@@ -1,0 +1,22 @@
+### Echo a GET with query params
+# Toggle the disabled parameter and header on to see them sent.
+GET https://httpbin.org/get?greeting=hello
+#~ &debug=1
+Accept: application/json
+#~ X-Debug: true
+
+### Post JSON
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "id": "{{$uuid}}",
+  "createdAt": "{{$isoTimestamp}}"
+}
+
+### Basic auth
+GET https://httpbin.org/basic-auth/user/passwd
+Authorization: Basic user passwd
+
+### PNG preview
+GET https://httpbin.org/image/png

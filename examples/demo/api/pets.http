@@ -1,0 +1,21 @@
+@petId = 1
+
+### List pets
+# Returns all pets, optionally filtered.
+GET {{baseUrl}}/pets?limit=20
+#~ &status=sold
+Accept: application/json
+#~ X-Debug: true
+Authorization: Bearer {{token}}
+
+### Create pet
+POST {{baseUrl}}/pets
+Content-Type: application/json
+
+{
+  "name": "Rex",
+  "tag": "dog"
+}
+
+### Get pet image
+GET {{baseUrl}}/png/{{petId}}

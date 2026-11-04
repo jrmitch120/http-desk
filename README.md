@@ -1,0 +1,92 @@
+# HttpDesk
+
+A Postman-style desktop HTTP client whose requests live in plain, portable
+**`.http` files** (JetBrains HTTP Client / VS Code REST Client format).
+
+- Point it at any folder; your `.http` files *are* the collection. No import, no database.
+- Edit requests graphically: method, URL, params, headers, auth, body, settings.
+- **Enable/disable any component** (individual params and headers, or whole
+  sections: auth, body). Disabled parts stay in the file as comments, so other
+  tools ignore them and HttpDesk restores them exactly.
+- Generate requests from **OpenAPI 3.0/3.1** (JSON/YAML, file or URL).
+- Environments via `http-client.env.json`; secrets go to
+  `http-client.private.env.json`, which is git-ignored automatically.
+- Requests run in Rust (reqwest), never on the UI thread.
+
+Built with Tauri 2, Rust and Svelte 5. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for the design: parsing strategy, data model, disabled-component encoding,
+OpenAPI mapping, sync, and known limitations.
+
+## What a saved request looks like
+
+```http
+### List pets
+# Returns all pets, optionally filtered.
+GET {{baseUrl}}/pets?limit=20
+#~ &status=sold
+Authorization: Bearer {{token}}
+Accept: application/json
+#~ X-Debug: true
+```
+
+`#~` marks something you switched off in HttpDesk. JetBrains and VS Code read it
+as a comment. Requests you don't edit are saved byte-for-byte as they were.
+
+## Using it
+
+| Action | How |
+|---|---|
+| Open a workspace | Welcome screen → *Open folder…* (the last workspace reopens on start) |
+| New file / folder / request | Explorer toolbar, right-click menus, or `+` next to a file |
+| Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
+| Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
+| Search requests | `⌘/Ctrl P` |
+| Environments | Top-right selector; `⌘/Ctrl E` to edit |
+| Import OpenAPI | Top bar → *Import OpenAPI* |
+| See the `.http` text | `.http` button above the URL bar |
+| Move files | Drag and drop in the explorer |
+
+If a file changes on disk, HttpDesk reloads it. If you have unsaved edits to that
+file, it asks whether to reload or keep your version.
+
+Try it with `examples/demo`, which includes `httpbin.org` requests. To try the
+importer, use `examples/petstore-openapi.yaml`.
+
+## Development
+
+Prerequisites: Rust (stable), Node 20+, pnpm, and the
+[Tauri system dependencies](https://tauri.app/start/prerequisites/) (on Linux:
+`libwebkit2gtk-4.1-dev librsvg2-dev patchelf`).
+
+```sh
+pnpm install
+pnpm tauri dev          # run the app
+pnpm tauri build        # native bundles (.dmg/.app, .msi/.exe, .deb/.rpm/.AppImage)
+```
+
+Tests:
+
+```sh
+cargo test --workspace  # parser/serializer, enablement, execution, env, OpenAPI, IPC + watcher
+pnpm test               # frontend helpers (URL⇄params sync, form/multipart editors, …)
+pnpm check              # svelte-check / TypeScript
+```
+
+UI-only work: `pnpm dev` and open <http://localhost:1420>. Outside Tauri the app
+runs against a mocked backend (`src/dev/mock.ts`, never shipped in production
+builds). Its fixtures are real parser output, regenerated with
+`cargo run -p httpdesk-core --example dump -- file.http`.
+
+### Layout
+
+```
+crates/httpdesk-core/   all domain logic (no Tauri): model, parser, serializer,
+                        vars, env, exec, openapi, workspace — and their tests
+src-tauri/              thin command layer, file watcher, IPC tests
+src/                    Svelte 5 UI (lib/ = store, API, helpers; components/)
+docs/ARCHITECTURE.md    design and decisions
+```
+
+Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds
+installers for all three platforms and attaches them to a draft GitHub release.
+Code signing and notarization are not configured yet.

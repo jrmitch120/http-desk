@@ -1,0 +1,81 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Library API", "version": "2.1.0" },
+  "servers": [{ "url": "https://api.library.test" }],
+  "paths": {
+    "/books": {
+      "post": {
+        "operationId": "createBook",
+        "summary": "Add a book",
+        "tags": ["books"],
+        "security": [{ "apiKeyQuery": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Book" }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Created" } }
+      },
+      "get": {
+        "operationId": "searchBooks",
+        "summary": "Search books",
+        "tags": ["books"],
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string", "examples": ["dune"] } },
+          { "name": "filter", "in": "query", "style": "deepObject", "schema": { "type": "object", "properties": { "year": { "type": "integer", "examples": [1965] }, "lang": { "const": "en" } } } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Book" } } } }
+          }
+        }
+      }
+    },
+    "/categories/{categoryId}": {
+      "get": {
+        "summary": "Get a category tree",
+        "tags": ["categories"],
+        "security": [{ "oauth": ["read"] }],
+        "parameters": [
+          { "name": "categoryId", "in": "path", "required": true, "schema": { "type": "string" }, "examples": { "fiction": { "value": "fiction" } } }
+        ],
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Category" } } } } }
+      }
+    }
+  },
+  "webhooks": {
+    "newBook": {
+      "post": { "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Book" } } } }, "responses": { "200": { "description": "OK" } } }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKeyQuery": { "type": "apiKey", "in": "query", "name": "api_key" },
+      "oauth": { "type": "oauth2", "flows": { "clientCredentials": { "tokenUrl": "https://auth.library.test/token", "scopes": { "read": "Read" } } } }
+    },
+    "schemas": {
+      "Book": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "examples": ["Dune"] },
+          "subtitle": { "type": ["string", "null"] },
+          "pages": { "type": ["integer", "null"], "minimum": 1 },
+          "kind": { "const": "book" },
+          "authors": { "type": "array", "items": { "type": "string", "examples": ["Frank Herbert"] } },
+          "isbn": { "type": "string", "examples": ["978-0441013593"] }
+        }
+      },
+      "Category": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "children": { "type": "array", "items": { "$ref": "#/components/schemas/Category" } },
+          "parent": { "$ref": "#/components/schemas/Category" }
+        }
+      }
+    }
+  }
+}

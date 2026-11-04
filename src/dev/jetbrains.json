@@ -1,0 +1,251 @@
+{
+  "header": {
+    "comments": [],
+    "variables": [
+      {
+        "name": "host",
+        "value": "https://httpbin.org"
+      },
+      {
+        "name": "userId",
+        "value": "42"
+      }
+    ],
+    "raw": "@host = https://httpbin.org\n@userId = 42\n\n"
+  },
+  "requests": [
+    {
+      "name": "Get request with a header",
+      "comments": [
+        "A JetBrains-style comment describing the request"
+      ],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "GET",
+      "url": "{{host}}/get",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "show_env",
+            "value": "1"
+          }
+        ]
+      },
+      "headers": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "Accept",
+            "value": "application/json"
+          }
+        ]
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "none",
+        "username": "",
+        "password": "",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "none",
+        "text": ""
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### Get request with a header\n// A JetBrains-style comment describing the request\nGET {{host}}/get?show_env=1\nAccept: application/json\n\n"
+    },
+    {
+      "name": "Post with JSON body",
+      "comments": [],
+      "directives": [
+        {
+          "name": "no-redirect",
+          "value": ""
+        },
+        {
+          "name": "timeout",
+          "value": "30"
+        }
+      ],
+      "variables": [],
+      "preScript": null,
+      "method": "POST",
+      "url": "{{host}}/post",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": []
+      },
+      "headers": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "bearer",
+        "username": "",
+        "password": "",
+        "token": "{{token}}",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "json",
+        "text": "{\n  \"id\": 999,\n  \"value\": \"content\"\n}"
+      },
+      "extraLines": [],
+      "responseHandler": "> {%\n    client.test(\"Request executed successfully\", function() {\n        client.assert(response.status === 200, \"Response status is not 200\");\n    });\n%}",
+      "leading": "",
+      "raw": "### Post with JSON body\n# @no-redirect\n# @timeout 30\nPOST {{host}}/post\nContent-Type: application/json\nAuthorization: Bearer {{token}}\n\n{\n  \"id\": 999,\n  \"value\": \"content\"\n}\n\n> {%\n    client.test(\"Request executed successfully\", function() {\n        client.assert(response.status === 200, \"Response status is not 200\");\n    });\n%}\n\n"
+    },
+    {
+      "name": "Multi-line query",
+      "comments": [],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "GET",
+      "url": "https://example.com/comments",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "page",
+            "value": "2"
+          },
+          {
+            "enabled": true,
+            "name": "pageSize",
+            "value": "10"
+          }
+        ]
+      },
+      "headers": {
+        "enabled": true,
+        "items": []
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "none",
+        "username": "",
+        "password": "",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "none",
+        "text": ""
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### Multi-line query\nGET https://example.com/comments\n    ?page=2\n    &pageSize=10\n\n"
+    },
+    {
+      "name": "Basic auth",
+      "comments": [],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "GET",
+      "url": "{{host}}/basic-auth/user/passwd",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": []
+      },
+      "headers": {
+        "enabled": true,
+        "items": []
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "basic",
+        "username": "user",
+        "password": "passwd",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "none",
+        "text": ""
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### Basic auth\nGET {{host}}/basic-auth/user/passwd\nAuthorization: Basic user passwd\n\n"
+    },
+    {
+      "name": "Send a form with the text and file fields",
+      "comments": [],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "POST",
+      "url": "https://httpbin.org/post",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": []
+      },
+      "headers": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "Content-Type",
+            "value": "multipart/form-data; boundary=WebAppBoundary"
+          }
+        ]
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "none",
+        "username": "",
+        "password": "",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "multipart",
+        "text": "--WebAppBoundary\nContent-Disposition: form-data; name=\"element-name\"\nContent-Type: text/plain\n\nName\n--WebAppBoundary\nContent-Disposition: form-data; name=\"data\"; filename=\"data.json\"\nContent-Type: application/json\n\n< ./request-form-data.json\n--WebAppBoundary--"
+      },
+      "extraLines": [],
+      "responseHandler": ">> response.json",
+      "leading": "### Section divider with notes only\n# This block has no request in it\n\n",
+      "raw": "### Send a form with the text and file fields\nPOST https://httpbin.org/post\nContent-Type: multipart/form-data; boundary=WebAppBoundary\n\n--WebAppBoundary\nContent-Disposition: form-data; name=\"element-name\"\nContent-Type: text/plain\n\nName\n--WebAppBoundary\nContent-Disposition: form-data; name=\"data\"; filename=\"data.json\"\nContent-Type: application/json\n\n< ./request-form-data.json\n--WebAppBoundary--\n\n>> response.json\n"
+    }
+  ],
+  "trailing": "",
+  "lineEnding": "lf"
+}

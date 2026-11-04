@@ -1,0 +1,55 @@
+@host = https://httpbin.org
+@userId = 42
+
+### Get request with a header
+// A JetBrains-style comment describing the request
+GET {{host}}/get?show_env=1
+Accept: application/json
+
+### Post with JSON body
+# @no-redirect
+# @timeout 30
+POST {{host}}/post
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "id": 999,
+  "value": "content"
+}
+
+> {%
+    client.test("Request executed successfully", function() {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+%}
+
+### Multi-line query
+GET https://example.com/comments
+    ?page=2
+    &pageSize=10
+
+### Basic auth
+GET {{host}}/basic-auth/user/passwd
+Authorization: Basic user passwd
+
+### Section divider with notes only
+# This block has no request in it
+
+### Send a form with the text and file fields
+POST https://httpbin.org/post
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="element-name"
+Content-Type: text/plain
+
+Name
+--WebAppBoundary
+Content-Disposition: form-data; name="data"; filename="data.json"
+Content-Type: application/json
+
+< ./request-form-data.json
+--WebAppBoundary--
+
+>> response.json

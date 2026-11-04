@@ -1,0 +1,255 @@
+openapi: 3.0.3
+info:
+  title: Swagger Petstore
+  version: 1.0.0
+  description: A sample pet store.
+servers:
+  - url: "{scheme}://petstore.example.com/{basePath}"
+    description: Production
+    variables:
+      scheme:
+        default: https
+        enum: [https, http]
+      basePath:
+        default: v1
+  - url: http://localhost:8080/v1
+    description: Local development
+tags:
+  - name: pet
+    description: Everything about your Pets
+  - name: store
+    description: Access to Petstore orders
+security:
+  - bearerAuth: []
+paths:
+  /pets:
+    get:
+      tags: [pet]
+      summary: List all pets
+      operationId: listPets
+      description: |
+        Returns all pets the caller can see.
+
+        Supports paging.
+      parameters:
+        - name: limit
+          in: query
+          description: How many items to return at one time (max 100)
+          required: false
+          schema:
+            type: integer
+            format: int32
+            maximum: 100
+            example: 20
+        - name: status
+          in: query
+          required: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [available, pending, sold]
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/TraceHeader'
+      responses:
+        "200":
+          description: A paged array of pets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+    post:
+      tags: [pet]
+      summary: Create a pet
+      operationId: createPet
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/NewPet'
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        description: The id of the pet to retrieve
+        schema:
+          type: integer
+          format: int64
+          example: 42
+    get:
+      tags: [pet]
+      summary: Info for a specific pet
+      operationId: showPetById
+      security:
+        - api_key: []
+      responses:
+        "200":
+          description: Expected response to a valid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+    delete:
+      tags: [pet]
+      operationId: deletePet
+      deprecated: true
+      parameters:
+        - name: session
+          in: cookie
+          schema:
+            type: string
+            example: abc123
+      responses:
+        "204":
+          description: Deleted
+  /pets/{petId}/photo:
+    post:
+      tags: [pet]
+      summary: Upload a photo
+      operationId: uploadPhoto
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                caption:
+                  type: string
+                  example: Rex at the beach
+                metadata:
+                  type: object
+                  properties:
+                    takenAt:
+                      type: string
+                      format: date-time
+                file:
+                  type: string
+                  format: binary
+            encoding:
+              file:
+                contentType: image/png
+      responses:
+        "200":
+          description: OK
+  /store/orders:
+    post:
+      tags: [store]
+      summary: Place an order
+      operationId: placeOrder
+      security: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                petId:
+                  type: integer
+                  example: 7
+                quantity:
+                  type: integer
+                  minimum: 1
+                note:
+                  type: string
+                  example: leave at the door
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  parameters:
+    TraceHeader:
+      name: X-Trace
+      in: header
+      required: true
+      schema:
+        type: string
+        default: trace-1
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    basicAuth:
+      type: http
+      scheme: basic
+    api_key:
+      type: apiKey
+      name: X-API-Key
+      in: header
+  schemas:
+    NewPet:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: Rex
+        tag:
+          type: string
+          nullable: true
+        birthday:
+          type: string
+          format: date
+    Pet:
+      allOf:
+        - $ref: '#/components/schemas/NewPet'
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: integer
+              format: int64
+              readOnly: true
+            owner:
+              $ref: '#/components/schemas/Owner'
+    Owner:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        id:
+          type: string
+          format: uuid

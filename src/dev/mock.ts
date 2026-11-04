@@ -1,0 +1,120 @@
+// Dev-only: lets the UI run in a plain browser (`pnpm dev`, open localhost:1420)
+// for visual testing. Fixtures are produced by the real Rust parser
+// (`cargo run -p httpdesk-core --example dump -- file.http`). Never bundled in
+// production builds (imported behind `import.meta.env.DEV`).
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import pets from "./pets.json";
+import jetbrains from "./jetbrains.json";
+
+const ROOT = "/demo";
+const files: Record<string, unknown> = {
+  [`${ROOT}/api/pets.http`]: pets,
+  [`${ROOT}/samples/jetbrains.http`]: jetbrains,
+};
+const tree = {
+  name: "demo",
+  path: ROOT,
+  kind: "dir",
+  children: [
+    { name: "api", path: `${ROOT}/api`, kind: "dir", children: [{ name: "pets.http", path: `${ROOT}/api/pets.http`, kind: "file" }] },
+    { name: "samples", path: `${ROOT}/samples`, kind: "dir", children: [{ name: "jetbrains.http", path: `${ROOT}/samples/jetbrains.http`, kind: "file" }] },
+  ],
+};
+let envSet = {
+  shared: [{ name: "version", value: "v1", secret: false }],
+  environments: [
+    { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:8765", secret: false }, { name: "token", value: "dev-token-123", secret: true }] },
+    { name: "staging", variables: [{ name: "baseUrl", value: "https://staging.example.com", secret: false }] },
+  ],
+  privateFileIgnored: true,
+};
+let settings = {
+  exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
+  recentWorkspaces: [ROOT],
+  environments: { [ROOT]: "local" },
+  theme: new URLSearchParams(location.search).get("theme") ?? "dark",
+  layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
+};
+
+const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+mockWindows("main");
+mockIPC(
+  async (cmd, args: any) => {
+    switch (cmd) {
+      case "get_settings":
+        return clone(settings);
+      case "save_settings":
+        settings = args.settings;
+        return null;
+      case "path_exists":
+        return true;
+      case "open_workspace":
+        return { root: ROOT, tree };
+      case "get_tree":
+        return tree;
+      case "load_environments":
+        return clone(envSet);
+      case "save_environments":
+        envSet = args.set;
+        return { gitignoreUpdated: false };
+      case "read_http_file":
+        return clone(files[args.path]);
+      case "save_http_file":
+        files[args.path] = clone(args.file);
+        return clone(args.file);
+      case "render_request": {
+        const r = args.request;
+        return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+      }
+      case "search_requests":
+        return [{ path: `${ROOT}/api/pets.http`, index: 0, name: "List pets", method: "GET", url: "{{baseUrl}}/pets" }];
+      case "send_request": {
+        await delay(450);
+        const r = args.request;
+        if (r.url.includes("png")) {
+          return {
+            id: "r2", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+            headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, headersSize: 60,
+            contentType: "image/png", bodyText: null,
+            bodyBase64: "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAKhElEQVR42u2df4xUVxXHz31vfi3dYamtkdUiQwRqTYzD+of8ENlGGym2ZjHaYNQy1BCFsu5im7BAjJiUbaqmDKwm+GPtQP8g1ppuLRSjiR0Euk1M2SFqKj+SDsXE/lFTYJf9MTPvXc97u+v+gM3Ove++XzvnhMDsy8vusJ/vu/ee7z33jAYUNR0a/QpIABQkAAoSAAUJgIIEQEECoKiliHj1g3jH+pRhltcxYGnOeRovpfBqCvjtboZJl6d8MXGVz3ZBzT18hvc35R3Ocs+02293T5EzVsRvVMDXBV2Lnqo7nC96wYW5Dd00K5vxVcYGXgXYGoQ/0z0oAJbV9cjLborBFQHwPQ+kTcNsw/9URgQswZ9+z+gLk7FcVI/+yA0hKBUA39eywBzqPzAFPMF3BH/yPRxYLpmM7mTZ/LXACaDS8UCGmeYBfLmA4KuHP3GVIXxty/zu0z2BEYCx6/PP3fLUE3zl8Kfdk03+pnenrwKwhnxjqP8lxqGZ4HsHn0+8yCcb4hudTAnM2Xw/8BqMpnQE33v441NCYX5D7H5ZEUgbQdaTT/D9hT/6BPN0//WRlzx1Aq05n4Z9/+FPuqe5P7M668kUMLbaf47gBwb+/+9Bl3Xj/Fxvj2sCsOf9wf63KdULHvzR98yuNbD4Eparfj0gNAUg/CzBDyZ86x9cDyy4AcNZV0YA296tmH0EP5jwJ0eMwZK63BtFpSMAwm8n+MGHb0XJhH1KR4DRXb3y2wQ/+PDHf9VcgyV3VjEKVDUC4JZuhuCHB/7Ys92icArgmwl+mOBjSmjidrwKAVjDP1AxR6jgj84BkHo/szLlWAAGGM0EP2TwJ+A1g9OaQGaYaYIfQvg2vNvs1YiOACYWcRL8EMK34bG08xEA+GKCH0L43B4BFisoC6fS7TDCH3sfKecCIPjhhD/jN3F6MITghwc+V30yiODPKfhiAiD4cw5+9QLwAn5dPegbd4C2NA3sroXA//sumJcLUPl9F8DQAMF3AX7Vi0C34bOPLIXIjiywefUT11AE+l3rQfvkGih3tQP/92WCrxh+dXsBHjz50+FP8SHmJSHaikUuKBKCL+EFKNoNdG3O1z6zfkb4U0TwzQ5bLARf5h5HAnB3wcc+lq5uqLpnGcTasqMiIPhK4FcnAJdX+7M9/dNFYI8EBF+ZESR8MER1qmfi4k4k9E+thei3dhN8RYtCzU/4tgD+fkZ45aqvfBC0+79G8BVkBJqf8O2vL/ZBJf+isAhiX221hUDwnaWDmp/wxy8YaPaYlwriInh0NzBcFxB8eS9A8xv+eJR+uVd4PWBFvB09hHuWEny3jCDPvH20e0sHsa/UJNu3mrA8gvjOg8Dn1RP82VE4EIAXGzsORJBoPwQwPaUk+IoE4OGuHr96Gcq/2Cs+lC1aBvHvdhJ8AfhVGkHeb+mal/qg/PzT4unh8hUQ27yb4LvZIcSr/fxK70kovdglLILIqg0QfXgLwa9SDVoQ4Y/fY/zld1B544/CIog+9BjoKASCHzAjSGY/v3y0E4zz4m5hPLMHtHtXEPygGEFOijlKR/dLeQSJbZ324pDg+2wEOa7kGRyA4QOtYGKZmHB6+MQhYB9oJPh+GUHKyrhuDsDI4T1yRtH2TtsjqDX4vhtBqmv4+NVLMPzs98TTw48uw5Ggi+B7aQS5VcBpiWAk1yklgviWvQTfCyPI7epdo/dVKRFE12yA2KY2gu+mEeRV6XYFRVB+/aSwCGJfeAQiqzfUBnyvjSCv6/ZLuf1SIohvwnXE3QtrHr5SI8ivQxulFw6BcfWycGZgTQe1Dl+ZEeTriZ3Bfhj+aauwCPR7m2oePlRzNCw0BzUlTJBahy9xPDyA8MfcPivNEwnjX+fmPHyutD9AQJ/82COtwvA5Wsvls6/WPHyB4+EBhY87fvZiTjCGj2EN4Xv/qXn4VR4PDyb8yOoHpeCX/vwCVM6eIPgya4Agwb/F1q0irGF/5Fi2duBzhU2iggJfW7RUCr7xDm4kdT9F8GUEECT4iSe7pOAP/ngHwVfiA/iV5+N+fnz707aLJ7rit+Hf7Cf4qvoE+gHf2s/X7m6UgP94zcLnbvQJ9KM5g1XgKZrrWzH0sw4wr1wi+Kr6BPoBP5bZC5EVnxOH370fjLfOEXxVfQL9gB/98relcv2Rl7uhcuYEwVfVJ9AP+DoWbcQefkwq1y/1dBN8dSOA9/A13KpNSOT6lQt9MPzrpwi+QJ9AZUaQKvgMD3IktndK5fpDhzoI/gwjNygtCHGrJw/m+HVo9Ijm+uZ778LgMzvs4hCCXz18JUaQUvhPdEkZPUNduxzBZ+gvRD7eNM1n4CJ9M2cZeiedei5ehApmJ+ZAv+/wHRtBKnvy1OGwL5PrDz7zOJg4/MvCT3yjHeJf3ARehonG1ODRZ2Ekf9z70ntVRpBK+HHM9W9bo1dFru8Eft3WH0Bs7ZfA69DuSEL9th+OpqyvveIbfMGjYe7A15c3SRd1WLm+LHz9viZf4E+OeY9+H9gdSd/gCxwNc68Pn75irXiufwYPhfzpt44WfNGmdeB3WCNB9BOf9g2+QLNo95ow6ouWCcO39vWdrvZl1htuhJ5a7ht8ISPIrSaM1ipeqKjDqudTkeoNDgRCANb7cLf0XoUP4GIHTuPCueqLOjDX54M3lOT5lbfOBUIApX+86XoNpvOPjHGxA2f57EnbyJntKbGHfUXw7V/86eO+jwLlf74JRvGCb/ClPzBCaR8+NHCGfr5rRhh2UQfm+sY7F5U6fBxz8YH923wTgWUI3fjJk+5XX8Nsnw09S9z8zme5J+1X6/CEz9fbbD9Aw5O71qhQ6fsrjODOnsonf/o92gcbIfGVrRC5r0m44kgWfOlveRg6ccwWodul9wv/UGDqBEAdOEP3oZizCSCi3ggi+IHsrKKqIojgzx34whVBBH9uwVdoBBH84H4QtnMj6ArBDyd8/HPFsQBMYEWCH8Yn3/6r6FgAjEOB4IcSPnAGBQVTACsQ/BDCn+nhFRWArut5gh8++KPVNpB3bAVbMbB1jbUOWEzwQwQf2JXG44WUorJwliP4YYKP+BlkQVVJWCQSyRH88MC3X+rQo0wAdYfzRUwHjxD8kDTRZOxIY0+hqLQqWGM8S/BD0kFVh32gul18/a9eL3BrFCD4wYYv8PQLt4tPJqPt+POuE/zAwr+e0KEd3PrACJbNX8PxJUPwg9lEE2Fm7uwpXHP1E0Pmd5/uQffgIMEPFnycng9+6JVCjyhPBpJxY8sqy2VaR/AD0EoP2Ck0fZplOGqyAkg2xFvwB58n+D4/+ZydT0SgRZajtACs9UCyIWap7hTB9+/Jr4tCs+i8r2QKmBz9mdVZE8w2gu/tnP/h44V2p+yUCMBeE2RWtZjAc7gF2UDw3U31rNW+zIJP6RRwS3aQ6+1pgEQKJXWE4Ltn8mCen1IFX+kIMDmGMitTJRP24fvfTPDVePuWvSvi8PkqgPF4H4WAP6IFDN7OgC8m+GL7+daWrrWr5wZ4TwRwixgMaMY6pTSYLI2XUByWKAj+WPVu0arhs8u4sJLHTei+CIAimKHRr4AEQEECoCABUJAAKEgAFCQAilqK/wEWJINOQzlGbAAAAABJRU5ErkJggg==",
+            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [],
+          };
+        }
+        const body = JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+        return {
+          id: "r1", status: r.method === "POST" ? 201 : 200, statusText: r.method === "POST" ? "Created" : "OK", httpVersion: "HTTP/1.1",
+          url: "http://127.0.0.1:8765/pets?limit=20",
+          headers: [["content-type", "application/json"], ["content-length", String(body.length)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"]],
+          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, headersSize: 120, contentType: "application/json", bodyText: body, bodyBase64: null, truncated: false,
+          request: {
+            method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
+            headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"]], bodyPreview: null, bodySize: 0,
+          },
+          warnings: [],
+        };
+      }
+      case "openapi_load":
+        await delay(300);
+        return {
+          title: "Swagger Petstore", version: "1.0.0", openapiVersion: "3.0.3", description: null,
+          servers: [{ url: "https://petstore.example.com/v1", description: "Production" }],
+          tags: ["pet", "store"],
+          operations: [
+            { id: "listPets", method: "GET", path: "/pets", summary: "List all pets", operationId: "listPets", tags: ["pet"], deprecated: false },
+            { id: "createPet", method: "POST", path: "/pets", summary: "Create a pet", operationId: "createPet", tags: ["pet"], deprecated: false },
+            { id: "showPetById", method: "GET", path: "/pets/{petId}", summary: "Info for a specific pet", operationId: "showPetById", tags: ["pet"], deprecated: false },
+            { id: "deletePet", method: "DELETE", path: "/pets/{petId}", summary: "Delete a pet", operationId: "deletePet", tags: ["pet"], deprecated: true },
+            { id: "getInventory", method: "GET", path: "/store/inventory", summary: "Returns pet inventories", operationId: "getInventory", tags: ["store"], deprecated: false },
+          ],
+          warnings: ["Unresolved external $ref: https://example.com/common.yaml#/Error"],
+        };
+      case "openapi_generate":
+        return { files: [`${ROOT}/swagger-petstore/pet.http`], conflicts: [], written: !args.dryRun, environments: ["production"], envDir: ROOT, gitignoreUpdated: false, warnings: [] };
+      default:
+        return null; // plugins (dialog, window title, opener), cancel, etc.
+    }
+  },
+  { shouldMockEvents: true },
+);

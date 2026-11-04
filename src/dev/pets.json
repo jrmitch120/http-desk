@@ -1,0 +1,157 @@
+{
+  "header": {
+    "comments": [],
+    "variables": [
+      {
+        "name": "petId",
+        "value": "1"
+      }
+    ],
+    "raw": "@petId = 1\n\n"
+  },
+  "requests": [
+    {
+      "name": "List pets",
+      "comments": [
+        "Returns all pets, optionally filtered."
+      ],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "GET",
+      "url": "{{baseUrl}}/pets",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "limit",
+            "value": "20"
+          },
+          {
+            "enabled": false,
+            "name": "status",
+            "value": "sold"
+          }
+        ]
+      },
+      "headers": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "Accept",
+            "value": "application/json"
+          },
+          {
+            "enabled": false,
+            "name": "X-Debug",
+            "value": "true"
+          }
+        ]
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "bearer",
+        "username": "",
+        "password": "",
+        "token": "{{token}}",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "none",
+        "text": ""
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### List pets\n# Returns all pets, optionally filtered.\nGET {{baseUrl}}/pets?limit=20\n#~ &status=sold\nAccept: application/json\n#~ X-Debug: true\nAuthorization: Bearer {{token}}\n\n"
+    },
+    {
+      "name": "Create pet",
+      "comments": [],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "POST",
+      "url": "{{baseUrl}}/pets",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": []
+      },
+      "headers": {
+        "enabled": true,
+        "items": [
+          {
+            "enabled": true,
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "none",
+        "username": "",
+        "password": "",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "json",
+        "text": "{\n  \"name\": \"Rex\",\n  \"tag\": \"dog\"\n}"
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### Create pet\nPOST {{baseUrl}}/pets\nContent-Type: application/json\n\n{\n  \"name\": \"Rex\",\n  \"tag\": \"dog\"\n}\n\n"
+    },
+    {
+      "name": "Get pet image",
+      "comments": [],
+      "directives": [],
+      "variables": [],
+      "preScript": null,
+      "method": "GET",
+      "url": "{{baseUrl}}/png/{{petId}}",
+      "httpVersion": null,
+      "query": {
+        "enabled": true,
+        "items": []
+      },
+      "headers": {
+        "enabled": true,
+        "items": []
+      },
+      "auth": {
+        "enabled": true,
+        "kind": "none",
+        "username": "",
+        "password": "",
+        "token": "",
+        "keyName": "",
+        "keyValue": "",
+        "keyLocation": "header"
+      },
+      "body": {
+        "enabled": true,
+        "mode": "none",
+        "text": ""
+      },
+      "extraLines": [],
+      "responseHandler": null,
+      "leading": "",
+      "raw": "### Get pet image\nGET {{baseUrl}}/png/{{petId}}\n"
+    }
+  ],
+  "trailing": "",
+  "lineEnding": "lf"
+}

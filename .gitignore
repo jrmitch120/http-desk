@@ -1,0 +1,7 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/schemas/
+.DS_Store
+*.httpdesk-tmp
+http-client.private.env.json

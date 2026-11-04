@@ -1,0 +1,65 @@
+<script lang="ts">
+  // On/off switch for request components.
+  let { checked, onchange, title = "", label = "" }: { checked: boolean; onchange: (v: boolean) => void; title?: string; label?: string } = $props();
+</script>
+
+<button
+  type="button"
+  class="toggle"
+  class:on={checked}
+  role="switch"
+  aria-checked={checked}
+  title={title || (checked ? "Enabled — click to disable" : "Disabled — click to enable")}
+  onclick={(e) => {
+    e.stopPropagation();
+    onchange(!checked);
+  }}
+>
+  <span class="track"><span class="knob"></span></span>
+  {#if label}<span class="label">{label}</span>{/if}
+</button>
+
+<style>
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .track {
+    width: 28px;
+    height: 16px;
+    border-radius: 8px;
+    background: var(--panel-3);
+    border: 1px solid var(--border-strong);
+    position: relative;
+    transition: background 0.15s;
+    flex: none;
+  }
+  .knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform 0.15s, background 0.15s;
+  }
+  .on .track {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .on .knob {
+    transform: translateX(12px);
+    background: #fff;
+  }
+  .on .label {
+    color: var(--text-2);
+  }
+</style>
