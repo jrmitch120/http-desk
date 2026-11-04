@@ -1,0 +1,4 @@
+# Check out with LF everywhere so test fixtures and snapshots are byte-identical
+# across platforms (Windows runners default to core.autocrlf=true). CRLF
+# handling is covered by explicit tests in crates/httpdesk-core/tests/format.rs.
+* text=auto eol=lf
