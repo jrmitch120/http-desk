@@ -37,7 +37,9 @@ export const theme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "color-mix(in srgb, var(--focus) 30%, transparent) !important",
   },
-  ".cm-gutters": { backgroundColor: "transparent", color: "var(--faint)", border: "none" },
+  // Opaque so horizontally scrolled content doesn't show through the sticky gutter.
+  // All editors sit on --panel; a container can override with --editor-bg.
+  ".cm-gutters": { backgroundColor: "var(--editor-bg, var(--panel))", color: "var(--faint)", border: "none" },
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--hover) 45%, transparent)" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--text-2)" },
   ".cm-foldGutter .cm-gutterElement": { cursor: "pointer", color: "var(--faint)" },
