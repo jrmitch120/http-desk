@@ -381,3 +381,16 @@ async fn load_url_sends_a_user_agent() {
     let doc = OpenApiDoc::load_url(&format!("{}/openapi.yaml", server.uri())).await.expect("spec loads");
     assert!(!doc.summary().operations.is_empty());
 }
+
+#[test]
+fn parameter_descriptions_can_be_turned_off() {
+    let opts = GenerateOptions { param_descriptions: false, ..Default::default() };
+    let out = petstore().generate(&opts);
+    for f in &out.files {
+        let text = serialize(&f.file);
+        assert!(!text.contains("# @param") && !text.contains("# @header"), "{text}");
+        assert!(f.file.requests.iter().all(|r| r.query.items.iter().chain(&r.headers.items).all(|i| i.description.is_empty())));
+    }
+    // Request descriptions (operation summaries/descriptions) are unaffected.
+    assert!(out.files.iter().any(|f| f.file.requests.iter().any(|r| !r.comments.is_empty())));
+}

@@ -44,7 +44,8 @@
           {
             "enabled": true,
             "name": "Accept",
-            "value": "application/json"
+            "value": "application/json",
+            "description": "Response format. The API only produces JSON."
           },
           {
             "enabled": false,

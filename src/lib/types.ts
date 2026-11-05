@@ -165,6 +165,7 @@ export interface AppSettings {
   theme: "dark" | "light";
   layout: "horizontal" | "vertical";
   checkUpdates: boolean;
+  showDescriptions: boolean;
 }
 
 // ---- OpenAPI
@@ -202,6 +203,7 @@ export interface GenerateOptions {
   grouping: Grouping;
   baseUrlVariable: string;
   singleFileName: string | null;
+  paramDescriptions: boolean;
 }
 
 export interface GenerateReport {

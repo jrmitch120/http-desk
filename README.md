@@ -31,9 +31,9 @@ Accept: application/json
 ```
 
 `#~` marks something you switched off in HttpDesk. `# @param` / `# @header` lines
-hold the descriptions shown by the ⓘ next to params and headers (the OpenAPI
-importer fills them in). JetBrains and VS Code ignore both. Requests you don't
-edit are saved byte-for-byte as they were.
+hold the descriptions shown under each param and header (click one to edit it;
+the OpenAPI importer can fill them in). JetBrains and VS Code ignore both.
+Requests you don't edit are saved byte-for-byte as they were.
 
 ## Using it
 

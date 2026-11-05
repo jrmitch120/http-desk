@@ -88,6 +88,10 @@
             <button class:on={copy.layout === "vertical"} onclick={() => (copy!.layout = "vertical")}><Icon name="rows" size={13} />Response below</button>
           </div>
         </div>
+        <div class="setting">
+          <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>
+          <Toggle checked={copy.showDescriptions} onchange={(v) => (copy!.showDescriptions = v)} />
+        </div>
       </section>
 
       <section>

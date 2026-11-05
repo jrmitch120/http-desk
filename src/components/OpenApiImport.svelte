@@ -8,6 +8,7 @@
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
+  import Toggle from "./Toggle.svelte";
 
   let step = $state<"source" | "select">("source");
   let kind = $state<"file" | "url">("file");
@@ -25,6 +26,7 @@
 
   let grouping = $state<Grouping>("tag");
   let baseUrlVariable = $state("baseUrl");
+  let paramDescriptions = $state(true);
   let outputDir = $state("");
   let generating = $state(false);
 
@@ -119,6 +121,7 @@
       grouping,
       baseUrlVariable: baseUrlVariable.trim() || "baseUrl",
       singleFileName: null,
+      paramDescriptions,
     };
     try {
       const preview = await api.openapiGenerate({ source, options, outputDir: dir, overwrite: false, dryRun: true });
@@ -301,6 +304,11 @@
             </div>
             <small class="muted">Server URLs are written to <span class="mono">http-client.env.json</span>.</small>
           </label>
+          <div class="field">
+            <span>Parameter descriptions</span>
+            <Toggle checked={paramDescriptions} onchange={(v) => (paramDescriptions = v)} label={paramDescriptions ? "Included" : "Not included"} title="Write each parameter's description, allowed values and default as # @param / # @header comments" />
+            <small class="muted">Shown next to params and headers. Request descriptions are always included.</small>
+          </div>
           <label class="field">
             <span>Output directory</span>
             <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" title={outputDir} />

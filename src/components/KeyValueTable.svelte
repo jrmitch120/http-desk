@@ -14,7 +14,7 @@
     valuePlaceholder?: string;
     suggestions?: string[];
     separator?: string;
-    /** Show per-row documentation (ⓘ with the description on hover; click to edit). */
+    /** Per-row descriptions shown under the key, editable in place. */
     docs?: boolean;
   }
   let {
@@ -64,11 +64,44 @@
     bulk = !bulk;
   }
 
-  async function editDoc(i: number) {
-    const item = items[i];
-    const label = item.name || namePlaceholder.toLowerCase();
-    const next = await app.prompt(`Description for ${label}`, (item.description ?? "").replace(/\n/g, " "), "Shown on hover; saved in the .http file");
-    if (next !== null) items[i].description = next.trim();
+  const showDesc = $derived(docs && app.settings?.showDescriptions !== false);
+  let editing = $state<number | null>(null);
+  let draft = $state("");
+
+  function startEdit(i: number) {
+    draft = items[i].description ?? "";
+    editing = i;
+  }
+  function commitEdit() {
+    if (editing === null) return;
+    const text = draft.replace(/\s+$/, "").replace(/^\s+/, "");
+    if (items[editing]) {
+      if (text) items[editing].description = text;
+      else delete items[editing].description;
+    }
+    editing = null;
+  }
+  function onDescKey(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      editing = null;
+    }
+  }
+  /** Grows the textarea with its content; focuses with the caret at the end. */
+  function autosize(el: HTMLTextAreaElement) {
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.addEventListener("input", fit);
+    return { destroy: () => el.removeEventListener("input", fit) };
   }
 
   export function isBulk() {
@@ -107,7 +140,7 @@
   {:else}
     {#each rows as row, i (i)}
       {@const ghost = i === items.length}
-      <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost>
+      <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost class:no-check={!toggles}>
         {#if toggles}
           <span class="c-check">
             {#if !ghost}
@@ -124,26 +157,29 @@
           oninput={(e) => set(i, "name", e.currentTarget.value)}
         />
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
-        {#if docs}
-          <span class="c-doc">
-            {#if !ghost}
-              <button
-                class="icon-btn"
-                class:has-doc={!!row.description}
-                title={row.description ? row.description : "Add a description"}
-                aria-label={row.description ? `Description: ${row.description}` : "Add a description"}
-                onclick={() => editDoc(i)}
-              >
-                <Icon name="info" size={13} />
-              </button>
-            {/if}
-          </span>
-        {/if}
         <span class="c-del">
           {#if !ghost}
             <button class="icon-btn" title="Delete" onclick={() => items.splice(i, 1)}><Icon name="trash" size={13} /></button>
           {/if}
         </span>
+        {#if showDesc && !ghost}
+          {#if editing === i}
+            <textarea
+              class="desc desc-edit"
+              rows="1"
+              bind:value={draft}
+              use:autosize
+              placeholder="Describe this {namePlaceholder.toLowerCase()} — Enter to save, Shift+Enter for a new line, Esc to cancel"
+              onkeydown={onDescKey}
+              onblur={commitEdit}
+            ></textarea>
+          {:else if row.description}
+            <button class="desc" title={row.description} onclick={() => startEdit(i)}>{row.description}</button>
+          {:else}
+            <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
+            <button class="desc add" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(i)}>Add description</button>
+          {/if}
+        {/if}
       </div>
     {/each}
   {/if}
@@ -162,11 +198,92 @@
     overflow: hidden;
     background: var(--panel);
   }
-  .kv-head,
-  .kv-row {
+  .kv-head {
     display: flex;
     align-items: stretch;
     min-height: 31px;
+  }
+  /* Row: [check][name][value][delete], with an optional description line
+     under name+value. Column widths match the header's flex layout. */
+  .kv-row {
+    display: grid;
+    grid-template-columns: 34px 38% 1fr 34px;
+    grid-template-rows: 31px auto;
+  }
+  .kv-row.no-check {
+    grid-template-columns: 38% 1fr 34px;
+  }
+  .kv-row > .c-check {
+    grid-row: 1 / span 2;
+    align-items: flex-start;
+    padding-top: 8px;
+  }
+  .kv-row > .c-name,
+  .kv-row > .c-value,
+  .kv-row > .c-del {
+    grid-row: 1;
+    min-width: 0;
+  }
+  .desc {
+    grid-row: 2;
+    grid-column: 2 / 4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0;
+    padding: 0 10px 7px;
+    border: none;
+    background: none;
+    text-align: left;
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--muted);
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+    white-space: pre-line;
+  }
+  .kv-row.no-check .desc {
+    grid-column: 1 / 3;
+  }
+  .desc:hover {
+    color: var(--text-2);
+  }
+  .desc.add {
+    display: none;
+    color: var(--faint);
+    font-style: italic;
+  }
+  .kv-row:focus-within .desc.add {
+    display: block;
+  }
+  .desc-edit {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    margin: 0 6px 6px;
+    padding: 4px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--panel-2);
+    box-shadow: inset 0 0 0 1px var(--focus);
+    color: var(--text);
+    resize: none;
+    outline: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+  }
+  .desc-edit::placeholder {
+    color: var(--faint);
+    font-style: italic;
+  }
+  .kv-row.off .desc {
+    color: var(--faint);
+  }
+  .kv-row .desc.desc-edit {
+    color: var(--text);
   }
   .kv-head {
     font-size: 11.5px;
@@ -212,27 +329,15 @@
     align-items: center;
     justify-content: center;
   }
-  .c-del .icon-btn,
-  .c-doc .icon-btn {
+  .c-del .icon-btn {
     opacity: 0;
     width: 24px;
     height: 24px;
   }
-  .kv-row:hover .c-del .icon-btn,
-  .kv-row:hover .c-doc .icon-btn,
-  .c-doc .icon-btn.has-doc {
+  .kv-row:hover .c-del .icon-btn {
     opacity: 1;
   }
-  .c-doc {
-    width: 28px;
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .c-doc .icon-btn.has-doc {
-    color: var(--info);
-  }
+
   .cell {
     border: none;
     background: transparent;
@@ -268,6 +373,10 @@
     height: 14px;
     margin: 0;
     cursor: pointer;
+  }
+  .kv-head .c-value {
+    overflow: hidden;
+    white-space: nowrap;
   }
   .bulk {
     margin-left: auto;

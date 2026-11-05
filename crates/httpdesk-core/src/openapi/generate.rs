@@ -122,7 +122,7 @@ pub(crate) fn generate(doc: &OpenApiDoc, opts: &GenerateOptions) -> GenerationOu
             }
         }
         for op in list {
-            let req = build_request(&ctx, op, base_var, &mut file.header.variables, &mut secrets);
+            let req = build_request(&ctx, op, base_var, opts.param_descriptions, &mut file.header.variables, &mut secrets);
             file.requests.push(req);
         }
         files.push(GeneratedFile { relative_path: file_name, file });
@@ -383,6 +383,7 @@ fn build_request<'a>(
     ctx: &Ctx<'a>,
     op: &Op<'a>,
     base_var: &str,
+    with_docs: bool,
     file_vars: &mut Vec<Variable>,
     secrets: &mut Vec<String>,
 ) -> Request {
@@ -452,7 +453,7 @@ fn build_request<'a>(
         let Some(name) = p.get("name").and_then(Value::as_str) else { continue };
         let required = p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let value = param_example(ctx, p);
-        let description = param_doc(ctx, p, required);
+        let description = if with_docs { param_doc(ctx, p, required) } else { String::new() };
         let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v, description: description.clone() };
         match p.get("in").and_then(Value::as_str) {
             Some("query") => {
