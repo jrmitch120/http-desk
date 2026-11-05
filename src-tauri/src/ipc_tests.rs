@@ -2,6 +2,12 @@
 //! payloads the frontend sends (camelCase args, frontend-only `_key` fields),
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
+// The origin Tauri serves the app from; capabilities only apply to it.
+#[cfg(windows)]
+const APP_URL: &str = "http://tauri.localhost";
+#[cfg(not(windows))]
+const APP_URL: &str = "tauri://localhost";
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -31,7 +37,7 @@ impl Harness {
                 cmd: cmd.into(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: "tauri://localhost".parse().unwrap(),
+                url: APP_URL.parse().unwrap(),
                 body: tauri::ipc::InvokeBody::Json(args),
                 headers: Default::default(),
                 invoke_key: INVOKE_KEY.to_string(),
