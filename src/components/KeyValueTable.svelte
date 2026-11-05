@@ -2,6 +2,7 @@
   // Editable key/value list with per-row enable checkboxes, a trailing blank
   // row that turns into a real row as you type, and a bulk-edit mode.
   import type { KeyValue } from "../lib/types";
+  import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -13,6 +14,8 @@
     valuePlaceholder?: string;
     suggestions?: string[];
     separator?: string;
+    /** Per-row descriptions shown under the key, editable in place. */
+    docs?: boolean;
   }
   let {
     items = $bindable(),
@@ -22,6 +25,7 @@
     valuePlaceholder = "Value",
     suggestions = [],
     separator = ":",
+    docs = false,
   }: Props = $props();
 
   const listId = `kv-${Math.random().toString(36).slice(2)}`;
@@ -42,6 +46,7 @@
         .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
         .join("\n");
     } else {
+      const previous = [...items];
       items = bulkText
         .split("\n")
         .filter((l) => l.trim())
@@ -51,10 +56,52 @@
           const idx = line.indexOf(separator);
           const name = (idx < 0 ? line : line.slice(0, idx)).trim();
           const value = idx < 0 ? "" : line.slice(idx + 1).trim();
-          return { enabled: !disabled, name, value };
+          const at = previous.findIndex((p) => p.name === name);
+          const description = at < 0 ? undefined : previous.splice(at, 1)[0].description;
+          return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
         });
     }
     bulk = !bulk;
+  }
+
+  const showDesc = $derived(docs && app.settings?.showDescriptions !== false);
+  let editing = $state<number | null>(null);
+  let draft = $state("");
+
+  function startEdit(i: number) {
+    draft = items[i].description ?? "";
+    editing = i;
+  }
+  function commitEdit() {
+    if (editing === null) return;
+    const text = draft.replace(/\s+$/, "").replace(/^\s+/, "");
+    if (items[editing]) {
+      if (text) items[editing].description = text;
+      else delete items[editing].description;
+    }
+    editing = null;
+  }
+  function onDescKey(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      editing = null;
+    }
+  }
+  /** Grows the textarea with its content; focuses with the caret at the end. */
+  function autosize(el: HTMLTextAreaElement) {
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    el.addEventListener("input", fit);
+    return { destroy: () => el.removeEventListener("input", fit) };
   }
 
   export function isBulk() {
@@ -93,7 +140,7 @@
   {:else}
     {#each rows as row, i (i)}
       {@const ghost = i === items.length}
-      <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost>
+      <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost class:no-check={!toggles}>
         {#if toggles}
           <span class="c-check">
             {#if !ghost}
@@ -115,6 +162,24 @@
             <button class="icon-btn" title="Delete" onclick={() => items.splice(i, 1)}><Icon name="trash" size={13} /></button>
           {/if}
         </span>
+        {#if showDesc && !ghost}
+          {#if editing === i}
+            <textarea
+              class="desc desc-edit"
+              rows="1"
+              bind:value={draft}
+              use:autosize
+              placeholder="Describe this {namePlaceholder.toLowerCase()} — Enter to save, Shift+Enter for a new line, Esc to cancel"
+              onkeydown={onDescKey}
+              onblur={commitEdit}
+            ></textarea>
+          {:else if row.description}
+            <button class="desc" title={row.description} onclick={() => startEdit(i)}>{row.description}</button>
+          {:else}
+            <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
+            <button class="desc add" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(i)}>Add description</button>
+          {/if}
+        {/if}
       </div>
     {/each}
   {/if}
@@ -133,11 +198,92 @@
     overflow: hidden;
     background: var(--panel);
   }
-  .kv-head,
-  .kv-row {
+  .kv-head {
     display: flex;
     align-items: stretch;
     min-height: 31px;
+  }
+  /* Row: [check][name][value][delete], with an optional description line
+     under name+value. Column widths match the header's flex layout. */
+  .kv-row {
+    display: grid;
+    grid-template-columns: 34px 38% 1fr 34px;
+    grid-template-rows: 31px auto;
+  }
+  .kv-row.no-check {
+    grid-template-columns: 38% 1fr 34px;
+  }
+  .kv-row > .c-check {
+    grid-row: 1 / span 2;
+    align-items: flex-start;
+    padding-top: 8px;
+  }
+  .kv-row > .c-name,
+  .kv-row > .c-value,
+  .kv-row > .c-del {
+    grid-row: 1;
+    min-width: 0;
+  }
+  /* Description sub-row: spans to the right edge on a faint tint, with a
+     hairline that closes off the key/value divider above it. */
+  .desc {
+    grid-row: 2;
+    grid-column: 2 / -1;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin: 0;
+    padding: 5px 10px 6px;
+    border: none;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+    text-align: left;
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--muted);
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+    white-space: pre-line;
+  }
+  .kv-row.no-check .desc {
+    grid-column: 1 / -1;
+  }
+  .desc:hover {
+    color: var(--text-2);
+  }
+  .desc.add {
+    display: none;
+    color: var(--faint);
+    font-style: italic;
+  }
+  .kv-row:focus-within .desc.add {
+    display: block;
+  }
+  .desc-edit {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    background: var(--panel-2);
+    box-shadow: inset 0 0 0 1px var(--focus);
+    color: var(--text);
+    resize: none;
+    outline: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+  }
+  .desc-edit::placeholder {
+    color: var(--faint);
+    font-style: italic;
+  }
+  .kv-row.off .desc {
+    color: var(--faint);
+  }
+  .kv-row .desc.desc-edit {
+    color: var(--text);
   }
   .kv-head {
     font-size: 11.5px;
@@ -191,6 +337,7 @@
   .kv-row:hover .c-del .icon-btn {
     opacity: 1;
   }
+
   .cell {
     border: none;
     background: transparent;
@@ -226,6 +373,10 @@
     height: 14px;
     margin: 0;
     cursor: pointer;
+  }
+  .kv-head .c-value {
+    overflow: hidden;
+    white-space: nowrap;
   }
   .bulk {
     margin-left: auto;

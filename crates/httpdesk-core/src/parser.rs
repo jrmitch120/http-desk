@@ -15,6 +15,11 @@ pub const DISABLED_MARKER: &str = "#~";
 pub const SECTION_DIRECTIVE: &str = "httpdesk-disabled";
 /// Directive identifying API-key auth: `# @httpdesk-auth apikey header X-API-Key`.
 pub const AUTH_DIRECTIVE: &str = "httpdesk-auth";
+/// Per-item documentation directives: `# @param name: text`, `# @header Name: text`.
+/// Above the request line both JetBrains and VS Code treat them as unknown tags
+/// and ignore them (docs/research/http-comment-compat.md).
+pub const PARAM_DOC_DIRECTIVE: &str = "param";
+pub const HEADER_DOC_DIRECTIVE: &str = "header";
 
 const KNOWN_METHODS: &[&str] = &[
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT",
@@ -193,6 +198,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
     let mut query_marked_disabled = false;
     let mut headers_marked_disabled = false;
     let mut api_key: Option<(ApiKeyLocation, String)> = None;
+    let mut docs: Vec<Directive> = Vec::new();
 
     // ---- preamble ----
     let request_line = loop {
@@ -222,6 +228,11 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
                         };
                         api_key = Some((loc, parts.get(2).unwrap_or(&"").to_string()));
                     }
+                }
+                Some(d)
+                    if d.name.eq_ignore_ascii_case(PARAM_DOC_DIRECTIVE) || d.name.eq_ignore_ascii_case(HEADER_DOC_DIRECTIVE) =>
+                {
+                    docs.push(d)
                 }
                 Some(d) => req.directives.push(d),
                 None => req.comments.push(strip_one_space(c).to_string()),
@@ -362,6 +373,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
 
     req.query = resolve_section(query_items, query_marked_disabled);
     req.headers = resolve_section(header_items, headers_marked_disabled);
+    attach_docs(&mut req, docs);
 
     // ---- body ----
     let content_type = req.header("content-type").map(|h| h.value.clone());
@@ -463,5 +475,32 @@ pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
         BodyMode::Xml
     } else {
         BodyMode::Text
+    }
+}
+
+/// Attaches `@param` / `@header` docs to the first item with that name (params
+/// match exactly, headers case-insensitively). Repeated lines append. Docs that
+/// match nothing stay as directives so they're never dropped.
+fn attach_docs(req: &mut Request, docs: Vec<Directive>) {
+    for d in docs {
+        let is_header = d.name.eq_ignore_ascii_case(HEADER_DOC_DIRECTIVE);
+        let target = d.value.split_once(':').and_then(|(name, text)| {
+            let name = name.trim();
+            let items = if is_header { &mut req.headers.items } else { &mut req.query.items };
+            let item = items
+                .iter_mut()
+                .find(|kv| if is_header { kv.name.eq_ignore_ascii_case(name) } else { kv.name == name })?;
+            Some((item, text.trim().to_string()))
+        });
+        match target {
+            Some((item, text)) if !text.is_empty() => {
+                if !item.description.is_empty() {
+                    item.description.push('\n');
+                }
+                item.description.push_str(&text);
+            }
+            Some(_) => {}
+            None => req.directives.push(d),
+        }
     }
 }

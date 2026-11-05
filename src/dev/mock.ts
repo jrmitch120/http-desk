@@ -35,6 +35,7 @@ let settings = {
   theme: new URLSearchParams(location.search).get("theme") ?? "dark",
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
+  showDescriptions: true,
 };
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));

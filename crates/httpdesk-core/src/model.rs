@@ -56,20 +56,24 @@ pub struct KeyValue {
     pub enabled: bool,
     pub name: String,
     pub value: String,
+    /// Documentation, stored as `# @param name: …` / `# @header Name: …`
+    /// lines above the request line (ignored by JetBrains and VS Code).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 impl Default for KeyValue {
     fn default() -> Self {
-        KeyValue { enabled: true, name: String::new(), value: String::new() }
+        KeyValue { enabled: true, name: String::new(), value: String::new(), description: String::new() }
     }
 }
 
 impl KeyValue {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
-        KeyValue { enabled: true, name: name.into(), value: value.into() }
+        KeyValue { enabled: true, name: name.into(), value: value.into(), description: String::new() }
     }
     pub fn disabled(name: impl Into<String>, value: impl Into<String>) -> Self {
-        KeyValue { enabled: false, name: name.into(), value: value.into() }
+        KeyValue { enabled: false, name: name.into(), value: value.into(), description: String::new() }
     }
 }
 

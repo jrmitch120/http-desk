@@ -17,6 +17,8 @@ export interface KeyValue {
   enabled: boolean;
   name: string;
   value: string;
+  /** Params/headers only: saved as `# @param name: …` / `# @header Name: …`. */
+  description?: string;
 }
 
 export interface KvSection {
@@ -163,6 +165,7 @@ export interface AppSettings {
   theme: "dark" | "light";
   layout: "horizontal" | "vertical";
   checkUpdates: boolean;
+  showDescriptions: boolean;
 }
 
 // ---- OpenAPI
@@ -200,6 +203,7 @@ export interface GenerateOptions {
   grouping: Grouping;
   baseUrlVariable: string;
   singleFileName: string | null;
+  paramDescriptions: boolean;
 }
 
 export interface GenerateReport {

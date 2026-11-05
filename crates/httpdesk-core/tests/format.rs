@@ -332,3 +332,56 @@ fn added_and_removed_requests_serialize_cleanly() {
     let back = parse(&out);
     assert_eq!(back.requests.len(), 5);
 }
+
+#[test]
+fn param_and_header_docs_attach_to_items_and_round_trip() {
+    let text = "### Active alerts\n\
+# Returns all currently active alerts\n\
+# @name alerts_active\n\
+# @param area: State or marine area code\n\
+# @param area: e.g. KS\n\
+# @header user-agent: Identify your app\n\
+# @param missing: Documents nothing\n\
+GET https://api.weather.gov/alerts/active?limit=5\n\
+#~ &area=KS\n\
+User-Agent: HttpDesk\n";
+    let f = parse(text);
+    let r = &f.requests[0];
+    assert_eq!(r.comments, ["Returns all currently active alerts"]);
+    let area = r.query.items.iter().find(|i| i.name == "area").unwrap();
+    assert!(!area.enabled);
+    assert_eq!(area.description, "State or marine area code\ne.g. KS");
+    assert_eq!(r.query.items.iter().find(|i| i.name == "limit").unwrap().description, "");
+    assert_eq!(r.headers.items[0].description, "Identify your app", "header names match case-insensitively");
+    // Docs that match no item are kept, not dropped.
+    assert!(r.directives.iter().any(|d| d.name == "param" && d.value == "missing: Documents nothing"));
+
+    // Untouched: byte-for-byte.
+    assert_eq!(serialize(&f), text);
+
+    // Edited: docs are rendered from the items, above the request line.
+    let mut f = f;
+    f.requests[0].query.items[0].description = "Max results".into();
+    let out = serialize(&f);
+    assert!(out.contains("# @param limit: Max results\n# @param area: State or marine area code\n# @param area: e.g. KS\n# @header User-Agent: Identify your app\n"), "{out}");
+    assert!(out.contains("# @param missing: Documents nothing\n"));
+    let back = parse(&out);
+    assert_eq!(back.requests[0].query.items, f.requests[0].query.items);
+    assert_eq!(back.requests[0].headers.items, f.requests[0].headers.items);
+}
+
+#[test]
+fn doc_lines_stay_above_the_request_line() {
+    // Docs between query or header lines break JetBrains (research Appendix B),
+    // so every doc line must come before the method line.
+    let mut req = Request { name: "X".into(), method: "GET".into(), url: "https://x".into(), ..Default::default() };
+    req.query.items.push(KeyValue { description: "Q doc".into(), ..KeyValue::disabled("q", "1") });
+    req.headers.items.push(KeyValue { description: "H doc".into(), ..KeyValue::new("X-A", "1") });
+    let out = render_request(&req);
+    let method_line = out.lines().position(|l| l.starts_with("GET ")).unwrap();
+    for (i, l) in out.lines().enumerate() {
+        if l.starts_with("# @param") || l.starts_with("# @header") {
+            assert!(i < method_line, "{out}");
+        }
+    }
+}

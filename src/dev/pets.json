@@ -27,12 +27,14 @@
           {
             "enabled": true,
             "name": "limit",
-            "value": "20"
+            "value": "20",
+            "description": "How many pets to return. Default: 20."
           },
           {
             "enabled": false,
             "name": "status",
-            "value": "sold"
+            "value": "sold",
+            "description": "Filter by status. One of: available, pending, sold."
           }
         ]
       },
@@ -42,7 +44,8 @@
           {
             "enabled": true,
             "name": "Accept",
-            "value": "application/json"
+            "value": "application/json",
+            "description": "Response format. The API only produces JSON."
           },
           {
             "enabled": false,

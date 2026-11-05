@@ -91,6 +91,8 @@ pub struct GenerateOptions {
     pub grouping: Grouping,
     pub base_url_variable: String,
     pub single_file_name: Option<String>,
+    /// Write parameter descriptions as `# @param` / `# @header` lines.
+    pub param_descriptions: bool,
 }
 
 impl Default for GenerateOptions {
@@ -100,6 +102,7 @@ impl Default for GenerateOptions {
             grouping: Grouping::Tag,
             base_url_variable: "baseUrl".into(),
             single_file_name: None,
+            param_descriptions: true,
         }
     }
 }

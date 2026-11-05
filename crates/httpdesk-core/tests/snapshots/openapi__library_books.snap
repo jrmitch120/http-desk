@@ -23,6 +23,7 @@ Content-Type: application/json
 
 ### Search books
 # @name searchBooks
+# @param q: Required.
 GET {{baseUrl}}/books?q=dune
 #~ &filter[year]=1965
 #~ &filter[lang]=en

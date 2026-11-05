@@ -33,6 +33,8 @@ struct AppSettings {
     layout: String,
     /// Look for a new release on startup.
     check_updates: bool,
+    /// Show param/header descriptions under each row.
+    show_descriptions: bool,
 }
 
 impl Default for AppSettings {
@@ -44,6 +46,7 @@ impl Default for AppSettings {
             theme: "dark".into(),
             layout: "horizontal".into(),
             check_updates: true,
+            show_descriptions: true,
         }
     }
 }
