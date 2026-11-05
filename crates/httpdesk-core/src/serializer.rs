@@ -5,7 +5,7 @@
 //! requests are re-rendered. See `docs/ARCHITECTURE.md` §2.
 
 use crate::model::*;
-use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, SECTION_DIRECTIVE};
+use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
 
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
@@ -134,6 +134,14 @@ pub fn render_request(req: &Request) -> String {
     }
     for d in &req.directives {
         lines.push(if d.value.is_empty() { format!("# @{}", d.name) } else { format!("# @{} {}", d.name, d.value) });
+    }
+    let docs = [(PARAM_DOC_DIRECTIVE, &req.query.items), (HEADER_DOC_DIRECTIVE, &req.headers.items)];
+    for (tag, items) in docs {
+        for kv in items.iter().filter(|kv| !kv.name.is_empty()) {
+            for l in kv.description.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                lines.push(format!("# @{tag} {}: {l}", kv.name));
+            }
+        }
     }
     let mut off = Vec::new();
     if !req.query.enabled {

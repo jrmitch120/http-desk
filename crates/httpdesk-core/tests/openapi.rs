@@ -3,6 +3,11 @@
 use httpdesk_core::openapi::*;
 use httpdesk_core::*;
 
+/// (name, value, enabled) — descriptions are asserted separately.
+fn kv(items: &[KeyValue]) -> Vec<(&str, &str, bool)> {
+    items.iter().map(|i| (i.name.as_str(), i.value.as_str(), i.enabled)).collect()
+}
+
 const PETSTORE: &str = include_str!("fixtures/openapi/petstore-3.0.yaml");
 const LIBRARY: &str = include_str!("fixtures/openapi/library-3.1.json");
 
@@ -120,7 +125,10 @@ fn query_and_header_params_follow_required_flag() {
     let out = generate(&petstore(), Grouping::Tag);
     let list = request(file(&out, "pet.http"), "List all pets");
     assert_eq!(list.url, "{{baseUrl}}/pets");
-    assert_eq!(list.query.items, vec![KeyValue::disabled("limit", "20"), KeyValue::new("status", "available")]);
+    assert_eq!(kv(&list.query.items), [("limit", "20", false), ("status", "available", true)]);
+    let docs: Vec<_> = list.query.items.iter().map(|i| i.description.as_str()).collect();
+    assert_eq!(docs, ["How many items to return at one time (max 100).", "Required. One of: available, pending, sold."]);
+    assert_eq!(list.headers.items.iter().find(|h| h.name == "X-Trace").unwrap().description, "Required. Default: trace-1.");
     let headers: Vec<_> = list.headers.items.iter().map(|h| (h.name.as_str(), h.value.as_str(), h.enabled)).collect();
     assert_eq!(
         headers,
@@ -209,7 +217,7 @@ fn openapi_31_schemas_handle_type_arrays_const_and_recursion() {
         })
     );
     let search = request(file(&out, "books.http"), "Search books");
-    assert_eq!(search.query.items, vec![KeyValue::new("q", "dune"), KeyValue::disabled("filter[year]", "1965"), KeyValue::disabled("filter[lang]", "en")]);
+    assert_eq!(kv(&search.query.items), [("q", "dune", true), ("filter[year]", "1965", false), ("filter[lang]", "en", false)]);
 }
 
 #[test]

@@ -314,6 +314,52 @@ fn param_example<'a>(ctx: &Ctx<'a>, p: &'a Value) -> Value {
     Value::Null
 }
 
+const MAX_DOC_CHARS: usize = 240;
+const MAX_DOC_ENUM: usize = 8;
+
+/// One-line documentation for a parameter: the first paragraph of its
+/// description plus required / deprecated / allowed values / default.
+fn param_doc<'a>(ctx: &Ctx<'a>, p: &'a Value, required: bool) -> String {
+    let schema = p.get("schema").map(|s| ctx.deref(s));
+    fn text(v: Option<&Value>) -> Option<&str> {
+        v.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(desc) = text(p.get("description")).or_else(|| text(schema.and_then(|s| s.get("description")))) {
+        // First paragraph; its lines become sentences so they don't run together.
+        let first = desc.split("\n\n").next().unwrap_or(desc);
+        let sentences: Vec<String> = first
+            .lines()
+            .map(single_line)
+            .filter(|l| !l.is_empty())
+            .map(|l| if l.ends_with(['.', '!', '?', ':', ';', ',']) { l } else { format!("{l}.") })
+            .collect();
+        let mut line = sentences.join(" ");
+        if line.chars().count() > MAX_DOC_CHARS {
+            line = line.chars().take(MAX_DOC_CHARS - 1).collect::<String>().trim_end().to_string() + "…";
+        }
+        parts.push(line);
+    }
+    if required {
+        parts.push("Required.".into());
+    }
+    if p.get("deprecated").and_then(Value::as_bool).unwrap_or(false) {
+        parts.push("Deprecated.".into());
+    }
+    let values = schema.and_then(|s| {
+        s.get("enum").or_else(|| s.get("items").map(|i| ctx.deref(i)).and_then(|i| i.get("enum")))
+    });
+    if let Some(values) = values.and_then(Value::as_array).filter(|v| !v.is_empty()) {
+        let shown: Vec<String> = values.iter().take(MAX_DOC_ENUM).map(value_to_string).collect();
+        let more = if values.len() > MAX_DOC_ENUM { format!(", … ({} total)", values.len()) } else { String::new() };
+        parts.push(format!("One of: {}{more}.", shown.join(", ")));
+    }
+    if let Some(default) = schema.and_then(|s| s.get("default")).filter(|d| !d.is_null()) {
+        parts.push(format!("Default: {}.", value_to_string(default)));
+    }
+    parts.join(" ")
+}
+
 fn merged_parameters<'a>(ctx: &Ctx<'a>, op: &Op<'a>) -> Vec<&'a Value> {
     let mut out: Vec<&'a Value> = Vec::new();
     let lists = [op.path_item.get("parameters"), op.op.get("parameters")];
@@ -406,7 +452,8 @@ fn build_request<'a>(
         let Some(name) = p.get("name").and_then(Value::as_str) else { continue };
         let required = p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let value = param_example(ctx, p);
-        let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v };
+        let description = param_doc(ctx, p, required);
+        let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v, description: description.clone() };
         match p.get("in").and_then(Value::as_str) {
             Some("query") => {
                 for (n, v) in expand_query(name, &value, p) {
@@ -440,7 +487,7 @@ fn build_request<'a>(
     if !cookies.is_empty() {
         let enabled = cookies.iter().any(|(_, r)| *r);
         let value = cookies.into_iter().map(|(c, _)| c).collect::<Vec<_>>().join("; ");
-        req.headers.items.push(KeyValue { enabled, name: "Cookie".into(), value });
+        req.headers.items.push(KeyValue { enabled, name: "Cookie".into(), value, ..Default::default() });
     }
     req
 }

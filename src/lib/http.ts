@@ -83,16 +83,20 @@ export function applyUrlText(req: Request, text: string): void {
   req.url = base;
   if (parsed.length && !req.query.enabled) req.query.enabled = true;
   const sectionOn = req.query.enabled;
+  // Retyped params keep their documentation (matched by name).
+  const docs = new Map<string, string>();
+  for (const item of req.query.items) if (sectionOn && isActive(item) && item.description && !docs.has(item.name)) docs.set(item.name, item.description);
+  const withDoc = (p: KeyValue): KeyValue => (docs.has(p.name) ? { ...p, description: docs.get(p.name) } : p);
   const next: KeyValue[] = [];
   let k = 0;
   for (const item of req.query.items) {
     if (sectionOn && isActive(item)) {
-      if (k < parsed.length) next.push(parsed[k++]);
+      if (k < parsed.length) next.push(withDoc(parsed[k++]));
     } else {
       next.push(item);
     }
   }
-  while (k < parsed.length) next.push(parsed[k++]);
+  while (k < parsed.length) next.push(withDoc(parsed[k++]));
   req.query.items = next;
 }
 

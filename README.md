@@ -22,6 +22,7 @@ OpenAPI mapping, sync, and known limitations.
 ```http
 ### List pets
 # Returns all pets, optionally filtered.
+# @param limit: Max results. Default: 20.
 GET {{baseUrl}}/pets?limit=20
 #~ &status=sold
 Authorization: Bearer {{token}}
@@ -29,8 +30,10 @@ Accept: application/json
 #~ X-Debug: true
 ```
 
-`#~` marks something you switched off in HttpDesk. JetBrains and VS Code read it
-as a comment. Requests you don't edit are saved byte-for-byte as they were.
+`#~` marks something you switched off in HttpDesk. `# @param` / `# @header` lines
+hold the descriptions shown by the ⓘ next to params and headers (the OpenAPI
+importer fills them in). JetBrains and VS Code ignore both. Requests you don't
+edit are saved byte-for-byte as they were.
 
 ## Using it
 

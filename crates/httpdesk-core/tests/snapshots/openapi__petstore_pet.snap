@@ -11,6 +11,9 @@ expression: "serialize(file(&out, \"pet.http\"))"
 #
 # Supports paging.
 # @name listPets
+# @param limit: How many items to return at one time (max 100).
+# @param status: Required. One of: available, pending, sold.
+# @header X-Trace: Required. Default: trace-1.
 GET {{baseUrl}}/pets?status=available
 #~ &limit=20
 Authorization: Bearer {{token}}

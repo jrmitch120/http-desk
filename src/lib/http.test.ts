@@ -48,6 +48,19 @@ describe("URL ⇄ query params", () => {
     expect(r.query.items).toEqual([{ enabled: false, name: "b", value: "2" }]);
   });
 
+  it("typing in the URL bar keeps param descriptions", () => {
+    const r = newRequest();
+    r.query.items = [
+      { enabled: true, name: "limit", value: "5", description: "Max results" },
+      { enabled: false, name: "area", value: "KS", description: "State code" },
+    ];
+    applyUrlText(r, "https://x/p?limit=50");
+    expect(r.query.items).toEqual([
+      { enabled: true, name: "limit", value: "50", description: "Max results" },
+      { enabled: false, name: "area", value: "KS", description: "State code" },
+    ]);
+  });
+
   it("typing params re-enables a disabled section", () => {
     const r = newRequest();
     r.query.enabled = false;

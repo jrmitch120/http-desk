@@ -17,6 +17,8 @@ export interface KeyValue {
   enabled: boolean;
   name: string;
   value: string;
+  /** Params/headers only: saved as `# @param name: …` / `# @header Name: …`. */
+  description?: string;
 }
 
 export interface KvSection {

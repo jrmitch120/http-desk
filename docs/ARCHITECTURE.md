@@ -134,6 +134,7 @@ is the same body JetBrains or VS Code would send.
 | Query params (enabled) | Appended to the URL: `?page=1&size=10`. Indented multi-line `?`/`&` continuation lines are also parsed. |
 | Path params | `{{var}}` placeholders, values from file variables / environment |
 | Headers | `Name: value` lines |
+| Param / header descriptions | `# @param limit: Max results` / `# @header X-Trace: Correlation id` lines in the comment block above the request line. Repeated lines append. Docs that match no item are kept as directives. Both tools ignore these unknown tags (verified in JetBrains CLI 2026.3; VS Code source). They are never placed between query or header lines, where JetBrains breaks: see [research/http-comment-compat.md](research/http-comment-compat.md). |
 | Auth: Basic | `Authorization: Basic {{user}} {{password}}` (the space-separated form both clients accept and encode). `user:pass` and pre-encoded base64 are also parsed. |
 | Auth: Bearer | `Authorization: Bearer {{token}}` |
 | Auth: API key | A header or query param plus `# @httpdesk-auth apikey header X-API-Key` |

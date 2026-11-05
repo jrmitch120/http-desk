@@ -2,6 +2,7 @@
   // Editable key/value list with per-row enable checkboxes, a trailing blank
   // row that turns into a real row as you type, and a bulk-edit mode.
   import type { KeyValue } from "../lib/types";
+  import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -13,6 +14,8 @@
     valuePlaceholder?: string;
     suggestions?: string[];
     separator?: string;
+    /** Show per-row documentation (ⓘ with the description on hover; click to edit). */
+    docs?: boolean;
   }
   let {
     items = $bindable(),
@@ -22,6 +25,7 @@
     valuePlaceholder = "Value",
     suggestions = [],
     separator = ":",
+    docs = false,
   }: Props = $props();
 
   const listId = `kv-${Math.random().toString(36).slice(2)}`;
@@ -42,6 +46,7 @@
         .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
         .join("\n");
     } else {
+      const previous = [...items];
       items = bulkText
         .split("\n")
         .filter((l) => l.trim())
@@ -51,10 +56,19 @@
           const idx = line.indexOf(separator);
           const name = (idx < 0 ? line : line.slice(0, idx)).trim();
           const value = idx < 0 ? "" : line.slice(idx + 1).trim();
-          return { enabled: !disabled, name, value };
+          const at = previous.findIndex((p) => p.name === name);
+          const description = at < 0 ? undefined : previous.splice(at, 1)[0].description;
+          return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
         });
     }
     bulk = !bulk;
+  }
+
+  async function editDoc(i: number) {
+    const item = items[i];
+    const label = item.name || namePlaceholder.toLowerCase();
+    const next = await app.prompt(`Description for ${label}`, (item.description ?? "").replace(/\n/g, " "), "Shown on hover; saved in the .http file");
+    if (next !== null) items[i].description = next.trim();
   }
 
   export function isBulk() {
@@ -110,6 +124,21 @@
           oninput={(e) => set(i, "name", e.currentTarget.value)}
         />
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
+        {#if docs}
+          <span class="c-doc">
+            {#if !ghost}
+              <button
+                class="icon-btn"
+                class:has-doc={!!row.description}
+                title={row.description ? row.description : "Add a description"}
+                aria-label={row.description ? `Description: ${row.description}` : "Add a description"}
+                onclick={() => editDoc(i)}
+              >
+                <Icon name="info" size={13} />
+              </button>
+            {/if}
+          </span>
+        {/if}
         <span class="c-del">
           {#if !ghost}
             <button class="icon-btn" title="Delete" onclick={() => items.splice(i, 1)}><Icon name="trash" size={13} /></button>
@@ -183,13 +212,26 @@
     align-items: center;
     justify-content: center;
   }
-  .c-del .icon-btn {
+  .c-del .icon-btn,
+  .c-doc .icon-btn {
     opacity: 0;
     width: 24px;
     height: 24px;
   }
-  .kv-row:hover .c-del .icon-btn {
+  .kv-row:hover .c-del .icon-btn,
+  .kv-row:hover .c-doc .icon-btn,
+  .c-doc .icon-btn.has-doc {
     opacity: 1;
+  }
+  .c-doc {
+    width: 28px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .c-doc .icon-btn.has-doc {
+    color: var(--info);
   }
   .cell {
     border: none;
