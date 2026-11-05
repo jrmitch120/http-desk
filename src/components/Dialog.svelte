@@ -52,6 +52,9 @@
     margin: 0;
     color: var(--text-2);
     line-height: 1.5;
+    white-space: pre-line;
+    max-height: 50vh;
+    overflow: auto;
   }
   .input {
     width: 100%;

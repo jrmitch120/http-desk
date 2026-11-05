@@ -87,6 +87,20 @@ src/                    Svelte 5 UI (lib/ = store, API, helpers; components/)
 docs/ARCHITECTURE.md    design and decisions
 ```
 
-Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds
-installers for all three platforms and attaches them to a draft GitHub release.
+### Releases
+
+1. Bump `version` in `package.json` and `src-tauri/tauri.conf.json`.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+3. `.github/workflows/release.yml` builds installers for all three platforms and
+   attaches them to a **draft** GitHub release. Publish the draft to ship it.
+
+Installed apps check `releases/latest/download/latest.json` on startup (and from
+Settings → Updates) and offer to install newer versions. Updates are signed with
+a minisign key: the public half is in `tauri.conf.json`; the private key and its
+password are the `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets. If that key is lost,
+existing installs can no longer verify updates, so keep a backup.
+
+Updater bundles are only produced with `--config src-tauri/tauri.updater.conf.json`
+(the release workflow passes it), so local `pnpm tauri build` needs no key.
 Code signing and notarization are not configured yet.
