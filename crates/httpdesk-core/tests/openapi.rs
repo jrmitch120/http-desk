@@ -355,3 +355,21 @@ fn load_file_reports_missing_files() {
     let err = OpenApiDoc::load_file(std::path::Path::new("/definitely/not/here.yaml")).unwrap_err();
     assert!(matches!(err, OpenApiError::Io(_)), "{err}");
 }
+
+#[tokio::test]
+async fn load_url_sends_a_user_agent() {
+    use wiremock::matchers::{header_regex, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    // Mirrors api.weather.gov: 403 unless a User-Agent is present.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/openapi.yaml"))
+        .and(header_regex("user-agent", "^HttpDesk/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(PETSTORE))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(403)).mount(&server).await;
+
+    let doc = OpenApiDoc::load_url(&format!("{}/openapi.yaml", server.uri())).await.expect("spec loads");
+    assert!(!doc.summary().operations.is_empty());
+}

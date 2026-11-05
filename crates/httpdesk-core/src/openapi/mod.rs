@@ -154,11 +154,18 @@ impl OpenApiDoc {
     }
 
     pub async fn load_url(url: &str) -> Result<OpenApiDoc, OpenApiError> {
+        // Some servers (e.g. api.weather.gov) reject requests without a User-Agent.
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
+            .user_agent(concat!("HttpDesk/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| OpenApiError::Http(e.to_string()))?;
-        let resp = client.get(url).send().await.map_err(|e| OpenApiError::Http(e.to_string()))?;
+        let resp = client
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.8")
+            .send()
+            .await
+            .map_err(|e| OpenApiError::Http(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(OpenApiError::Http(format!("{url} returned HTTP {status}")));
