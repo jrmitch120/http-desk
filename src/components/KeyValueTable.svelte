@@ -224,18 +224,21 @@
     grid-row: 1;
     min-width: 0;
   }
+  /* Description sub-row: spans to the right edge on a faint tint, with a
+     hairline that closes off the key/value divider above it. */
   .desc {
     grid-row: 2;
-    grid-column: 2 / 4;
+    grid-column: 2 / -1;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     margin: 0;
-    padding: 0 10px 7px;
+    padding: 5px 10px 6px;
     border: none;
-    background: none;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    background: color-mix(in srgb, var(--panel-2) 55%, transparent);
     text-align: left;
     font: inherit;
     font-size: 11.5px;
@@ -247,7 +250,7 @@
     white-space: pre-line;
   }
   .kv-row.no-check .desc {
-    grid-column: 1 / 3;
+    grid-column: 1 / -1;
   }
   .desc:hover {
     color: var(--text-2);
@@ -264,9 +267,6 @@
     display: block;
     -webkit-line-clamp: unset;
     line-clamp: unset;
-    margin: 0 6px 6px;
-    padding: 4px 6px;
-    border-radius: var(--radius-sm);
     background: var(--panel-2);
     box-shadow: inset 0 0 0 1px var(--focus);
     color: var(--text);
