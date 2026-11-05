@@ -186,16 +186,35 @@ class AppStore {
     };
   }
 
-  async loadDoc(path: string): Promise<Doc | null> {
-    if (this.docs[path]) return this.docs[path];
-    try {
-      const file = await api.readHttpFile(path);
-      this.docs[path] = this.makeDoc(path, file);
-      return this.docs[path];
-    } catch (e) {
-      this.toast("error", errorMessage(e));
-      return null;
+  private loading = new Map<string, Promise<Doc | null>>();
+
+  /** Loads (once) and caches a document. Concurrent callers share one read so
+   *  request keys stay stable; a second parse would orphan open tabs. */
+  loadDoc(path: string): Promise<Doc | null> {
+    if (this.docs[path]) return Promise.resolve(this.docs[path]);
+    let pending = this.loading.get(path);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const file = await api.readHttpFile(path);
+          this.docs[path] ??= this.makeDoc(path, file);
+          return this.docs[path];
+        } catch (e) {
+          this.toast("error", errorMessage(e));
+          return null;
+        } finally {
+          this.loading.delete(path);
+        }
+      })();
+      this.loading.set(path, pending);
     }
+    return pending;
+  }
+
+  /** Re-reads documents that are already open after the app itself rewrote
+   *  them (e.g. OpenAPI regeneration); our own writes produce no watcher event. */
+  async reloadOpen(paths: string[]) {
+    for (const p of paths) if (this.docs[p]) await this.reload(p);
   }
 
   requestFor(tab: Tab | null): Request | undefined {
