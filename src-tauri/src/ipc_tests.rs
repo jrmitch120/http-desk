@@ -209,7 +209,9 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
     h.webview.listen_any("workspace-changed", move |e| {
         let _ = tx.send(e.payload().to_string());
     });
-    std::thread::sleep(std::time::Duration::from_millis(400)); // let the watcher settle
+    // Let the watcher settle: FSEvents can deliver the setup write above late, so
+    // drain until no event has arrived for a while before acting.
+    while rx.recv_timeout(std::time::Duration::from_millis(600)).is_ok() {}
 
     let file = h.ok("read_http_file", json!({ "path": path }));
     h.ok("save_http_file", json!({ "path": path, "file": file }));
