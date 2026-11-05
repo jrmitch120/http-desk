@@ -4,6 +4,7 @@
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import { updates } from "../lib/updates.svelte";
 
   async function openFolder() {
     const dir = await open({ directory: true, title: "Open workspace folder" });
@@ -54,6 +55,11 @@
     <button class="icon-btn" onclick={() => (app.modal = "env")} title="Manage environments (⌘/Ctrl E)"><Icon name="layers" size={14} /></button>
   </div>
 
+  {#if updates.progress !== null}
+    <span class="update-pill" title="Downloading the update; HttpDesk restarts when it's done">
+      <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
+    </span>
+  {/if}
   <button
     class="icon-btn"
     title={layout === "horizontal" ? "Show response below" : "Show response on the right"}
@@ -68,6 +74,18 @@
 </header>
 
 <style>
+  .update-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    margin-right: 6px;
+  }
   .topbar {
     height: 42px;
     flex: none;

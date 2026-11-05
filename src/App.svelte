@@ -13,11 +13,15 @@
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import Icon from "./components/Icon.svelte";
+  import { updates } from "./lib/updates.svelte";
 
   let sidebarWidth = $state(Number(localStorage.getItem("sidebarWidth")) || 280);
 
   onMount(() => {
-    app.init();
+    app.init().then(() => {
+      // Production builds only: dev builds have no signed release to compare against.
+      if (!import.meta.env.DEV && app.settings?.checkUpdates !== false) setTimeout(() => updates.check(false), 3000);
+    });
   });
 
   function onKey(e: KeyboardEvent) {

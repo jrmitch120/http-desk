@@ -162,6 +162,7 @@ export interface AppSettings {
   environments: Record<string, string>;
   theme: "dark" | "light";
   layout: "horizontal" | "vertical";
+  checkUpdates: boolean;
 }
 
 // ---- OpenAPI

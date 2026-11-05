@@ -1,6 +1,8 @@
 <script lang="ts">
   // Application settings: appearance, request defaults, TLS, response limits.
   import { open } from "@tauri-apps/plugin-dialog";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
   import Icon from "./Icon.svelte";
@@ -9,6 +11,8 @@
 
   let copy = $state<AppSettings | null>(app.settings ? structuredClone($state.snapshot(app.settings) as AppSettings) : null);
   let saving = $state(false);
+  let version = $state("");
+  getVersion().then((v) => (version = v)).catch(() => {});
 
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
 
@@ -83,6 +87,20 @@
             <button class:on={copy.layout === "horizontal"} onclick={() => (copy!.layout = "horizontal")}><Icon name="columns" size={13} />Response on the right</button>
             <button class:on={copy.layout === "vertical"} onclick={() => (copy!.layout = "vertical")}><Icon name="rows" size={13} />Response below</button>
           </div>
+        </div>
+      </section>
+
+      <section>
+        <h3>Updates</h3>
+        <div class="setting">
+          <div class="label"><span>Check for updates on startup</span><small class="muted">{version ? `HttpDesk ${version}` : "HttpDesk"}</small></div>
+          <Toggle checked={copy.checkUpdates} onchange={(v) => (copy!.checkUpdates = v)} />
+        </div>
+        <div class="setting">
+          <div class="label"><span>Check now</span><small class="muted">Downloads come from the project's GitHub releases</small></div>
+          <button class="btn small" disabled={updates.checking || updates.progress !== null} onclick={() => updates.check(true)}>
+            {updates.checking ? "Checking…" : "Check for updates"}
+          </button>
         </div>
       </section>
 

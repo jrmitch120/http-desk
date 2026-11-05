@@ -31,6 +31,8 @@ struct AppSettings {
     environments: HashMap<String, String>,
     theme: String,
     layout: String,
+    /// Look for a new release on startup.
+    check_updates: bool,
 }
 
 impl Default for AppSettings {
@@ -41,6 +43,7 @@ impl Default for AppSettings {
             environments: HashMap::new(),
             theme: "dark".into(),
             layout: "horizontal".into(),
+            check_updates: true,
         }
     }
 }
@@ -447,7 +450,13 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    with_commands(tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_opener::init()))
+    with_commands(
+        tauri::Builder::default()
+            .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_opener::init())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init()),
+    )
         .run(tauri::generate_context!())
         .expect("error while running HttpDesk");
 }
