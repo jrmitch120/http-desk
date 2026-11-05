@@ -35,7 +35,9 @@
           theme,
           EditorView.theme({
             "&": { fontSize: "13px", height: "100%" },
-            ".cm-scroller": { overflow: "hidden", lineHeight: "30px", fontFamily: "var(--mono)" },
+            // Scrolls horizontally (wheel, trackpad, caret, drag-select) without a visible scrollbar.
+            ".cm-scroller": { overflowX: "auto", overflowY: "hidden", scrollbarWidth: "none", lineHeight: "30px", fontFamily: "var(--mono)" },
+            ".cm-scroller::-webkit-scrollbar": { display: "none" },
             ".cm-content": { padding: "0", lineHeight: "30px" },
             ".cm-line": { padding: "0 10px", lineHeight: "30px" },
             ".cm-activeLine": { backgroundColor: "transparent" },

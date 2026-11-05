@@ -143,6 +143,7 @@
         return;
       }
       await app.refreshTree();
+      await app.reloadOpen(report.files);
       await app.loadEnvironments();
       app.expanded[dir] = true;
       if (!app.envName && report.environments[0]) await app.selectEnvironment(report.environments[0]);
