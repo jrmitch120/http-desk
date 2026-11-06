@@ -482,6 +482,54 @@ describe("startup", () => {
     expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
     expect(app.starting).toBe(false);
   });
+
+  describe("pane sizes left in localStorage by older versions", () => {
+    let stored: Map<string, string>;
+    beforeEach(() => {
+      stored = new Map([
+        ["sidebarWidth", "340"],
+        ["splitRatio", "0.35"],
+        ["unrelated", "kept"],
+      ]);
+      vi.stubGlobal("localStorage", {
+        getItem: (k: string) => stored.get(k) ?? null,
+        setItem: (k: string, v: string) => void stored.set(k, String(v)),
+        removeItem: (k: string) => void stored.delete(k),
+      });
+      api.getSettings.mockResolvedValue({
+        ...settings([]),
+        sidebarWidth: 280,
+        splitRatio: { horizontal: 0.5, vertical: 0.5 },
+      });
+      return () => vi.unstubAllGlobals();
+    });
+
+    it("are moved into settings once, then removed from localStorage", async () => {
+      await app.init();
+
+      expect(api.saveSettings).toHaveBeenCalledTimes(1);
+      // The old single ratio applied to both layouts.
+      expect(api.saveSettings.mock.calls[0][0]).toMatchObject({
+        sidebarWidth: 340,
+        splitRatio: { horizontal: 0.35, vertical: 0.35 },
+      });
+      expect([...stored.keys()]).toEqual(["unrelated"]);
+
+      await app.init();
+      expect(api.saveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores values that aren't usable sizes", async () => {
+      stored.set("sidebarWidth", "wide");
+      stored.delete("splitRatio");
+
+      await app.init();
+
+      expect(api.saveSettings).not.toHaveBeenCalled();
+      expect(app.settings).toMatchObject({ sidebarWidth: 280, splitRatio: { horizontal: 0.5, vertical: 0.5 } });
+      expect([...stored.keys()]).toEqual(["unrelated"]);
+    });
+  });
 });
 
 describe("watcher resilience", () => {

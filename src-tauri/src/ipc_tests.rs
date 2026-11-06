@@ -389,6 +389,23 @@ fn settings_are_replaced_atomically_through_symlinks() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "no temp file left behind");
 }
 
+/// Settings files written before the pane sizes were stored still load, with the default sizes.
+#[test]
+fn settings_without_pane_sizes_load_with_defaults() {
+    let old = r#"{"theme":"light","layout":"vertical","checkUpdates":false}"#;
+    let settings: super::AppSettings = serde_json::from_str(old).unwrap();
+    let json = serde_json::to_value(&settings).unwrap();
+    assert_eq!(json["theme"], "light");
+    assert_eq!(json["checkUpdates"], false);
+    assert_eq!(json["sidebarWidth"], 280.0);
+    assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.5 }));
+
+    // One layout's ratio saved on its own keeps the default for the other.
+    let partial: super::AppSettings = serde_json::from_str(r#"{"splitRatio":{"vertical":0.3}}"#).unwrap();
+    let json = serde_json::to_value(&partial).unwrap();
+    assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.3 }));
+}
+
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.
 fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec<String> {
     let mut out = Vec::new();

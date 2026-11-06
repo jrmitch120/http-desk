@@ -54,6 +54,24 @@ struct AppSettings {
     check_updates: bool,
     /// Show param/header descriptions under each row.
     show_descriptions: bool,
+    /// Sidebar width in px. A float, so no value the frontend writes fails to load.
+    sidebar_width: f64,
+    /// The request pane's share of the request/response split, per layout.
+    split_ratio: SplitRatio,
+}
+
+/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct SplitRatio {
+    horizontal: f64,
+    vertical: f64,
+}
+
+impl Default for SplitRatio {
+    fn default() -> Self {
+        SplitRatio { horizontal: 0.5, vertical: 0.5 }
+    }
 }
 
 impl Default for AppSettings {
@@ -66,6 +84,8 @@ impl Default for AppSettings {
             layout: "horizontal".into(),
             check_updates: true,
             show_descriptions: true,
+            sidebar_width: 280.0,
+            split_ratio: SplitRatio::default(),
         }
     }
 }
