@@ -6,8 +6,19 @@
 //! copied byte for byte, so `9007199254740993`, `10.50`, `1e3`, `-0` and `\u`
 //! escapes stay exactly as written, and duplicate keys keep their order.
 //! Parsing into `serde_json::Value`, `f64` or JS numbers would change them.
+//!
+//! The XML formatter ([`format_xml`]) works the same way: markup and text are
+//! copied as written and only the whitespace between elements changes.
+//!
+//! [`hexdump`] renders binary bodies for the Hex view.
 
 use serde::Deserialize;
+
+mod hex;
+mod xml;
+
+pub use hex::{hexdump, HEX_PREVIEW_BYTES};
+pub use xml::format_xml;
 
 /// How to lay out the tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -24,12 +35,23 @@ pub enum FormatMode {
 #[serde(rename_all = "lowercase")]
 pub enum BodyKind {
     Json,
+    Xml,
 }
 
 /// Why a body couldn't be formatted (it isn't valid, or is nested too deeply).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct FormatError(String);
+
+impl FormatError {
+    /// "Invalid {syntax} at line L, column C: {what}", for byte offset `pos` of `text`.
+    fn at(syntax: &str, text: &str, pos: usize, what: &str) -> FormatError {
+        let before = &text[..pos];
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+        FormatError(format!("Invalid {syntax} at line {line}, column {column}: {what}"))
+    }
+}
 
 /// Deepest nesting we format. Pretty output grows with the square of the
 /// depth (each level indents every line below it), so a hostile body could
@@ -43,6 +65,7 @@ const INDENT: &str = "  ";
 pub fn format_body(text: &str, kind: BodyKind, mode: FormatMode) -> Result<String, FormatError> {
     match kind {
         BodyKind::Json => format_json(text, mode),
+        BodyKind::Xml => format_xml(text, mode),
     }
 }
 
@@ -260,9 +283,6 @@ impl<'a> Scanner<'a> {
 
     /// An error naming the line and column of the current position.
     fn error(&self, what: &str) -> FormatError {
-        let before = &self.text[..self.pos];
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
-        FormatError(format!("Invalid JSON at line {line}, column {column}: {what}"))
+        FormatError::at("JSON", self.text, self.pos, what)
     }
 }

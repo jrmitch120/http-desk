@@ -166,7 +166,7 @@ export interface HttpResponse {
 }
 
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
-export type BodyKind = "json";
+export type BodyKind = "json" | "xml";
 
 /** Pretty: one member per line, two-space indent. Minify: no whitespace. */
 export type FormatMode = "pretty" | "minify";

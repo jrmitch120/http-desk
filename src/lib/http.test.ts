@@ -8,7 +8,6 @@ import {
   parseFileRef,
   parseForm,
   parseMultipart,
-  prettyXml,
   relativePath,
   setBodyMode,
   setDirective,
@@ -358,12 +357,6 @@ describe("directives", () => {
 });
 
 describe("misc", () => {
-  it("pretty prints xml", () => {
-    expect(prettyXml('<?xml version="1.0"?><a><b>text</b><c/><d><e>1</e></d></a>')).toBe(
-      ['<?xml version="1.0"?>', "<a>", "  <b>text</b>", "  <c/>", "  <d>", "    <e>1</e>", "  </d>", "</a>"].join("\n"),
-    );
-  });
-
   it("computes relative paths", () => {
     expect(relativePath("/w/api", "/w/api/files/a.json")).toBe("./files/a.json");
     expect(relativePath("/w/api", "/w/data/a.json")).toBe("../data/a.json");

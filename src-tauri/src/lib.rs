@@ -386,6 +386,18 @@ async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResul
         .map_err(err)?
 }
 
+/// The Hex view of a binary response: a dump of the start of the stored body
+/// (`body_format::hexdump`), so it works even for bodies too big to send to
+/// the UI as base64.
+#[tauri::command]
+async fn hexdump<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
+    off_main(app, move |state| {
+        let body = state.bodies.lock().unwrap().get(&response_id).ok_or("Response is no longer available")?;
+        Ok(body_format::hexdump(&body))
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ settings
 
 #[tauri::command]
@@ -563,6 +575,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             cancel_request,
             save_response_body,
             format_body,
+            hexdump,
             get_settings,
             save_settings,
             set_unsaved,
