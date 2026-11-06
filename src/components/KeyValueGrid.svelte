@@ -41,6 +41,7 @@
   // Rows are keyed by object, and the ghost row object itself becomes the new
   // row, so its inputs (and focus) survive the change.
   import { untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import type { KeyValue } from "../lib/types";
   import { formatBulk, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
@@ -67,6 +68,8 @@
     separator?: string;
     /** Why a name can't be saved (shown under the row), or null. */
     nameError?: (name: string) => string | null;
+    /** Which rows to show (e.g. a search filter). The ghost row and rows added here always show. */
+    visible?: (row: R) => boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
   }
@@ -82,6 +85,7 @@
     suggestions = [],
     separator = ":",
     nameError = () => null,
+    visible = () => true,
     onchange,
   }: Props = $props();
 
@@ -106,13 +110,25 @@
 
   const newRow = () => blank();
   let ghost = $state(newRow());
-  const rows = $derived([...items, ghost]);
+  /** Rows typed into the ghost row since `visible` last changed: they stay visible while you type. */
+  const added = new SvelteSet<R>();
+  let addedUnder = $state.raw<Props["visible"]>();
+  const shown = (row: R) => (addedUnder === visible && added.has(row)) || visible(row);
+  /** Each shown row with its position in `items`, so hidden rows don't shift indexes. */
+  const rows = $derived([...items.map((row, i) => ({ row, i })).filter(({ row }) => shown(row)), { row: ghost, i: items.length }]);
 
   function changed() {
     onchange?.(items);
   }
 
   function set(row: R, patch: Partial<R>) {
+    if (row === ghost) {
+      if (addedUnder !== visible) {
+        added.clear();
+        addedUnder = visible;
+      }
+      added.add(row);
+    }
     Object.assign(row, patch);
     if (row === ghost) {
       items.push(row);
@@ -227,7 +243,7 @@
   {#if bulk}
     <textarea class="bulk-text mono" bind:value={bulkText} oninput={applyBulk} spellcheck="false" rows={Math.max(6, bulkText.split("\n").length + 1)}></textarea>
   {:else}
-    {#each rows as row, i (row)}
+    {#each rows as { row, i } (row)}
       {@const isGhost = row === ghost}
       {@const error = isGhost ? null : nameError(row.name)}
       <div class="kv-row" class:off={!isGhost && toggles && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
