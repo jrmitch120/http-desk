@@ -35,11 +35,11 @@
 </script>
 
 <script lang="ts" generics="R extends GridRow">
-  // The one key/value grid (#36): params, headers, File variables, form fields
-  // and multipart parts. Columns are opt-in (`columns`), a trailing ghost row
-  // turns into a real row as you type, and bulk edit shows the rows as text.
-  // Rows are keyed by object, and the ghost row object itself becomes the new
-  // row, so its inputs (and focus) survive the change.
+  // The one key/value grid (#36): params, headers, File variables, form fields,
+  // multipart parts and environment variables. Columns are opt-in (`columns`),
+  // a trailing ghost row turns into a real row as you type, and bulk edit shows
+  // the rows as text. Rows are keyed by object, and the ghost row object itself
+  // becomes the new row, so its inputs (and focus) survive the change.
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { KeyValue } from "../lib/types";
