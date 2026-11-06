@@ -17,6 +17,7 @@ pub struct Resolver {
     vars: HashMap<String, String>,
     base_dir: Option<PathBuf>,
     unresolved: std::cell::RefCell<BTreeSet<String>>,
+    errors: std::cell::RefCell<Vec<String>>,
 }
 
 impl Resolver {
@@ -47,6 +48,11 @@ impl Resolver {
         self.unresolved.borrow().iter().cloned().collect()
     }
 
+    /// Dynamic variables that failed (bad or out-of-range arguments), as messages.
+    pub fn errors(&self) -> Vec<String> {
+        self.errors.borrow().clone()
+    }
+
     fn resolve_depth(&self, text: &str, depth: usize) -> String {
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
@@ -58,7 +64,19 @@ impl Resolver {
             rest = &rest[start + 4 + len..];
 
             let value = if let Some(dynamic) = inner.strip_prefix('$') {
-                self.dynamic(dynamic)
+                match self.dynamic(dynamic) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let (name, _) = split_call(dynamic);
+                        let e = format!("{{{{${dynamic}}}}}: ${name} {e}");
+                        let mut errors = self.errors.borrow_mut();
+                        if !errors.contains(&e) {
+                            errors.push(e);
+                        }
+                        out.push_str(whole);
+                        continue;
+                    }
+                }
             } else if depth < MAX_DEPTH {
                 self.vars.get(inner).map(|v| self.resolve_depth(v, depth + 1))
             } else {
@@ -76,20 +94,30 @@ impl Resolver {
         out
     }
 
-    fn dynamic(&self, expr: &str) -> Option<String> {
+    /// `Ok(None)` when the variable is unknown or unset; `Err` when its arguments are bad.
+    fn dynamic(&self, expr: &str) -> Result<Option<String>, String> {
         let (name, args) = split_call(expr);
         let arg = |i: usize| args.get(i).map(String::as_str);
-        let num = |i: usize, default: i64| arg(i).and_then(|a| a.parse::<i64>().ok()).unwrap_or(default);
-        Some(match name {
+        let int = |i: usize, default: i64| arg(i).map_or(Ok(default), parse_int);
+        Ok(Some(match name {
             "uuid" | "guid" | "random.uuid" => uuid::Uuid::new_v4().to_string(),
-            "timestamp" => (Utc::now() + offset(&args)).timestamp().to_string(),
+            "timestamp" => shift(Utc::now(), offset(&args)?)?.timestamp().to_string(),
             "isoTimestamp" => Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             "randomInt" | "random.integer" => {
-                let (lo, hi) = (num(0, 0), num(1, 1000));
-                rand::random_range(lo..hi.max(lo + 1)).to_string()
+                let (lo, hi) = (int(0, 0)?, int(1, 1000)?);
+                if lo >= hi {
+                    return Err(format!("needs min < max (max is exclusive), got {lo} and {hi}"));
+                }
+                rand::random_range(lo..hi).to_string()
             }
             "random.float" => {
-                let (lo, hi) = (num(0, 0) as f64, num(1, 1000) as f64);
+                let float = |i: usize, default: f64| {
+                    arg(i).map_or(Ok(default), |a| a.parse::<f64>().ok().filter(|f| f.is_finite()).ok_or_else(|| format!("\"{a}\" is not a number")))
+                };
+                let (lo, hi) = (float(0, 0.0)?, float(1, 1000.0)?);
+                if lo > hi {
+                    return Err(format!("needs min <= max, got {lo} and {hi}"));
+                }
                 format!("{:.4}", lo + rand::random::<f64>() * (hi - lo))
             }
             "random.alphabetic" | "random.alphanumeric" | "random.hexadecimal" => {
@@ -98,22 +126,25 @@ impl Resolver {
                     "random.hexadecimal" => b"0123456789abcdef",
                     _ => b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
                 };
-                (0..num(0, 10).clamp(0, 4096)).map(|_| chars[rand::random_range(0..chars.len())] as char).collect()
+                (0..int(0, 10)?.clamp(0, 4096)).map(|_| chars[rand::random_range(0..chars.len())] as char).collect()
             }
             "random.email" => format!("user{}@example.com", rand::random_range(1000..99999)),
             "datetime" | "localDatetime" => {
                 let fmt = arg(0).unwrap_or("iso8601").trim_matches(['"', '\'']);
-                let off = offset(&args[args.len().min(1)..]);
+                let off = offset(&args[args.len().min(1)..])?;
                 if name == "localDatetime" {
-                    format_datetime(Local::now() + off, fmt)
+                    format_datetime(shift(Local::now(), off)?, fmt)
                 } else {
-                    format_datetime(Utc::now() + off, fmt)
+                    format_datetime(shift(Utc::now(), off)?, fmt)
                 }
             }
-            "processEnv" => std::env::var(arg(0)?.trim_start_matches('%')).ok()?,
-            "dotenv" => self.dotenv(arg(0)?)?,
-            _ => std::env::var(name.strip_prefix("env.")?).ok()?,
-        })
+            "processEnv" => {
+                let Some(key) = arg(0) else { return Ok(None) };
+                return Ok(std::env::var(key.trim_start_matches('%')).ok());
+            }
+            "dotenv" => return Ok(arg(0).and_then(|k| self.dotenv(k))),
+            _ => return Ok(name.strip_prefix("env.").and_then(|k| std::env::var(k).ok())),
+        }))
     }
 
     fn dotenv(&self, key: &str) -> Option<String> {
@@ -134,27 +165,62 @@ fn split_call(expr: &str) -> (&str, Vec<String>) {
         let args = inner.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
         return (name, args);
     }
-    let mut parts = expr.split_whitespace();
-    let name = parts.next().unwrap_or("");
-    (name, parts.map(str::to_string).collect())
+    let expr = expr.trim();
+    let (name, rest) = expr.split_once(char::is_whitespace).unwrap_or((expr, ""));
+    (name, split_args(rest))
 }
 
-/// VS Code offset arguments: `-1 d`, `2 h`, …
-fn offset(args: &[String]) -> Duration {
-    let (Some(n), Some(unit)) = (args.first().and_then(|a| a.parse::<i64>().ok()), args.get(1)) else {
-        return Duration::zero();
-    };
-    match unit.as_str() {
-        "y" => Duration::days(365 * n),
-        "M" => Duration::days(30 * n),
-        "w" => Duration::weeks(n),
-        "d" => Duration::days(n),
-        "h" => Duration::hours(n),
-        "m" => Duration::minutes(n),
-        "s" => Duration::seconds(n),
-        "ms" => Duration::milliseconds(n),
-        _ => Duration::zero(),
+/// Whitespace-separated arguments; `"…"` and `'…'` group words and lose their quotes.
+fn split_args(text: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = text.trim().chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut arg = String::new();
+        if c == '"' || c == '\'' {
+            chars.next();
+            arg.extend(chars.by_ref().take_while(|&ch| ch != c));
+        } else {
+            while let Some(ch) = chars.next_if(|ch| !ch.is_whitespace()) {
+                arg.push(ch);
+            }
+        }
+        args.push(arg);
     }
+    args
+}
+
+fn parse_int(a: &str) -> Result<i64, String> {
+    a.parse::<i64>().map_err(|_| format!("\"{a}\" is not a whole number between {} and {}", i64::MIN, i64::MAX))
+}
+
+/// VS Code offset arguments: `-1 d`, `2 h`, … (none means no offset).
+fn offset(args: &[String]) -> Result<Duration, String> {
+    let (n, unit) = match args {
+        [] => return Ok(Duration::zero()),
+        [n, unit] => (parse_int(n)?, unit.as_str()),
+        _ => return Err(format!("expects an offset like `-1 d`, got `{}`", args.join(" "))),
+    };
+    let scaled = |factor: i64, f: fn(i64) -> Option<Duration>| n.checked_mul(factor).and_then(f);
+    let d = match unit {
+        "y" => scaled(365, Duration::try_days),
+        "M" => scaled(30, Duration::try_days),
+        "w" => Duration::try_weeks(n),
+        "d" => Duration::try_days(n),
+        "h" => Duration::try_hours(n),
+        "m" => Duration::try_minutes(n),
+        "s" => Duration::try_seconds(n),
+        "ms" => Duration::try_milliseconds(n),
+        _ => return Err(format!("has an unknown offset unit \"{unit}\" (use y, M, w, d, h, m, s or ms)")),
+    };
+    d.ok_or_else(|| format!("offset {n} {unit} is out of range"))
+}
+
+fn shift<Tz: chrono::TimeZone>(dt: chrono::DateTime<Tz>, by: Duration) -> Result<chrono::DateTime<Tz>, String> {
+    dt.checked_add_signed(by).ok_or_else(|| "offset moves the date out of range".to_string())
 }
 
 fn format_datetime<Tz: chrono::TimeZone>(dt: chrono::DateTime<Tz>, fmt: &str) -> String
@@ -168,16 +234,63 @@ where
     }
 }
 
-/// Converts a Day.js-style pattern (`YYYY-MM-DD HH:mm:ss`) to strftime.
+/// Day.js tokens and their strftime equivalents, longest first so `MMMM` wins over `MM`.
+const DAYJS_TOKENS: &[(&str, &str)] = &[
+    ("YYYY", "%Y"),
+    ("MMMM", "%B"),
+    ("dddd", "%A"),
+    ("MMM", "%b"),
+    ("ddd", "%a"),
+    ("SSS", "%3f"),
+    ("YY", "%y"),
+    ("MM", "%m"),
+    ("DD", "%d"),
+    ("HH", "%H"),
+    ("hh", "%I"),
+    ("mm", "%M"),
+    ("ss", "%S"),
+    ("ZZ", "%z"),
+    ("M", "%-m"),
+    ("D", "%-d"),
+    ("H", "%-H"),
+    ("h", "%-I"),
+    ("m", "%-M"),
+    ("s", "%-S"),
+    ("A", "%p"),
+    ("a", "%P"),
+    ("Z", "%:z"),
+];
+
+/// Converts a Day.js pattern (`YYYY-MM-DD hh:mm A`) to strftime. Everything that
+/// isn't a token, and anything in `[brackets]`, is literal, so the result is
+/// always a valid strftime pattern.
 fn convert_format(f: &str) -> String {
-    [("YYYY", "%Y"), ("MM", "%m"), ("DD", "%d"), ("HH", "%H"), ("mm", "%M"), ("ss", "%S")]
-        .iter()
-        .fold(f.to_string(), |acc, (from, to)| acc.replace(from, to))
+    let mut out = String::with_capacity(f.len() * 2);
+    let literal = |out: &mut String, text: &str| out.push_str(&text.replace('%', "%%"));
+    let mut rest = f;
+    while let Some(c) = rest.chars().next() {
+        if c == '[' {
+            if let Some(end) = rest.find(']') {
+                literal(&mut out, &rest[1..end]);
+                rest = &rest[end + 1..];
+                continue;
+            }
+        }
+        if let Some((token, strftime)) = DAYJS_TOKENS.iter().find(|(t, _)| rest.starts_with(t)) {
+            out.push_str(strftime);
+            rest = &rest[token.len()..];
+        } else {
+            literal(&mut out, &rest[..c.len_utf8()]);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     fn resolver(pairs: &[(&str, &str)]) -> Resolver {
         Resolver::new(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
@@ -223,5 +336,73 @@ mod tests {
         std::env::set_var("HTTPDESK_TEST_VAR", "yes");
         assert_eq!(r.resolve("{{$processEnv HTTPDESK_TEST_VAR}}"), "yes");
         assert_eq!(r.resolve("{{$env.HTTPDESK_TEST_VAR}}"), "yes");
+    }
+
+    /// Resolves `text` with a fresh resolver and returns its errors.
+    fn errors_of(text: &str) -> Vec<String> {
+        let r = resolver(&[]);
+        let out = r.resolve(text);
+        assert_eq!(out, text, "a failed dynamic variable is left as written");
+        r.errors()
+    }
+
+    #[test]
+    fn dynamic_variables_with_bad_arguments_report_errors() {
+        let cases = [
+            ("{{$randomInt 9223372036854775807 9223372036854775807}}", "$randomInt"),
+            ("{{$randomInt 99999999999999999999 1}}", "99999999999999999999"),
+            ("{{$randomInt a 10}}", "\"a\""),
+            ("{{$randomInt 10 5}}", "$randomInt"),
+            ("{{$random.integer(5, 5)}}", "$random.integer"),
+            ("{{$timestamp 9223372036854775807 y}}", "$timestamp"),
+            ("{{$timestamp -9223372036854775808 ms}}", "$timestamp"),
+            ("{{$timestamp 1 fortnight}}", "fortnight"),
+            ("{{$timestamp x d}}", "\"x\""),
+            ("{{$timestamp 1}}", "$timestamp"),
+            ("{{$datetime iso8601 9223372036854775807 d}}", "$datetime"),
+            ("{{$localDatetime rfc1123 300000 y}}", "$localDatetime"),
+        ];
+        for (text, mentions) in cases {
+            let errors = errors_of(text);
+            assert_eq!(errors.len(), 1, "{text}: {errors:?}");
+            assert!(errors[0].contains(mentions), "{text}: {errors:?}");
+        }
+    }
+
+    fn matches_shape(value: &str, shape: &str) {
+        let ok = value.len() == shape.len() && value.chars().zip(shape.chars()).all(|(v, s)| if s == '9' { v.is_ascii_digit() } else { v == s });
+        assert!(ok, "{value:?} does not look like {shape:?}");
+    }
+
+    #[test]
+    fn quoted_datetime_formats_are_honoured_whole() {
+        let r = resolver(&[]);
+        matches_shape(&r.resolve(r#"{{$datetime "YYYY-MM-DD HH:mm"}}"#), "9999-99-99 99:99");
+        matches_shape(&r.resolve("{{$datetime 'DD/MM/YYYY HH:mm:ss' -1 d}}"), "99/99/9999 99:99:99");
+        matches_shape(&r.resolve(r#"{{$localDatetime "HH:mm" 2 h}}"#), "99:99");
+        matches_shape(&r.resolve("{{$datetime YYYY}}"), "9999");
+        assert_eq!(r.resolve(r#"{{$datetime "[at] 100%"}}"#), "at 100%", "brackets escape; `%` is literal");
+        assert!(r.errors().is_empty(), "{:?}", r.errors());
+    }
+
+    #[test]
+    fn datetime_supports_common_dayjs_tokens() {
+        let utc = Utc.with_ymd_and_hms(2026, 3, 7, 15, 4, 5).unwrap() + Duration::milliseconds(89);
+        assert_eq!(format_datetime(utc, "YYYY-MM-DD hh:mm:ss.SSS A Z"), "2026-03-07 03:04:05.089 PM +00:00");
+        assert_eq!(format_datetime(utc, "YY M D H h m s a ZZ"), "26 3 7 15 3 4 5 pm +0000");
+        assert_eq!(format_datetime(utc, "ddd dddd MMM MMMM"), "Sat Saturday Mar March");
+        let ist = utc.with_timezone(&chrono::FixedOffset::east_opt(5 * 3600 + 1800).unwrap());
+        assert_eq!(format_datetime(ist, "HH:mm Z"), "20:34 +05:30");
+        assert_eq!(format_datetime(ist, "iso8601"), "2026-03-07T20:34:05+05:30");
+    }
+
+    #[test]
+    fn valid_dynamic_offsets_still_resolve() {
+        let r = resolver(&[]);
+        let now: i64 = r.resolve("{{$timestamp}}").parse().unwrap();
+        let earlier: i64 = r.resolve("{{$timestamp -1 h}}").parse().unwrap();
+        assert!((now - earlier - 3600).abs() <= 1, "{now} {earlier}");
+        assert!(r.resolve("{{$datetime iso8601 1 d}}").ends_with('Z'));
+        assert!(r.errors().is_empty(), "{:?}", r.errors());
     }
 }

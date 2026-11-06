@@ -137,11 +137,19 @@ async fn bodies_json_form_multipart_and_files() {
     let cases = [
         ("Content-Type: application/json\n\n{\"a\": {{v}}}", b"{\"a\": 42}".to_vec()),
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\n&v={{v}}", b"name=foo&v=42".to_vec()),
+        ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\nv={{v}}\nlast=1", b"name=foo&v=42&last=1".to_vec()),
+        ("Content-Type: application/x-www-form-urlencoded\n\nname=foo&\nv={{v}}", b"name=foo&v=42".to_vec()),
         ("Content-Type: application/json\n\n< ./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
         ("Content-Type: application/json\n\n<@ ./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // No space after the marker: the editor shows it as a file body, so it is sent as one.
+        ("Content-Type: application/json\n\n<./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
+        ("Content-Type: application/json\n\n<@./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        ("Content-Type: application/xml\n\n<tag/>", b"<tag/>".to_vec()),
     ];
     for (rest, expected) in cases {
         let req = parse(&format!("POST {{{{base}}}}/echo\n{rest}\n")).requests.remove(0);
+        let is_file = rest.contains("payload.json");
+        assert_eq!(req.body.mode == BodyMode::File, is_file, "editor body mode for {rest}");
         send(&req, vars.clone(), dir.path()).await.unwrap();
         assert_eq!(last_request(&server).await.body, expected, "{rest}");
     }
@@ -316,6 +324,9 @@ fn prepare_rules() {
     let req = parse("example.com/a\nHost: ignored\n").requests.remove(0);
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/a");
 
+    let req = parse("GET example.com/login?next=http://foo\n").requests.remove(0);
+    assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/login?next=http://foo", "scheme is looked for before `?` only");
+
     let req = parse("GET /path\nHost: api.local:8080\n").requests.remove(0);
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://api.local:8080/path");
 
@@ -329,4 +340,34 @@ fn prepare_rules() {
 
     let req = parse("GET http://[bad\n").requests.remove(0);
     assert!(matches!(prepare(&req, &r, Path::new("."), &s), Err(ExecError::InvalidUrl { .. })));
+}
+
+#[test]
+fn dynamic_variable_errors_stop_the_send() {
+    let s = ExecSettings::default();
+    let req = parse("POST https://x/a?n={{$randomInt 10 5}}\nX-Ts: {{$timestamp 1 fortnight}}\n").requests.remove(0);
+    let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(matches!(err, ExecError::DynamicVariable(_)), "{msg}");
+    assert!(msg.contains("{{$randomInt 10 5}}") && msg.contains("fortnight"), "every failure is reported: {msg}");
+}
+
+#[test]
+fn unresolved_host_names_the_variables_and_suggests_an_environment() {
+    let s = ExecSettings::default();
+    let req = parse("GET {{baseUrl}}/users?id={{id}}\n").requests.remove(0);
+    let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["baseUrl"]), "only host variables are named: {msg}");
+    assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
+
+    // A variable that resolves to a URL whose own host is unresolved names that inner variable.
+    let r = Resolver::new(env(&[("baseUrl", "https://{{host}}:{{port}}/api")]));
+    let msg = prepare(&req, &r, Path::new("."), &s).unwrap_err().to_string();
+    assert!(msg.contains("host, port") && !msg.contains("baseUrl"), "{msg}");
+
+    // A relative URL whose Host header is unresolved.
+    let req = parse("GET /users\nHost: {{apiHost}}\n").requests.remove(0);
+    let msg = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err().to_string();
+    assert!(msg.contains("apiHost"), "{msg}");
 }
