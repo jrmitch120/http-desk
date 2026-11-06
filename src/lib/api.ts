@@ -62,6 +62,12 @@ export const api = {
    * core. Rejects with a message for an invalid expression or a non-JSON body.
    */
   filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
+  /**
+   * The Pretty view of a response too large to arrive with its `prettyText`,
+   * formatted from the body the shell stored. Rejects when it doesn't parse or
+   * has been evicted.
+   */
+  prettyResponse: (responseId: string) => invoke<string>("pretty_response", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

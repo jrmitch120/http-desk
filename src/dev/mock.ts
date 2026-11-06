@@ -78,13 +78,19 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-/** Text bodies of the responses sent so far, by response id (the shell's `RecentBodies`). */
-const bodies: Record<string, string> = {};
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
 let settingsServed = false;
+let prettyRequests = 0;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
+  /** How many times the viewer called `pretty_response`; a test may reset it. */
+  get prettyRequests() {
+    return prettyRequests;
+  },
+  set prettyRequests(n: number) {
+    prettyRequests = n;
+  },
   /** Whether the app has been given its settings yet. */
   get settingsServed() {
     return settingsServed;
@@ -178,8 +184,8 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=bigint`: the JSON response carries an ID above 2^53 and a `10.50`.
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
-// `?response=store`: items with a `status` and 19-digit IDs, a new response id
-//   per send, and item 2 becomes "sold" from the second send on (filter tests).
+// `?response=store`: items with a `status` and 19-digit IDs, and item 2 becomes
+//   "sold" from the second send on (filter tests).
 // `?response=html`: an HTML page. `?response=truncated`: a JSON body cut off at the size limit.
 const responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
@@ -203,6 +209,11 @@ const reasonPhrases: Record<number, string> = { 200: "OK", 201: "Created", 404: 
 // `?bigBinary=1`: the image response is a 2 MB binary body instead of a small PNG.
 const bigBinary = new URLSearchParams(location.search).get("bigBinary") === "1";
 const BIG_BINARY_BYTES = 2 * 1024 * 1024;
+// `?largeBody=1`: the JSON response counts as over the shell's inline Pretty
+// limit, so it arrives without `prettyText` and Pretty view asks for it.
+const largeBody = new URLSearchParams(location.search).get("largeBody") === "1";
+// `?evicted=1`: `pretty_response` finds no stored body, as after eviction.
+const evicted = new URLSearchParams(location.search).get("evicted") === "1";
 // `?timing=reused`: the JSON response's final request went over an open
 // connection after two redirects, so it has no DNS or connect phase.
 const timingParam = new URLSearchParams(location.search).get("timing");
@@ -353,6 +364,19 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
   return mode === "pretty" ? lines.join("\n") : lines.map((l) => l.trim()).join("");
 }
 
+/** Text response bodies by response id, like the shell's stored bodies. */
+const textBodies = new Map<string, string>();
+let responseCount = 0;
+
+/** Stand-in for the shell's Pretty text: formatted JSON, or the body as is if it doesn't parse. */
+function prettyText(body: string): string {
+  try {
+    return formatJson(body, "pretty");
+  } catch {
+    return body;
+  }
+}
+
 /** Binary response bodies by response id, like the shell's stored bodies. */
 const binaryBodies = new Map<string, string>();
 function storeBinary<T extends { id: string; bodyBase64: string }>(response: T): T {
@@ -489,17 +513,17 @@ mockIPC(
         const gzip = responseKind === "gzip";
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
+        const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
+        textBodies.set(id, body);
         const cookies = responseKind === "cookies" ? mockCookies : [];
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
-        const id = responseKind === "store" ? `r1-${sent.length}` : "r1";
-        bodies[id] = body;
         const contentType = responseKind === "html" ? "text/html; charset=utf-8" : "application/json";
         return {
           id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, contentEncoding: gzip ? "gzip" : null,
-          bodyText: body, bodyBase64: null, truncated: responseKind === "truncated",
+          bodyText: body, prettyText: largeBody || responseKind === "html" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
@@ -516,13 +540,24 @@ mockIPC(
         } catch (e) {
           throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
         }
+      case "pretty_response": {
+        prettyRequests++;
+        await delay(400); // long enough for a test to see the loading state
+        const body = evicted ? undefined : textBodies.get(args.responseId);
+        if (body === undefined) throw "Response is no longer available";
+        try {
+          return formatJson(body, "pretty");
+        } catch (e) {
+          throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+        }
+      }
       case "hexdump": {
         const b64 = binaryBodies.get(args.responseId);
         if (b64 === undefined) throw "Response is no longer available";
         return hexdump(b64);
       }
       case "filter_response": {
-        const body = bodies[args.responseId];
+        const body = textBodies.get(args.responseId);
         if (body === undefined) throw "Response is no longer available";
         try {
           JSON.parse(body);
@@ -535,7 +570,7 @@ mockIPC(
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {
         // Binary bodies are recorded as their base64.
-        const body = bodies[args.responseId] ?? binaryBodies.get(args.responseId);
+        const body = textBodies.get(args.responseId) ?? binaryBodies.get(args.responseId);
         if (body === undefined) throw "Response is no longer available";
         savedBodies[args.path] = body;
         return null;

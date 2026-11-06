@@ -333,12 +333,108 @@ fn format_body_beautifies_xml_and_rejects_xml_that_doesnt_nest() {
 fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
     let h = Harness::new();
     // What send_request does with a response's body.
-    h.app.state::<super::AppState>().bodies.lock().unwrap().push("resp-1".into(), b"\x89PNG\r\n\x1a\n".to_vec());
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
+        "resp-1".into(),
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        Some("image/png".into()),
+    );
 
     let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
     assert_eq!(dump, json!(format!("00000000  89 50 4e 47 0d 0a 1a 0a{}  .PNG....", " ".repeat(24))));
 
     let err = h.call("hexdump", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+/// Serves one response with `content_type` and `body`; returns the URL.
+fn serve_once(content_type: &'static str, body: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\n\r\n", body.len());
+        let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&body));
+    });
+    url
+}
+
+/// Sends `GET {url}/` from a fresh workspace and returns the response.
+fn send_get(h: &Harness, url: &str) -> Value {
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let path = root.join("get.http");
+    std::fs::write(&path, format!("GET {url}/\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    h.ok(
+        "send_request",
+        json!({ "runId": "p1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    )
+}
+
+#[test]
+fn a_small_json_response_arrives_with_its_pretty_text_numbers_as_sent() {
+    let h = Harness::new();
+    let url = serve_once("application/json", br#"{"id":9007199254740993,"price":10.50}"#.to_vec());
+    let resp = send_get(&h, &url);
+    assert_eq!(resp["prettyText"], json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50\n}"));
+}
+
+#[test]
+fn a_small_response_that_doesnt_parse_has_its_raw_body_as_pretty_text() {
+    let h = Harness::new();
+    let url = serve_once("application/json", br#"{"id": 1, oops}"#.to_vec());
+    assert_eq!(send_get(&h, &url)["prettyText"], json!(r#"{"id": 1, oops}"#));
+}
+
+#[test]
+fn a_plain_text_response_has_no_pretty_text() {
+    let h = Harness::new();
+    let url = serve_once("text/plain", b"hello".to_vec());
+    assert_eq!(send_get(&h, &url)["prettyText"], Value::Null);
+}
+
+#[test]
+fn a_large_json_response_is_formatted_only_when_asked_for_by_response_id() {
+    let h = Harness::new();
+    let items: Vec<String> = (0..60_000).map(|i| format!(r#"{{"id":1{i:05}0000000001,"n":"item"}}"#)).collect();
+    let body = format!("[{}]", items.join(","));
+    assert!(body.len() > super::PRETTY_INLINE_BYTES);
+    let url = serve_once("application/json; charset=utf-8", body.into_bytes());
+
+    let resp = send_get(&h, &url);
+    assert_eq!(resp["prettyText"], Value::Null);
+
+    let pretty = h.ok("pretty_response", json!({ "responseId": resp["id"] }));
+    let pretty = pretty.as_str().unwrap();
+    assert!(
+        pretty.starts_with("[\n  {\n    \"id\": 1000000000000001,\n    \"n\": \"item\"\n  },\n"),
+        "{}",
+        &pretty[..80]
+    );
+    assert!(pretty.ends_with("    \"id\": 1599990000000001,\n    \"n\": \"item\"\n  }\n]"));
+}
+
+#[test]
+fn pretty_response_rejects_an_evicted_id_and_a_body_that_doesnt_parse() {
+    let h = Harness::new();
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
+        "bad".into(),
+        br#"{"id": 1, oops}"#.to_vec(),
+        Some("application/json".into()),
+    );
+    let err = h.call("pretty_response", json!({ "responseId": "bad" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
+
+    let err = h.call("pretty_response", json!({ "responseId": "gone" })).unwrap_err();
     assert_eq!(err, json!("Response is no longer available"));
 }
 

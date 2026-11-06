@@ -374,8 +374,9 @@ async fn send_request<R: tauri::Runtime>(
 
     match result {
         Ok(Ok(outcome)) => {
-            state.bodies.lock().unwrap().push(outcome.response.id.clone(), outcome.body);
-            Ok(outcome.response)
+            let response = outcome.response;
+            state.bodies.lock().unwrap().push(response.id.clone(), outcome.body, response.content_type.clone());
+            Ok(with_pretty_text(response).await)
         }
         Ok(Err(e)) => Err(e),
         Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
@@ -399,8 +400,8 @@ async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: S
     .await
 }
 
-/// Beautify and the response Pretty view: re-lays out a body without changing
-/// any token (`body_format`). On the blocking pool, since bodies can be large.
+/// Beautify and Minify: re-lays out a request body without changing any token
+/// (`body_format`). On the blocking pool, since bodies can be large.
 #[tauri::command]
 async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResult<String> {
     tauri::async_runtime::spawn_blocking(move || body_format::format_body(&text, kind, mode).map_err(err))
@@ -442,6 +443,43 @@ async fn filter_response<R: tauri::Runtime>(
     expression: String,
 ) -> CmdResult<FilterResult> {
     off_main(app, move |state| json_doc(state, &response_id)?.filter(&expression).map_err(err)).await
+}
+
+/// Text bodies up to this size arrive with their Pretty text, so Pretty view
+/// shows at once. Larger ones are formatted only when Pretty is opened
+/// (`pretty_response`), so a big body isn't formatted, nor sent twice, unasked.
+const PRETTY_INLINE_BYTES: usize = 1024 * 1024;
+
+/// Fills in `pretty_text` for a small JSON or XML response (its raw text if it
+/// doesn't parse, which is what Pretty view shows then), on the blocking pool.
+async fn with_pretty_text(mut response: HttpResponse) -> HttpResponse {
+    let Some(text) = response.body_text.clone().filter(|t| t.len() <= PRETTY_INLINE_BYTES) else {
+        return response;
+    };
+    let content_type = response.content_type.clone();
+    let pretty = tauri::async_runtime::spawn_blocking(move || {
+        let pretty = body_format::pretty_response(content_type.as_deref(), &text);
+        pretty.map(|r| r.unwrap_or(text))
+    });
+    // If formatting failed outright, the viewer asks for it again when needed.
+    response.pretty_text = pretty.await.ok().flatten();
+    response
+}
+
+/// The response Pretty view of a stored body, for bodies too large to arrive
+/// with their Pretty text. Rejects when the body isn't JSON or XML, doesn't
+/// parse, or has been evicted; the viewer shows the raw body then.
+#[tauri::command]
+async fn pretty_response<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
+    off_main(app, move |state| {
+        let (body, content_type) =
+            state.bodies.lock().unwrap().get_with_type(&response_id).ok_or("Response is no longer available")?;
+        let text = exec::decode_text(&body, content_type.as_deref()).ok_or("Response body isn't text")?;
+        body_format::pretty_response(content_type.as_deref(), &text)
+            .ok_or("Response body isn't JSON or XML")?
+            .map_err(err)
+    })
+    .await
 }
 
 // ------------------------------------------------------------------ settings
@@ -623,6 +661,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             format_body,
             hexdump,
             filter_response,
+            pretty_response,
             get_settings,
             save_settings,
             set_unsaved,

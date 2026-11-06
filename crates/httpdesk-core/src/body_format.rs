@@ -69,6 +69,33 @@ pub fn format_body(text: &str, kind: BodyKind, mode: FormatMode) -> Result<Strin
     }
 }
 
+/// The response Pretty view's text for a body of `content_type`: `None` when
+/// the body isn't JSON or XML (nothing to format), else the formatted text or
+/// why it doesn't parse (the viewer then shows the raw body).
+///
+/// The kind follows the viewer's own rules, so the shell formats exactly the
+/// bodies the viewer would ask for: the content type when it names JSON, HTML,
+/// XML/SVG, images, PDF or media; otherwise the first non-blank character.
+pub fn pretty_response(content_type: Option<&str>, text: &str) -> Option<Result<String, FormatError>> {
+    let ct = content_type.unwrap_or("").to_ascii_lowercase();
+    let kind = if ct.contains("json") {
+        BodyKind::Json
+    } else if ct.contains("html") {
+        return None;
+    } else if ct.contains("xml") || ct.contains("svg") {
+        BodyKind::Xml
+    } else if ["image/", "audio/", "video/"].iter().any(|p| ct.starts_with(p)) || ct.contains("pdf") {
+        return None;
+    } else {
+        match text.trim_start().chars().next() {
+            Some('{' | '[') => BodyKind::Json,
+            Some('<') => BodyKind::Xml,
+            _ => return None,
+        }
+    };
+    Some(format_body(text, kind, FormatMode::Pretty))
+}
+
 /// Re-lays out JSON `text` without changing any token, or fails if it isn't
 /// valid JSON (RFC 8259). Iterative, so deep nesting can't overflow the stack.
 pub fn format_json(text: &str, mode: FormatMode) -> Result<String, FormatError> {

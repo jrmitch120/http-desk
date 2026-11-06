@@ -82,11 +82,12 @@
 
   const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
 
-  // Text the core renders for the editor: Pretty JSON/XML from its lossless
-  // formatter (numbers and text stay as the server sent them), or the Hex view
-  // of a binary body, dumped from the body the shell stored. Asked for once
-  // per response and rendering; raw text shows until it arrives, and stays if
-  // the body doesn't parse.
+  // Text the core renders for the editor, from the body the shell stored:
+  // Pretty JSON/XML from its lossless formatter (numbers and text stay as the
+  // server sent them), or the Hex view of a binary body. A small body's Pretty
+  // text arrives with the response; a large one's is asked for once, when
+  // Pretty is opened, with a loading state meanwhile. If the body doesn't
+  // parse or is no longer stored, Pretty shows the raw text.
   const dataUrl = $derived(res?.bodyBase64 ? `data:${res.contentType ?? "application/octet-stream"};base64,${res.bodyBase64}` : null);
   const rendering = $derived.by(() => {
     if (!res) return null;
@@ -97,13 +98,13 @@
   let rendered = $state<{ key: string; text: string } | null>(null);
   $effect(() => {
     const key = rendering;
-    if (!key || !res || untrack(() => rendered?.key) === key) return;
+    if (!key || !res || res.prettyText != null || untrack(() => rendered?.key) === key) return;
     const { id, bodyText: raw } = res;
     const keep = (text: string) => {
       if (res?.id === id) rendered = { key, text }; // a newer response may have arrived
     };
     if (raw === null) api.hexdump(id).then(keep, (e) => keep(`(${errorMessage(e)})`));
-    else api.formatBody(raw, kind === "xml" ? "xml" : "json", "pretty").then(keep, () => keep(raw));
+    else api.prettyResponse(id).then(keep, () => keep(raw));
   });
 
   // The JSONPath filter runs in the core against the stored body, by response
@@ -134,10 +135,13 @@
   const filterError = $derived(outcome?.expression === expression ? (outcome.error ?? null) : null);
   /** The matches on screen (the body view is then always pretty, and Copy copies them). */
   const filtered = $derived(outcome?.result && !filterError ? outcome.result : null);
+  /** A large body's Pretty text is still on its way (filter matches show instead, if any). */
+  const formatting = $derived(!filtered && !!rendering && res?.bodyText != null && res.prettyText == null && rendered?.key !== rendering);
 
   const bodyText = $derived.by(() => {
     if (!res) return "";
     if (filtered) return filtered.text;
+    if (rendering && res.bodyText !== null && res.prettyText != null) return res.prettyText;
     if (rendering && rendered?.key === rendering) return rendered.text;
     return res.bodyText ?? "";
   });
@@ -301,6 +305,8 @@
             <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
           {:else if res.bodySize === 0}
             <div class="empty-state small">The response has no body.</div>
+          {:else if formatting}
+            <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
           {:else}
             <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} />
           {/if}

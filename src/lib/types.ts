@@ -164,6 +164,12 @@ export interface HttpResponse {
   /** The response's Content-Encoding header, if any. */
   contentEncoding: string | null;
   bodyText: string | null;
+  /**
+   * The Pretty view's text, formatted by the shell, for a small JSON or XML
+   * body (its raw text if it doesn't parse). Null for other bodies, and for
+   * large ones: fetch those with `api.prettyResponse` when Pretty is opened.
+   */
+  prettyText: string | null;
   bodyBase64: string | null;
   truncated: boolean;
   request: SentRequest;
