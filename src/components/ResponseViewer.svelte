@@ -173,7 +173,10 @@
     <div class="statusbar">
       <span class="title">Response</span>
       {#if run.loading}
-        <span class="loading"><span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}</span>
+        <span class="loading">
+          <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
+          {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
+        </span>
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
@@ -315,6 +318,9 @@
     gap: 8px;
     color: var(--muted);
     font-size: 12px;
+  }
+  .received {
+    font-family: var(--mono);
   }
   .spinner {
     width: 13px;

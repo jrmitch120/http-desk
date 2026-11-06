@@ -13,7 +13,7 @@ use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 mod bodies;
 mod confine;
@@ -312,8 +312,19 @@ fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResu
 
 // ------------------------------------------------------------------ execution
 
+/// Payload of the `send-progress` event: body bytes received so far on the
+/// wire for an in-flight send. Emitted at most ~10 times a second (see
+/// `exec::PROGRESS_INTERVAL`) and never after the send returns.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendProgress {
+    run_id: String,
+    received: usize,
+}
+
 #[tauri::command]
-async fn send_request(
+async fn send_request<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     run_id: String,
     request: Request,
@@ -344,7 +355,11 @@ async fn send_request(
         (prepared, ssl)
     };
 
-    let task = tokio::spawn(async move { exec::execute(prepared, &settings, &ssl).await });
+    let progress_id = run_id.clone();
+    let on_progress = move |received| {
+        let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
+    };
+    let task = tokio::spawn(async move { exec::execute_with_progress(prepared, &settings, &ssl, on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);

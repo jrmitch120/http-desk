@@ -124,6 +124,11 @@ impl BodyReader {
         Ok(self.append(&data))
     }
 
+    /// Raw body bytes received on the wire so far (what progress reports).
+    pub fn transferred(&self) -> usize {
+        self.transferred
+    }
+
     /// Ends the body, flushing the decoders.
     pub fn finish(mut self) -> Result<ReceivedBody, String> {
         // A cut-off body would fail to finish; and an empty one (HEAD, 204) has nothing to decode.
