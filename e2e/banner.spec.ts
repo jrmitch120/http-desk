@@ -46,6 +46,9 @@ test("warning banners look the same in the request editor, the Environments edit
   const status = (text: string | RegExp) => page.getByRole("status").filter({ hasText: text });
 
   await openRequest(page, ["api", "pets.http"], "Create pet");
+  await page.getByRole("switch", { name: "Enabled" }).click();
+  const sectionOff = await tone(status("Query parameters disabled."));
+
   await page.locator(".subtab", { hasText: "Body" }).click();
   await page.locator(".code .cm-content").click();
   await page.keyboard.press("ControlOrMeta+End");
@@ -63,4 +66,5 @@ test("warning banners look the same in the request editor, the Environments edit
 
   expect(envs).toEqual(settings);
   expect(body).toEqual(settings);
+  expect(sectionOff).toEqual(settings);
 });
