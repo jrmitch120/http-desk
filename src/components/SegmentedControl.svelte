@@ -69,7 +69,7 @@
   button {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-1);
     height: var(--control-h-sm);
     padding: 0 var(--space-3);
     border: none;

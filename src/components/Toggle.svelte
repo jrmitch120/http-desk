@@ -77,7 +77,7 @@
   }
   .on .knob {
     transform: translateX(12px);
-    background: #fff;
+    background: var(--on-accent);
   }
   .on .label {
     color: var(--text-2);

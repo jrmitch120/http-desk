@@ -68,7 +68,7 @@
     border: 1px solid var(--border-strong);
     border-radius: 3px;
     background: var(--panel);
-    color: #fff;
+    color: var(--on-accent);
     transition: background 0.1s, border-color 0.1s;
   }
   .checkbox:hover .box {

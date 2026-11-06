@@ -192,7 +192,7 @@
     gap: var(--space-2);
     height: var(--control-h);
     min-width: 0;
-    padding: 0 8px 0 9px;
+    padding: 0 var(--space-2);
     background: var(--panel-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -203,7 +203,7 @@
   }
   .select-trigger.sm {
     height: var(--control-h-sm);
-    padding: 0 6px 0 7px;
+    padding: 0 var(--space-1) 0 var(--space-2);
     font-size: 12px;
   }
   .select-trigger:focus-visible {
@@ -235,7 +235,7 @@
   }
 
   .select-popup {
-    padding: 4px;
+    padding: var(--space-1);
     font-size: 13px;
     max-width: min(420px, calc(100vw - 12px));
   }
@@ -249,9 +249,9 @@
   .filter {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px 6px;
-    margin-bottom: 4px;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    margin-bottom: var(--space-1);
     border-bottom: 1px solid var(--border);
     color: var(--text);
     white-space: pre;
@@ -262,14 +262,14 @@
   .option {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 10px 5px 6px;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
     border-radius: var(--radius-sm);
     cursor: pointer;
     white-space: nowrap;
   }
   .sm .option {
-    padding: 3px 8px 3px 4px;
+    padding: 2px var(--space-2) 2px var(--space-1);
   }
   .option.active {
     background: var(--accent-soft);
@@ -287,7 +287,7 @@
     text-overflow: ellipsis;
   }
   .empty {
-    padding: 5px 10px;
+    padding: var(--space-1) var(--space-2);
     color: var(--muted);
   }
 </style>

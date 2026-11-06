@@ -16,6 +16,8 @@
   --accent-hover: #ff8456;
   --accent-soft: rgba(255, 108, 55, 0.14);
   --focus: #5b9dff;
+  /* text and marks on a solid --accent or --danger fill */
+  --on-accent: #fff;
   --danger: #f2706b;
   --success: #4fc08d;
   --warning: #e8b64c;
@@ -221,7 +223,7 @@ textarea.input {
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -232,7 +234,7 @@ textarea.input {
 .btn.danger.solid {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn.ghost {
   background: transparent;

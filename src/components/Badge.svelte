@@ -29,13 +29,13 @@
 
 <style>
   .badge {
-    --pad: 5px;
+    --pad: var(--space-1);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: none;
     box-sizing: border-box;
-    height: 16px;
+    height: var(--space-4);
     padding: 0 var(--pad);
     border-radius: var(--radius-sm);
     font-family: var(--mono);
@@ -47,8 +47,8 @@
     background: color-mix(in srgb, currentColor 14%, transparent);
   }
   .md {
-    --pad: 7px;
-    height: 20px;
+    --pad: var(--space-2);
+    height: var(--space-5);
     font-size: 11.5px;
   }
   .method {

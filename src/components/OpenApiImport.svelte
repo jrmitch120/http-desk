@@ -537,7 +537,7 @@
     height: 12px;
     border-radius: 50%;
     border: 2px solid rgba(255, 255, 255, 0.4);
-    border-top-color: #fff;
+    border-top-color: var(--on-accent);
     animation: spin 0.7s linear infinite;
   }
   @keyframes spin {

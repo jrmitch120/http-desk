@@ -315,4 +315,5 @@ New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
 `:focus-visible` for focus; and the `--popup-*` tokens for floating surfaces. Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
-so on), so a control works in the light and dark themes without its own rules.
+so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control
+works in the light and dark themes without its own rules.
