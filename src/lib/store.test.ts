@@ -4,16 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists } = vi.hoisted(() => ({
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, openWorkspace, getTree } = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
   saveHttpFile: vi.fn(),
   createFile: vi.fn(),
   createDir: vi.fn(),
   renamePath: vi.fn(),
   pathExists: vi.fn(),
+  openWorkspace: vi.fn(),
+  getTree: vi.fn(),
 }));
 vi.mock("./api", () => ({
-  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists },
+  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, openWorkspace, getTree },
   errorMessage: (e: unknown) => String(e),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -48,7 +50,7 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir]) fn.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, openWorkspace, getTree]) fn.mockReset();
   renamePath.mockReset().mockResolvedValue(undefined);
   pathExists.mockReset().mockResolvedValue(true);
   app.dialog = null;
@@ -315,5 +317,45 @@ describe("closing an Orphaned tab", () => {
     expect(app.tabs).toHaveLength(1);
     expect(app.dirtyDocs()).toEqual([]);
     expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("watcher resilience", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.tree = { name: "ws", path: "/ws", kind: "dir", children: [] };
+  });
+
+  it("keeps the open workspace and shows why when the new one can't be watched", async () => {
+    openWorkspace.mockRejectedValueOnce("Could not watch /other for changes: too many open files");
+    readHttpFile.mockResolvedValueOnce(file("List"));
+    await app.openRequest(PATH, { index: 0 });
+
+    await app.openWorkspace("/other");
+
+    expect(app.root).toBe("/ws");
+    expect(app.tabs).toHaveLength(1);
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["error", "Could not watch /other for changes: too many open files"]]);
+  });
+
+  it("says so when the workspace folder is deleted or moved, without a cryptic tree error", async () => {
+    getTree.mockRejectedValue("No such file or directory (os error 2)");
+
+    app.onWorkspaceMissing("/ws");
+    await app.refreshTree();
+
+    expect(app.toasts.map((t) => t.message)).toEqual(['The workspace folder "ws" was deleted or moved. Open it again from where it is now.']);
+  });
+
+  it("ignores a missing-folder report for a workspace that is no longer open", () => {
+    app.onWorkspaceMissing("/old");
+    expect(app.toasts).toEqual([]);
+  });
+
+  it("shows watcher errors", () => {
+    app.onWatchError("inotify watch limit reached");
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([
+      ["error", "Watching the workspace for changes failed: inotify watch limit reached. Changes made outside HttpDesk may not show up."],
+    ]);
   });
 });

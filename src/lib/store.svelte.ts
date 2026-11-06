@@ -106,6 +106,8 @@ class AppStore {
     }
     this.applyTheme();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
+    await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
+    await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
     const win = getCurrentWindow();
     await win.onCloseRequested(async (e) => {
       const dirty = this.dirtyDocs();
@@ -148,6 +150,7 @@ class AppStore {
     }
     try {
       const info = await api.openWorkspace(path);
+      this.missingRoot = null;
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
@@ -165,8 +168,11 @@ class AppStore {
     }
   }
 
+  /** A workspace folder that was deleted or moved while open; the user has been told. */
+  private missingRoot: string | null = null;
+
   async refreshTree() {
-    if (!this.root) return;
+    if (!this.root || this.root === this.missingRoot) return;
     try {
       this.tree = await api.getTree();
     } catch (e) {
@@ -374,6 +380,18 @@ class AppStore {
         await this.reload(p);
       }
     }
+  }
+
+  /** Handles a `workspace-missing` event: the open workspace folder was deleted or moved. */
+  onWorkspaceMissing(root: string) {
+    if (root !== this.root || root === this.missingRoot) return;
+    this.missingRoot = root;
+    this.toast("error", `The workspace folder "${basename(root)}" was deleted or moved. Open it again from where it is now.`);
+  }
+
+  /** Handles a `workspace-watch-error` event. */
+  onWatchError(message: string) {
+    this.toast("error", `Watching the workspace for changes failed: ${message}. Changes made outside HttpDesk may not show up.`);
   }
 
   // ---------------------------------------------------------------- tabs
