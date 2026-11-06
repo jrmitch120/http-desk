@@ -104,7 +104,10 @@ test("the response view and Settings switches are the same radiogroup", async ({
   expect(await pick(settings.getByRole("radiogroup", { name: "Layout" }), "Response below")).toBe(look);
   await settings.getByRole("button", { name: "Save" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await expect(page.locator(".split.vertical")).toBeVisible();
+  await expect(page.getByRole("separator", { name: "Resize request and response" })).toHaveAttribute(
+    "aria-orientation",
+    "horizontal",
+  );
 });
 
 test("the OpenAPI importer's switches are the same radiogroup", async ({ page }) => {

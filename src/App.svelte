@@ -13,10 +13,10 @@
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
   import Icon from "./components/Icon.svelte";
+  import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
   import { modalOpen } from "./lib/modal";
-
-  let sidebarWidth = $state(Number(localStorage.getItem("sidebarWidth")) || 280);
+  import { SIDEBAR } from "./lib/panes";
 
   onMount(() => {
     app.init().then(() => {
@@ -60,20 +60,6 @@
     if (k === ",") return () => (app.modal = "settings");
     return null;
   }
-
-  function startResize(e: PointerEvent) {
-    const startX = e.clientX;
-    const start = sidebarWidth;
-    const move = (ev: PointerEvent) => (sidebarWidth = Math.min(560, Math.max(200, start + ev.clientX - startX)));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      localStorage.setItem("sidebarWidth", String(sidebarWidth));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  }
-
 </script>
 
 <svelte:window onkeydown={onKey} oncontextmenu={(e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).closest?.(".cm-editor") || e.preventDefault()} />
@@ -82,34 +68,41 @@
   <div class="shell">
     <TopBar />
     <div class="main">
-      <aside style:width="{sidebarWidth}px">
-        <Sidebar />
-      </aside>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="resizer" onpointerdown={startResize}></div>
-      <section class="work">
-        <TabBar />
-        {#if app.activeTab}
-          {#key app.activeTab.id}
-            <RequestView tab={app.activeTab} />
-          {/key}
-        {:else}
-          <div class="empty-state">
-            <Icon name="send" size={34} stroke={1.3} />
-            <div>Open a request from the explorer, or create a new one.</div>
-            <div class="row">
-              <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
-              <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
-            </div>
-            <div class="hints muted">
-              <span><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd> send</span>
-              <span><kbd>⌘/Ctrl</kbd> <kbd>S</kbd> save</span>
-              <span><kbd>⌘/Ctrl</kbd> <kbd>P</kbd> search</span>
-              <span><kbd>⌘/Ctrl</kbd> <kbd>E</kbd> environments</span>
-            </div>
-          </div>
-        {/if}
-      </section>
+      <SplitPane
+        size={app.settings?.sidebarWidth ?? SIDEBAR.initial}
+        limits={SIDEBAR}
+        label="Resize sidebar"
+        onresize={(sidebarWidth) => app.updateSettings({ sidebarWidth })}
+      >
+        {#snippet first()}
+          <aside><Sidebar /></aside>
+        {/snippet}
+        {#snippet second()}
+          <section class="work">
+            <TabBar />
+            {#if app.activeTab}
+              {#key app.activeTab.id}
+                <RequestView tab={app.activeTab} />
+              {/key}
+            {:else}
+              <div class="empty-state">
+                <Icon name="send" size={34} stroke={1.3} />
+                <div>Open a request from the explorer, or create a new one.</div>
+                <div class="row">
+                  <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
+                  <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
+                </div>
+                <div class="hints muted">
+                  <span><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd> send</span>
+                  <span><kbd>⌘/Ctrl</kbd> <kbd>S</kbd> save</span>
+                  <span><kbd>⌘/Ctrl</kbd> <kbd>P</kbd> search</span>
+                  <span><kbd>⌘/Ctrl</kbd> <kbd>E</kbd> environments</span>
+                </div>
+              </div>
+            {/if}
+          </section>
+        {/snippet}
+      </SplitPane>
     </div>
   </div>
 {:else if !app.starting}
@@ -137,26 +130,14 @@
     min-height: 0;
   }
   aside {
-    flex: none;
+    flex: 1;
+    min-height: 0;
     background: var(--panel);
-    border-right: 1px solid var(--border);
-    min-width: 0;
-  }
-  .resizer {
-    width: 5px;
-    margin-left: -3px;
-    margin-right: -2px;
-    cursor: col-resize;
-    z-index: 5;
-    flex: none;
-  }
-  .resizer:hover {
-    background: var(--focus);
-    opacity: 0.4;
   }
   .work {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     background: var(--bg);

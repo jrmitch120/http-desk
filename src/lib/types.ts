@@ -185,6 +185,10 @@ export interface AppSettings {
   layout: "horizontal" | "vertical";
   checkUpdates: boolean;
   showDescriptions: boolean;
+  /** Sidebar width in px. */
+  sidebarWidth: number;
+  /** Request pane's share (0..1) of the request/response split, per layout. */
+  splitRatio: Record<AppSettings["layout"], number>;
 }
 
 // ---- OpenAPI
