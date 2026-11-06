@@ -111,14 +111,14 @@
       <section>
         <h3>Requests</h3>
         <div class="setting">
-          <div class="label"><span>Request timeout</span><small class="muted">Seconds; 0 disables the timeout</small></div>
+          <div class="label"><span>Idle timeout</span><small class="muted">Longest wait for the next data from the server, in seconds; 0 disables it. Downloads that keep streaming are never cut off.</small></div>
           <div class="unit">
             <input class="input num" type="number" min="0" step="1" value={copy.exec.timeoutMs / 1000} oninput={(e) => (copy!.exec.timeoutMs = Math.round(num(e) * 1000))} />
             <span class="muted">s</span>
           </div>
         </div>
         <div class="setting">
-          <div class="label"><span>Connection timeout</span><small class="muted">Seconds; 0 disables the timeout</small></div>
+          <div class="label"><span>Connection timeout</span><small class="muted">Longest wait to connect, in seconds; 0 disables it</small></div>
           <div class="unit">
             <input class="input num" type="number" min="0" step="1" value={copy.exec.connectTimeoutMs / 1000} oninput={(e) => (copy!.exec.connectTimeoutMs = Math.round(num(e) * 1000))} />
             <span class="muted">s</span>
@@ -132,7 +132,7 @@
           <div class="label"><span>Maximum redirects</span></div>
           <input class="input num" type="number" min="0" step="1" disabled={!copy.exec.followRedirects} value={copy.exec.maxRedirects} oninput={(e) => (copy!.exec.maxRedirects = Math.round(num(e)))} />
         </div>
-        <p class="note muted">Per-request <span class="mono"># @timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
+        <p class="note muted">Per-request <span class="mono"># @timeout</span>, <span class="mono"># @connection-timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
       </section>
 
       <section>
