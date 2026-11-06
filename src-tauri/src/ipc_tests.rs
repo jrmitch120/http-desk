@@ -3,6 +3,7 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod confinement;
+mod watcher;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
 #[cfg(windows)]

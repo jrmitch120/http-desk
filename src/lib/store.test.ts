@@ -1,6 +1,6 @@
 // Store behaviour that depends on async ordering (concurrent loads of the same
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
-// sending, settings, toasts and startup.
+// sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
@@ -19,8 +19,9 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
+  getTree: vi.fn(),
 }));
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments } =
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments, getTree } =
   api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -438,6 +439,46 @@ describe("startup", () => {
     expect(app.settings?.recentWorkspaces).toEqual(["/ws"]);
     expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
     expect(app.starting).toBe(false);
+  });
+});
+
+describe("watcher resilience", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.tree = { name: "ws", path: "/ws", kind: "dir", children: [] };
+  });
+
+  it("keeps the open workspace and shows why when the new one can't be watched", async () => {
+    openWorkspace.mockRejectedValueOnce("Could not watch /other for changes: too many open files");
+    readHttpFile.mockResolvedValueOnce(file("List"));
+    await app.openRequest(PATH, { index: 0 });
+
+    await app.openWorkspace("/other");
+
+    expect(app.root).toBe("/ws");
+    expect(app.tabs).toHaveLength(1);
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["error", "Could not watch /other for changes: too many open files"]]);
+  });
+
+  it("says so when the workspace folder is deleted or moved, without a cryptic tree error", async () => {
+    getTree.mockRejectedValue("No such file or directory (os error 2)");
+
+    app.onWorkspaceMissing("/ws");
+    await app.refreshTree();
+
+    expect(app.toasts.map((t) => t.message)).toEqual(['The workspace folder "ws" was deleted or moved. Open it again from where it is now.']);
+  });
+
+  it("ignores a missing-folder report for a workspace that is no longer open", () => {
+    app.onWorkspaceMissing("/old");
+    expect(app.toasts).toEqual([]);
+  });
+
+  it("shows watcher errors", () => {
+    app.onWatchError("inotify watch limit reached");
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([
+      ["error", "Watching the workspace for changes failed: inotify watch limit reached. Changes made outside HttpDesk may not show up."],
+    ]);
   });
 });
 
