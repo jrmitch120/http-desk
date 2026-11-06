@@ -2,8 +2,12 @@
 // window's initialization script, replacing the placeholder in the last line
 // with the saved theme setting as a JSON string; e2e/startup-theme.spec.ts runs
 // the same file. System (or anything unknown) resolves the way `effectiveTheme`
-// in src/lib/store.svelte.ts does: dark unless the OS appearance says otherwise.
+// in src/lib/store.svelte.ts does: dark when the OS prefers dark, else light.
 (function (choice) {
+  // Top frame only: on Windows the script also runs in subframes (response
+  // previews), which have their own styles. Comparing windows is allowed across
+  // origins.
+  if (window.top !== window) return;
   var theme =
     choice === "light" || choice === "dark" ? choice : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   var apply = function () {

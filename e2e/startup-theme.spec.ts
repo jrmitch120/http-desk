@@ -63,6 +63,23 @@ for (const { theme, os, expected } of cases) {
   });
 }
 
+test("leaves frames alone (Windows runs the script in subframes too)", async ({ page }) => {
+  await page.route("**/frame.html", (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body>frame</body></html>" }));
+  await startApp(page, "light", "dark");
+  await page.evaluate(
+    () =>
+      new Promise((loaded) => {
+        const frame = document.createElement("iframe");
+        frame.src = "/frame.html";
+        frame.onload = loaded;
+        document.body.append(frame);
+      }),
+  );
+  const frame = page.frames().find((f) => f.url().endsWith("/frame.html"))!;
+  expect(await frame.evaluate(() => document.documentElement.dataset.theme ?? "none")).toBe("none");
+  expect((await snapshot(page)).theme).toBe("light");
+});
+
 test("without the start-up script a light theme would flash dark (the bug this guards)", async ({ page }) => {
   await startApp(page, "light", "dark", false);
   expect(await snapshot(page)).toEqual({ settingsServed: false, firstFrame: "none", theme: "none", background: BG.dark });

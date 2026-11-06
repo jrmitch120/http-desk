@@ -12,7 +12,8 @@ pub fn create_main_window<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M, choi
     let fixed = window_theme(choice);
     let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
         .theme(fixed)
-        // Main frame only: response previews are iframes with their own styles.
+        // Main frame only (Windows also runs it in subframes, so the script checks):
+        // response previews are iframes with their own styles.
         .initialization_script(page_script(choice));
     if let Some(theme) = fixed {
         builder = builder.background_color(background(theme));
