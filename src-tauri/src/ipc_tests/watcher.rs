@@ -69,7 +69,7 @@ fn churn_in_ignored_folders_and_unlisted_files_emits_no_events() {
 fn a_workspace_inside_an_ignored_folder_still_syncs() {
     let h = Harness::new();
     let tmp = tempfile::tempdir().unwrap();
-    let root = crate::paths::canonicalize(tmp.path()).unwrap().join(".config/target/ws");
+    let root = crate::paths::canonicalize(tmp.path()).unwrap().join(".config").join("target").join("ws");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     let info = h.ok("open_workspace", json!({ "path": root }));

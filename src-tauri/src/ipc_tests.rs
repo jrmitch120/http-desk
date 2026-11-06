@@ -417,7 +417,9 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     });
     changed_paths(&rx, std::time::Duration::from_millis(600));
 
-    let p = |rel: &str| root.join(rel).to_string_lossy().to_string();
+    // Join one component at a time: on Windows `join("dir/b.http")` keeps the `/`,
+    // which never equals the `\` paths the watcher reports.
+    let p = |rel: &str| rel.split('/').fold(root.clone(), |acc, c| acc.join(c)).to_string_lossy().to_string();
     h.ok("rename_path", json!({ "from": p("a.http"), "to": p("b.http") }));
     h.ok("create_dir", json!({ "path": p("dir") }));
     h.ok("rename_path", json!({ "from": p("b.http"), "to": p("dir/b.http") }));
