@@ -33,7 +33,7 @@ let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   recentWorkspaces: [ROOT],
   environments: { [ROOT]: "local" },
-  theme: new URLSearchParams(location.search).get("theme") ?? "dark",
+  theme: new URLSearchParams(location.search).get("theme") ?? "system",
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,

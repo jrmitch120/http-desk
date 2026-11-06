@@ -16,7 +16,10 @@ export default defineConfig({
     baseURL: `http://localhost:${port}`,
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // A dark OS appearance, so the System theme (the default) renders the dark
+  // design that most tests were written against. Tests change it with
+  // `page.emulateMedia({ colorScheme })`.
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], colorScheme: "dark" } }],
   webServer: {
     command: `pnpm exec vite --port ${port}`,
     url: `http://localhost:${port}`,
