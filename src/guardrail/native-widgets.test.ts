@@ -1,9 +1,8 @@
 // Guardrail for ADR 0002: the app's own UI uses HttpDesk's owned controls, never
-// native form widgets or `title` tooltips. See native-widgets.allowlist.ts for
-// the files that haven't been converted yet.
+// native form widgets or `title` tooltips. There is no allowlist: every app
+// source file is checked.
 import { describe, expect, it } from "vitest";
-import { ALLOWLIST } from "./native-widgets.allowlist";
-import { checkSources, emptyAllowlist } from "./native-widgets";
+import { checkSources } from "./native-widgets";
 
 const file = (path: string, source: string) => ({ path, source });
 
@@ -14,16 +13,16 @@ const sources = import.meta.glob(["/src/**/*.svelte", "/src/**/*.ts", "!/src/**/
   eager: true,
 }) as Record<string, string>;
 
-it("the app uses owned controls, not native widgets, outside the allowlist", () => {
+it("the app uses owned controls, not native widgets", () => {
   const files = Object.entries(sources).map(([path, source]) => file(path.slice(1), source));
   expect(files.length).toBeGreaterThan(20);
-  const problems = checkSources(files, ALLOWLIST);
-  expect(problems, `Use the owned controls (ADR 0002) instead:\n${problems.join("\n")}\n`).toEqual([]);
+  const problems = checkSources(files);
+  expect(problems, `Use the owned controls instead (ADR 0002, docs/controls.md):\n${problems.join("\n")}\n`).toEqual([]);
 });
 
 describe("checkSources", () => {
-  it("reports a native <select> in a non-allowlisted component, naming the file and widget", () => {
-    const problems = checkSources([file("src/components/New.svelte", `<div>\n  <select><option>a</option></select>\n</div>`)], emptyAllowlist());
+  it("reports a native <select> in any component, naming the file and widget", () => {
+    const problems = checkSources([file("src/components/New.svelte", `<div>\n  <select><option>a</option></select>\n</div>`)]);
     expect(problems).toEqual([expect.stringMatching(/^src\/components\/New\.svelte:2 .*<select>/)]);
   });
 
@@ -35,7 +34,7 @@ describe("checkSources", () => {
       `<input list="x" /><datalist id="x"></datalist>`,
       `<button title="Close">x</button>`,
     ].join("\n");
-    expect(checkSources([file("src/A.svelte", source)], emptyAllowlist())).toEqual([
+    expect(checkSources([file("src/A.svelte", source)])).toEqual([
       'src/A.svelte:1 uses a native <input type="checkbox">',
       'src/A.svelte:2 uses a native <input type="radio">',
       'src/A.svelte:3 uses a native <input type="number">',
@@ -46,7 +45,7 @@ describe("checkSources", () => {
 
   it("catches a title tooltip however the attribute is written", () => {
     const source = `<span title={label}></span>\n<span {title}></span>`;
-    expect(checkSources([file("src/A.svelte", source)], emptyAllowlist())).toEqual([
+    expect(checkSources([file("src/A.svelte", source)])).toEqual([
       "src/A.svelte:1 uses a native title= tooltip",
       "src/A.svelte:2 uses a native title= tooltip",
     ]);
@@ -65,7 +64,7 @@ describe("checkSources", () => {
   input[type="checkbox"] { margin: 0; }
   .title { color: red; }
 </style>`;
-    expect(checkSources([file("src/A.svelte", source)], emptyAllowlist())).toEqual([]);
+    expect(checkSources([file("src/A.svelte", source)])).toEqual([]);
   });
 
   it("catches native widgets built from TypeScript (CodeMirror decorations, DOM APIs)", () => {
@@ -78,7 +77,7 @@ describe("checkSources", () => {
       `interface Dialog { title: string } // not a tooltip`,
       `if (el.title === "x") {}`,
     ].join("\n");
-    expect(checkSources([file("src/lib/x.ts", source)], emptyAllowlist())).toEqual([
+    expect(checkSources([file("src/lib/x.ts", source)])).toEqual([
       "src/lib/x.ts:1 uses a native title= tooltip",
       "src/lib/x.ts:2 uses a native title= tooltip",
       "src/lib/x.ts:3 uses a native title= tooltip",
@@ -89,20 +88,6 @@ describe("checkSources", () => {
 
   it("checks DOM-building code inside a component's <script> too", () => {
     const source = `<script lang="ts">\n  let el: HTMLElement;\n  $effect(() => { el.title = "x"; });\n</script>\n<div bind:this={el}></div>`;
-    expect(checkSources([file("src/A.svelte", source)], emptyAllowlist())).toEqual(["src/A.svelte:3 uses a native title= tooltip"]);
-  });
-
-  it("allowlists a file for one widget kind only", () => {
-    const allowlist = { ...emptyAllowlist(), select: ["src/A.svelte"] };
-    const source = `<select></select>\n<input type="checkbox" />`;
-    expect(checkSources([file("src/A.svelte", source)], allowlist)).toEqual(['src/A.svelte:2 uses a native <input type="checkbox">']);
-  });
-
-  it("asks for an allowlist entry to be removed once its file no longer has that widget", () => {
-    const allowlist = { ...emptyAllowlist(), select: ["src/A.svelte", "src/Gone.svelte"] };
-    expect(checkSources([file("src/A.svelte", `<div></div>`)], allowlist)).toEqual([
-      'src/A.svelte has no native <select> any more: remove it from the "select" allowlist',
-      'src/Gone.svelte has no native <select> any more: remove it from the "select" allowlist',
-    ]);
+    expect(checkSources([file("src/A.svelte", source)])).toEqual(["src/A.svelte:3 uses a native title= tooltip"]);
   });
 });

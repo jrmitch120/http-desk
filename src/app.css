@@ -130,7 +130,6 @@ body {
 
 input,
 textarea,
-select,
 button {
   font: inherit;
   color: inherit;
@@ -162,8 +161,7 @@ textarea,
 
 /* ---------------------------------------------------------------- controls */
 
-.input,
-.select {
+.input {
   height: var(--control-h);
   padding: 0 9px;
   background: var(--panel-2);
@@ -172,8 +170,7 @@ textarea,
   outline: none;
   min-width: 0;
 }
-.input:focus,
-.select:focus {
+.input:focus {
   border-color: var(--focus);
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
@@ -184,15 +181,6 @@ textarea,
 .input.mono {
   font-family: var(--mono);
   font-size: 12.5px;
-}
-.select {
-  padding-right: 24px;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position: calc(100% - 13px) 13px, calc(100% - 9px) 13px;
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
 }
 textarea.input {
   height: auto;

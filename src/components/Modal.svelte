@@ -21,7 +21,7 @@
     if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
   });
 
-  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 
   /** Keeps Tab / Shift+Tab cycling inside the topmost modal. */
   function trapTab(e: KeyboardEvent) {
