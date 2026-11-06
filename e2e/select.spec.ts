@@ -64,6 +64,20 @@ test("the method can be picked with the keyboard", async ({ page }) => {
   expect(await lastSentMethod(page)).toBe("DELETE");
 });
 
+test("Enter and Space open the list, and Tab closes it without a change", async ({ page }) => {
+  await method(page).focus();
+  for (const key of ["Enter", "Space"]) {
+    await page.keyboard.press(key);
+    await expect(methodList(page)).toBeVisible();
+    await expect(methodList(page).getByRole("option", { name: "GET" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Tab");
+    await expect(methodList(page)).toHaveCount(0);
+    await expect(method(page)).toHaveText("GET");
+    await method(page).focus();
+  }
+});
+
 test("each method is listed in its colour", async ({ page }) => {
   await method(page).click();
   for (const [m, cls] of [["GET", "m-get"], ["POST", "m-post"], ["DELETE", "m-delete"], ["OPTIONS", "m-options"]]) {
