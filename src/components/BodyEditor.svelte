@@ -1,5 +1,6 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
+  import { api } from "../lib/api";
   import type { Request, BodyMode } from "../lib/types";
   import type { VarProvider } from "../lib/codemirror/setup";
   import { bodySyntaxHighlight } from "../lib/codemirror/setup";
@@ -13,7 +14,6 @@
     parseFileRef,
     parseForm,
     parseMultipart,
-    prettyJson,
     prettyXml,
     relativePath,
     setBodyMode,
@@ -84,10 +84,18 @@
     body.text = `<${substitute ? "@" : ""} ${path}`;
   }
 
-  function beautify() {
+  async function beautify() {
     if (body.mode === "json") {
-      const p = prettyJson(body.text);
-      if (p !== null) body.text = p;
+      // Formatted in the core so numbers stay as written. Invalid JSON (or a
+      // `{{var}}` in a value position) leaves the body as it is.
+      const target = body;
+      const text = target.text;
+      try {
+        const pretty = await api.formatBody(text, "json", "pretty");
+        if (target.text === text) target.text = pretty; // unless edited meanwhile
+      } catch {
+        // not valid JSON: nothing to do
+      }
     } else if (body.mode === "xml") {
       body.text = prettyXml(body.text);
     }
