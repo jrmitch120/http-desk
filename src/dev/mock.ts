@@ -136,7 +136,8 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
-// `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`).
+// `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`),
+// except that `unresolvedVariable` fails only while no environment is selected.
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
 const chain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
 const sendErrors: Record<string, { message: string; details: unknown }> = {
@@ -298,7 +299,8 @@ mockIPC(
         } else {
           await delay(450);
         }
-        if (sendError) throw clone(sendError);
+        // An environment defines the missing variable, so picking one fixes it.
+        if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
         const r = args.request;
         if (r.url.includes("png") && bigBinary) {
           return {

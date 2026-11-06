@@ -216,7 +216,7 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <SendErrorPanel error={run.error} onretry={() => app.send(tab.id)} />
+      <SendErrorPanel error={run.error} tabId={tab.id} onretry={() => app.send(tab.id)} />
     {:else if res}
       {#if res.warnings.length || res.truncated}
         <Banner severity="warning">

@@ -561,7 +561,12 @@ Decisions made during implementation, beyond the plan above:
   (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
-  (`src/lib/sendError.ts`) and always offers Retry. DNS errors are recognised by the
+  (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
+  the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
+  turns verification off), the timeouts open the request's Settings, and
+  `unresolvedVariable` opens the environment picker. They ask through one-shot store
+  fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
+  component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
   verifiers don't agree on reasons (macOS reports a self-signed or expired certificate
   as an opaque code), so after a certificate rejection the core fetches the certificate

@@ -68,6 +68,8 @@ export interface DialogState {
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | null;
+/** A section of the Settings modal that can be opened scrolled into view. */
+export type SettingsSection = "tls";
 
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
@@ -112,6 +114,12 @@ class AppStore {
   starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
+  /** Fix-it requests from the error panel, each cleared by the component that
+   *  acts on it: the Settings section to scroll to when the modal opens, the tab
+   *  whose request editor should show its Settings, and the environment picker. */
+  settingsSection = $state<SettingsSection | null>(null);
+  requestSettingsFor = $state<string | null>(null);
+  envPickerWanted = $state(false);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -883,6 +891,22 @@ class AppStore {
       else delete envs[this.root];
       await this.updateSettings({ environments: envs });
     }
+  }
+
+  /** Opens the Settings modal, scrolled to `section` if given. */
+  openSettings(section: SettingsSection | null = null) {
+    this.settingsSection = section;
+    this.modal = "settings";
+  }
+
+  /** Switches the tab's request editor to its Settings section (timeouts). */
+  showRequestSettings(tabId: string) {
+    this.requestSettingsFor = tabId;
+  }
+
+  /** Opens the environment picker in the top bar. */
+  chooseEnvironment() {
+    this.envPickerWanted = true;
   }
 
   // ---------------------------------------------------------------- feedback
