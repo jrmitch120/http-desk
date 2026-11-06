@@ -16,6 +16,7 @@
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import HeadersPanel from "./HeadersPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -239,15 +240,7 @@
           {/if}
         </div>
       {:else if current === "headers"}
-        <div class="table-wrap">
-          <table>
-            <tbody>
-              {#each res.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <HeadersPanel headers={res.headers} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
