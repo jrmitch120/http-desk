@@ -92,6 +92,25 @@ test('typing a new method token offers "Use …" and picks it, uppercased', asyn
   await expect(methodList(page).getByRole("option")).toHaveText(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "PURGE"]);
 });
 
+test("the environment picker filters as you type and selects with Enter", async ({ page }) => {
+  const env = page.getByRole("combobox", { name: "Active environment" });
+  const list = page.getByRole("listbox", { name: "Active environment" });
+  await expect(env).toHaveText("local");
+  await expect(list).toHaveCount(0);
+
+  await env.focus();
+  await page.keyboard.type("st");
+  await expect(list.getByRole("option")).toHaveText(["staging"]);
+  await page.keyboard.press("Enter");
+  await expect(list).toHaveCount(0);
+  await expect(env).toHaveText("staging");
+
+  await env.click();
+  await expect(list.getByRole("option")).toHaveText(["No environment", "local", "staging"]);
+  await list.getByRole("option", { name: "No environment" }).click();
+  await expect(env).toHaveText("No environment");
+});
+
 test('an invalid method token offers no "Use" item', async ({ page }) => {
   await method(page).focus();
   await page.keyboard.type("bad method");
