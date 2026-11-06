@@ -3,12 +3,27 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { SvelteSet } from "svelte/reactivity";
   import { api, errorMessage } from "../lib/api";
-  import { joinPath, methodClass, slugify } from "../lib/http";
+  import { joinPath, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
+  import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
+
+  const sources: SegmentedOption<"file" | "url">[] = [
+    { value: "file", label: "File", icon: "file" },
+    { value: "url", label: "URL", icon: "globe" },
+  ];
+  const groupings: SegmentedOption<Grouping>[] = [
+    { value: "tag", label: "Tag" },
+    { value: "path", label: "Path" },
+    { value: "single", label: "Single file" },
+  ];
 
   let step = $state<"source" | "select">("source");
   let kind = $state<"file" | "url">("file");
@@ -60,11 +75,6 @@
     if (grouping === "single") return 1;
     return new Set(ops.map(grouping === "tag" ? groupOf : segmentOf)).size;
   });
-
-  function indeterminate(node: HTMLInputElement, value: boolean) {
-    node.indeterminate = value;
-    return { update: (v: boolean) => (node.indeterminate = v) };
-  }
 
   async function browseSpec() {
     const picked = await open({ multiple: false, filters: [{ name: "OpenAPI", extensions: ["yaml", "yml", "json"] }] });
@@ -171,10 +181,7 @@
       <p class="intro muted">
         Generate standard <span class="mono">.http</span> files from an OpenAPI 3.0 or 3.1 specification (JSON or YAML). Requests stay plain, portable text you can edit anywhere.
       </p>
-      <div class="seg" role="tablist">
-        <button class:on={kind === "file"} onclick={() => (kind = "file")} role="tab" aria-selected={kind === "file"}><Icon name="file" size={14} />File</button>
-        <button class:on={kind === "url"} onclick={() => (kind = "url")} role="tab" aria-selected={kind === "url"}><Icon name="globe" size={14} />URL</button>
-      </div>
+      <SegmentedControl label="Specification source" options={sources} value={kind} onchange={(v) => (kind = v)} />
       {#if kind === "file"}
         <label class="field">
           <span>Specification file</span>
@@ -190,7 +197,7 @@
         </label>
       {/if}
       {#if loadError}
-        <div class="banner error load-error"><Icon name="alert" /><span class="selectable">{loadError}</span></div>
+        <Banner severity="error" inline><span class="selectable">{loadError}</span></Banner>
       {/if}
     </div>
   {:else if summary}
@@ -198,30 +205,29 @@
       <div class="spec-head">
         <div class="spec-title">
           <strong>{summary.title}</strong>
-          <span class="pill">v{summary.version}</span>
-          <span class="pill">OpenAPI {summary.openapiVersion}</span>
+          <Badge size="md">v{summary.version}</Badge>
+          <Badge size="md">OpenAPI {summary.openapiVersion}</Badge>
         </div>
         {#if summary.servers.length}
           <div class="servers muted">
             {#each summary.servers as s (s.url)}
-              <span class="mono" title={s.description ?? ""}>{s.url}{#if s.description}<span class="desc">{` — ${s.description}`}</span>{/if}</span>
+              <span class="mono" use:tooltip={s.description}>{s.url}{#if s.description}<span class="desc">{` — ${s.description}`}</span>{/if}</span>
             {/each}
           </div>
         {/if}
       </div>
       {#if summary.warnings.length}
-        <div class="banner warning warn">
+        <Banner severity="warning">
           <button class="warn-toggle" onclick={() => (showWarnings = !showWarnings)}>
-            <Icon name="alert" />
             {summary.warnings.length} warning{summary.warnings.length === 1 ? "" : "s"} while reading the specification
             <Icon name={showWarnings ? "chevron-down" : "chevron-right"} size={13} />
           </button>
           {#if showWarnings}
-            <ul class="selectable">
+            <ul class="warn-list selectable">
               {#each summary.warnings as w, i (i)}<li>{w}</li>{/each}
             </ul>
           {/if}
-        </div>
+        </Banner>
       {/if}
 
       <div class="body">
@@ -241,15 +247,14 @@
               {@const count = g.ops.filter((o) => selected.has(o.id)).length}
               <div class="group">
                 <div class="group-head">
-                  <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} title={collapsed[g.name] ? "Expand" : "Collapse"}>
+                  <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} aria-label={collapsed[g.name] ? "Expand" : "Collapse"} use:tooltip>
                     <Icon name={collapsed[g.name] ? "chevron-right" : "chevron-down"} size={13} />
                   </button>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={count === g.ops.length}
-                    use:indeterminate={count > 0 && count < g.ops.length}
+                    indeterminate={count > 0 && count < g.ops.length}
                     onchange={() => toggleGroup(g.ops)}
-                    aria-label="Select all in {g.name}"
+                    label="Select all in {g.name}"
                   />
                   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                   <span class="group-name" onclick={() => (collapsed[g.name] = !collapsed[g.name])}>{g.name}</span>
@@ -257,13 +262,12 @@
                 </div>
                 {#if !collapsed[g.name]}
                   {#each g.ops as op (op.id)}
-                    <label class="op" class:deprecated={op.deprecated}>
-                      <input type="checkbox" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)} />
-                      <span class="method-badge {methodClass(op.method)}">{op.method}</span>
-                      <span class="path mono ellipsis" title={op.path}>{op.path}</span>
-                      <span class="summary muted ellipsis" title={op.summary ?? op.operationId ?? ""}>{op.summary ?? op.operationId ?? ""}</span>
+                    <Checkbox class="op{op.deprecated ? ' deprecated' : ''}" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)}>
+                      <Badge method={op.method}>{op.method}</Badge>
+                      <span class="path mono ellipsis" use:tooltip={op.path}>{op.path}</span>
+                      <span class="summary muted ellipsis" use:tooltip={op.summary ?? op.operationId}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
-                    </label>
+                    </Checkbox>
                   {/each}
                 {/if}
               </div>
@@ -277,11 +281,7 @@
           <h3>Output</h3>
           <div class="field">
             <span>Organize files by</span>
-            <div class="seg small">
-              <button class:on={grouping === "tag"} onclick={() => (grouping = "tag")}>Tag</button>
-              <button class:on={grouping === "path"} onclick={() => (grouping = "path")}>Path</button>
-              <button class:on={grouping === "single"} onclick={() => (grouping = "single")}>Single file</button>
-            </div>
+            <SegmentedControl label="Organize files by" options={groupings} value={grouping} onchange={(v) => (grouping = v)} />
           </div>
           <label class="field">
             <span>Base URL variable</span>
@@ -299,7 +299,7 @@
           </div>
           <label class="field">
             <span>Output directory</span>
-            <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" title={outputDir} />
+            <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" use:tooltip={outputDir} />
             <button class="btn small browse" onclick={browseOutput}>Browse…</button>
           </label>
           <div class="estimate">
@@ -342,35 +342,6 @@
     margin: 0;
     line-height: 1.55;
   }
-  .seg {
-    display: inline-flex;
-    align-self: flex-start;
-    padding: 2px;
-    border-radius: 6px;
-    background: var(--panel-3);
-    border: 1px solid var(--border);
-  }
-  .seg button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: none;
-    background: none;
-    color: var(--muted);
-    padding: 5px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: 500;
-  }
-  .seg button.on {
-    background: var(--panel);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  }
-  .seg.small button {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
   .field {
     display: flex;
     flex-direction: column;
@@ -383,11 +354,6 @@
   }
   .grow {
     flex: 1;
-  }
-  .load-error {
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    align-items: flex-start;
   }
   .select {
     display: flex;
@@ -405,13 +371,6 @@
     gap: 8px;
     font-size: 14px;
   }
-  .pill {
-    font-size: 11px;
-    padding: 1px 7px;
-    border-radius: 10px;
-    background: var(--panel-3);
-    color: var(--text-2);
-  }
   .servers {
     display: flex;
     flex-wrap: wrap;
@@ -421,10 +380,6 @@
   }
   .desc {
     font-family: var(--font);
-  }
-  .warn {
-    flex-direction: column;
-    align-items: stretch;
   }
   .warn-toggle {
     display: flex;
@@ -437,9 +392,9 @@
     cursor: pointer;
     font-size: 12px;
   }
-  .warn ul {
+  .warn-list {
     margin: 6px 0 2px;
-    padding-left: 22px;
+    padding-left: 16px;
     max-height: 90px;
     overflow: auto;
     color: var(--text-2);
@@ -496,15 +451,13 @@
     flex: 1;
     cursor: pointer;
   }
-  .op {
+  .op-list :global(.op) {
     display: flex;
-    align-items: center;
+    width: 100%;
     gap: 10px;
     padding: 4px 12px 4px 38px;
-    cursor: pointer;
-    min-width: 0;
   }
-  .op:hover {
+  .op-list :global(.op:hover) {
     background: var(--hover);
   }
   .path {
@@ -517,8 +470,8 @@
     min-width: 0;
     font-size: 12px;
   }
-  .op.deprecated .path,
-  .op.deprecated .summary {
+  :global(.op.deprecated) .path,
+  :global(.op.deprecated) .summary {
     text-decoration: line-through;
     text-decoration-color: var(--faint);
   }
@@ -531,11 +484,6 @@
     border-radius: 3px;
     background: color-mix(in srgb, var(--warning) 18%, transparent);
     color: var(--warning);
-    flex: none;
-  }
-  input[type="checkbox"] {
-    accent-color: var(--accent);
-    margin: 0;
     flex: none;
   }
   .options {
@@ -588,8 +536,8 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.4);
-    border-top-color: #fff;
+    border: 2px solid color-mix(in srgb, var(--on-accent) 40%, transparent);
+    border-top-color: var(--on-accent);
     animation: spin 0.7s linear infinite;
   }
   @keyframes spin {

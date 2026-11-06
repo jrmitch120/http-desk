@@ -3,7 +3,10 @@
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
+  import { THEMES, themeLabel } from "../lib/themes";
   import Icon from "./Icon.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import { updates } from "../lib/updates.svelte";
 
   async function openFolder() {
@@ -19,13 +22,31 @@
     ]);
   }
 
-  const envNames = $derived(app.envSet?.environments.map((e) => e.name) ?? []);
+  const envOptions: SelectOption[] = $derived([
+    { value: "", label: "No environment" },
+    ...(app.envSet?.environments.map((e) => ({ value: e.name, label: e.name })) ?? []),
+  ]);
   const layout = $derived(app.settings?.layout ?? "horizontal");
-  const theme = $derived(app.settings?.theme ?? "dark");
+
+  // The theme menu: System / Light / Dark, the current choice checked.
+  let themeButton: HTMLButtonElement | undefined = $state();
+  // "Theme: Light", or with System what it resolves to: "Theme: System (Dark)".
+  const themeTip = $derived(
+    `Theme: ${themeLabel(app.themeChoice)}${app.themeChoice === "system" ? ` (${themeLabel(app.effectiveTheme)})` : ""}`,
+  );
+
+  function themeMenu(e: MouseEvent) {
+    if (menu.isOpenFrom(themeButton)) return menu.close(false);
+    menu.show(
+      e,
+      THEMES.map((t) => ({ label: t.label, icon: t.icon, checked: app.themeChoice === t.value, action: () => app.updateSettings({ theme: t.value }) })),
+      { anchor: themeButton, align: "end", label: "Theme" },
+    );
+  }
 </script>
 
 <header class="topbar">
-  <button class="ws" onclick={workspaceMenu} title={app.root ?? ""}>
+  <button class="ws" onclick={workspaceMenu} use:tooltip={app.root}>
     <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true">
       <rect x="64" y="64" width="896" height="896" rx="200" fill="var(--accent)" />
       <path d="M300 330 L460 512 L300 694" fill="none" stroke="#fff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" />
@@ -37,43 +58,72 @@
 
   <div class="spacer"></div>
 
-  <button class="btn small ghost" onclick={() => (app.modal = "openapi")} title="Generate .http files from an OpenAPI specification">
+  <button class="btn small ghost" onclick={() => (app.modal = "openapi")} use:tooltip={"Generate .http files from an OpenAPI specification"}>
     <Icon name="import" size={14} />Import OpenAPI
   </button>
 
   <div class="env" class:none={!app.envName}>
     <Icon name="globe" size={14} />
-    <select
+    <Select
       class="env-select"
+      options={envOptions}
       value={app.envName ?? ""}
-      onchange={(e) => app.selectEnvironment((e.currentTarget as HTMLSelectElement).value || null)}
-      title="Active environment"
-    >
-      <option value="">No environment</option>
-      {#each envNames as n (n)}<option value={n}>{n}</option>{/each}
-    </select>
-    <button class="icon-btn" onclick={() => (app.modal = "env")} title="Manage environments (⌘/Ctrl E)"><Icon name="layers" size={14} /></button>
+      onchange={(v) => app.selectEnvironment(v || null)}
+      label="Active environment"
+      tooltip="Active environment"
+    />
+    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
   </div>
 
   {#if updates.progress !== null}
-    <span class="update-pill" title="Downloading the update; HttpDesk restarts when it's done">
+    <span class="update-pill" use:tooltip={"Downloading the update; HttpDesk restarts when it's done"}>
       <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
     </span>
   {/if}
   <button
     class="icon-btn"
-    title={layout === "horizontal" ? "Show response below" : "Show response on the right"}
+    aria-label={layout === "horizontal" ? "Show response below" : "Show response on the right"}
+    use:tooltip
     onclick={() => app.updateSettings({ layout: layout === "horizontal" ? "vertical" : "horizontal" })}
   >
     <Icon name={layout === "horizontal" ? "rows" : "columns"} />
   </button>
-  <button class="icon-btn" title="Toggle theme" onclick={() => app.updateSettings({ theme: theme === "dark" ? "light" : "dark" })}>
-    <Icon name={theme === "dark" ? "sun" : "moon"} />
+  <button
+    class="icon-btn theme-btn"
+    bind:this={themeButton}
+    aria-label="Theme"
+    aria-haspopup="menu"
+    aria-expanded={menu.isOpenFrom(themeButton)}
+    use:tooltip={themeTip}
+    onclick={themeMenu}
+  >
+    <Icon name={app.effectiveTheme === "dark" ? "moon" : "sun"} />
+    {#if app.themeChoice === "system"}<span class="auto" aria-hidden="true">A</span>{/if}
   </button>
-  <button class="icon-btn" title="Settings (⌘/Ctrl ,)" onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  <button class="icon-btn" aria-label="Settings" use:tooltip={"Settings (⌘/Ctrl ,)"} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
 </header>
 
 <style>
+  .theme-btn {
+    position: relative;
+  }
+  /* "Automatic": System is chosen, so the icon follows the OS. */
+  .auto {
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 2px;
+    border-radius: 6px;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 11px;
+    text-align: center;
+    color: var(--panel);
+    background: var(--muted);
+    pointer-events: none;
+  }
   .update-pill {
     display: inline-flex;
     align-items: center;
@@ -130,15 +180,12 @@
   .env.none {
     color: var(--muted);
   }
-  .env-select {
+  .env :global(.env-select) {
     height: 28px;
-    border: none;
+    border-color: transparent;
     background: transparent;
-    color: var(--text);
-    outline: none;
     padding: 0 6px;
     min-width: 150px;
     max-width: 220px;
-    cursor: pointer;
   }
 </style>

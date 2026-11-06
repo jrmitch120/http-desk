@@ -1,8 +1,10 @@
 <script lang="ts">
   import { app, type Tab } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
-  import { basename, displayName, methodClass } from "../lib/http";
+  import { basename, displayName } from "../lib/http";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let strip: HTMLDivElement | undefined = $state();
 
@@ -59,26 +61,26 @@
         role="tab"
         aria-selected={active}
         tabindex={active ? 0 : -1}
-        title="{req ? displayName(req) : ''} — {orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}"
+        use:tooltip={`${req ? displayName(req) : ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
         onclick={() => (app.activeTabId = tab.id)}
         onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
         {#if req}
-          <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
+          <Badge method={req.method} class="tab-method" />
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}
           {#if dirty}<span class="dot"></span>{/if}
-          <button class="close" title="Close" onclick={(e) => (e.stopPropagation(), app.closeTab(tab.id))}><Icon name="x" size={12} /></button>
+          <button class="close" aria-label="Close" use:tooltip onclick={(e) => (e.stopPropagation(), app.closeTab(tab.id))}><Icon name="x" size={12} /></button>
         </span>
       </div>
     {/each}
   </div>
-  <button class="icon-btn plus" title="New request (⌘/Ctrl T)" onclick={newRequest}><Icon name="plus" /></button>
+  <button class="icon-btn plus" aria-label="New request" use:tooltip={"New request (⌘/Ctrl T)"} onclick={newRequest}><Icon name="plus" /></button>
 </div>
 
 <style>
@@ -117,9 +119,10 @@
     background: var(--panel-2);
     color: var(--text-2);
   }
+  /* The strip scrolls, so it clips: the ring sits fully inside the tab. */
   .tab:focus-visible {
-    outline: 2px solid var(--focus);
-    outline-offset: -2px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-inset);
   }
   .tab.active {
     background: var(--bg);
@@ -134,6 +137,13 @@
     height: 2px;
     background: var(--accent);
   }
+  /* The bar is positioned, so it paints over the tab's own outline: move it
+     inside the ring while the tab has keyboard focus. */
+  .tab.active:focus-visible::before {
+    top: var(--focus-ring-width);
+    left: var(--focus-ring-width);
+    right: var(--focus-ring-width);
+  }
   .tab.active::after {
     content: "";
     position: absolute;
@@ -143,7 +153,7 @@
     height: 1px;
     background: var(--bg);
   }
-  .tab .method-badge {
+  .tab :global(.tab-method) {
     min-width: 0;
   }
   .name {
@@ -177,7 +187,7 @@
     border: none;
     background: none;
     color: var(--muted);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     opacity: 0;
   }

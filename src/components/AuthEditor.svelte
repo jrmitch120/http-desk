@@ -1,8 +1,10 @@
 <script lang="ts">
-  import type { Auth, AuthKind } from "../lib/types";
+  import type { ApiKeyLocation, Auth, AuthKind } from "../lib/types";
   import { basicUsernameError, headerNameError } from "../lib/http";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { auth }: { auth: Auth } = $props();
   let reveal = $state(false);
@@ -13,11 +15,15 @@
   );
   const usernameError = $derived(basicUsernameError(auth.username));
 
-  const kinds: { value: AuthKind; label: string }[] = [
+  const kinds: SelectOption<AuthKind>[] = [
     { value: "none", label: "No Auth" },
     { value: "basic", label: "Basic Auth" },
     { value: "bearer", label: "Bearer Token" },
     { value: "apiKey", label: "API Key" },
+  ];
+  const locations: SelectOption<ApiKeyLocation>[] = [
+    { value: "header", label: "Header" },
+    { value: "query", label: "Query params" },
   ];
 
   const preview = $derived.by(() => {
@@ -38,12 +44,10 @@
 
 <div class="auth" class:off={!auth.enabled && auth.kind !== "none"}>
   <div class="left">
-    <label class="field">
+    <div class="field">
       <span>Type</span>
-      <select class="select" bind:value={auth.kind}>
-        {#each kinds as k (k.value)}<option value={k.value}>{k.label}</option>{/each}
-      </select>
-    </label>
+      <Select class="auth-select" options={kinds} value={auth.kind} onchange={(v) => (auth.kind = v)} label="Authorization type" />
+    </div>
     <p class="muted help">
       {#if auth.kind === "none"}
         This request does not use any authorization.
@@ -74,7 +78,7 @@
         <span>Password</span>
         <div class="with-btn">
           <input class="input mono" type={reveal ? "text" : "password"} bind:value={auth.password} placeholder={"{{password}}"} spellcheck="false" />
-          <button class="icon-btn" title={reveal ? "Hide" : "Show"} onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
+          <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
       </label>
     {:else if auth.kind === "bearer"}
@@ -82,7 +86,7 @@
         <span>Token</span>
         <div class="with-btn">
           <input class="input mono" type={reveal || auth.token.startsWith("{{") ? "text" : "password"} bind:value={auth.token} placeholder={"{{token}}"} spellcheck="false" />
-          <button class="icon-btn" title={reveal ? "Hide" : "Show"} onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
+          <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
       </label>
     {:else if auth.kind === "apiKey"}
@@ -92,13 +96,10 @@
         {#if keyNameError}<span class="field-error" role="alert">{keyNameError}</span>{/if}
       </label>
       <label class="field"><span>Value</span><input class="input mono" bind:value={auth.keyValue} placeholder={"{{apiKey}}"} spellcheck="false" /></label>
-      <label class="field">
+      <div class="field">
         <span>Add to</span>
-        <select class="select" bind:value={auth.keyLocation}>
-          <option value="header">Header</option>
-          <option value="query">Query params</option>
-        </select>
-      </label>
+        <Select class="auth-select" options={locations} value={auth.keyLocation} onchange={(v) => (auth.keyLocation = v)} label="Add to" />
+      </div>
     {/if}
   </div>
 </div>
@@ -132,7 +133,7 @@
     color: var(--muted);
   }
   .field .input,
-  .field .select {
+  .field :global(.auth-select) {
     width: 100%;
     color: var(--text);
   }

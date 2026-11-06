@@ -29,19 +29,70 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
+type EnvMap = Record<string, Record<string, unknown>>;
+type MockEnvVar = { name: string; value: string; secret: boolean };
+/**
+ * What saving writes to http-client.env.json (`shared`) and
+ * http-client.private.env.json (`private`), like `env::save` in the Rust core:
+ * a Secret's value goes only to the private file; a Secret already listed in
+ * the shared file keeps an empty placeholder there.
+ */
+function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: EnvMap; private: EnvMap } {
+  const shared: EnvMap = {};
+  const priv: EnvMap = {};
+  const named: [string, MockEnvVar[]][] = [["$shared", set.shared], ...set.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
+  for (const [env, vars] of named) {
+    const pub: Record<string, unknown> = {};
+    const sec: Record<string, unknown> = {};
+    for (const v of vars.filter((v) => v.name)) {
+      if (v.secret) {
+        sec[v.name] = v.value;
+        if (old.shared[env] && v.name in old.shared[env]) pub[v.name] = "";
+      } else pub[v.name] = v.value;
+    }
+    if (env !== "$shared" || Object.keys(pub).length || old.shared[env]) shared[env] = pub;
+    if (Object.keys(sec).length) priv[env] = sec;
+  }
+  return { shared, private: priv };
+}
+let envFiles = splitEnvFiles(envSet, { shared: {} });
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   recentWorkspaces: [ROOT],
   environments: { [ROOT]: "local" },
-  theme: new URLSearchParams(location.search).get("theme") ?? "dark",
+  theme: new URLSearchParams(location.search).get("theme") ?? "system",
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,
+  sidebarWidth: 280,
+  splitRatio: { horizontal: 0.5, vertical: 0.5 },
 };
+// Saved settings survive a reload of the page (like the real settings file), so
+// a test can check something is still applied after `page.reload()`. Each test
+// gets a fresh page, so it still starts from the defaults above.
+const SAVED_SETTINGS = "httpdesk-mock-settings";
+const saved = sessionStorage.getItem(SAVED_SETTINGS);
+if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-(window as unknown as { __mock: unknown }).__mock = { sent };
+let settingsServed = false;
+(window as unknown as { __mock: unknown }).__mock = {
+  sent,
+  /** Whether the app has been given its settings yet. */
+  get settingsServed() {
+    return settingsServed;
+  },
+  /** Lets held settings through (`?settingsDelay=hold`). */
+  releaseSettings: () => releaseSettings(),
+  get settings() {
+    return clone(settings);
+  },
+  /** The two env files as last written (see `splitEnvFiles`). */
+  get envFiles() {
+    return clone(envFiles);
+  },
+};
 
 type Node = { name: string; path: string; kind: string; children?: Node[] };
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
@@ -80,6 +131,15 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
+// `?sendError=1`: every send fails as if the server were unreachable.
+const sendError = new URLSearchParams(location.search).get("sendError") === "1";
+// `?settingsDelay=<ms>`: settings arrive late, as on a slow start.
+// `?settingsDelay=hold`: settings wait until a test calls `__mock.releaseSettings()`.
+const settingsDelayParam = new URLSearchParams(location.search).get("settingsDelay");
+const settingsHeld = settingsDelayParam === "hold";
+const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
+let releaseSettings: () => void = () => {};
+const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -89,9 +149,13 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "get_settings":
+        if (settingsDelay) await delay(settingsDelay);
+        await settingsReleased;
+        settingsServed = true;
         return clone(settings);
       case "save_settings":
         settings = args.settings;
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
         return null;
       case "path_exists":
         return true;
@@ -103,6 +167,7 @@ mockIPC(
         return clone(envSet);
       case "save_environments":
         envSet = args.set;
+        envFiles = splitEnvFiles(envSet, envFiles);
         return { gitignoreUpdated: false };
       case "read_http_file":
         return clone(files[args.path]);
@@ -147,6 +212,7 @@ mockIPC(
       case "send_request": {
         sent.push(clone(args.request));
         await delay(450);
+        if (sendError) throw "Connection refused (os error 61)";
         const r = args.request;
         if (r.url.includes("png")) {
           return {

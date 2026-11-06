@@ -20,6 +20,9 @@ import {
   basicUsernameError,
   variableNameError,
   bodySyntaxWarnings,
+  customMethod,
+  type FormField,
+  type MultipartPart,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -254,6 +257,28 @@ describe("bulk edit", () => {
     expect(parseBulk("Acc: application/json", ":", headers)[0].description).toBeUndefined();
     expect(parseBulk("Accept: application/json", ":", headers)[0].description).toBe("What we read");
   });
+
+  it("works on any row type, carrying the fields the text can't show over by name", () => {
+    const parts: MultipartPart[] = [
+      { name: "avatar", kind: "file", value: "./cat.png", contentType: "image/png" },
+      { name: "note", kind: "text", value: "hi" },
+    ];
+    expect(formatBulk(parts, ":", false)).toBe("avatar: ./cat.png\nnote: hi");
+    const blank = (): MultipartPart => ({ name: "", kind: "text", value: "" });
+    expect(parseBulk("note: hello\navatar: ./dog.png\nextra: 1", ":", parts, { blank, carry: ["kind", "contentType"] })).toEqual([
+      { name: "note", kind: "text", value: "hello" },
+      { name: "avatar", kind: "file", value: "./dog.png", contentType: "image/png" },
+      { name: "extra", kind: "text", value: "1" },
+    ]);
+  });
+
+  it("reads // as disabled only for rows that can be disabled", () => {
+    const blank = (): FormField => ({ name: "", value: "" });
+    expect(parseBulk("//a=1\nb=2", "=", [], { blank, carry: [] })).toEqual([
+      { name: "//a", value: "1" },
+      { name: "b", value: "2" },
+    ]);
+  });
 });
 
 describe("directives", () => {
@@ -317,5 +342,17 @@ describe("field safety", () => {
       { line: 6, message: "Line 6 starts with >, so it and the lines after it will be read as a response handler." },
     ]);
     expect(bodySyntaxWarnings('{\n  "a": 1\n}')).toEqual([]);
+  });
+});
+
+describe("custom methods", () => {
+  it("uppercases a typed method token", () => {
+    expect(customMethod("purge")).toBe("PURGE");
+    expect(customMethod("  Report ")).toBe("REPORT");
+    expect(customMethod("x-sync_2")).toBe("X-SYNC_2");
+  });
+
+  it("rejects text the .http parser wouldn't read back as a method", () => {
+    for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
   });
 });

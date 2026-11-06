@@ -2,10 +2,12 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
-  import { basename, displayName, joinPath, methodClass } from "../lib/http";
+  import { basename, displayName, joinPath } from "../lib/http";
   import type { TreeNode } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { node, depth }: { node: TreeNode; depth: number } = $props();
 
@@ -86,7 +88,7 @@
   aria-level={depth + 1}
   data-path={node.path}
   tabindex="-1"
-  title={node.path}
+  use:tooltip={node.path}
   onclick={toggle}
   onkeydown={(e) => e.key === "Enter" && toggle()}
   oncontextmenu={contextMenu}
@@ -103,9 +105,9 @@
   <span class="chev"><Icon name={open ? "chevron-down" : "chevron-right"} size={12} /></span>
   <span class="ico" class:file={!isDir}><Icon name={isDir ? (open ? "folder-open" : "folder") : "file"} size={14} /></span>
   <span class="label ellipsis">{node.name}</span>
-  {#if dirty}<span class="dot" title="Unsaved changes"></span>{/if}
+  {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes" use:tooltip></span>{/if}
   {#if !isDir}
-    <button class="icon-btn add" title="New request in this file" onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
+    <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
       <Icon name="plus" size={13} />
     </button>
   {/if}
@@ -133,7 +135,7 @@
         onkeydown={(e) => e.key === "Enter" && app.openRequest(node.path, { key: req._key })}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
-        <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
+        <Badge method={req.method} />
         <span class="label ellipsis">{displayName(req)}</span>
         {#if app.isRequestDirty(node.path, req._key!)}<span class="dot"></span>{/if}
       </div>
@@ -198,11 +200,6 @@
   .label {
     flex: 1;
     min-width: 0;
-  }
-  .req .method-badge {
-    min-width: 40px;
-    text-align: right;
-    padding-right: 4px;
   }
   .dot {
     width: 7px;

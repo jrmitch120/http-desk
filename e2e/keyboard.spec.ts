@@ -24,6 +24,31 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
   await expect(row).toBeFocused();
 });
 
+test("a modal's Tab wrap skips elements that aren't Tab stops", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("ControlOrMeta+Comma");
+  const settings = dialog(page, "Settings");
+  // Roving widgets (a SegmentedControl's unchecked radios) put tabindex=-1
+  // buttons in a modal; here one sits first, and a tabindex=-1 element that
+  // isn't otherwise focusable sits last.
+  await settings.evaluate((box) => {
+    for (const [where, name, tag] of [["afterbegin", "First", "button"], ["beforeend", "Last", "div"]] as const) {
+      const b = document.createElement(tag);
+      b.tabIndex = -1;
+      b.textContent = name;
+      box.insertAdjacentElement(where, b);
+    }
+  });
+  const close = settings.getByRole("button", { name: "Close" });
+  const done = settings.getByRole("button", { name: "Done" });
+
+  await done.focus();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(done).toBeFocused();
+});
+
 test("Enter confirms a Delete dialog", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
@@ -70,7 +95,7 @@ test("the unsaved-changes dialog focuses Save", async ({ page }) => {
   await openRequest(page, ["api", "pets.http"], "List pets");
   await urlBar(page).click();
   await page.keyboard.type("x");
-  await activeTab(page).getByTitle("Close").click();
+  await activeTab(page).getByRole("button", { name: "Close" }).click();
 
   await expect(dialog(page, 'Save changes to "List pets"?').getByRole("button", { name: "Save", exact: true })).toBeFocused();
 });
@@ -189,7 +214,7 @@ test("icon-only buttons, including toast close buttons, have accessible labels",
   await expect(page.getByText("Environments saved")).toHaveCount(0);
   const unlabelled = await page.locator("button").evaluateAll((buttons) =>
     buttons
-      .filter((b) => !b.textContent?.trim() && !b.getAttribute("aria-label") && !b.getAttribute("title"))
+      .filter((b) => !b.textContent?.trim() && !b.getAttribute("aria-label"))
       .map((b) => b.outerHTML.slice(0, 80)),
   );
   expect(unlabelled).toEqual([]);

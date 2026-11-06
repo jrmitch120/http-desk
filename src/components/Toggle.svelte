@@ -1,6 +1,18 @@
 <script lang="ts">
   // On/off switch for request components.
-  let { checked, onchange, title = "", label = "" }: { checked: boolean; onchange: (v: boolean) => void; title?: string; label?: string } = $props();
+  import { tooltip } from "../lib/popup/tooltip.svelte";
+
+  interface Props {
+    checked: boolean;
+    onchange: (v: boolean) => void;
+    /** Tooltip text; defaults to what a click does. */
+    title?: string;
+    /** Visible text next to the switch. */
+    label?: string;
+    /** Accessible name when there's no `label` (the setting it controls). */
+    ariaLabel?: string;
+  }
+  let { checked, onchange, title = "", label = "", ariaLabel }: Props = $props();
 </script>
 
 <button
@@ -9,7 +21,8 @@
   class:on={checked}
   role="switch"
   aria-checked={checked}
-  title={title || (checked ? "Enabled — click to disable" : "Disabled — click to enable")}
+  aria-label={ariaLabel}
+  use:tooltip={title || (checked ? "Enabled — click to disable" : "Disabled — click to enable")}
   onclick={(e) => {
     e.stopPropagation();
     onchange(!checked);
@@ -33,7 +46,7 @@
   }
   .track {
     width: 28px;
-    height: 16px;
+    height: var(--space-4);
     border-radius: 8px;
     background: var(--panel-3);
     border: 1px solid var(--border-strong);
@@ -51,13 +64,20 @@
     background: var(--muted);
     transition: transform 0.15s, background 0.15s;
   }
+  .toggle:focus-visible {
+    outline: none;
+  }
+  .toggle:focus-visible .track {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
+  }
   .on .track {
     background: var(--accent);
     border-color: var(--accent);
   }
   .on .knob {
     transform: translateX(12px);
-    background: #fff;
+    background: var(--on-accent);
   }
   .on .label {
     color: var(--text-2);

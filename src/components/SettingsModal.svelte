@@ -5,39 +5,50 @@
   import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
+  import NumberField from "./NumberField.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import { THEMES } from "../lib/themes";
   import Toggle from "./Toggle.svelte";
 
-  let copy = $state<AppSettings | null>(app.settings ? structuredClone($state.snapshot(app.settings) as AppSettings) : null);
-  let saving = $state(false);
+  // Edits apply straight to the live settings, through the same save path as the
+  // top bar: switches on click, text and number fields on blur or Enter.
+  const settings = $derived(app.settings);
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
 
+  const layouts: SegmentedOption<AppSettings["layout"]>[] = [
+    { value: "horizontal", label: "Response on the right", icon: "columns" },
+    { value: "vertical", label: "Response below", icon: "rows" },
+  ];
+
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
 
-  function num(e: Event, min = 0): number {
-    const n = Number((e.currentTarget as HTMLInputElement).value);
-    return Number.isFinite(n) ? Math.max(min, n) : min;
+  function set(patch: Partial<AppSettings>) {
+    app.updateSettings(patch);
+  }
+
+  function setExec(patch: Partial<ExecSettings>) {
+    if (!app.settings) return;
+    const exec = { ...app.settings.exec, ...patch };
+    if (Object.entries(patch).some(([k, v]) => app.settings!.exec[k as keyof ExecSettings] !== v)) set({ exec });
   }
 
   function setPath(key: PathKey, value: string) {
-    if (copy) copy.exec[key] = value.trim() === "" ? null : value;
+    setExec({ [key]: value.trim() === "" ? null : value });
+  }
+
+  /** Path fields apply on blur and Enter, not per keystroke. */
+  function onPathKeydown(e: KeyboardEvent, key: PathKey) {
+    if (e.key === "Enter") setPath(key, (e.currentTarget as HTMLInputElement).value);
   }
 
   async function browse(key: PathKey) {
     const picked = await open({ multiple: false, directory: false, filters: [{ name: "Certificates & keys", extensions: ["pem", "crt", "cer", "der", "key"] }, { name: "All files", extensions: ["*"] }] });
     if (typeof picked === "string") setPath(key, picked);
-  }
-
-  async function save() {
-    if (!copy) return;
-    saving = true;
-    try {
-      if (await app.updateSettings(copy)) app.modal = null;
-    } finally {
-      saving = false;
-    }
   }
 
   function close() {
@@ -59,37 +70,31 @@
       <small class="muted">{f.hint}</small>
     </div>
     <div class="row">
-      <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" oninput={(e) => setPath(f.key, e.currentTarget.value)} />
+      <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" onblur={(e) => setPath(f.key, e.currentTarget.value)} onkeydown={(e) => onPathKeydown(e, f.key)} />
       <button class="btn small" onclick={() => browse(f.key)}>Browse…</button>
       {#if exec[f.key]}
-        <button class="icon-btn" title="Clear" onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>
+        <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>
       {/if}
     </div>
   </div>
 {/snippet}
 
 <Modal title="Settings" width="560px" onclose={close}>
-  {#if copy}
+  {#if settings}
     <div class="body">
       <section>
         <h3>Appearance</h3>
         <div class="setting">
           <div class="label"><span>Theme</span></div>
-          <div class="seg">
-            <button class:on={copy.theme === "dark"} onclick={() => (copy!.theme = "dark")}><Icon name="moon" size={13} />Dark</button>
-            <button class:on={copy.theme === "light"} onclick={() => (copy!.theme = "light")}><Icon name="sun" size={13} />Light</button>
-          </div>
+          <SegmentedControl label="Theme" options={THEMES} value={app.themeChoice} onchange={(v) => set({ theme: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Layout</span></div>
-          <div class="seg">
-            <button class:on={copy.layout === "horizontal"} onclick={() => (copy!.layout = "horizontal")}><Icon name="columns" size={13} />Response on the right</button>
-            <button class:on={copy.layout === "vertical"} onclick={() => (copy!.layout = "vertical")}><Icon name="rows" size={13} />Response below</button>
-          </div>
+          <SegmentedControl label="Layout" options={layouts} value={settings.layout} onchange={(v) => set({ layout: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>
-          <Toggle checked={copy.showDescriptions} onchange={(v) => (copy!.showDescriptions = v)} />
+          <Toggle ariaLabel="Show parameter descriptions" checked={settings.showDescriptions} onchange={(v) => set({ showDescriptions: v })} />
         </div>
       </section>
 
@@ -97,7 +102,7 @@
         <h3>Updates</h3>
         <div class="setting">
           <div class="label"><span>Check for updates on startup</span><small class="muted">{version ? `HttpDesk ${version}` : "HttpDesk"}</small></div>
-          <Toggle checked={copy.checkUpdates} onchange={(v) => (copy!.checkUpdates = v)} />
+          <Toggle ariaLabel="Check for updates on startup" checked={settings.checkUpdates} onchange={(v) => set({ checkUpdates: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Check now</span><small class="muted">Downloads come from the project's GitHub releases</small></div>
@@ -111,25 +116,19 @@
         <h3>Requests</h3>
         <div class="setting">
           <div class="label"><span>Idle timeout</span><small class="muted">Longest wait for the next data from the server, in seconds; 0 disables it. Downloads that keep streaming are never cut off.</small></div>
-          <div class="unit">
-            <input class="input num" type="number" min="0" step="1" value={copy.exec.timeoutMs / 1000} oninput={(e) => (copy!.exec.timeoutMs = Math.round(num(e) * 1000))} />
-            <span class="muted">s</span>
-          </div>
+          <NumberField label="Idle timeout" unit="s" min={0} value={settings.exec.timeoutMs / 1000} onchange={(v) => setExec({ timeoutMs: Math.round(v * 1000) })} />
         </div>
         <div class="setting">
           <div class="label"><span>Connection timeout</span><small class="muted">Longest wait to connect, in seconds; 0 disables it</small></div>
-          <div class="unit">
-            <input class="input num" type="number" min="0" step="1" value={copy.exec.connectTimeoutMs / 1000} oninput={(e) => (copy!.exec.connectTimeoutMs = Math.round(num(e) * 1000))} />
-            <span class="muted">s</span>
-          </div>
+          <NumberField label="Connection timeout" unit="s" min={0} value={settings.exec.connectTimeoutMs / 1000} onchange={(v) => setExec({ connectTimeoutMs: Math.round(v * 1000) })} />
         </div>
         <div class="setting">
           <div class="label"><span>Follow redirects</span></div>
-          <Toggle checked={copy.exec.followRedirects} onchange={(v) => (copy!.exec.followRedirects = v)} />
+          <Toggle ariaLabel="Follow redirects" checked={settings.exec.followRedirects} onchange={(v) => setExec({ followRedirects: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Maximum redirects</span></div>
-          <input class="input num" type="number" min="0" step="1" disabled={!copy.exec.followRedirects} value={copy.exec.maxRedirects} oninput={(e) => (copy!.exec.maxRedirects = Math.round(num(e)))} />
+          <NumberField label="Maximum redirects" integer min={0} disabled={!settings.exec.followRedirects} value={settings.exec.maxRedirects} onchange={(v) => setExec({ maxRedirects: v })} />
         </div>
         <p class="note muted">Per-request <span class="mono"># @timeout</span>, <span class="mono"># @connection-timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
       </section>
@@ -138,13 +137,13 @@
         <h3>TLS</h3>
         <div class="setting">
           <div class="label"><span>Verify server certificates</span></div>
-          <Toggle checked={copy.exec.verifyTls} onchange={(v) => (copy!.exec.verifyTls = v)} />
+          <Toggle ariaLabel="Verify server certificates" checked={settings.exec.verifyTls} onchange={(v) => setExec({ verifyTls: v })} />
         </div>
-        {#if !copy.exec.verifyTls}
-          <div class="banner warning inline"><Icon name="alert" /><span>Certificate verification is off. Responses could come from an impostor server — only use this for local development.</span></div>
+        {#if !settings.exec.verifyTls}
+          <Banner severity="warning" inline class="tls-off">Certificate verification is off. Responses could come from an impostor server — only use this for local development.</Banner>
         {/if}
         {#each pathFields as f (f.key)}
-          {@render pathRow(copy.exec, f)}
+          {@render pathRow(settings.exec, f)}
         {/each}
         <p class="note muted">Environment-specific client certificates can also be set with <span class="mono">SSLConfiguration</span> in <span class="mono">http-client.env.json</span>.</p>
       </section>
@@ -153,17 +152,14 @@
         <h3>Responses</h3>
         <div class="setting">
           <div class="label"><span>Maximum body size</span><small class="muted">Larger responses are truncated</small></div>
-          <div class="unit">
-            <input
-              class="input num"
-              type="number"
-              min="1"
-              step="1"
-              value={Math.round(copy.exec.maxBodyBytes / 1024 / 1024)}
-              oninput={(e) => (copy!.exec.maxBodyBytes = Math.round(num(e, 1) * 1024 * 1024))}
-            />
-            <span class="muted">MB</span>
-          </div>
+          <NumberField
+            label="Maximum body size"
+            unit="MB"
+            integer
+            min={1}
+            value={Math.round(settings.exec.maxBodyBytes / 1024 / 1024)}
+            onchange={(v) => setExec({ maxBodyBytes: v * 1024 * 1024 })}
+          />
         </div>
       </section>
     </div>
@@ -172,8 +168,7 @@
   {/if}
 
   {#snippet footer()}
-    <button class="btn" onclick={close}>Cancel</button>
-    <button class="btn primary" disabled={!copy || saving} onclick={save}>Save</button>
+    <button class="btn primary" onclick={close}>Done</button>
   {/snippet}
 </Modal>
 
@@ -219,49 +214,12 @@
   .grow {
     flex: 1;
   }
-  .unit {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .num {
-    width: 84px;
-    text-align: right;
-  }
-  .seg {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 6px;
-    background: var(--panel-3);
-    border: 1px solid var(--border);
-  }
-  .seg button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: none;
-    background: none;
-    color: var(--muted);
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .seg button.on {
-    background: var(--panel);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  }
   .note {
     margin: 4px 0 6px;
     font-size: 11.5px;
     line-height: 1.5;
   }
-  .banner.inline {
-    border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-    border-radius: var(--radius);
+  .body :global(.tls-off) {
     margin: 2px 0 6px;
-    line-height: 1.45;
   }
 </style>

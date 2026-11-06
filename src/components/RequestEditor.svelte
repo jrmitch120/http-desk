@@ -7,16 +7,21 @@
   import { untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, STANDARD_METHODS } from "../lib/http";
+  import type { KeyValue } from "../lib/types";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
-  import KeyValueTable from "./KeyValueTable.svelte";
+  import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
   import SectionBar from "./SectionBar.svelte";
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
+  import Badge from "./Badge.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -49,6 +54,9 @@
     "Content-Length", "Cookie", "Host", "If-Match", "If-None-Match", "If-Modified-Since", "Origin", "Referer",
     "User-Agent", "X-Api-Key", "X-Request-Id", "X-Correlation-Id", "X-Forwarded-For",
   ];
+  /** Params and headers: every column, with descriptions (`# @param` / `# @header`). */
+  const documented: Column<KeyValue>[] = ["enable", "name", "value", "description", "delete"];
+  const showDescriptions = $derived(app.settings?.showDescriptions !== false);
 
   const qCount = $derived(req ? req.query.items.filter((i) => i.enabled && i.name).length : 0);
   const hCount = $derived(req ? req.headers.items.filter((i) => i.enabled && i.name).length : 0);
@@ -59,18 +67,14 @@
       : "",
   );
 
-  async function chooseMethod(e: Event) {
-    const sel = e.currentTarget as HTMLSelectElement;
-    if (!req) return;
-    if (sel.value === "__custom") {
-      sel.value = req.method;
-      const m = await app.prompt("Custom HTTP method", STANDARD_METHODS.includes(req.method) ? "" : req.method, "PURGE");
-      if (m && /^[A-Za-z][A-Za-z0-9_-]*$/.test(m.trim())) req.method = m.trim().toUpperCase();
-      else if (m) app.toast("error", "A method must be a single token of letters, digits, '-' or '_'.");
-    } else {
-      req.method = sel.value;
-    }
-  }
+  // Every method in its colour; a non-standard one already in use is listed too.
+  const methods: SelectOption[] = $derived(
+    (req && !STANDARD_METHODS.includes(req.method) ? [...STANDARD_METHODS, req.method] : STANDARD_METHODS).map((m) => ({
+      value: m,
+      label: m,
+      color: `var(--${methodClass(m)})`,
+    })),
+  );
 
   async function reloadFromDisk() {
     await app.reload(tab.path);
@@ -82,40 +86,45 @@
 {:else}
   <div class="editor">
     {#if doc.missing}
-      <div class="banner error"><Icon name="alert" />{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</div>
+      <Banner severity="error">{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</Banner>
     {:else if orphaned}
-      <div class="banner error">
-        <Icon name="alert" />This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
-      </div>
+      <Banner severity="error">
+        This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
+      </Banner>
     {:else if doc.externalChange}
-      <div class="banner warning">
-        <Icon name="alert" />
-        <span>{basename(tab.path)} changed on disk while you have unsaved edits.</span>
-        <span class="spacer"></span>
-        <button class="btn small" onclick={reloadFromDisk}>Reload from disk</button>
-        <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
-      </div>
+      <Banner severity="warning">
+        {basename(tab.path)} changed on disk while you have unsaved edits.
+        {#snippet actions()}
+          <button class="btn small" onclick={reloadFromDisk}>Reload from disk</button>
+          <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
+        {/snippet}
+      </Banner>
     {/if}
 
     <div class="crumbs">
-      <span class="file" title={tab.path}>{basename(tab.path)}</span>
+      <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <Icon name="chevron-right" size={12} />
       <input class="name-input" value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
       <span class="spacer"></span>
-      <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} title="Show the .http source for this request">
+      <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} title="Save (⌘/Ctrl S)">
+      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={"Save (⌘/Ctrl S)"}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
 
     <div class="urlbar">
-      <select class="method {methodClass(req.method)}" value={STANDARD_METHODS.includes(req.method) ? req.method : req.method} onchange={chooseMethod} title="HTTP method">
-        {#each STANDARD_METHODS as m (m)}<option value={m} class={methodClass(m)}>{m}</option>{/each}
-        {#if !STANDARD_METHODS.includes(req.method)}<option value={req.method}>{req.method}</option>{/if}
-        <option value="__custom">Custom…</option>
-      </select>
+      <Select
+        class="method"
+        options={methods}
+        value={req.method}
+        onchange={(m) => (req.method = m)}
+        create={customMethod}
+        label="HTTP method"
+        tooltip="HTTP method"
+        mono
+      />
       <UrlInput
         value={composeUrl(req)}
         onchange={(v) => applyUrlText(req, v)}
@@ -126,7 +135,7 @@
       {#if run?.loading}
         <button class="btn send cancel" onclick={() => app.cancel(tab.id)}><Icon name="stop" size={13} />Cancel</button>
       {:else}
-        <button class="btn primary send" onclick={() => app.send(tab.id)} title="Send (⌘/Ctrl Enter)"><Icon name="send" size={13} />Send</button>
+        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={"Send (⌘/Ctrl Enter)"}><Icon name="send" size={13} />Send</button>
       {/if}
     </div>
 
@@ -139,19 +148,19 @@
       <nav class="subtabs">
         <button class="subtab" class:active={section === "params"} class:off={!req.query.enabled} onclick={() => (section = "params")}>
           <span class="label">Params</span>
-          {#if !req.query.enabled}<span class="off-pill">OFF</span>{:else if qCount}<span class="count">{qCount}</span>{/if}
+          {#if !req.query.enabled}<Badge>OFF</Badge>{:else if qCount}<span class="count">{qCount}</span>{/if}
         </button>
         <button class="subtab" class:active={section === "headers"} class:off={!req.headers.enabled} onclick={() => (section = "headers")}>
           <span class="label">Headers</span>
-          {#if !req.headers.enabled}<span class="off-pill">OFF</span>{:else if hCount}<span class="count">{hCount}</span>{/if}
+          {#if !req.headers.enabled}<Badge>OFF</Badge>{:else if hCount}<span class="count">{hCount}</span>{/if}
         </button>
         <button class="subtab" class:active={section === "auth"} class:off={!req.auth.enabled && req.auth.kind !== "none"} onclick={() => (section = "auth")}>
           <span class="label">Authorization</span>
-          {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<span class="off-pill">OFF</span>{/if}{/if}
+          {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
         </button>
         <button class="subtab" class:active={section === "body"} class:off={!req.body.enabled && req.body.mode !== "none"} onclick={() => (section = "body")}>
           <span class="label">Body</span>
-          {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<span class="off-pill">OFF</span>{/if}{/if}
+          {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
         </button>
         <button class="subtab" class:active={section === "settings"} onclick={() => (section = "settings")}>
           <span class="label">Settings</span>
@@ -161,11 +170,11 @@
       <div class="panel" class:fill={section === "body"}>
         {#if section === "params"}
           <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
-          <KeyValueTable bind:items={req.query.items} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" docs />
+          <KeyValueGrid bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" />
           <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
         {:else if section === "headers"}
           <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueTable bind:items={req.headers.items} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} docs />
+          <KeyValueGrid bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} />
           {#if req.auth.kind !== "none" && req.auth.enabled}
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
@@ -237,24 +246,14 @@
     padding: 6px 14px 12px 16px;
     flex: none;
   }
-  .method {
+  .urlbar :global(.method) {
+    flex: none;
     height: 32px;
-    border: 1px solid var(--border);
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-    background: var(--panel-2);
-    font-family: var(--mono);
     font-weight: 700;
-    font-size: 12.5px;
-    padding: 0 10px;
+    padding: 0 8px 0 10px;
     min-width: 104px;
-    outline: none;
-    cursor: pointer;
-  }
-  .method:focus {
-    border-color: var(--focus);
-  }
-  .method option {
-    background: var(--panel-2);
+    max-width: 180px;
   }
   .send {
     height: 32px;

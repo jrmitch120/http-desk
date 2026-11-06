@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import { legacyPaneSizes } from "./panes";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
 
 export interface Doc {
@@ -86,6 +87,18 @@ class AppStore {
   envSet = $state<EnvironmentSet | null>(null);
   envName = $state<string | null>(null);
   settings = $state<AppSettings | null>(null);
+  /** Whether the OS appearance is dark, which is what the System theme follows. */
+  private systemDark = $state(true);
+  private stopWatchingSystem: (() => void) | null = null;
+  /** The theme chosen in settings: System for new installs, and for anything
+   *  unknown in a hand-edited settings file (as theme.rs and theme-boot.js do). */
+  themeChoice = $derived<AppSettings["theme"]>(
+    this.settings?.theme === "light" || this.settings?.theme === "dark" ? this.settings.theme : "system",
+  );
+  /** The theme in effect, with System resolved through the OS appearance. */
+  effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
+  /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
+  private windowTheme: "light" | "dark" | null | undefined = undefined;
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
@@ -125,7 +138,10 @@ class AppStore {
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
+    this.watchSystemTheme();
+    this.windowTheme = undefined;
     this.applyTheme();
+    await this.migratePaneSizes();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
@@ -150,8 +166,38 @@ class AppStore {
     if (recent.length && exists[0]) await this.openWorkspace(recent[0]);
   }
 
+  /** Moves pane sizes older versions kept in localStorage into settings, once. */
+  private async migratePaneSizes() {
+    const legacy = legacyPaneSizes();
+    if (!legacy || !this.settings) return;
+    // Kept until the settings are saved, so a failed save can try again next start.
+    if (!Object.keys(legacy.patch).length || (await this.updateSettings(legacy.patch))) legacy.remove();
+  }
+
+  /** Tracks the OS appearance, re-applying the theme when it changes while System is chosen. */
+  private watchSystemTheme() {
+    this.stopWatchingSystem?.();
+    const query = globalThis.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!query) return;
+    this.systemDark = query.matches;
+    const onChange = (e: { matches: boolean }) => {
+      this.systemDark = e.matches;
+      if (this.themeChoice === "system") this.applyTheme();
+    };
+    query.addEventListener("change", onChange);
+    this.stopWatchingSystem = () => query.removeEventListener("change", onChange);
+  }
+
+  /** Applies the theme to the page and to the native window (title bar, scrollbars). */
   applyTheme() {
-    document.documentElement.dataset.theme = this.settings?.theme ?? "dark";
+    document.documentElement.dataset.theme = this.effectiveTheme;
+    // A fixed theme pins the window; System lets it (and so prefers-color-scheme) follow the OS.
+    const windowTheme = this.themeChoice === "system" ? null : this.themeChoice;
+    if (windowTheme === this.windowTheme) return;
+    this.windowTheme = windowTheme;
+    getCurrentWindow()
+      .setTheme(windowTheme)
+      .catch(() => {});
   }
 
   /** Applies and saves settings; a failed save shows an error toast and returns false. */
@@ -159,6 +205,36 @@ class AppStore {
     if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
+    return this.saveSettings();
+  }
+
+  private settingsSave: Promise<boolean> | null = null;
+  private nextSettingsSave: Promise<boolean> | null = null;
+
+  /**
+   * Saves the whole settings object. Only one save runs at a time: changes made
+   * while one runs share a single follow-up save, which snapshots the settings
+   * when it starts, so an older snapshot can never be written last.
+   */
+  private saveSettings(): Promise<boolean> {
+    if (this.nextSettingsSave) return this.nextSettingsSave;
+    if (!this.settingsSave) return this.startSettingsSave();
+    this.nextSettingsSave = this.settingsSave.then(() => {
+      this.nextSettingsSave = null;
+      return this.startSettingsSave();
+    });
+    return this.nextSettingsSave;
+  }
+
+  private startSettingsSave(): Promise<boolean> {
+    const save = this.writeSettings().finally(() => {
+      if (this.settingsSave === save) this.settingsSave = null;
+    });
+    this.settingsSave = save;
+    return save;
+  }
+
+  private async writeSettings(): Promise<boolean> {
     try {
       await api.saveSettings($state.snapshot(this.settings) as AppSettings);
       return true;

@@ -40,8 +40,9 @@ const {
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+const win = vi.hoisted(() => ({ setTheme: vi.fn(async (_theme: "light" | "dark" | null) => {}) }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}) }),
+  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}), setTheme: win.setTheme }),
 }));
 
 import { app } from "./store.svelte";
@@ -408,11 +409,134 @@ describe("saving settings", () => {
     expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["error", "Could not save settings: disk full"]]);
   });
 
+  it("saves one at a time, so rapid changes end with the latest settings saved", async () => {
+    // The backend keeps whichever save finishes last, and the first one is slow
+    // (arrow presses on a pane separator, a live setting changed meanwhile).
+    let stored: AppSettings | null = null;
+    let inFlight = 0;
+    let most = 0;
+    const delays = [20, 1, 1, 1];
+    api.saveSettings.mockImplementation(async (s: AppSettings) => {
+      most = Math.max(most, ++inFlight);
+      stored = await later(delays.shift() ?? 1, s);
+      inFlight--;
+    });
+
+    const saves = [201, 202, 203].map((sidebarWidth) => app.updateSettings({ sidebarWidth }));
+    expect(await Promise.all(saves)).toEqual([true, true, true]);
+    expect(stored!.sidebarWidth).toBe(203);
+    expect(most).toBe(1);
+
+    // Later changes still save.
+    await app.updateSettings({ sidebarWidth: 250 });
+    expect(stored!.sidebarWidth).toBe(250);
+  });
+
+  it("reports a failed save to every change it carried", async () => {
+    api.saveSettings.mockImplementationOnce(() => later(10, undefined));
+    api.saveSettings.mockRejectedValueOnce("disk full");
+    const saves = [app.updateSettings({ sidebarWidth: 201 }), app.updateSettings({ sidebarWidth: 202 }), app.updateSettings({ sidebarWidth: 203 })];
+    expect(await Promise.all(saves)).toEqual([true, false, false]);
+  });
+
   it("shows an error toast when the selected environment can't be saved", async () => {
     api.saveSettings.mockRejectedValueOnce("disk full");
     await app.selectEnvironment("staging");
     expect(app.envName).toBe("staging");
     expect(app.toasts.map((t) => t.kind)).toEqual(["error"]);
+  });
+});
+
+describe("theme", () => {
+  /** A stand-in for the OS appearance as `matchMedia("(prefers-color-scheme: dark)")` reports it. */
+  function osAppearance(dark: boolean) {
+    const listeners = new Set<(e: { matches: boolean }) => void>();
+    const query = {
+      matches: dark,
+      addEventListener: (_: "change", f: (e: { matches: boolean }) => void) => listeners.add(f),
+      removeEventListener: (_: "change", f: (e: { matches: boolean }) => void) => listeners.delete(f),
+    };
+    vi.stubGlobal("matchMedia", (q: string) => (q === "(prefers-color-scheme: dark)" ? query : { matches: false, addEventListener() {}, removeEventListener() {} }));
+    return {
+      set(next: boolean) {
+        query.matches = next;
+        for (const f of listeners) f({ matches: next });
+      },
+    };
+  }
+  const applied = () => (document.documentElement.dataset as { theme?: string }).theme;
+  const start = async (theme: AppSettings["theme"] | undefined) => {
+    api.getSettings.mockResolvedValue({ theme, recentWorkspaces: [], environments: {} } as unknown as AppSettings);
+    await app.init();
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    win.setTheme.mockClear();
+    app.toasts = [];
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each(["dark", "light"] as const)("keeps a saved %s theme whatever the OS appearance is", async (theme) => {
+    osAppearance(theme === "light");
+    await start(theme);
+    expect(applied()).toBe(theme);
+    expect(app.effectiveTheme).toBe(theme);
+    expect(win.setTheme).toHaveBeenLastCalledWith(theme);
+  });
+
+  it.each([
+    [true, "dark"],
+    [false, "light"],
+  ])("resolves System through prefers-color-scheme (OS dark: %s)", async (dark, theme) => {
+    osAppearance(dark);
+    await start("system");
+    expect(applied()).toBe(theme);
+    expect(app.effectiveTheme).toBe(theme);
+    // The native window follows the OS too, so its title bar and scrollbars agree.
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+  });
+
+  it("switches live when the OS appearance changes while System is chosen", async () => {
+    const os = osAppearance(false);
+    await start("system");
+    os.set(true);
+    expect(applied()).toBe("dark");
+    os.set(false);
+    expect(applied()).toBe("light");
+  });
+
+  it("ignores OS appearance changes while a fixed theme is chosen", async () => {
+    const os = osAppearance(false);
+    await start("light");
+    os.set(true);
+    expect(applied()).toBe("light");
+  });
+
+  it("applies a theme picked later at once, and the native window with it", async () => {
+    osAppearance(true);
+    await start("light");
+    await app.updateSettings({ theme: "system" });
+    expect(applied()).toBe("dark");
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+    await app.updateSettings({ theme: "light" });
+    expect(applied()).toBe("light");
+    expect(win.setTheme).toHaveBeenLastCalledWith("light");
+  });
+
+  it("follows the OS when the settings have no theme", async () => {
+    osAppearance(false);
+    await start(undefined);
+    expect(applied()).toBe("light");
+  });
+
+  it("treats an unknown theme in a hand-edited settings file as System, as the start-up script does", async () => {
+    osAppearance(false);
+    await start("sepia" as AppSettings["theme"]);
+    expect(app.themeChoice).toBe("system");
+    expect(applied()).toBe("light");
+    expect(app.effectiveTheme).toBe("light");
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
   });
 });
 
@@ -481,6 +605,54 @@ describe("startup", () => {
     expect(app.settings?.recentWorkspaces).toEqual(["/ws"]);
     expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
     expect(app.starting).toBe(false);
+  });
+
+  describe("pane sizes left in localStorage by older versions", () => {
+    let stored: Map<string, string>;
+    beforeEach(() => {
+      stored = new Map([
+        ["sidebarWidth", "340"],
+        ["splitRatio", "0.35"],
+        ["unrelated", "kept"],
+      ]);
+      vi.stubGlobal("localStorage", {
+        getItem: (k: string) => stored.get(k) ?? null,
+        setItem: (k: string, v: string) => void stored.set(k, String(v)),
+        removeItem: (k: string) => void stored.delete(k),
+      });
+      api.getSettings.mockResolvedValue({
+        ...settings([]),
+        sidebarWidth: 280,
+        splitRatio: { horizontal: 0.5, vertical: 0.5 },
+      });
+      return () => vi.unstubAllGlobals();
+    });
+
+    it("are moved into settings once, then removed from localStorage", async () => {
+      await app.init();
+
+      expect(api.saveSettings).toHaveBeenCalledTimes(1);
+      // The old single ratio applied to both layouts.
+      expect(api.saveSettings.mock.calls[0][0]).toMatchObject({
+        sidebarWidth: 340,
+        splitRatio: { horizontal: 0.35, vertical: 0.35 },
+      });
+      expect([...stored.keys()]).toEqual(["unrelated"]);
+
+      await app.init();
+      expect(api.saveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores values that aren't usable sizes", async () => {
+      stored.set("sidebarWidth", "wide");
+      stored.delete("splitRatio");
+
+      await app.init();
+
+      expect(api.saveSettings).not.toHaveBeenCalled();
+      expect(app.settings).toMatchObject({ sidebarWidth: 280, splitRatio: { horizontal: 0.5, vertical: 0.5 } });
+      expect([...stored.keys()]).toEqual(["unrelated"]);
+    });
   });
 });
 

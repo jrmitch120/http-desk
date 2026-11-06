@@ -3,7 +3,12 @@
   import { api, errorMessage } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import type { EnvironmentSet, EnvVar } from "../lib/types";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
+  import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
+  import { SvelteSet } from "svelte/reactivity";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
 
   const SHARED = "$shared";
@@ -31,26 +36,27 @@
   /** Environment that should be active after saving (tracks renames/deletes). */
   let activeEnv = $state<string | null>(app.envName);
   let filter = $state("");
-  let revealed = $state<Record<string, boolean>>({});
+  /** Secrets whose value is shown in plain text. */
+  const revealed = new SvelteSet<EnvVar>();
   let saving = $state(false);
 
-  const vars = $derived(selected === SHARED ? set.shared : (set.environments.find((e) => e.name === selected)?.variables ?? set.shared));
+  const selectedEnv = $derived(selected === SHARED ? undefined : set.environments.find((e) => e.name === selected));
+  const vars = $derived(selectedEnv?.variables ?? set.shared);
+  function setVars(list: EnvVar[]) {
+    if (selectedEnv) selectedEnv.variables = list;
+    else set.shared = list;
+  }
   const dirty = $derived(JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || activeEnv !== app.envName);
   const hasSecrets = $derived(set.shared.some((v) => v.secret) || set.environments.some((e) => e.variables.some((v) => v.secret)));
 
-  // Keep a trailing blank row so typing into it creates a new variable.
-  $effect(() => {
-    const list = vars;
-    const last = list[list.length - 1];
-    if (!last || last.name !== "" || last.value !== "") list.push({ name: "", value: "", secret: false });
-  });
-
-  const rows = $derived.by(() => {
+  /** The filter matches names, and the values of shareable variables (never a Secret's). */
+  const matches = $derived.by(() => {
     const q = filter.trim().toLowerCase();
-    return vars
-      .map((v, i) => ({ v, i }))
-      .filter(({ v, i }) => i === vars.length - 1 || !q || v.name.toLowerCase().includes(q) || (!v.secret && v.value.toLowerCase().includes(q)));
+    return (v: EnvVar) => !q || v.name.toLowerCase().includes(q) || (!v.secret && v.value.toLowerCase().includes(q));
   });
+  const blankVar = (): EnvVar => ({ name: "", value: "", secret: false });
+  const valueColumn: Column<EnvVar> = { id: "value", header: "Value", width: "1fr", cell: valueCell };
+  const lockColumn: Column<EnvVar> = { id: "secret", header: "", width: "34px", cell: lockCell };
 
   function countOf(list: EnvVar[]) {
     return list.filter((v) => v.name.trim()).length;
@@ -147,12 +153,39 @@
   }
 </script>
 
+{#snippet valueCell({ row, ghost, set: setRow }: GridCell<EnvVar>)}
+  {@const shown = !row.secret || revealed.has(row)}
+  <input class="cell" type={shown ? "text" : "password"} value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => setRow({ value: e.currentTarget.value })} />
+  {#if row.secret && !ghost}
+    <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(row) : revealed.add(row))}>
+      <Icon name={shown ? "eye-off" : "eye"} size={13} />
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet lockCell({ row, ghost, set: setRow }: GridCell<EnvVar>)}
+  {#if !ghost}
+    <button
+      class="icon-btn lock"
+      class:active={row.secret}
+      aria-label="Secret"
+      aria-pressed={row.secret}
+      use:tooltip={row.secret
+        ? "Secret: saved only in http-client.private.env.json. Click to make it shareable."
+        : "Shareable: saved in http-client.env.json. Click to make it a Secret."}
+      onclick={() => setRow({ secret: !row.secret })}
+    >
+      <Icon name={row.secret ? "lock" : "unlock"} size={13} />
+    </button>
+  {/if}
+{/snippet}
+
 <Modal title="Environments" width="860px" height="560px" onclose={requestClose}>
   <div class="layout">
     <aside>
       <div class="side-head">
         <span class="muted">Environments</span>
-        <button class="icon-btn" title="New environment" onclick={addEnv}><Icon name="plus" /></button>
+        <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
       </div>
       <div class="list">
         <button class="env" class:selected={selected === SHARED} onclick={() => (selected = SHARED)}>
@@ -166,7 +199,7 @@
           <div class="env" class:selected={selected === env.name} onclick={() => (selected = env.name)} ondblclick={() => renameEnv(env.name)} role="button" tabindex="0">
             <Icon name="layers" size={14} />
             <span class="ellipsis grow">{env.name}</span>
-            {#if activeEnv === env.name}<span class="active-pill">Active</span>{/if}
+            {#if activeEnv === env.name}<Badge tone="success">Active</Badge>{/if}
             <span class="count">{countOf(env.variables)}</span>
           </div>
         {:else}
@@ -192,13 +225,13 @@
             class="btn small"
             disabled={saving || inUse}
             onclick={() => useEnv(selected)}
-            title={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
+            use:tooltip={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
           >
             <Icon name="check" size={13} />{inUse ? "In use" : onDisk(selected) ? "Use" : "Save & use"}
           </button>
-          <button class="icon-btn" title="Rename" onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
-          <button class="icon-btn" title="Duplicate" onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
-          <button class="icon-btn danger-hover" title="Delete" onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
+          <button class="icon-btn" aria-label="Rename" use:tooltip onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
+          <button class="icon-btn" aria-label="Duplicate" use:tooltip onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
+          <button class="icon-btn danger-hover" aria-label="Delete" use:tooltip onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
         {/if}
         <div class="filter">
           <Icon name="search" size={13} />
@@ -207,62 +240,21 @@
       </div>
 
       {#if hasSecrets && set.privateFileIgnored === false}
-        <div class="banner warning">
-          <Icon name="alert" />
-          <span><span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.</span>
-        </div>
+        <Banner severity="warning">
+          <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
+        </Banner>
       {/if}
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th class="c-name">Variable</th>
-              <th>Value</th>
-              <th class="c-act"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each rows as { v, i } (i)}
-              {@const blank = i === vars.length - 1}
-              {@const key = `${selected}:${i}`}
-              <tr class:blank>
-                <td class="c-name">
-                  <input class="cell mono" placeholder={blank ? "Add variable" : ""} bind:value={v.name} spellcheck="false" />
-                </td>
-                <td>
-                  <div class="value-cell">
-                    <input
-                      class="cell mono"
-                      type={v.secret && !revealed[key] ? "password" : "text"}
-                      placeholder={blank ? "Value" : ""}
-                      bind:value={v.value}
-                      spellcheck="false"
-                    />
-                    {#if v.secret}
-                      <button class="icon-btn" title={revealed[key] ? "Hide value" : "Show value"} onclick={() => (revealed[key] = !revealed[key])}>
-                        <Icon name={revealed[key] ? "eye-off" : "eye"} size={13} />
-                      </button>
-                    {/if}
-                  </div>
-                </td>
-                <td class="c-act">
-                  {#if !blank}
-                    <button
-                      class="icon-btn"
-                      class:active={v.secret}
-                      title={v.secret ? "Secret: stored in http-client.private.env.json — click to make shareable" : "Secret: stored in http-client.private.env.json — click to mark as secret"}
-                      onclick={() => (v.secret = !v.secret)}
-                    >
-                      <Icon name={v.secret ? "lock" : "unlock"} size={13} />
-                    </button>
-                    <button class="icon-btn danger-hover" title="Delete variable" onclick={() => vars.splice(i, 1)}><Icon name="trash" size={13} /></button>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+      <div class="vars">
+        <KeyValueGrid
+          bind:items={() => vars, setVars}
+          columns={[{ id: "name", width: "34%" }, valueColumn, lockColumn, "delete"]}
+          blank={blankVar}
+          label="Variables"
+          visible={matches}
+          bulkEdit={false}
+          namePlaceholder="Variable"
+        />
       </div>
     </section>
   </div>
@@ -339,16 +331,6 @@
     font-size: 11px;
     color: var(--faint);
   }
-  .active-pill {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--success) 18%, transparent);
-    color: var(--success);
-  }
   .divider {
     height: 1px;
     background: var(--border);
@@ -396,67 +378,23 @@
   .danger-hover:hover {
     color: var(--danger);
   }
-  .table-wrap {
+  .vars {
     flex: 1;
     overflow: auto;
-    padding: 4px 14px 14px;
+    padding: 10px 14px 14px;
   }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
+  .reveal,
+  .lock {
+    align-self: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
   }
-  th {
-    text-align: left;
-    font-weight: 600;
-    font-size: 11px;
-    color: var(--muted);
-    padding: 8px 8px 6px;
-    border-bottom: 1px solid var(--border);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+  .reveal {
+    margin-right: 4px;
   }
-  td {
-    border-bottom: 1px solid var(--border);
-    padding: 0;
-  }
-  .c-name {
-    width: 34%;
-    border-right: 1px solid var(--border);
-  }
-  .c-act {
-    width: 64px;
-    text-align: right;
-    white-space: nowrap;
-    padding-right: 2px;
-  }
-  .value-cell {
-    display: flex;
-    align-items: center;
-    padding-right: 4px;
-  }
-  .cell {
-    width: 100%;
-    height: 32px;
-    padding: 0 8px;
-    background: transparent;
-    border: 1px solid transparent;
-    outline: none;
-    font-size: 12.5px;
-    border-radius: 3px;
-  }
-  .cell:hover {
-    background: var(--panel-2);
-  }
-  .cell:focus {
-    border-color: var(--focus);
-    background: var(--panel-2);
-  }
-  .cell::placeholder {
-    color: var(--faint);
-  }
-  tr.blank .cell::placeholder {
-    font-style: italic;
+  .lock {
+    margin: 0 auto;
   }
   .hint {
     font-size: 11.5px;

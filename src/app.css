@@ -16,6 +16,8 @@
   --accent-hover: #ff8456;
   --accent-soft: rgba(255, 108, 55, 0.14);
   --focus: #5b9dff;
+  /* text and marks on a solid --accent or --danger fill */
+  --on-accent: #fff;
   --danger: #f2706b;
   --success: #4fc08d;
   --warning: #e8b64c;
@@ -33,10 +35,41 @@
   --m-options: #f18ee0;
   --m-custom: #a1a1aa;
 
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* Bundled families first (src/fonts/fonts.css), system stacks as fallback. */
+  --font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --radius: 6px;
   --radius-sm: 4px;
+
+  /* control heights: inputs, selects and buttons; small buttons; icon buttons */
+  --control-h: 30px;
+  --control-h-sm: 24px;
+  --control-h-icon: 26px;
+
+  /* the one focus ring every control uses: outline: var(--focus-ring);
+     outline-offset: var(--focus-ring-offset). A control flush against an edge
+     that clips (a scrolling strip, overflow: hidden) offsets it by
+     --focus-ring-inset instead, which keeps the whole ring inside the control. */
+  --focus-ring-width: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--focus);
+  --focus-ring-offset: -1px;
+  --focus-ring-inset: calc(-1 * var(--focus-ring-width));
+
+  /* spacing scale, on a 4px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* the one floating surface: context menu, tooltips, selects, suggestion
+     lists and CodeMirror tooltips (.popup-surface below) */
+  --popup-bg: var(--panel-2);
+  --popup-border: 1px solid var(--border-strong);
+  --popup-radius: 8px;
+  --popup-shadow: var(--shadow);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
@@ -103,7 +136,6 @@ body {
 
 input,
 textarea,
-select,
 button {
   font: inherit;
   color: inherit;
@@ -135,9 +167,8 @@ textarea,
 
 /* ---------------------------------------------------------------- controls */
 
-.input,
-.select {
-  height: 30px;
+.input {
+  height: var(--control-h);
   padding: 0 9px;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -145,9 +176,10 @@ textarea,
   outline: none;
   min-width: 0;
 }
-.input:focus,
-.select:focus {
+.input:focus {
   border-color: var(--focus);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 .input::placeholder {
   color: var(--faint);
@@ -156,23 +188,22 @@ textarea,
   font-family: var(--mono);
   font-size: 12.5px;
 }
-.select {
-  padding-right: 24px;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position: calc(100% - 13px) 13px, calc(100% - 9px) 13px;
-  background-size: 4px 4px;
-  background-repeat: no-repeat;
-}
 textarea.input {
   height: auto;
   padding: 7px 9px;
   resize: vertical;
 }
 
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.link:focus-visible,
+.subtab:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .btn {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
@@ -196,7 +227,7 @@ textarea.input {
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -207,7 +238,7 @@ textarea.input {
 .btn.danger.solid {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn.ghost {
   background: transparent;
@@ -217,14 +248,14 @@ textarea.input {
   background: var(--hover);
 }
 .btn.small {
-  height: 24px;
+  height: var(--control-h-sm);
   padding: 0 8px;
   font-size: 12px;
 }
 
 .icon-btn {
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-icon);
+  height: var(--control-h-icon);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -285,15 +316,6 @@ textarea.input {
 .m-options { color: var(--m-options); }
 .m-custom { color: var(--m-custom); }
 
-.method-badge {
-  font-family: var(--mono);
-  font-weight: 700;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  min-width: 38px;
-  flex: none;
-}
-
 /* status colors */
 .s-2xx { color: var(--success); }
 .s-3xx { color: var(--info); }
@@ -340,15 +362,6 @@ textarea.input {
   text-decoration-color: var(--faint);
   color: var(--faint);
 }
-.subtab .off-pill {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--panel-3);
-  color: var(--muted);
-}
 
 .empty-state {
   height: 100%;
@@ -360,27 +373,6 @@ textarea.input {
   color: var(--muted);
   text-align: center;
   padding: 24px;
-}
-
-.banner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.banner.warning {
-  background: rgba(232, 182, 76, 0.12);
-  color: var(--warning);
-}
-.banner.error {
-  background: rgba(242, 112, 107, 0.12);
-  color: var(--danger);
-}
-.banner.info {
-  background: rgba(91, 157, 255, 0.1);
-  color: var(--info);
 }
 
 kbd {
@@ -409,4 +401,37 @@ kbd {
 .cm-var-dyn {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
+}
+
+/* Shared popup layer (src/lib/popup/layer.ts): a zero-size fixed stacking
+   context at the end of <body>, above modals (100) and toasts (200). Every
+   popup inside it is position: fixed in viewport coordinates. */
+.popup-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 400;
+}
+.popup-surface {
+  position: fixed;
+  background: var(--popup-bg);
+  border: var(--popup-border);
+  border-radius: var(--popup-radius);
+  box-shadow: var(--popup-shadow);
+  color: var(--text);
+  animation: popup-in 120ms ease-out;
+}
+.popup-surface[data-side="top"] {
+  --popup-from: 3px;
+}
+@keyframes popup-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--popup-from, -3px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popup-surface {
+    animation: none;
+  }
 }

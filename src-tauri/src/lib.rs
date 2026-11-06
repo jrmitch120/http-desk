@@ -21,6 +21,7 @@ mod deleting;
 mod paths;
 mod quit;
 mod self_writes;
+mod theme;
 mod watcher;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
@@ -48,12 +49,31 @@ struct AppSettings {
     recent_workspaces: Vec<PathBuf>,
     /// Last selected environment per workspace.
     environments: HashMap<String, String>,
+    /// "system" (follow the OS appearance), "light" or "dark".
     theme: String,
     layout: String,
     /// Look for a new release on startup.
     check_updates: bool,
     /// Show param/header descriptions under each row.
     show_descriptions: bool,
+    /// Sidebar width in px. A float, so no value the frontend writes fails to load.
+    sidebar_width: f64,
+    /// The request pane's share of the request/response split, per layout.
+    split_ratio: SplitRatio,
+}
+
+/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct SplitRatio {
+    horizontal: f64,
+    vertical: f64,
+}
+
+impl Default for SplitRatio {
+    fn default() -> Self {
+        SplitRatio { horizontal: 0.5, vertical: 0.5 }
+    }
 }
 
 impl Default for AppSettings {
@@ -62,10 +82,12 @@ impl Default for AppSettings {
             exec: ExecSettings::default(),
             recent_workspaces: vec![],
             environments: HashMap::new(),
-            theme: "dark".into(),
+            theme: "system".into(),
             layout: "horizontal".into(),
             check_updates: true,
             show_descriptions: true,
+            sidebar_width: 280.0,
+            split_ratio: SplitRatio::default(),
         }
     }
 }
@@ -490,18 +512,27 @@ fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> Cmd
 
 // ------------------------------------------------------------------ entry point
 
-/// Registers state and commands (shared by the app and the IPC tests).
-fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+/// Reads settings.json into the app state (keeping the defaults if it's missing or unreadable).
+fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(text) = settings_path(app).and_then(|p| std::fs::read_to_string(p).ok()) {
+        if let Ok(mut s) = serde_json::from_str::<AppSettings>(&text) {
+            s.recent_workspaces = simplified_recents(&s.recent_workspaces);
+            *app.state::<AppState>().settings.lock().unwrap() = s;
+        }
+    }
+}
+
+/// Runs at setup once settings are loaded.
+type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
+
+/// Registers state and commands and loads settings at setup, then runs
+/// `after_setup` (shared by the app and the IPC tests).
+fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: AfterSetup<R>) -> tauri::Builder<R> {
     builder
         .manage(AppState::default())
-        .setup(|app| {
-            if let Some(text) = settings_path(app.handle()).and_then(|p| std::fs::read_to_string(p).ok()) {
-                if let Ok(mut s) = serde_json::from_str::<AppSettings>(&text) {
-                    s.recent_workspaces = simplified_recents(&s.recent_workspaces);
-                    *app.state::<AppState>().settings.lock().unwrap() = s;
-                }
-            }
-            Ok(())
+        .setup(move |app| {
+            load_settings(app.handle());
+            Ok(after_setup(app)?)
         })
         .invoke_handler(tauri::generate_handler![
             open_workspace,
@@ -537,6 +568,7 @@ pub fn run() {
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init()),
+        theme::create_main_window,
     )
     .build(tauri::generate_context!())
     .expect("error while building HttpDesk")

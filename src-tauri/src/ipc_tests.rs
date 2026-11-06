@@ -35,7 +35,7 @@ impl Harness {
     fn new() -> Self {
         let cfg = tempfile::tempdir().unwrap();
         let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
-        let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
+        let app = super::with_commands(builder, |_| Ok(())).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let trash_bin = tempfile::tempdir().unwrap();
         let bin = trash_bin.path().to_path_buf();
@@ -387,6 +387,35 @@ fn settings_are_replaced_atomically_through_symlinks() {
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(saved["theme"], "light");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "no temp file left behind");
+}
+
+/// Settings files written before the pane sizes were stored still load, with the default sizes.
+#[test]
+fn settings_without_pane_sizes_load_with_defaults() {
+    let old = r#"{"theme":"light","layout":"vertical","checkUpdates":false}"#;
+    let settings: super::AppSettings = serde_json::from_str(old).unwrap();
+    let json = serde_json::to_value(&settings).unwrap();
+    assert_eq!(json["theme"], "light");
+    assert_eq!(json["checkUpdates"], false);
+    assert_eq!(json["sidebarWidth"], 280.0);
+    assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.5 }));
+
+    // One layout's ratio saved on its own keeps the default for the other.
+    let partial: super::AppSettings = serde_json::from_str(r#"{"splitRatio":{"vertical":0.3}}"#).unwrap();
+    let json = serde_json::to_value(&partial).unwrap();
+    assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.3 }));
+}
+
+/// A theme chosen by an older version loads unchanged; a settings file without one follows the OS.
+#[test]
+fn saved_themes_load_unchanged_and_a_missing_theme_follows_the_system() {
+    for theme in ["dark", "light"] {
+        let old: super::AppSettings = serde_json::from_str(&format!(r#"{{"theme":"{theme}"}}"#)).unwrap();
+        assert_eq!(serde_json::to_value(&old).unwrap()["theme"], theme);
+    }
+    let fresh: super::AppSettings = serde_json::from_str(r#"{"layout":"vertical"}"#).unwrap();
+    assert_eq!(serde_json::to_value(&fresh).unwrap()["theme"], "system");
+    assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["theme"], "system");
 }
 
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.

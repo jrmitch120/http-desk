@@ -1,20 +1,13 @@
 <script lang="ts">
   import { menu } from "../lib/menu.svelte";
+  import { popup } from "../lib/popup/popup";
   import Icon from "./Icon.svelte";
 
   let el: HTMLDivElement | undefined = $state();
-  let pos = $state({ x: 0, y: 0 });
 
+  // Opens focused on the current choice (radio items) or its first item, so the keyboard can drive it.
   $effect(() => {
-    const m = menu.open;
-    if (!m || !el) return;
-    const r = el.getBoundingClientRect();
-    pos = { x: Math.min(m.x, window.innerWidth - r.width - 6), y: Math.min(m.y, window.innerHeight - r.height - 6) };
-  });
-
-  // Opens focused on its first item, so the keyboard can drive it.
-  $effect(() => {
-    if (menu.open && el) items()[0]?.focus();
+    if (menu.open && el) (el.querySelector<HTMLButtonElement>('.item[aria-checked="true"]:not(:disabled)') ?? items()[0])?.focus();
   });
 
   const items = () => [...(el?.querySelectorAll<HTMLButtonElement>(".item:not(:disabled)") ?? [])];
@@ -39,15 +32,22 @@
   }
 </script>
 
-<svelte:window
-  onmousedown={(e) => el && !el.contains(e.target as Node) && menu.close(false)}
-  onkeydown={(e) => menu.open && e.key === "Escape" && menu.close()}
-  onblur={() => menu.close(false)}
-/>
-
 {#if menu.open}
+  {@const { x, y, anchor, align, label } = menu.open}
   <!-- svelte-ignore a11y_interactive_supports_focus -->
-  <div class="menu" bind:this={el} style:left="{pos.x}px" style:top="{pos.y}px" role="menu" onkeydown={onKey}>
+  <div
+    class="popup-surface menu"
+    bind:this={el}
+    role="menu"
+    aria-label={label}
+    onkeydown={onKey}
+    use:popup={{
+      anchor: anchor ?? { left: x, top: y, right: x, bottom: y },
+      gap: anchor ? 4 : 0,
+      align,
+      onclose: (reason) => menu.close(reason === "escape"),
+    }}
+  >
     {#each menu.open.items as item, i (i)}
       {#if item.separator}
         <div class="sep" role="separator"></div>
@@ -56,7 +56,8 @@
           class="item"
           class:danger={item.danger}
           disabled={item.disabled}
-          role="menuitem"
+          role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+          aria-checked={item.checked}
           tabindex="-1"
           onclick={() => {
             menu.close();
@@ -65,6 +66,7 @@
         >
           <span class="ico">{#if item.icon}<Icon name={item.icon} size={14} />{/if}</span>
           {item.label}
+          {#if item.checked}<span class="check"><Icon name="check" size={14} /></span>{/if}
         </button>
       {/if}
     {/each}
@@ -73,14 +75,8 @@
 
 <style>
   .menu {
-    position: fixed;
-    z-index: 300;
     min-width: 190px;
     padding: 4px;
-    background: var(--panel-2);
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    box-shadow: var(--shadow);
   }
   .item {
     display: flex;
@@ -113,6 +109,12 @@
   }
   .danger .ico {
     color: var(--danger);
+  }
+  .check {
+    display: inline-flex;
+    margin-left: auto;
+    padding-left: 12px;
+    color: var(--accent);
   }
   .sep {
     height: 1px;

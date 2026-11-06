@@ -1,10 +1,12 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
-  import { basename, joinPath, methodClass } from "../lib/http";
+  import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let query = $state("");
   let hits = $state<SearchHit[]>([]);
@@ -115,11 +117,11 @@
   <div class="head">
     <span class="title">Explorer</span>
     <div class="spacer"></div>
-    <button class="icon-btn" title="New .http file" onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
-    <button class="icon-btn" title="New folder" onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
-    <button class="icon-btn" title="Import OpenAPI" onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
-    <button class="icon-btn" title="Refresh" onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
-    <button class="icon-btn" title="Collapse all" onclick={collapseAll}><Icon name="fold" /></button>
+    <button class="icon-btn" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
+    <button class="icon-btn" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
+    <button class="icon-btn" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
+    <button class="icon-btn" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
+    <button class="icon-btn" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
   </div>
 
   <div class="search">
@@ -135,7 +137,7 @@
       aria-controls="search-results"
       aria-activedescendant={hits.length ? `search-hit-${selected}` : undefined}
     />
-    {#if query}<button class="icon-btn" aria-label="Clear search" title="Clear search" onclick={() => (query = "")}><Icon name="x" size={12} /></button>{/if}
+    {#if query}<button class="icon-btn" aria-label="Clear search" use:tooltip onclick={() => (query = "")}><Icon name="x" size={12} /></button>{/if}
   </div>
 
   <div class="scroll">
@@ -154,7 +156,7 @@
             tabindex="-1"
             onclick={() => app.openSearchHit(h)}
           >
-            <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
+            <Badge method={h.method} />
             <span class="hit-text">
               <span class="ellipsis">{h.name}</span>
               <span class="file ellipsis">{basename(h.path)} · {h.url}</span>

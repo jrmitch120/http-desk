@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     title: string;
@@ -20,14 +21,26 @@
     if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
   });
 
-  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+  /**
+   * Blurs a focused field inside the modal before closing, so a field that
+   * applies on blur (NumberField, Settings paths) keeps what was typed. WebKit
+   * fires no blur when the focused element is removed with the modal.
+   */
+  function close() {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && box?.contains(focused)) focused.blur();
+    onclose();
+  }
+
+  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]';
 
   /** Keeps Tab / Shift+Tab cycling inside the topmost modal. */
   function trapTab(e: KeyboardEvent) {
     if (e.key !== "Tab" || e.defaultPrevented || !box) return;
     const modals = document.querySelectorAll('[aria-modal="true"]');
     if (modals[modals.length - 1] !== box) return;
-    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+    // Tab stops only: roving widgets (SegmentedControl, grids) hold tabindex=-1 buttons.
+    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
@@ -44,17 +57,17 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === "Escape") onclose();
+    if (e.key === "Escape") close();
     else trapTab(e);
   }}
 />
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onmousedown={(e) => e.target === e.currentTarget && onclose()}>
+<div class="backdrop" onmousedown={(e) => e.target === e.currentTarget && close()}>
   <div class="modal" bind:this={box} style:width style:height role="dialog" aria-modal="true" aria-label={title}>
     <header>
       <h2>{title}</h2>
-      <button class="icon-btn" onclick={onclose} title="Close"><Icon name="x" /></button>
+      <button class="icon-btn" onclick={close} aria-label="Close" use:tooltip><Icon name="x" /></button>
     </header>
     <div class="content">{@render children()}</div>
     {#if footer}<footer>{@render footer()}</footer>{/if}
@@ -106,8 +119,8 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 8px;
-    padding: 12px 16px;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border);
     flex: none;
   }
