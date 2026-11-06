@@ -27,6 +27,7 @@ zstd = "0.14.3"
 [dev-dependencies]
 brotli = "9.1.1"
 insta = "1.49.0"
+proptest = "1.12.0"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6.5"

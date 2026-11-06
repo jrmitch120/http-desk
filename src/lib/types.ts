@@ -194,6 +194,12 @@ export interface ResponseCookie {
   parseError: string | null;
 }
 
+/** The syntax `format_body` formats (core `body_format::BodyKind`). */
+export type BodyKind = "json";
+
+/** Pretty: one member per line, two-space indent. Minify: no whitespace. */
+export type FormatMode = "pretty" | "minify";
+
 export interface ExecSettings {
   timeoutMs: number;
   connectTimeoutMs: number;
