@@ -12,7 +12,7 @@
 //!
 //! [`hexdump`] renders binary bodies for the Hex view.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 mod hex;
 mod xml;
@@ -69,29 +69,62 @@ pub fn format_body(text: &str, kind: BodyKind, mode: FormatMode) -> Result<Strin
     }
 }
 
-/// The response Pretty view's text for a body of `content_type`: `None` when
-/// the body isn't JSON or XML (nothing to format), else the formatted text or
-/// why it doesn't parse (the viewer then shows the raw body).
-///
-/// The kind follows the viewer's own rules, so the shell formats exactly the
-/// bodies the viewer would ask for: the content type when it names JSON, HTML,
-/// XML/SVG, images, PDF or media; otherwise the first non-blank character.
-pub fn pretty_response(content_type: Option<&str>, text: &str) -> Option<Result<String, FormatError>> {
+/// What a response body is, as the viewer treats it: which views it offers
+/// (Pretty, Preview), its syntax highlighting, and the extension Save
+/// suggests. Every response carries it (`HttpResponse::body_kind`), so this is
+/// the one place it's decided.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponseKind {
+    Json,
+    Html,
+    Xml,
+    Image,
+    Pdf,
+    /// Audio or video.
+    Media,
+    Text,
+    #[default]
+    Binary,
+}
+
+/// The kind of a body of `content_type`: the content type when it names JSON,
+/// HTML, XML/SVG, images, PDF or media; otherwise, for a text body (`text`),
+/// its first non-blank character (`{`/`[` JSON, `<` XML, else plain text). A
+/// body that isn't text and whose type says nothing is binary.
+pub fn response_kind(content_type: Option<&str>, text: Option<&str>) -> ResponseKind {
     let ct = content_type.unwrap_or("").to_ascii_lowercase();
-    let kind = if ct.contains("json") {
-        BodyKind::Json
+    if ct.contains("json") {
+        ResponseKind::Json
     } else if ct.contains("html") {
-        return None;
+        ResponseKind::Html
     } else if ct.contains("xml") || ct.contains("svg") {
-        BodyKind::Xml
-    } else if ["image/", "audio/", "video/"].iter().any(|p| ct.starts_with(p)) || ct.contains("pdf") {
-        return None;
+        ResponseKind::Xml
+    } else if ct.starts_with("image/") {
+        ResponseKind::Image
+    } else if ct.contains("pdf") {
+        ResponseKind::Pdf
+    } else if ct.starts_with("audio/") || ct.starts_with("video/") {
+        ResponseKind::Media
     } else {
-        match text.trim_start().chars().next() {
-            Some('{' | '[') => BodyKind::Json,
-            Some('<') => BodyKind::Xml,
-            _ => return None,
+        match text.map(|t| t.trim_start().chars().next()) {
+            Some(Some('{' | '[')) => ResponseKind::Json,
+            Some(Some('<')) => ResponseKind::Xml,
+            Some(_) => ResponseKind::Text,
+            None => ResponseKind::Binary,
         }
+    }
+}
+
+/// The response Pretty view's text for a body of `content_type`: `None` when
+/// the body isn't JSON or XML by [`response_kind`] (nothing to format), else
+/// the formatted text or why it doesn't parse (the viewer then shows the raw
+/// body).
+pub fn pretty_response(content_type: Option<&str>, text: &str) -> Option<Result<String, FormatError>> {
+    let kind = match response_kind(content_type, Some(text)) {
+        ResponseKind::Json => BodyKind::Json,
+        ResponseKind::Xml => BodyKind::Xml,
+        _ => return None,
     };
     Some(format_body(text, kind, FormatMode::Pretty))
 }

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::body_format::{self, ResponseKind};
 use crate::cookies::{self, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
@@ -72,23 +73,41 @@ fn human_ms(ms: u64) -> String {
     }
 }
 
+/// The class of a failed send, which the UI picks a heading, hint and fix-it
+/// button by. Serialised in camelCase (`timeoutIdle`), as `SendError["kind"]`
+/// in `src/lib/types.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorKind {
+    Dns,
+    Refused,
+    Reset,
+    Tls,
+    TimeoutIdle,
+    TimeoutConnect,
+    InvalidUrl,
+    UnresolvedVariable,
+    File,
+    Other,
+}
+
 impl ExecError {
     /// The class of failure the UI picks a heading, hint and fix-it buttons by.
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            ExecError::Dns { .. } => "dns",
-            ExecError::Refused { .. } => "refused",
-            ExecError::Reset { .. } => "reset",
-            ExecError::ReadTimeout(_) => "timeoutIdle",
-            ExecError::ConnectTimeout(_) => "timeoutConnect",
-            ExecError::InvalidUrl { .. } => "invalidUrl",
-            ExecError::UnresolvedHost(_) => "unresolvedVariable",
-            ExecError::File { .. } => "file",
-            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => "tls",
+            ExecError::Dns { .. } => ErrorKind::Dns,
+            ExecError::Refused { .. } => ErrorKind::Refused,
+            ExecError::Reset { .. } => ErrorKind::Reset,
+            ExecError::ReadTimeout(_) => ErrorKind::TimeoutIdle,
+            ExecError::ConnectTimeout(_) => ErrorKind::TimeoutConnect,
+            ExecError::InvalidUrl { .. } => ErrorKind::InvalidUrl,
+            ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
+            ExecError::File { .. } => ErrorKind::File,
+            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
             | ExecError::InvalidHeader(_)
             | ExecError::DynamicVariable(_)
-            | ExecError::Other(_) => "other",
+            | ExecError::Other(_) => ErrorKind::Other,
         }
     }
 
@@ -129,7 +148,7 @@ impl Serialize for ExecError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut st = s.serialize_struct("ExecError", 3)?;
-        st.serialize_field("kind", self.kind())?;
+        st.serialize_field("kind", &self.kind())?;
         st.serialize_field("message", &self.to_string())?;
         st.serialize_field("details", &self.details())?;
         st.end()
@@ -473,6 +492,9 @@ pub struct HttpResponse {
     pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
+    /// What the body is, for the viewer (see [`body_format::response_kind`]).
+    #[serde(default)]
+    pub body_kind: ResponseKind,
     /// The response's `Content-Encoding` header, as sent by the server.
     pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
@@ -989,6 +1011,7 @@ pub async fn execute_on(
             body_size: body.len(),
             transferred_size: transferred,
             headers_size,
+            body_kind: body_format::response_kind(content_type.as_deref(), body_text.as_deref()),
             content_type,
             content_encoding,
             body_text,

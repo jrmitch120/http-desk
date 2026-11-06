@@ -161,6 +161,8 @@ export interface HttpResponse {
   transferredSize: number;
   headersSize: number;
   contentType: string | null;
+  /** What the body is, decided by the core from the content type (else the text). */
+  bodyKind: ResponseKind;
   /** The response's Content-Encoding header, if any. */
   contentEncoding: string | null;
   bodyText: string | null;
@@ -219,6 +221,9 @@ export interface ResponseCookie {
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
 export type BodyKind = "json" | "xml";
 
+/** What a response body is (core `body_format::ResponseKind`): its views, highlighting and Save extension. */
+export type ResponseKind = "json" | "html" | "xml" | "image" | "pdf" | "media" | "text" | "binary";
+
 /** Pretty: one member per line, two-space indent. Minify: no whitespace. */
 export type FormatMode = "pretty" | "minify";
 
@@ -240,35 +245,25 @@ export interface JsonShape {
 }
 
 /** Why a send failed; mirrors the core's `ExecError` kinds. */
-export type SendErrorKind =
-  | "dns"
-  | "refused"
-  | "reset"
-  | "tls"
-  | "timeoutIdle"
-  | "timeoutConnect"
-  | "invalidUrl"
-  | "unresolvedVariable"
-  | "file"
-  | "other";
-
 export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
 
-/** A failed send as `send_request` rejects with it. `details` depends on `kind`. */
-export interface SendError {
-  kind: SendErrorKind;
-  /** The core's explanation (for transport errors, the full error chain). */
-  message: string;
-  details:
-    | { host: string } // dns
-    | { host: string; port: number } // refused, reset
-    | { reason: TlsReason } // tls
-    | { timeoutMs: number } // timeoutIdle, timeoutConnect
-    | { url: string; reason: string } // invalidUrl
-    | { names: string[] } // unresolvedVariable
-    | { path: string; reason: string } // file
-    | null; // other
-}
+/**
+ * A failed send as `send_request` rejects with it (core `ExecError`, kinds
+ * from `exec::ErrorKind`). `message` is the core's explanation (for transport
+ * errors, the full error chain); `details` depends on `kind`.
+ */
+export type SendError = { message: string } & (
+  | { kind: "dns"; details: { host: string } }
+  | { kind: "refused" | "reset"; details: { host: string; port: number } }
+  | { kind: "tls"; details: { reason: TlsReason } }
+  | { kind: "timeoutIdle" | "timeoutConnect"; details: { timeoutMs: number } }
+  | { kind: "invalidUrl"; details: { url: string; reason: string } }
+  | { kind: "unresolvedVariable"; details: { names: string[] } }
+  | { kind: "file"; details: { path: string; reason: string } }
+  | { kind: "other"; details: null }
+);
+
+export type SendErrorKind = SendError["kind"];
 
 export interface ExecSettings {
   timeoutMs: number;

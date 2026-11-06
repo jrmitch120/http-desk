@@ -562,7 +562,8 @@ Decisions made during implementation, beyond the plan above:
   showing the bytes as received"); status, headers and cookies are kept. While a body
   decodes, its raw bytes are kept too (up to the size limit) for that fallback.
 * **Send errors are classified.** `send_request` rejects with `{ kind, message,
-  details }` (the core's `ExecError`), unlike other commands, whose errors are strings.
+  details }` (the core's `ExecError`; `kind` is `exec::ErrorKind`, and `SendError` in
+  `src/lib/types.ts` is a union on it), unlike other commands, whose errors are strings.
   Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
   `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
   (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
@@ -587,6 +588,11 @@ Decisions made during implementation, beyond the plan above:
   another origin leaves out Authorization, Cookie, Proxy-Authorization and
   WWW-Authenticate; and a Referer names the previous URL (not from https to http). It's
   labelled a reconstruction: headers reqwest adds itself aren't listed.
+* **A response's kind is the core's call.** `HttpResponse.bodyKind` (`json`, `html`,
+  `xml`, `image`, `pdf`, `media`, `text`, `binary`) comes from
+  `body_format::response_kind`: the content type when it names one, else the body's
+  first character. The viewer's views, highlighting and Save extension follow it, and
+  the shell's Pretty text uses the same rule.
 * **Download progress:** while a body downloads, the shell emits `send-progress`
   events (`{runId, received}`, raw bytes on the wire so far) for the in-flight send. The
   core reports at most once per 100 ms (`exec::PROGRESS_INTERVAL`) however small the
@@ -644,7 +650,7 @@ Decisions made during implementation, beyond the plan above:
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
 | Env, vars, workspace | Unit tests in each module |
 | IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings and hints by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

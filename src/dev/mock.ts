@@ -6,7 +6,11 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import type { JsonShape, ResponseCookie } from "../lib/types";
+import { base64DecodedLength } from "../lib/http";
+import type { JsonShape, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+
+/** What the shell rejects with for a response id whose body has been evicted. */
+const RESPONSE_GONE = "Response is no longer available";
 
 const ROOT = "/demo";
 const files: Record<string, unknown> = {
@@ -158,12 +162,15 @@ const openapiConflicts = new URLSearchParams(location.search).get("openapiConfli
 // `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`),
 // except that `unresolvedVariable` fails only while no environment is selected.
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
-const chain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
-const sendErrors: Record<string, { message: string; details: unknown }> = {
-  dns: { message: chain("dns error: failed to lookup address information"), details: { host: "api.exmaple.com" } },
-  refused: { message: chain("tcp connect error: Connection refused (os error 61)"), details: { host: "127.0.0.1", port: 8765 } },
-  reset: { message: chain("connection closed before message completed"), details: { host: "127.0.0.1", port: 8765 } },
-  tls: { message: chain("invalid peer certificate: UnknownIssuer"), details: { reason: "selfSigned" } },
+/** A transport error's message as the core writes it: reqwest's error chain ending in `cause`. */
+const connectErrorChain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
+/** The fixture for each kind: the rest of the `SendError` of that kind. */
+type SendErrorFixtures = { [K in SendErrorKind]: Omit<SendError & { kind: K }, "kind"> };
+const sendErrors: SendErrorFixtures = {
+  dns: { message: connectErrorChain("dns error: failed to lookup address information"), details: { host: "api.exmaple.com" } },
+  refused: { message: connectErrorChain("tcp connect error: Connection refused (os error 61)"), details: { host: "127.0.0.1", port: 8765 } },
+  reset: { message: connectErrorChain("connection closed before message completed"), details: { host: "127.0.0.1", port: 8765 } },
+  tls: { message: connectErrorChain("invalid peer certificate: UnknownIssuer"), details: { reason: "selfSigned" } },
   timeoutIdle: {
     message: "Read timeout: no data received for 200 ms. Raise it with # @timeout or the idle timeout in Settings.",
     details: { timeoutMs: 200 },
@@ -178,9 +185,12 @@ const sendErrors: Record<string, { message: string; details: unknown }> = {
       "The URL's scheme or host uses undefined variables: baseUrl. Pick an environment that defines them, or declare them as file variables.",
     details: { names: ["baseUrl"] },
   },
+  invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
+  file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
   other: { message: "Something unexpected went wrong", details: null },
 };
-const sendError = sendErrorKind && sendErrors[sendErrorKind] ? { kind: sendErrorKind, ...sendErrors[sendErrorKind] } : null;
+const sendError: SendError | null =
+  sendErrorKind && Object.hasOwn(sendErrors, sendErrorKind) ? ({ kind: sendErrorKind, ...sendErrors[sendErrorKind as SendErrorKind] } as SendError) : null;
 // `?manyHeaders=1`: the JSON response also carries caching, CORS and rate-limit headers.
 const manyHeaders = new URLSearchParams(location.search).get("manyHeaders") === "1";
 const extraHeaders: [string, string][] = manyHeaders
@@ -386,8 +396,8 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
   return mode === "pretty" ? lines.join("\n") : lines.map((l) => l.trim()).join("");
 }
 
-/** Text response bodies by response id, like the shell's stored bodies. */
-const textBodies = new Map<string, string>();
+/** Text response bodies by response id, with their kind, like the shell's stored bodies. */
+const textBodies = new Map<string, { body: string; kind: ResponseKind }>();
 let responseCount = 0;
 
 /** Stand-in for the shell's Pretty text: formatted JSON, or the body as is if it doesn't parse. */
@@ -417,7 +427,7 @@ function hexdump(b64: string): string {
     const ascii = chunk.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
     lines.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
   }
-  if (Math.floor((b64.length * 3) / 4) - (b64.match(/=*$/)?.[0].length ?? 0) > limit) lines.push("… (truncated preview)");
+  if (base64DecodedLength(b64) > limit) lines.push("… (truncated preview)");
   return lines.join("\n");
 }
 
@@ -506,7 +516,7 @@ mockIPC(
           return storeBinary({
             id: "r3", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
             headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
-            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", contentEncoding: null, bodyText: null,
+            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null, bodyText: null,
             bodyBase64: "AAAA".repeat(Math.floor(BIG_BINARY_BYTES / 3)) + "AAA=", // 2 MB of zero bytes (2 MB = 3n + 2)
             truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
           });
@@ -515,7 +525,7 @@ mockIPC(
           return storeBinary({
             id: "r2", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
             headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
-            contentType: "image/png", contentEncoding: null, bodyText: null,
+            contentType: "image/png", bodyKind: "image", contentEncoding: null, bodyText: null,
             bodyBase64: "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",
             truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
           });
@@ -538,15 +548,16 @@ mockIPC(
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
         const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        textBodies.set(id, body);
+        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : "application/json";
+        const bodyKind: ResponseKind = responseKind === "html" ? "html" : "json";
+        textBodies.set(id, { body, kind: bodyKind });
         const cookies = responseKind === "cookies" ? mockCookies : [];
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
-        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : "application/json";
         return {
           id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
-          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, contentEncoding: gzip ? "gzip" : null,
+          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
           bodyText: body, prettyText: largeBody || responseKind === "html" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
@@ -567,22 +578,24 @@ mockIPC(
       case "pretty_response": {
         prettyRequests++;
         await delay(400); // long enough for a test to see the loading state
-        const body = evicted ? undefined : textBodies.get(args.responseId);
-        if (body === undefined) throw "Response is no longer available";
+        const stored = evicted ? undefined : textBodies.get(args.responseId);
+        if (stored === undefined) throw RESPONSE_GONE;
+        if (stored.kind === "xml") return formatXml(stored.body, "pretty");
+        if (stored.kind !== "json") throw "Response body isn't JSON or XML";
         try {
-          return formatJson(body, "pretty");
+          return formatJson(stored.body, "pretty");
         } catch (e) {
           throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
         }
       }
       case "hexdump": {
         const b64 = binaryBodies.get(args.responseId);
-        if (b64 === undefined) throw "Response is no longer available";
+        if (b64 === undefined) throw RESPONSE_GONE;
         return hexdump(b64);
       }
       case "filter_response": {
-        const body = textBodies.get(args.responseId);
-        if (body === undefined) throw "Response is no longer available";
+        const body = textBodies.get(args.responseId)?.body;
+        if (body === undefined) throw RESPONSE_GONE;
         try {
           JSON.parse(body);
         } catch (e) {
@@ -592,16 +605,16 @@ mockIPC(
       }
       case "response_shape": {
         shapeRequests.push(args.responseId);
-        const body = textBodies.get(args.responseId);
-        if (body === undefined) throw "Response is no longer available";
+        const body = textBodies.get(args.responseId)?.body;
+        if (body === undefined) throw RESPONSE_GONE;
         return mockShape(JSON.parse(body));
       }
       case "plugin:dialog|save":
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {
         // Binary bodies are recorded as their base64.
-        const body = textBodies.get(args.responseId) ?? binaryBodies.get(args.responseId);
-        if (body === undefined) throw "Response is no longer available";
+        const body = textBodies.get(args.responseId)?.body ?? binaryBodies.get(args.responseId);
+        if (body === undefined) throw RESPONSE_GONE;
         savedBodies[args.path] = body;
         return null;
       }

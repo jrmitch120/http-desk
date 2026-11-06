@@ -395,10 +395,23 @@ fn cancel_request(state: State<'_, AppState>, run_id: String) {
     }
 }
 
+/// The error for a response id whose body has been evicted (or never stored).
+const RESPONSE_GONE: &str = "Response is no longer available";
+
+/// The stored body of `response_id`, or [`RESPONSE_GONE`].
+fn stored_body(state: &AppState, response_id: &str) -> CmdResult<Arc<[u8]>> {
+    state.bodies.lock().unwrap().get(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+}
+
+/// The stored body of `response_id` with its content type, or [`RESPONSE_GONE`].
+fn stored_body_with_type(state: &AppState, response_id: &str) -> CmdResult<(Arc<[u8]>, Option<String>)> {
+    state.bodies.lock().unwrap().get_with_type(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+}
+
 #[tauri::command]
 async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String, path: PathBuf) -> CmdResult<()> {
     off_main(app, move |state| {
-        let body = state.bodies.lock().unwrap().get(&response_id).ok_or("Response is no longer available")?;
+        let body = stored_body(state, &response_id)?;
         std::fs::write(&path, body).map_err(err)
     })
     .await
@@ -419,7 +432,7 @@ async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResul
 #[tauri::command]
 async fn hexdump<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
     off_main(app, move |state| {
-        let body = state.bodies.lock().unwrap().get(&response_id).ok_or("Response is no longer available")?;
+        let body = stored_body(state, &response_id)?;
         Ok(body_format::hexdump(&body))
     })
     .await
@@ -432,8 +445,10 @@ fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>>
     if let Some(parsed) = state.json_docs.lock().unwrap().get(response_id) {
         return parsed;
     }
-    let body = state.bodies.lock().unwrap().get(response_id).ok_or("Response is no longer available")?;
-    let parsed = JsonDocument::parse(&String::from_utf8_lossy(&body)).map(Arc::new).map_err(err);
+    let (body, content_type) = stored_body_with_type(state, response_id)?;
+    // Decoded the way the response's `bodyText` was (its charset, else UTF-8).
+    let text = exec::decode_text(&body, content_type.as_deref()).ok_or("The body isn't text")?;
+    let parsed = JsonDocument::parse(&text).map(Arc::new).map_err(err);
     state.json_docs.lock().unwrap().insert(response_id.to_owned(), parsed.clone());
     parsed
 }
@@ -476,8 +491,7 @@ async fn with_pretty_text(mut response: HttpResponse) -> HttpResponse {
 #[tauri::command]
 async fn pretty_response<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
     off_main(app, move |state| {
-        let (body, content_type) =
-            state.bodies.lock().unwrap().get_with_type(&response_id).ok_or("Response is no longer available")?;
+        let (body, content_type) = stored_body_with_type(state, &response_id)?;
         let text = exec::decode_text(&body, content_type.as_deref()).ok_or("Response body isn't text")?;
         body_format::pretty_response(content_type.as_deref(), &text)
             .ok_or("Response body isn't JSON or XML")?
