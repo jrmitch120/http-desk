@@ -353,7 +353,7 @@
   .kv-row > .c-check {
     grid-row: 1 / span 2;
     align-items: flex-start;
-    padding-top: 8px;
+    padding-top: var(--space-2);
   }
   .kv-row > .c-name,
   .kv-row > .c-value,
@@ -471,7 +471,7 @@
     outline: none;
     font-family: var(--mono);
     font-size: 12.5px;
-    padding: 0 8px 0 10px;
+    padding: 0 var(--space-2) 0 10px;
   }
   .kv .divider {
     border-right: 1px solid var(--border);

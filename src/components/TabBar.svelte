@@ -179,7 +179,7 @@
     border: none;
     background: none;
     color: var(--muted);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     opacity: 0;
   }
