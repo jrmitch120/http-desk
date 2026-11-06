@@ -4,8 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile } = vi.hoisted(() => ({ readHttpFile: vi.fn(), saveHttpFile: vi.fn() }));
-vi.mock("./api", () => ({ api: { readHttpFile, saveHttpFile }, errorMessage: (e: unknown) => String(e) }));
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists } = vi.hoisted(() => ({
+  readHttpFile: vi.fn(),
+  saveHttpFile: vi.fn(),
+  createFile: vi.fn(),
+  createDir: vi.fn(),
+  renamePath: vi.fn(),
+  pathExists: vi.fn(),
+}));
+vi.mock("./api", () => ({
+  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists },
+  errorMessage: (e: unknown) => String(e),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
 
@@ -37,8 +47,11 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  readHttpFile.mockReset();
-  saveHttpFile.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir]) fn.mockReset();
+  renamePath.mockReset().mockResolvedValue(undefined);
+  pathExists.mockReset().mockResolvedValue(true);
+  app.dialog = null;
+  app.toasts = [];
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
@@ -71,6 +84,104 @@ describe("reloadOpen", () => {
     expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "New"]);
     expect(app.requestFor(app.tabs[0])?.name).toBe("List");
     expect(readHttpFile).toHaveBeenCalledTimes(2); // not-open.http isn't read
+  });
+});
+
+/** Types `value` into the name prompt the action opens and presses OK. */
+async function answerPrompt<T>(action: Promise<T>, value: string): Promise<T> {
+  await vi.waitFor(() => expect(app.dialog?.input).toBeTruthy());
+  app.closeDialog("ok", value);
+  return action;
+}
+
+const errors = () => app.toasts.filter((t) => t.kind === "error").map((t) => t.message);
+
+describe("name prompts", () => {
+  const bad = ["../x.http", "sub/x.http", "sub\\x.http", ".."];
+
+  it.each(bad)("new file rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.createFile("/ws"), name);
+    expect(createFile).not.toHaveBeenCalled();
+    expect(errors()).toEqual(["Names can't contain / or \\, or be . or .."]);
+  });
+
+  it.each(bad)("new folder rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.createFolder("/ws"), name);
+    expect(createDir).not.toHaveBeenCalled();
+    expect(errors()).toHaveLength(1);
+  });
+
+  it.each(bad)("rename rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), name);
+    expect(renamePath).not.toHaveBeenCalled();
+    expect(errors()).toHaveLength(1);
+  });
+
+  it("accepts ordinary names, including ones with dots", async () => {
+    await answerPrompt(app.createFolder("/ws"), "v1..v2");
+    expect(createDir).toHaveBeenCalledWith("/ws/v1..v2");
+    expect(errors()).toEqual([]);
+  });
+});
+
+describe("renamePath", () => {
+  it("keeps the .http extension when it's omitted", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), "dogs");
+    expect(renamePath).toHaveBeenCalledWith("/ws/pets.http", "/ws/dogs.http");
+  });
+
+  it("renaming pets.http to pets leaves pets.http", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), "pets");
+    expect(renamePath).not.toHaveBeenCalledWith("/ws/pets.http", "/ws/pets");
+    expect(errors()).toEqual([]);
+  });
+
+  it("keeps a .rest extension", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.rest"), "dogs");
+    expect(renamePath).toHaveBeenCalledWith("/ws/pets.rest", "/ws/dogs.rest");
+  });
+
+  it("doesn't add an extension to folders", async () => {
+    await answerPrompt(app.renamePath("/ws/api"), "v2");
+    expect(renamePath).toHaveBeenCalledWith("/ws/api", "/ws/v2");
+  });
+
+  it("allows case-only renames", async () => {
+    await answerPrompt(app.renamePath("/ws/api.http"), "API.http");
+    expect(renamePath).toHaveBeenCalledWith("/ws/api.http", "/ws/API.http");
+  });
+});
+
+describe("watcher events", () => {
+  const MOVED = "/ws/api/library.http";
+
+  async function openAndEdit() {
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.openRequest(PATH, { index: 0 });
+    app.requestFor(app.tabs[0])!.url = "https://example.com/edited";
+  }
+
+  it("shows no banner when a dirty file renamed inside the app still holds what was loaded", async () => {
+    await openAndEdit();
+    await app.movePath(PATH, MOVED);
+
+    // A late event for our own rename: the disk still has the loaded content.
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.onExternalChange([PATH, MOVED]);
+
+    expect(app.docs[MOVED].externalChange).toBe(false);
+    expect(app.tabs[0].path).toBe(MOVED);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
+  });
+
+  it("still shows the banner when another editor changed a dirty file", async () => {
+    await openAndEdit();
+
+    readHttpFile.mockResolvedValueOnce(file("List", "Create", "Delete"));
+    await app.onExternalChange([PATH]);
+
+    expect(app.docs[PATH].externalChange).toBe(true);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
   });
 });
 
