@@ -41,7 +41,7 @@ test("typing a path suggests the keys of the items there, and accepting one comp
   await expect(bodyLines(page)).toHaveText(["[", '  "Rex",', '  "Tom"', "]"]);
 
   // Every keystroke completed from the one summary fetched for this response.
-  expect(await shapeRequests(page)).toEqual(["r1"]);
+  expect(await shapeRequests(page)).toEqual(["r1-1"]);
 });
 
 test("the shape summary is fetched once per response", async ({ page }) => {

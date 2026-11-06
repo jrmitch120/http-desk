@@ -592,7 +592,7 @@ mockIPC(
       }
       case "response_shape": {
         shapeRequests.push(args.responseId);
-        const body = bodies[args.responseId];
+        const body = textBodies.get(args.responseId);
         if (body === undefined) throw "Response is no longer available";
         return mockShape(JSON.parse(body));
       }
