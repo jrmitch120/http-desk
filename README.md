@@ -68,10 +68,12 @@ Requests you don't edit are saved byte-for-byte as they were.
 |---|---|
 | Open a workspace | Welcome screen → *Open folder…* (the last workspace reopens on start) |
 | New file / folder / request | Explorer toolbar, right-click menus, or `+` next to a file |
+| New request | `⌘/Ctrl T` (in the current tab's file; a new file if no tab is open) |
 | Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
 | Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
-| Search requests | `⌘/Ctrl P` |
+| Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
 | Environments | Top-right selector; `⌘/Ctrl E` to edit |
+| Settings | Gear icon in the top bar, or `⌘/Ctrl ,` |
 | Import OpenAPI | Top bar → *Import OpenAPI* |
 | See the `.http` text | `.http` button above the URL bar |
 | Move files | Drag and drop in the explorer |
