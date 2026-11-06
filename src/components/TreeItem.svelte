@@ -7,6 +7,7 @@
   import TreeItem from "./TreeItem.svelte";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { node, depth }: { node: TreeNode; depth: number } = $props();
 
@@ -87,7 +88,7 @@
   aria-level={depth + 1}
   data-path={node.path}
   tabindex="-1"
-  title={node.path}
+  use:tooltip={node.path}
   onclick={toggle}
   onkeydown={(e) => e.key === "Enter" && toggle()}
   oncontextmenu={contextMenu}
@@ -104,9 +105,9 @@
   <span class="chev"><Icon name={open ? "chevron-down" : "chevron-right"} size={12} /></span>
   <span class="ico" class:file={!isDir}><Icon name={isDir ? (open ? "folder-open" : "folder") : "file"} size={14} /></span>
   <span class="label ellipsis">{node.name}</span>
-  {#if dirty}<span class="dot" title="Unsaved changes"></span>{/if}
+  {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes" use:tooltip></span>{/if}
   {#if !isDir}
-    <button class="icon-btn add" title="New request in this file" onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
+    <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
       <Icon name="plus" size={13} />
     </button>
   {/if}

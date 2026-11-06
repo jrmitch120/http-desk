@@ -7,6 +7,7 @@
   // part of the click target.
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip as tip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     checked: boolean;
@@ -15,11 +16,13 @@
     onchange: (checked: boolean) => void;
     /** Accessible name when there are no children. */
     label?: string;
+    /** Tooltip text (use:tooltip). */
+    tooltip?: string;
     /** Extra class on the root, for laying out a labelled row. */
     class?: string;
     children?: Snippet;
   }
-  let { checked, indeterminate = false, onchange, label, class: className = "", children }: Props = $props();
+  let { checked, indeterminate = false, onchange, label, tooltip, class: className = "", children }: Props = $props();
 </script>
 
 <button
@@ -29,6 +32,7 @@
   class:on={checked || indeterminate}
   aria-checked={indeterminate ? "mixed" : checked}
   aria-label={label}
+  use:tip={tooltip ?? null}
   onclick={() => onchange(indeterminate ? true : !checked)}
   onkeydown={(e) => {
     if (e.key === "Enter") e.preventDefault();

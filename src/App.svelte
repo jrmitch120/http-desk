@@ -9,6 +9,7 @@
   import Dialog from "./components/Dialog.svelte";
   import Toasts from "./components/Toasts.svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
+  import TooltipHost from "./components/TooltipHost.svelte";
   import EnvironmentEditor from "./components/EnvironmentEditor.svelte";
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
@@ -116,6 +117,7 @@
   {#key app.dialog}<Dialog />{/key}
 {/if}
 <ContextMenu />
+<TooltipHost />
 <Toasts />
 
 <style>

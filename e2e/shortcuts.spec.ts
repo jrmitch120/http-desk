@@ -35,7 +35,7 @@ test("with a confirm dialog open, ⌘S, ⌘Enter and ⌘T do nothing", async ({ 
   await urlBar(page).click();
   await page.keyboard.press("End");
   await page.keyboard.type("&page=2");
-  await activeTab(page).getByTitle("Close").click();
+  await activeTab(page).getByRole("button", { name: "Close" }).click();
   const confirm = page.getByRole("dialog", { name: 'Save changes to "List pets"?' });
   await expect(confirm).toBeVisible();
 

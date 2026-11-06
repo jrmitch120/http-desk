@@ -63,7 +63,7 @@
         <div>Follow redirects</div>
         <div class="muted sub">When off, saved as <code># @no-redirect</code></div>
       </div>
-      <Toggle checked={followRedirects} onchange={(v) => setDirective(req, "no-redirect", v ? null : "")} />
+      <Toggle ariaLabel="Follow redirects" checked={followRedirects} onchange={(v) => setDirective(req, "no-redirect", v ? null : "")} />
     </div>
     {#each timeouts as t (t.directive)}
       <div class="line">

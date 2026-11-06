@@ -26,6 +26,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { popupLayer } from "../popup/layer";
 
 export type Language = "json" | "xml" | "html" | "text";
 
@@ -68,13 +69,18 @@ export const theme = EditorView.theme({
     borderRadius: "4px",
     color: "var(--text)",
   },
+  // The shared popup surface (.popup-surface in app.css); tooltips render into the popup layer.
   ".cm-tooltip": {
-    backgroundColor: "var(--panel-2)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: "6px",
+    backgroundColor: "var(--popup-bg)",
+    border: "var(--popup-border)",
+    borderRadius: "var(--popup-radius)",
     color: "var(--text)",
-    boxShadow: "var(--shadow)",
+    boxShadow: "var(--popup-shadow)",
+    animation: "popup-in 120ms ease-out",
   },
+  ".cm-tooltip-autocomplete": { overflow: "hidden" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12px", padding: "4px" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { borderRadius: "5px", padding: "2px 6px" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--text)" },
   ".cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "8px" },
   ".cm-placeholder": { color: "var(--faint)" },
@@ -194,11 +200,15 @@ function varCompletion(provider: VarProvider) {
   };
 }
 
+/**
+ * Hover tooltips and autocomplete render into the shared popup layer, so a
+ * panel's overflow can't clip them and they stack with the other popups.
+ */
+export const layerTooltips = (): Extension => tooltips({ parent: popupLayer() });
+
 export function variableExtensions(provider: VarProvider): Extension {
   return [
-    // Render tooltips (hover and autocomplete) into <body> so overflow/stacking
-    // of surrounding panels can't clip them.
-    tooltips({ parent: document.body }),
+    layerTooltips(),
     varDecorations(provider),
     varTooltip(provider),
     autocompletion({ override: [varCompletion(provider)], icons: false }),
@@ -207,15 +217,34 @@ export function variableExtensions(provider: VarProvider): Extension {
 
 // ---------------------------------------------------------------- body syntax warnings
 
-/** Highlights body lines that `.http` syntax reads as a separator or handler (see `bodySyntaxWarnings`). */
+/**
+ * Highlights body lines that `.http` syntax reads as a separator or handler (see
+ * `bodySyntaxWarnings`); hovering one shows the warning in a tooltip.
+ */
 export const bodySyntaxHighlight: Extension = [
   EditorView.decorations.compute(["doc"], (state) => {
     const b = new RangeSetBuilder<Decoration>();
     for (const w of bodySyntaxWarnings(state.doc.toString())) {
       const line = state.doc.line(w.line);
-      b.add(line.from, line.from, Decoration.line({ class: "cm-syntax-warning", attributes: { title: w.message } }));
+      b.add(line.from, line.from, Decoration.line({ class: "cm-syntax-warning" }));
     }
     return b.finish();
+  }),
+  hoverTooltip((view, pos) => {
+    const line = view.state.doc.lineAt(pos);
+    // Only the line's own warning; the scan is cheap next to a hover.
+    const warning = bodySyntaxWarnings(view.state.doc.toString()).find((w) => w.line === line.number);
+    if (!warning) return null;
+    return {
+      pos: line.from,
+      end: line.to,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "cm-syntax-warning-tip";
+        dom.textContent = warning.message;
+        return { dom };
+      },
+    };
   }),
   EditorView.theme({
     ".cm-syntax-warning": {
@@ -223,6 +252,8 @@ export const bodySyntaxHighlight: Extension = [
       textDecoration: "underline wavy color-mix(in srgb, var(--warning) 70%, transparent)",
       textUnderlineOffset: "3px",
     },
+    // Same text box as the app's own tooltips (TooltipHost.svelte).
+    ".cm-syntax-warning-tip": { maxWidth: "360px", padding: "4px 8px", fontFamily: "var(--font)", fontSize: "12px", lineHeight: "1.4" },
   }),
 ];
 
@@ -230,6 +261,7 @@ export const bodySyntaxHighlight: Extension = [
 
 export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }): Extension {
   const ext: Extension[] = [
+    layerTooltips(),
     theme,
     syntaxHighlighting(highlight),
     drawSelection(),

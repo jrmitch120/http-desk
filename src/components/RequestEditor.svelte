@@ -19,6 +19,7 @@
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -100,20 +101,20 @@
     {/if}
 
     <div class="crumbs">
-      <span class="file" title={tab.path}>{basename(tab.path)}</span>
+      <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <Icon name="chevron-right" size={12} />
       <input class="name-input" value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
       <span class="spacer"></span>
-      <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} title="Show the .http source for this request">
+      <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} title="Save (⌘/Ctrl S)">
+      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={"Save (⌘/Ctrl S)"}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
 
     <div class="urlbar">
-      <select class="method {methodClass(req.method)}" value={STANDARD_METHODS.includes(req.method) ? req.method : req.method} onchange={chooseMethod} title="HTTP method">
+      <select class="method {methodClass(req.method)}" value={STANDARD_METHODS.includes(req.method) ? req.method : req.method} onchange={chooseMethod} aria-label="HTTP method" use:tooltip>
         {#each STANDARD_METHODS as m (m)}<option value={m} class={methodClass(m)}>{m}</option>{/each}
         {#if !STANDARD_METHODS.includes(req.method)}<option value={req.method}>{req.method}</option>{/if}
         <option value="__custom">Custom…</option>
@@ -128,7 +129,7 @@
       {#if run?.loading}
         <button class="btn send cancel" onclick={() => app.cancel(tab.id)}><Icon name="stop" size={13} />Cancel</button>
       {:else}
-        <button class="btn primary send" onclick={() => app.send(tab.id)} title="Send (⌘/Ctrl Enter)"><Icon name="send" size={13} />Send</button>
+        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={"Send (⌘/Ctrl Enter)"}><Icon name="send" size={13} />Send</button>
       {/if}
     </div>
 

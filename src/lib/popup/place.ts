@@ -1,0 +1,47 @@
+// Where a floating surface goes next to its anchor so it stays on screen.
+// Pure geometry (no DOM), shared by every popup in the layer.
+
+export type Side = "top" | "bottom";
+export type Align = "start" | "center" | "end";
+
+/** Viewport coordinates; a pointer position is a zero-size rect. */
+export interface AnchorRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface PlaceOptions {
+  /** Preferred side; flips to the other one when it doesn't fit. Default "bottom". */
+  side?: Side;
+  /** Horizontal alignment with the anchor. Default "start". */
+  align?: Align;
+  /** Space between anchor and popup. Default 4. */
+  gap?: number;
+  /** Minimum distance from the viewport edges. Default 6. */
+  margin?: number;
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
+
+/** Top-left corner for a popup of `size` next to `anchor`, and the side it ended up on. */
+export function place(
+  anchor: AnchorRect,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+  { side = "bottom", align = "start", gap = 4, margin = 6 }: PlaceOptions = {},
+): { x: number; y: number; side: Side } {
+  const below = { side: "bottom" as const, y: anchor.bottom + gap, room: viewport.height - margin - anchor.bottom - gap };
+  const above = { side: "top" as const, y: anchor.top - gap - size.height, room: anchor.top - gap - margin };
+  const [first, second] = side === "bottom" ? [below, above] : [above, below];
+  const pick = first.room >= size.height ? first : second.room >= size.height ? second : first.room >= second.room ? first : second;
+
+  const width = anchor.right - anchor.left;
+  const x = align === "start" ? anchor.left : align === "end" ? anchor.right - size.width : anchor.left + (width - size.width) / 2;
+  return {
+    x: clamp(x, margin, viewport.width - margin - size.width),
+    y: clamp(pick.y, margin, viewport.height - margin - size.height),
+    side: pick.side,
+  };
+}

@@ -67,6 +67,9 @@ test("a body line starting with ### shows an inline warning", async ({ page }) =
   const warning = page.locator(".syntax-warnings");
   await expect(warning).toContainText("starts with ###, so it will be read as the start of a new request");
   await expect(page.locator(".cm-line.cm-syntax-warning")).toHaveText("### Heading");
+  // Hovering the line repeats the warning in a tooltip.
+  await page.locator(".cm-line.cm-syntax-warning").hover({ position: { x: 12, y: 6 } });
+  await expect(page.locator(".popup-layer .cm-tooltip")).toContainText("starts with ###, so it will be read as the start of a new request");
 
   await page.keyboard.press("Home");
   await page.keyboard.type(" ");
