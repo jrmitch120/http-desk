@@ -7,7 +7,7 @@
   import { untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -17,6 +17,7 @@
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
   import Badge from "./Badge.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -62,18 +63,14 @@
       : "",
   );
 
-  async function chooseMethod(e: Event) {
-    const sel = e.currentTarget as HTMLSelectElement;
-    if (!req) return;
-    if (sel.value === "__custom") {
-      sel.value = req.method;
-      const m = await app.prompt("Custom HTTP method", STANDARD_METHODS.includes(req.method) ? "" : req.method, "PURGE");
-      if (m && /^[A-Za-z][A-Za-z0-9_-]*$/.test(m.trim())) req.method = m.trim().toUpperCase();
-      else if (m) app.toast("error", "A method must be a single token of letters, digits, '-' or '_'.");
-    } else {
-      req.method = sel.value;
-    }
-  }
+  // Every method in its colour; a non-standard one already in use is listed too.
+  const methods: SelectOption[] = $derived(
+    (req && !STANDARD_METHODS.includes(req.method) ? [...STANDARD_METHODS, req.method] : STANDARD_METHODS).map((m) => ({
+      value: m,
+      label: m,
+      color: `var(--${methodClass(m)})`,
+    })),
+  );
 
   async function reloadFromDisk() {
     await app.reload(tab.path);
@@ -114,11 +111,16 @@
     </div>
 
     <div class="urlbar">
-      <select class="method {methodClass(req.method)}" value={STANDARD_METHODS.includes(req.method) ? req.method : req.method} onchange={chooseMethod} aria-label="HTTP method" use:tooltip>
-        {#each STANDARD_METHODS as m (m)}<option value={m} class={methodClass(m)}>{m}</option>{/each}
-        {#if !STANDARD_METHODS.includes(req.method)}<option value={req.method}>{req.method}</option>{/if}
-        <option value="__custom">Custom…</option>
-      </select>
+      <Select
+        class="method"
+        options={methods}
+        value={req.method}
+        onchange={(m) => (req.method = m)}
+        create={customMethod}
+        label="HTTP method"
+        tooltip="HTTP method"
+        mono
+      />
       <UrlInput
         value={composeUrl(req)}
         onchange={(v) => applyUrlText(req, v)}
@@ -240,24 +242,14 @@
     padding: 6px 14px 12px 16px;
     flex: none;
   }
-  .method {
+  .urlbar :global(.method) {
+    flex: none;
     height: 32px;
-    border: 1px solid var(--border);
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-    background: var(--panel-2);
-    font-family: var(--mono);
     font-weight: 700;
-    font-size: 12.5px;
-    padding: 0 10px;
+    padding: 0 8px 0 10px;
     min-width: 104px;
-    outline: none;
-    cursor: pointer;
-  }
-  .method:focus {
-    border-color: var(--focus);
-  }
-  .method option {
-    background: var(--panel-2);
+    max-width: 180px;
   }
   .send {
     height: 32px;

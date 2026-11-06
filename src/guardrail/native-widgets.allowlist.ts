@@ -11,7 +11,6 @@ export const ALLOWLIST: Allowlist = {
   select: [
     "src/components/AuthEditor.svelte",
     "src/components/BodyEditor.svelte",
-    "src/components/RequestEditor.svelte",
     "src/components/TopBar.svelte",
   ],
   checkbox: [],

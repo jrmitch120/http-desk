@@ -10,7 +10,6 @@ interface Case {
   selected?: string;
   /** Where the typed value shows up once confirmed. */
   result: (page: Page) => Locator;
-  expected?: "visible" | { value: string };
 }
 
 const environments = (page: Page) => dialog(page, "Environments");
@@ -82,16 +81,6 @@ const cases: Case[] = [
     selected: "staging",
     result: (page) => environments(page).getByRole("button", { name: /^ABC\b/ }),
   },
-  {
-    name: "custom method",
-    open: async (page) => {
-      await openRequest(page, ["api", "pets.http"], "List pets");
-      await page.getByRole("combobox", { name: "HTTP method" }).selectOption("__custom");
-      return "Custom HTTP method";
-    },
-    result: (page) => page.getByRole("combobox", { name: "HTTP method" }),
-    expected: { value: "ABC" },
-  },
 ];
 
 for (const c of cases) {
@@ -106,8 +95,6 @@ for (const c of cases) {
     await page.keyboard.press("Enter");
 
     await expect(dialog(page, title)).toBeHidden();
-    const expected = c.expected ?? "visible";
-    if (expected === "visible") await expect(c.result(page)).toBeVisible();
-    else await expect(c.result(page)).toHaveValue(expected.value);
+    await expect(c.result(page)).toBeVisible();
   });
 }
