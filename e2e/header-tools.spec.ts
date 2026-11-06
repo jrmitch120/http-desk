@@ -26,7 +26,7 @@ async function openHeaders(page: Page) {
   await openApp(page, "?manyHeaders=1");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("ControlOrMeta+Enter");
-  await page.locator(".viewer .subtab", { hasText: "Headers" }).click();
+  await page.getByRole("radiogroup", { name: "Response tabs" }).getByRole("radio", { name: /^Headers\b/ }).click();
 }
 
 const rows = (page: Page) => page.getByRole("table", { name: "Response headers" }).getByRole("row");
