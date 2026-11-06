@@ -32,8 +32,21 @@ pub enum ExecError {
     /// Connecting (TCP and TLS) took longer than this many ms (`@connection-timeout`).
     #[error("Connection timeout: couldn't connect within {}. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.", human_ms(*.0))]
     ConnectTimeout(u64),
+    /// The host name didn't resolve. `chain` is the full error chain.
+    #[error("{chain}")]
+    Dns { host: String, chain: String },
+    /// The server's certificate was rejected, or the TLS handshake failed.
+    #[error("{chain}")]
+    TlsHandshake { reason: TlsReason, chain: String },
+    /// Nothing accepted the TCP connection. `chain` is the full error chain.
+    #[error("{chain}")]
+    Refused { host: String, port: u16, chain: String },
+    /// The server closed or reset the connection before answering.
+    #[error("{chain}")]
+    Reset { host: String, port: u16, chain: String },
+    /// Any other failure, as its error chain.
     #[error("{0}")]
-    Http(String),
+    Other(String),
     /// Unresolved variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
@@ -49,9 +62,67 @@ fn human_ms(ms: u64) -> String {
     }
 }
 
+impl ExecError {
+    /// The class of failure the UI picks a heading, hint and fix-it buttons by.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ExecError::Dns { .. } => "dns",
+            ExecError::Refused { .. } => "refused",
+            ExecError::Reset { .. } => "reset",
+            ExecError::ReadTimeout(_) => "timeoutIdle",
+            ExecError::ConnectTimeout(_) => "timeoutConnect",
+            ExecError::InvalidUrl { .. } => "invalidUrl",
+            ExecError::UnresolvedHost(_) => "unresolvedVariable",
+            ExecError::File { .. } => "file",
+            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => "tls",
+            ExecError::InvalidMethod(_)
+            | ExecError::InvalidHeader(_)
+            | ExecError::DynamicVariable(_)
+            | ExecError::Other(_) => "other",
+        }
+    }
+
+    /// The structured facts behind [`Self::kind`], for the UI's hint. `null` when there are none.
+    fn details(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            ExecError::Dns { host, .. } => json!({ "host": host }),
+            ExecError::Refused { host, port, .. } | ExecError::Reset { host, port, .. } => {
+                json!({ "host": host, "port": port })
+            }
+            ExecError::TlsHandshake { reason, .. } => json!({ "reason": reason }),
+            ExecError::Tls(_) => json!({ "reason": TlsReason::Other }),
+            ExecError::ReadTimeout(ms) | ExecError::ConnectTimeout(ms) => json!({ "timeoutMs": ms }),
+            ExecError::InvalidUrl { url, reason } => json!({ "url": url, "reason": reason }),
+            ExecError::UnresolvedHost(names) => json!({ "names": names }),
+            ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
+            _ => serde_json::Value::Null,
+        }
+    }
+}
+
+/// Why a TLS connection failed, as far as it can be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsReason {
+    SelfSigned,
+    Expired,
+    WrongHost,
+    UnknownIssuer,
+    /// Anything else, including TLS configuration errors (unreadable CA or client certificate).
+    Other,
+}
+
+/// Send errors reach the UI as `{ kind, message, details }`: the core owns the
+/// message, the UI chooses the hint and buttons by kind.
 impl Serialize for ExecError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&self.to_string())
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ExecError", 3)?;
+        st.serialize_field("kind", self.kind())?;
+        st.serialize_field("message", &self.to_string())?;
+        st.serialize_field("details", &self.details())?;
+        st.end()
     }
 }
 
@@ -413,6 +484,73 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
+/// Every error in `e`'s source chain, including the ones `std::io::Error` wraps
+/// (its `source()` skips the wrapped error itself, which is where rustls and
+/// OS errors live).
+fn causes<'a>(e: &'a (dyn std::error::Error + 'static)) -> Vec<&'a (dyn std::error::Error + 'static)> {
+    let mut out = Vec::new();
+    let mut next = Some(e);
+    while let Some(err) = next {
+        out.push(err);
+        next = match err.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()) {
+            Some(wrapped) => Some(wrapped),
+            None => err.source(),
+        };
+    }
+    out
+}
+
+/// Turns a transport failure into the error kind the UI explains. Async because
+/// a rejected certificate may be fetched again to tell why (see [`crate::tls_probe`]).
+async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
+    match (e.is_timeout(), e.is_connect()) {
+        (true, true) if p.connect_timeout_ms > 0 => return ExecError::ConnectTimeout(p.connect_timeout_ms),
+        (true, false) if p.timeout_ms > 0 => return ExecError::ReadTimeout(p.timeout_ms),
+        _ => {}
+    }
+    let chain = error_chain(&e);
+    let url = e.url().cloned().or_else(|| url::Url::parse(&p.url).ok());
+    let host = url.as_ref().and_then(|u| u.host_str()).unwrap_or_default().trim_matches(['[', ']']).to_string();
+    let port = url.as_ref().and_then(url::Url::port_or_known_default).unwrap_or_default();
+    use std::io::ErrorKind as K;
+    let io_kind = |kinds: &[K]| {
+        causes(&e).iter().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| kinds.contains(&io.kind())))
+    };
+    // hyper-util's and reqwest's resolver errors are private types, so they're known by their text.
+    if causes(&e).iter().any(|c| matches!(c.to_string().as_str(), "dns error" | "error resolving DNS")) {
+        return ExecError::Dns { host, chain };
+    }
+    let tls = causes(&e).into_iter().find_map(|c| c.downcast_ref::<rustls::Error>().cloned());
+    if let Some(tls) = tls {
+        use rustls::CertificateError as C;
+        let reason = match tls {
+            rustls::Error::InvalidCertificate(C::Expired | C::ExpiredContext { .. }) => TlsReason::Expired,
+            rustls::Error::InvalidCertificate(C::NotValidForName | C::NotValidForNameContext { .. }) => {
+                TlsReason::WrongHost
+            }
+            rustls::Error::InvalidCertificate(cert) => {
+                let timeout = Duration::from_millis(match p.connect_timeout_ms {
+                    0 => 5_000,
+                    ms => ms.min(5_000),
+                });
+                let found = crate::tls_probe::certificate_reason(&host, port, timeout).await;
+                found.unwrap_or(if cert == C::UnknownIssuer { TlsReason::UnknownIssuer } else { TlsReason::Other })
+            }
+            _ => TlsReason::Other,
+        };
+        return ExecError::TlsHandshake { reason, chain };
+    }
+    if io_kind(&[K::ConnectionRefused]) {
+        return ExecError::Refused { host, port, chain };
+    }
+    let hung_up =
+        causes(&e).iter().any(|c| c.downcast_ref::<hyper::Error>().is_some_and(hyper::Error::is_incomplete_message));
+    if hung_up || io_kind(&[K::ConnectionReset, K::ConnectionAborted, K::BrokenPipe, K::UnexpectedEof]) {
+        return ExecError::Reset { host, port, chain };
+    }
+    ExecError::Other(chain)
+}
+
 fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<reqwest::Client, ExecError> {
     let mut b = reqwest::Client::builder()
         .redirect(if p.follow_redirects {
@@ -486,14 +624,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         builder = builder.body(body.clone());
     }
 
-    let map_err = |e: reqwest::Error| match (e.is_timeout(), e.is_connect()) {
-        (true, true) if p.connect_timeout_ms > 0 => ExecError::ConnectTimeout(p.connect_timeout_ms),
-        (true, false) if p.timeout_ms > 0 => ExecError::ReadTimeout(p.timeout_ms),
-        _ => ExecError::Http(error_chain(&e)),
-    };
-
     let start = Instant::now();
-    let mut resp = builder.send().await.map_err(map_err)?;
+    let mut resp = match builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => return Err(classify(e, &p).await),
+    };
     let ttfb = start.elapsed();
 
     let status = resp.status();
@@ -510,7 +645,12 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
 
     let mut body = Vec::new();
     let mut truncated = false;
-    while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
+    loop {
+        let chunk = match resp.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => return Err(classify(e, &p).await),
+        };
         if body.len() + chunk.len() > settings.max_body_bytes {
             body.extend_from_slice(&chunk[..settings.max_body_bytes - body.len()]);
             truncated = true;
