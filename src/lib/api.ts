@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   BodyKind,
+  FilterResult,
   FormatMode,
   EnvironmentSet,
   GenerateOptions,
@@ -56,6 +57,11 @@ export const api = {
    * the shell stored for it. Rejects once the body has been evicted.
    */
   hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
+  /**
+   * Runs an RFC 9535 JSONPath expression against a stored response body in the
+   * core. Rejects with a message for an invalid expression or a non-JSON body.
+   */
+  filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

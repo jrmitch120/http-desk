@@ -4,11 +4,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
+use httpdesk_core::json_filter::{FilterResult, JsonDocument};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
@@ -19,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod bodies;
 mod confine;
 mod deleting;
+mod json_docs;
 mod paths;
 mod quit;
 mod self_writes;
@@ -26,6 +28,7 @@ mod theme;
 mod watcher;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
+use json_docs::JsonDocs;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -103,6 +106,8 @@ struct AppState {
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Recent response bodies by response id (for "save to file").
     bodies: Mutex<RecentBodies>,
+    /// Recent bodies parsed as JSON, by response id (for the filter bar).
+    json_docs: Mutex<JsonDocs>,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
@@ -415,6 +420,30 @@ async fn hexdump<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> C
     .await
 }
 
+/// The stored body of `response_id` parsed as JSON, parsed on first use and
+/// then kept (see `json_docs`). The lock isn't held while parsing, so a large
+/// body doesn't hold up queries on other responses.
+fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>> {
+    if let Some(parsed) = state.json_docs.lock().unwrap().get(response_id) {
+        return parsed;
+    }
+    let body = state.bodies.lock().unwrap().get(response_id).ok_or("Response is no longer available")?;
+    let parsed = JsonDocument::parse(&String::from_utf8_lossy(&body)).map(Arc::new).map_err(err);
+    state.json_docs.lock().unwrap().insert(response_id.to_owned(), parsed.clone());
+    parsed
+}
+
+/// The filter bar: evaluates a JSONPath expression against a stored response
+/// body, returning the match count and the matches as lossless pretty JSON.
+#[tauri::command]
+async fn filter_response<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    response_id: String,
+    expression: String,
+) -> CmdResult<FilterResult> {
+    off_main(app, move |state| json_doc(state, &response_id)?.filter(&expression).map_err(err)).await
+}
+
 // ------------------------------------------------------------------ settings
 
 #[tauri::command]
@@ -593,6 +622,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             save_response_body,
             format_body,
             hexdump,
+            filter_response,
             get_settings,
             save_settings,
             set_unsaved,
