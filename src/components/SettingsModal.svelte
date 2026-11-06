@@ -5,15 +5,26 @@
   import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
 
   let copy = $state<AppSettings | null>(app.settings ? structuredClone($state.snapshot(app.settings) as AppSettings) : null);
   let saving = $state(false);
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
+
+  const themes: { value: AppSettings["theme"]; label: string; icon: string }[] = [
+    { value: "dark", label: "Dark", icon: "moon" },
+    { value: "light", label: "Light", icon: "sun" },
+  ];
+  const layouts: { value: AppSettings["layout"]; label: string; icon: string }[] = [
+    { value: "horizontal", label: "Response on the right", icon: "columns" },
+    { value: "vertical", label: "Response below", icon: "rows" },
+  ];
 
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
 
@@ -76,17 +87,11 @@
         <h3>Appearance</h3>
         <div class="setting">
           <div class="label"><span>Theme</span></div>
-          <div class="seg">
-            <button class:on={copy.theme === "dark"} onclick={() => (copy!.theme = "dark")}><Icon name="moon" size={13} />Dark</button>
-            <button class:on={copy.theme === "light"} onclick={() => (copy!.theme = "light")}><Icon name="sun" size={13} />Light</button>
-          </div>
+          <SegmentedControl label="Theme" options={themes} value={copy.theme} onchange={(v) => (copy!.theme = v)} />
         </div>
         <div class="setting">
           <div class="label"><span>Layout</span></div>
-          <div class="seg">
-            <button class:on={copy.layout === "horizontal"} onclick={() => (copy!.layout = "horizontal")}><Icon name="columns" size={13} />Response on the right</button>
-            <button class:on={copy.layout === "vertical"} onclick={() => (copy!.layout = "vertical")}><Icon name="rows" size={13} />Response below</button>
-          </div>
+          <SegmentedControl label="Layout" options={layouts} value={copy.layout} onchange={(v) => (copy!.layout = v)} />
         </div>
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>
@@ -142,7 +147,7 @@
           <Toggle ariaLabel="Verify server certificates" checked={copy.exec.verifyTls} onchange={(v) => (copy!.exec.verifyTls = v)} />
         </div>
         {#if !copy.exec.verifyTls}
-          <div class="banner warning inline"><Icon name="alert" /><span>Certificate verification is off. Responses could come from an impostor server — only use this for local development.</span></div>
+          <Banner severity="warning" inline class="tls-off">Certificate verification is off. Responses could come from an impostor server — only use this for local development.</Banner>
         {/if}
         {#each pathFields as f (f.key)}
           {@render pathRow(copy.exec, f)}
@@ -229,40 +234,12 @@
     width: 84px;
     text-align: right;
   }
-  .seg {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 6px;
-    background: var(--panel-3);
-    border: 1px solid var(--border);
-  }
-  .seg button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: none;
-    background: none;
-    color: var(--muted);
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .seg button.on {
-    background: var(--panel);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  }
   .note {
     margin: 4px 0 6px;
     font-size: 11.5px;
     line-height: 1.5;
   }
-  .banner.inline {
-    border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-    border-radius: var(--radius);
+  .body :global(.tls-off) {
     margin: 2px 0 6px;
-    line-height: 1.45;
   }
 </style>

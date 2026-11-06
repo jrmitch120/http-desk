@@ -3,6 +3,8 @@
   import { api, errorMessage } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import type { EnvironmentSet, EnvVar } from "../lib/types";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
@@ -167,7 +169,7 @@
           <div class="env" class:selected={selected === env.name} onclick={() => (selected = env.name)} ondblclick={() => renameEnv(env.name)} role="button" tabindex="0">
             <Icon name="layers" size={14} />
             <span class="ellipsis grow">{env.name}</span>
-            {#if activeEnv === env.name}<span class="active-pill">Active</span>{/if}
+            {#if activeEnv === env.name}<Badge tone="success">Active</Badge>{/if}
             <span class="count">{countOf(env.variables)}</span>
           </div>
         {:else}
@@ -208,10 +210,9 @@
       </div>
 
       {#if hasSecrets && set.privateFileIgnored === false}
-        <div class="banner warning">
-          <Icon name="alert" />
-          <span><span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.</span>
-        </div>
+        <Banner severity="warning">
+          <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
+        </Banner>
       {/if}
 
       <div class="table-wrap">
@@ -340,16 +341,6 @@
   .count {
     font-size: 11px;
     color: var(--faint);
-  }
-  .active-pill {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--success) 18%, transparent);
-    color: var(--success);
   }
   .divider {
     height: 1px;

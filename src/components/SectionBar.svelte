@@ -1,6 +1,7 @@
 <script lang="ts">
   // Header row for a request component with its enable/disable switch.
   import type { Snippet } from "svelte";
+  import Banner from "./Banner.svelte";
   import Toggle from "./Toggle.svelte";
 
   interface Props {
@@ -22,9 +23,9 @@
   {#if children}{@render children()}{/if}
 </div>
 {#if showToggle && !enabled}
-  <div class="off-note">
+  <Banner severity="warning" inline class="off-note">
     <strong>{title} disabled.</strong> Nothing here is sent; your configuration is kept in the file as comments and can be re-enabled anytime.
-  </div>
+  </Banner>
 {/if}
 
 <style>
@@ -40,14 +41,7 @@
     font-weight: 600;
     color: var(--text-2);
   }
-  .off-note {
-    font-size: 12px;
-    color: var(--warning);
-    background: color-mix(in srgb, var(--warning) 9%, transparent);
-    border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
-    border-radius: var(--radius-sm);
-    padding: 6px 10px;
+  :global(.off-note) {
     margin-bottom: 10px;
-    line-height: 1.5;
   }
 </style>

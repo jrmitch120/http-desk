@@ -37,11 +37,24 @@ let settings = {
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,
+  sidebarWidth: 280,
+  splitRatio: { horizontal: 0.5, vertical: 0.5 },
 };
+// Saved settings survive a reload of the page (like the real settings file), so
+// a test can check something is still applied after `page.reload()`. Each test
+// gets a fresh page, so it still starts from the defaults above.
+const SAVED_SETTINGS = "httpdesk-mock-settings";
+const saved = sessionStorage.getItem(SAVED_SETTINGS);
+if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-(window as unknown as { __mock: unknown }).__mock = { sent };
+(window as unknown as { __mock: unknown }).__mock = {
+  sent,
+  get settings() {
+    return clone(settings);
+  },
+};
 
 type Node = { name: string; path: string; kind: string; children?: Node[] };
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
@@ -80,6 +93,8 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
+// `?sendError=1`: every send fails as if the server were unreachable.
+const sendError = new URLSearchParams(location.search).get("sendError") === "1";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -92,6 +107,7 @@ mockIPC(
         return clone(settings);
       case "save_settings":
         settings = args.settings;
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
         return null;
       case "path_exists":
         return true;
@@ -147,6 +163,7 @@ mockIPC(
       case "send_request": {
         sent.push(clone(args.request));
         await delay(450);
+        if (sendError) throw "Connection refused (os error 61)";
         const r = args.request;
         if (r.url.includes("png")) {
           return {

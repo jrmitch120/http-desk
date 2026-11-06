@@ -1,5 +1,6 @@
 <script module lang="ts">
-  const viewByTab = new Map<string, { tab: string; mode: string }>();
+  type BodyView = "pretty" | "raw" | "preview";
+  const viewByTab = new Map<string, { tab: string; mode: BodyView }>();
 </script>
 
 <script lang="ts">
@@ -7,11 +8,14 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration, prettyJson, prettyXml, statusClass } from "../lib/http";
+  import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -20,7 +24,7 @@
 
   const saved = untrack(() => viewByTab.get(tab.id));
   let view = $state(saved?.tab ?? "body");
-  let mode = $state(saved?.mode ?? "pretty");
+  let mode = $state<BodyView>(saved?.mode ?? "pretty");
   let wrap = $state(false);
   let editor: Editor | undefined = $state();
   $effect(() => {
@@ -55,7 +59,12 @@
   const canPreview = $derived(["html", "image", "pdf", "media"].includes(kind));
   const isBinary = $derived(!!res && res.bodyText === null);
 
-  const effectiveMode = $derived(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
+  const effectiveMode = $derived<BodyView>(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
+  const viewOptions = $derived<{ value: BodyView; label: string }[]>([
+    ...(isBinary ? [] : [{ value: "pretty" as const, label: "Pretty" }]),
+    { value: "raw", label: isBinary ? "Hex" : "Raw" },
+    ...(canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),
+  ]);
 
   const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
 
@@ -127,37 +136,32 @@
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
-        <span class="pill cancelled">Cancelled</span>
+        <Badge size="md">Cancelled</Badge>
       {:else if res}
-        {#if run.cancelled}<span class="pill cancelled" use:tooltip={"The last send was cancelled; this is the response before it"}>Cancelled</span>{/if}
-        <span class="pill {statusClass(res.status)}" use:tooltip={statusTitle}>{res.status} {res.statusText}</span>
+        {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
+        <span class="tip" use:tooltip={statusTitle}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
         <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
         <button class="icon-btn" aria-label="Copy body" use:tooltip disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
-        <span class="pill s-5xx">Error</span>
+        <Badge size="md" tone="danger">Error</Badge>
       {/if}
     </div>
 
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <div class="error">
-        <Icon name="alert" size={22} />
-        <div>
-          <div class="err-title">Could not send request</div>
-          <div class="err-msg selectable mono">{run.error}</div>
-          <div class="muted small">Check the URL, the selected environment, and that the server is reachable.</div>
-        </div>
-      </div>
+      <Banner severity="error" inline heading="Could not send request" class="send-error">
+        <div class="err-msg selectable mono">{run.error}</div>
+        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
+      </Banner>
     {:else if res}
       {#if res.warnings.length || res.truncated}
-        <div class="banner warning">
-          <Icon name="alert" />
+        <Banner severity="warning">
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
-        </div>
+        </Banner>
       {/if}
       <nav class="subtabs">
         <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
@@ -169,15 +173,7 @@
 
       {#if view === "body"}
         <div class="toolbar">
-          <div class="seg">
-            {#if !isBinary}
-              <button class:active={effectiveMode === "pretty"} onclick={() => (mode = "pretty")}>Pretty</button>
-            {/if}
-            <button class:active={effectiveMode === "raw"} onclick={() => (mode = "raw")}>{isBinary ? "Hex" : "Raw"}</button>
-            {#if canPreview}
-              <button class:active={effectiveMode === "preview"} onclick={() => (mode = "preview")}>Preview</button>
-            {/if}
-          </div>
+          <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
           <span class="spacer"></span>
           {#if effectiveMode !== "preview"}
@@ -264,16 +260,9 @@
     font-weight: 600;
     font-size: 12.5px;
   }
-  .pill {
-    font-weight: 650;
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: color-mix(in srgb, currentColor 13%, transparent);
-  }
-  .pill.cancelled {
-    color: var(--muted);
+  /* Holds a badge's tooltip. */
+  .tip {
+    display: flex;
   }
   .metric {
     font-size: 12px;
@@ -303,24 +292,12 @@
       transform: rotate(360deg);
     }
   }
-  .error {
-    display: flex;
-    gap: 14px;
+  .viewer :global(.send-error) {
     margin: 18px;
-    padding: 16px;
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    background: color-mix(in srgb, var(--danger) 8%, transparent);
-    color: var(--danger);
-  }
-  .err-title {
-    font-weight: 600;
-    margin-bottom: 6px;
   }
   .err-msg {
     color: var(--text);
-    font-size: 12px;
-    margin-bottom: 8px;
+    margin: 4px 0 6px;
     word-break: break-word;
   }
   .toolbar {
@@ -329,27 +306,6 @@
     gap: 8px;
     padding: 6px 10px 6px 16px;
     flex: none;
-  }
-  .seg {
-    display: inline-flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-  .seg button {
-    border: none;
-    background: var(--panel-2);
-    padding: 3px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    color: var(--muted);
-  }
-  .seg button + button {
-    border-left: 1px solid var(--border);
-  }
-  .seg button.active {
-    background: var(--active);
-    color: var(--text);
   }
   .lang {
     font-size: 11px;

@@ -2,6 +2,10 @@
 //
 //   <button class="icon-btn" aria-label="Refresh" use:tooltip>…</button>   text = the aria-label
 //   <span use:tooltip={node.path}>…</span>                                  text = the argument
+//   <button use:tooltip={tooltip ?? null}>                                  null or "" = no tooltip
+//
+// (An undefined argument is the same as none, so a component forwarding an
+// optional prop passes `?? null` to avoid showing its aria-label.)
 //
 // The action only attaches listeners; one shared tooltip element
 // (TooltipHost.svelte, mounted once in App) shows the text for whichever
@@ -66,7 +70,7 @@ export function tooltip(node: HTMLElement, text?: string | null) {
   let current = text;
   // After a click, wait for the pointer to leave before showing it again (as native tooltips do).
   let clicked = false;
-  const textNow = () => current ?? node.getAttribute("aria-label") ?? "";
+  const textNow = () => (current === undefined ? (node.getAttribute("aria-label") ?? "") : (current ?? ""));
   const start = () => {
     const t = textNow();
     if (t) show(node, t);

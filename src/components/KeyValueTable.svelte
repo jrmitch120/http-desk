@@ -5,6 +5,7 @@
   import type { KeyValue } from "../lib/types";
   import { formatBulk, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
+  import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
 
@@ -119,13 +120,12 @@
     {#if toggles}
       <span class="c-check">
         {#if !bulk && items.length}
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allOn}
             indeterminate={!allOn && items.some((r) => r.enabled)}
-            onchange={(e) => items.forEach((r) => (r.enabled = e.currentTarget.checked))}
-            aria-label="Enable/disable all"
-            use:tooltip
+            onchange={(on) => items.forEach((r) => (r.enabled = on))}
+            label="Enable all"
+            tooltip="Enable/disable all"
           />
         {/if}
       </span>
@@ -149,7 +149,7 @@
         {#if toggles}
           <span class="c-check">
             {#if !ghost}
-              <input type="checkbox" checked={row.enabled} onchange={(e) => (items[i].enabled = e.currentTarget.checked)} aria-label={row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"} use:tooltip />
+              <Checkbox checked={row.enabled} onchange={(on) => (items[i].enabled = on)} label="Enable {row.name || namePlaceholder.toLowerCase()}" tooltip={row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"} />
             {/if}
           </span>
         {/if}
@@ -387,13 +387,6 @@
   }
   .section-off .kv-row:not(.ghost) {
     background: repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--panel-3) 35%, transparent) 6px 7px);
-  }
-  input[type="checkbox"] {
-    accent-color: var(--accent);
-    width: 14px;
-    height: 14px;
-    margin: 0;
-    cursor: pointer;
   }
   .kv-head .c-value {
     overflow: hidden;
