@@ -37,11 +37,24 @@ let settings = {
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,
+  sidebarWidth: 280,
+  splitRatio: { horizontal: 0.5, vertical: 0.5 },
 };
+// Saved settings survive a reload of the page (like the real settings file), so
+// a test can check something is still applied after `page.reload()`. Each test
+// gets a fresh page, so it still starts from the defaults above.
+const SAVED_SETTINGS = "httpdesk-mock-settings";
+const saved = sessionStorage.getItem(SAVED_SETTINGS);
+if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-(window as unknown as { __mock: unknown }).__mock = { sent };
+(window as unknown as { __mock: unknown }).__mock = {
+  sent,
+  get settings() {
+    return clone(settings);
+  },
+};
 
 type Node = { name: string; path: string; kind: string; children?: Node[] };
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
@@ -92,6 +105,7 @@ mockIPC(
         return clone(settings);
       case "save_settings":
         settings = args.settings;
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
         return null;
       case "path_exists":
         return true;
