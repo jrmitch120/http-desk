@@ -10,7 +10,7 @@
 
   function clean(s: EnvironmentSet): EnvironmentSet {
     const vars = (list: EnvVar[]) =>
-      list.filter((v) => v.name.trim() !== "").map((v) => ({ name: v.name.trim(), value: v.value, secret: v.secret }));
+      list.filter((v) => v.name.trim() !== "").map((v) => ({ name: v.name.trim(), value: v.value, secret: v.secret, jsonType: v.jsonType }));
     return {
       shared: vars(s.shared),
       environments: s.environments.map((e) => ({ name: e.name, variables: vars(e.variables) })),

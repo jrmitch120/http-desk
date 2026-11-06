@@ -26,7 +26,8 @@ let envSet = {
     { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:8765", secret: false }, { name: "token", value: "dev-token-123", secret: true }] },
     { name: "staging", variables: [{ name: "baseUrl", value: "https://staging.example.com", secret: false }] },
   ],
-  privateFileIgnored: true,
+  // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
+  privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
@@ -84,7 +85,7 @@ mockIPC(
       case "path_exists":
         return true;
       case "open_workspace":
-        return { root: ROOT, tree };
+        return { root: ROOT, tree, gitignoreUpdated: false };
       case "get_tree":
         return tree;
       case "load_environments":

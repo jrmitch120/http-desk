@@ -20,7 +20,8 @@ const api = vi.hoisted(() => ({
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
 }));
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests } = api;
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments } =
+  api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -437,6 +438,27 @@ describe("startup", () => {
     expect(app.settings?.recentWorkspaces).toEqual(["/ws"]);
     expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
     expect(app.starting).toBe(false);
+  });
+});
+
+describe("opening a workspace", () => {
+  const tree = { name: "ws", path: "/ws", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    app.toasts = [];
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+  });
+
+  it("tells the user when it added the private env file to .gitignore", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: true });
+    await app.openWorkspace("/ws");
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["info", "Added http-client.private.env.json to .gitignore"]]);
+  });
+
+  it("stays quiet when .gitignore was left alone", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: false });
+    await app.openWorkspace("/ws");
+    expect(app.toasts).toEqual([]);
   });
 });
 
