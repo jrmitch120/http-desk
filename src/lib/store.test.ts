@@ -529,6 +529,15 @@ describe("theme", () => {
     await start(undefined);
     expect(applied()).toBe("light");
   });
+
+  it("treats an unknown theme in a hand-edited settings file as System, as the start-up script does", async () => {
+    osAppearance(false);
+    await start("sepia" as AppSettings["theme"]);
+    expect(app.themeChoice).toBe("system");
+    expect(applied()).toBe("light");
+    expect(app.effectiveTheme).toBe("light");
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+  });
 });
 
 describe("toasts", () => {

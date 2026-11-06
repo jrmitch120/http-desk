@@ -86,7 +86,7 @@
         <h3>Appearance</h3>
         <div class="setting">
           <div class="label"><span>Theme</span></div>
-          <SegmentedControl label="Theme" options={THEMES} value={settings.theme} onchange={(v) => set({ theme: v })} />
+          <SegmentedControl label="Theme" options={THEMES} value={app.themeChoice} onchange={(v) => set({ theme: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Layout</span></div>

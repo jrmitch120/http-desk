@@ -90,8 +90,11 @@ class AppStore {
   /** Whether the OS appearance is dark, which is what the System theme follows. */
   private systemDark = $state(true);
   private stopWatchingSystem: (() => void) | null = null;
-  /** The theme chosen in settings (System for new installs). */
-  themeChoice = $derived<AppSettings["theme"]>(this.settings?.theme ?? "system");
+  /** The theme chosen in settings: System for new installs, and for anything
+   *  unknown in a hand-edited settings file (as theme.rs and theme-boot.js do). */
+  themeChoice = $derived<AppSettings["theme"]>(
+    this.settings?.theme === "light" || this.settings?.theme === "dark" ? this.settings.theme : "system",
+  );
   /** The theme in effect, with System resolved through the OS appearance. */
   effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
   /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
