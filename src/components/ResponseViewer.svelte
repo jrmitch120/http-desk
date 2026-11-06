@@ -112,6 +112,17 @@
     }
   }
 
+  // The viewer's tabs. Adding one is a line here plus its panel below. A
+  // `count` shows after the label; leave it out for none, and pass 0 only where
+  // an empty tab says something (no headers at all is worth knowing).
+  const tabs = $derived<SegmentedOption[]>([
+    { value: "body", label: "Body" },
+    { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    { value: "request", label: "Request" },
+  ]);
+  // A remembered tab that this response doesn't have falls back to Body.
+  const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
+
   const statusTitle = $derived(res ? `${res.httpVersion} · final URL ${res.url}` : "");
   const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
@@ -163,15 +174,11 @@
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
         </Banner>
       {/if}
-      <nav class="subtabs">
-        <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
-        <button class="subtab" class:active={view === "headers"} onclick={() => (view = "headers")}>
-          <span class="label">Headers</span><span class="count">{res.headers.length}</span>
-        </button>
-        <button class="subtab" class:active={view === "request"} onclick={() => (view = "request")}><span class="label">Request</span></button>
-      </nav>
+      <div class="tabs">
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view = t)} />
+      </div>
 
-      {#if view === "body"}
+      {#if current === "body"}
         <div class="toolbar">
           <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
@@ -206,7 +213,7 @@
             <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} />
           {/if}
         </div>
-      {:else if view === "headers"}
+      {:else if current === "headers"}
         <div class="table-wrap">
           <table>
             <tbody>
@@ -299,6 +306,12 @@
     color: var(--text);
     margin: 4px 0 6px;
     word-break: break-word;
+  }
+  .tabs {
+    display: flex;
+    padding: 6px 10px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
   }
   .toolbar {
     display: flex;

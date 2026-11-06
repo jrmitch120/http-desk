@@ -4,6 +4,9 @@
     label: string;
     /** An Icon name shown before the label. */
     icon?: string;
+    /** A number shown after the label (how many items the option holds). Left
+     *  out, nothing shows; pass 0 only where "none" is worth saying. */
+    count?: number;
   }
 </script>
 
@@ -54,6 +57,8 @@
       onclick={() => o.value !== value && onchange(o.value)}
     >
       {#if o.icon}<Icon name={o.icon} size={13} />{/if}{o.label}
+      <!-- The space keeps the name "Headers 4" for screen readers; flex layout drops it visually. -->
+      {#if o.count !== undefined}{" "}<span class="count">{o.count}</span>{/if}
     </button>
   {/each}
 </div>
@@ -92,6 +97,11 @@
     background: var(--panel);
     color: var(--text);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+  .count {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--success);
   }
   button:focus-visible {
     outline: var(--focus-ring);
