@@ -20,7 +20,10 @@ pub struct HttpFile {
     pub requests: Vec<Request>,
     /// Verbatim non-request text after the last request.
     pub trailing: String,
+    /// Dominant line ending of the original text; the whole file is saved with it.
     pub line_ending: LineEnding,
+    /// The file started with a UTF-8 byte order mark (stripped for parsing, written back on save).
+    pub bom: bool,
 }
 
 /// Content before the first request: `@var = value` lines plus other lines
@@ -130,6 +133,9 @@ pub struct Auth {
     pub key_name: String,
     pub key_value: String,
     pub key_location: ApiKeyLocation,
+    /// `Authorization` header value as written (Basic / Bearer). Re-emitted while it
+    /// still parses to the same credentials, so e.g. pre-encoded base64 is kept.
+    pub raw: Option<String>,
 }
 
 impl Default for Auth {
@@ -143,6 +149,7 @@ impl Default for Auth {
             key_name: String::new(),
             key_value: String::new(),
             key_location: ApiKeyLocation::Header,
+            raw: None,
         }
     }
 }
@@ -184,6 +191,23 @@ impl Body {
     }
 }
 
+/// An unrecognized header-area line, kept verbatim and in place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExtraLine {
+    pub text: String,
+    /// What the line sat directly above: a header name, or `&name` for a disabled
+    /// query param. Emitted before the first such line; `None` (or no longer
+    /// present) means after the last header.
+    pub before: Option<String>,
+}
+
+impl ExtraLine {
+    pub fn new(text: impl Into<String>) -> Self {
+        ExtraLine { text: text.into(), before: None }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Request {
@@ -204,8 +228,8 @@ pub struct Request {
     pub headers: KvSection,
     pub auth: Auth,
     pub body: Body,
-    /// Unrecognized lines in the header area, emitted verbatim.
-    pub extra_lines: Vec<String>,
+    /// Unrecognized lines in the header area (comments etc.), emitted verbatim.
+    pub extra_lines: Vec<ExtraLine>,
     /// Verbatim response handler / output redirect (`> {% … %}`, `>> file`).
     pub response_handler: Option<String>,
     /// Verbatim non-request blocks that precede this request in the file.

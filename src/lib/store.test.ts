@@ -19,6 +19,7 @@ function file(...names: string[]): HttpFile {
     requests: names.map((n) => ({ ...newRequest(n), url: `https://example.com/${n}` })),
     trailing: "",
     lineEnding: "lf",
+    bom: false,
   };
 }
 
