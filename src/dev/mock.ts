@@ -78,6 +78,8 @@ function removeNode(path: string) {
 }
 // `?trash=unavailable` simulates a volume without a trash: `delete_path` refuses.
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
+// `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
+const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -183,8 +185,12 @@ mockIPC(
           ],
           warnings: ["Unresolved external $ref: https://example.com/common.yaml#/Error"],
         };
-      case "openapi_generate":
-        return { files: [`${ROOT}/swagger-petstore/pet.http`], conflicts: [], written: !args.dryRun, environments: ["production"], envDir: ROOT, gitignoreUpdated: false, warnings: [] };
+      case "openapi_generate": {
+        const files = [`${ROOT}/swagger-petstore/pet.http`];
+        const conflicts = openapiConflicts ? files : [];
+        const written = !args.dryRun && (args.overwrite || !conflicts.length);
+        return { files, conflicts, written, environments: ["production"], envDir: ROOT, gitignoreUpdated: false, warnings: [] };
+      }
       default:
         return null; // plugins (dialog, window title, opener), cancel, etc.
     }
