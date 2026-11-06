@@ -3,7 +3,8 @@
   // Every badge shares one type, corner radius and padding per size; only the
   // colour changes. `method` and `status` pick their colour from the method or
   // status; otherwise `tone` does. Method badges are as wide as six letters, and
-  // show at most six, so they line up in lists. To adjust one at a call site,
+  // show at most six, so they line up in lists; pass the method as `children` to
+  // show it in full (the OpenAPI importer does). To adjust one at a call site,
   // pass a `class` and style it with `:global(...)`.
   import type { Snippet } from "svelte";
   import { methodClass, statusClass } from "../lib/http";

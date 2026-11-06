@@ -263,7 +263,7 @@
                 {#if !collapsed[g.name]}
                   {#each g.ops as op (op.id)}
                     <Checkbox class="op{op.deprecated ? ' deprecated' : ''}" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)}>
-                      <Badge method={op.method} />
+                      <Badge method={op.method}>{op.method}</Badge>
                       <span class="path mono ellipsis" use:tooltip={op.path}>{op.path}</span>
                       <span class="summary muted ellipsis" use:tooltip={op.summary ?? op.operationId}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
