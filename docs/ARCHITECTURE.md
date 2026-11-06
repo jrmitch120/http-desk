@@ -567,6 +567,11 @@ Decisions made during implementation, beyond the plan above:
   once more with a handshake that records it and aborts, and checks it itself
   (`tls_probe.rs`). That probe connects directly, so behind a proxy it may find nothing
   and the reason stays the verifier's.
+* **Download progress:** while a body downloads, the shell emits `send-progress`
+  events (`{runId, received}`, raw bytes on the wire so far) for the in-flight send. The
+  core reports at most once per 100 ms (`exec::PROGRESS_INTERVAL`) however small the
+  chunks, and never after the send returns. The viewer shows the count next to the
+  loading spinner; it goes away when the response completes, fails or is cancelled.
 * **Auto Content-Type:** choosing a body mode sets the `Content-Type` header (an
   ordinary, visible header). It replaces a type HttpDesk itself sets for some mode but
   keeps a custom one, except that multipart always sets `multipart/form-data;
@@ -613,11 +618,11 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported) and transferred size |
+| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported), transferred size, and rate-limited download progress |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty |
 | Env, vars, workspace | Unit tests in each module |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, environments, OpenAPI generation, confinement, deleting, Windows paths, and the file watcher (including self-write suppression) |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), and `send-progress` events for a trickled body |
 | Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings and hints by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |

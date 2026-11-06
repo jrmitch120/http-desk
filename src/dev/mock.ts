@@ -3,6 +3,7 @@
 // (`cargo run -p httpdesk-core --example dump -- file.http`). Never bundled in
 // production builds (imported behind `import.meta.env.DEV`).
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 
@@ -169,6 +170,9 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=bigint`: the JSON response carries an ID above 2^53 and a `10.50`.
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
 const responseKind = new URLSearchParams(location.search).get("response");
+// `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
+// events (bytes so far) every 100 ms, like the shell emits for a slow download.
+const slowDownload = new URLSearchParams(location.search).get("download") === "slow";
 // `?status=422`: the JSON response comes back with this status code instead.
 const statusParam = Number(new URLSearchParams(location.search).get("status")) || null;
 const reasonPhrases: Record<number, string> = { 200: "OK", 201: "Created", 404: "Not Found", 422: "Unprocessable Content", 500: "Internal Server Error" };
@@ -277,7 +281,14 @@ mockIPC(
       }
       case "send_request": {
         sent.push(clone(args.request));
-        await delay(450);
+        if (slowDownload) {
+          for (let i = 1; i <= 20; i++) {
+            await delay(100);
+            await emit("send-progress", { runId: args.runId, received: i * 6_000 });
+          }
+        } else {
+          await delay(450);
+        }
         if (sendError) throw clone(sendError);
         const r = args.request;
         if (r.url.includes("png") && bigBinary) {

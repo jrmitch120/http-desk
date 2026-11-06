@@ -629,6 +629,23 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
 }
 
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
+    execute_with_progress(p, settings, ssl, |_| {}).await
+}
+
+/// The shortest gap between two progress reports, so a body arriving in many
+/// small chunks doesn't flood the UI (at most ~10 reports a second).
+pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// [`execute`], calling `on_progress` with the body bytes received on the wire
+/// so far while the body downloads. Reports come at most once per
+/// [`PROGRESS_INTERVAL`], each larger than the last, and none after the
+/// function returns.
+pub async fn execute_with_progress(
+    p: PreparedRequest,
+    settings: &ExecSettings,
+    ssl: &SslConfig,
+    mut on_progress: impl FnMut(usize) + Send,
+) -> Result<ExecOutcome, ExecError> {
     let client = build_client(&p, settings, ssl)?;
     let method =
         reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
@@ -672,6 +689,7 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
     // A body that fails to decode is classified `other`, with body.rs's message.
     let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
     let as_received = unsupported.is_some();
+    let mut last_report: Option<Instant> = None;
     loop {
         let chunk = match resp.chunk().await {
             Ok(Some(chunk)) => chunk,
@@ -680,6 +698,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         };
         if !reader.push(&chunk).map_err(ExecError::Other)? {
             break;
+        }
+        // The first chunk reports at once; after that, once per interval.
+        if last_report.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) && !chunk.is_empty() {
+            last_report = Some(Instant::now());
+            on_progress(reader.transferred());
         }
     }
     let body::ReceivedBody { bytes: body, transferred, truncated } = reader.finish().map_err(ExecError::Other)?;

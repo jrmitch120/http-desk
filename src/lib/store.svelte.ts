@@ -37,6 +37,8 @@ export interface RunState {
   error?: SendError;
   /** The last send was cancelled; `response` is still the one before it. */
   cancelled?: boolean;
+  /** Body bytes received on the wire so far, while loading (`send-progress` events). */
+  received?: number;
 }
 
 export interface Toast {
@@ -147,6 +149,9 @@ class AppStore {
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
+    await listen<{ runId: string; received: number }>("send-progress", (e) =>
+      this.onSendProgress(e.payload.runId, e.payload.received),
+    );
     // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
     // turns those into a close request; see quit.rs). With nothing unsaved the
     // window closes at once, which quits the app.
@@ -838,6 +843,13 @@ class AppStore {
     } finally {
       this.cancelled.delete(runId);
     }
+  }
+
+  /** Records the bytes received so far for a send that is still loading; a
+   *  late event for a finished or replaced run is ignored. */
+  onSendProgress(runId: string, received: number) {
+    const run = Object.values(this.runs).find((r) => r.runId === runId);
+    if (run?.loading) run.received = received;
   }
 
   /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */
