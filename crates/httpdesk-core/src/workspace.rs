@@ -31,8 +31,18 @@ pub fn is_http_file(path: &Path) -> bool {
         .is_some_and(|e| HTTP_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-fn is_ignored_dir(name: &str) -> bool {
+/// Whether the explorer skips a folder with this name: dot-folders (`.git`,
+/// `.venv`, `.cache`, …), dependencies, build output, virtualenvs and caches.
+/// The watcher uses the same rule, so churn the explorer doesn't show causes no reloads.
+pub fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || IGNORED_DIRS.contains(&name)
+}
+
+/// Whether `path` lies inside an ignored folder below `root`. The folders `root`
+/// itself sits in don't count, nor does `path`'s own name.
+pub fn inside_ignored_dir(root: &Path, path: &Path) -> bool {
+    let Some(dirs) = path.strip_prefix(root).ok().and_then(Path::parent) else { return false };
+    dirs.components().any(|c| is_ignored_dir(&c.as_os_str().to_string_lossy()))
 }
 
 /// Lists directories and `.http`/`.rest` files under `root`, directories first.

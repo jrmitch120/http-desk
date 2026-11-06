@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -32,12 +32,16 @@ export interface RunState {
   startedAt: number;
   response?: HttpResponse;
   error?: string;
+  /** The last send was cancelled; `response` is still the one before it. */
+  cancelled?: boolean;
 }
 
 export interface Toast {
   id: string;
   kind: "info" | "success" | "error";
   message: string;
+  /** Hovered or has selected text: not auto-dismissed (see `holdToast`). */
+  held?: boolean;
 }
 
 export interface DialogButton {
@@ -61,6 +65,9 @@ function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
 }
 
+/** Identifies a request across reloads and searches: name + method + URL. */
+const signature = (name: string, method: string, url: string) => `${name}\u0000${method}\u0000${url}`;
+
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
   return r._key;
@@ -80,6 +87,9 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  /** True until `init` has finished reopening the last workspace, so the
+   *  Welcome screen doesn't flash first. */
+  starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
 
@@ -100,12 +110,22 @@ class AppStore {
 
   async init() {
     try {
+      await this.start();
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async start() {
+    try {
       this.settings = await api.getSettings();
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
     this.applyTheme();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
+    await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
+    await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
     const win = getCurrentWindow();
     await win.onCloseRequested(async (e) => {
       const dirty = this.dirtyDocs();
@@ -123,19 +143,29 @@ class AppStore {
       }
       await win.destroy();
     });
-    const last = this.settings?.recentWorkspaces[0];
-    if (last && (await api.pathExists(last).catch(() => false))) await this.openWorkspace(last);
+    // Forget recent workspaces whose folders are gone, then reopen the last one.
+    const recent = this.settings?.recentWorkspaces ?? [];
+    const exists = await Promise.all(recent.map((p) => api.pathExists(p).catch(() => true)));
+    if (exists.includes(false)) await this.updateSettings({ recentWorkspaces: recent.filter((_, i) => exists[i]) });
+    if (recent.length && exists[0]) await this.openWorkspace(recent[0]);
   }
 
   applyTheme() {
     document.documentElement.dataset.theme = this.settings?.theme ?? "dark";
   }
 
-  async updateSettings(patch: Partial<AppSettings>) {
-    if (!this.settings) return;
+  /** Applies and saves settings; a failed save shows an error toast and returns false. */
+  async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
+    if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
-    await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+    try {
+      await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+      return true;
+    } catch (e) {
+      this.toast("error", `Could not save settings: ${errorMessage(e)}`);
+      return false;
+    }
   }
 
   async openWorkspace(path: string) {
@@ -148,6 +178,8 @@ class AppStore {
     }
     try {
       const info = await api.openWorkspace(path);
+      this.missingRoot = null;
+      if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
@@ -165,8 +197,11 @@ class AppStore {
     }
   }
 
+  /** A workspace folder that was deleted or moved while open; the user has been told. */
+  private missingRoot: string | null = null;
+
   async refreshTree() {
-    if (!this.root) return;
+    if (!this.root || this.root === this.missingRoot) return;
     try {
       this.tree = await api.getTree();
     } catch (e) {
@@ -313,7 +348,7 @@ class AppStore {
     if (old) {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
       const unused = new Map([...old.file.requests, ...old.orphans].map((r) => [r._key!, r]));
-      const sig = (r: Request) => `${r.name}\u0000${r.method}\u0000${r.url}`;
+      const sig = (r: Request) => signature(r.name, r.method, r.url);
       const byName = (r: Request) => r.name;
       for (const same of [sig, byName]) {
         for (const r of file.requests) {
@@ -376,6 +411,59 @@ class AppStore {
     }
   }
 
+  /** Handles a `workspace-missing` event: the open workspace folder was deleted or moved. */
+  onWorkspaceMissing(root: string) {
+    if (root !== this.root || root === this.missingRoot) return;
+    this.missingRoot = root;
+    this.toast("error", `The workspace folder "${basename(root)}" was deleted or moved. Open it again from where it is now.`);
+  }
+
+  /** Handles a `workspace-watch-error` event. */
+  onWatchError(message: string) {
+    this.toast("error", `Watching the workspace for changes failed: ${message}. Changes made outside HttpDesk may not show up.`);
+  }
+
+  // ---------------------------------------------------------------- search
+
+  /** Case-insensitive search over request names, methods, URLs and file names.
+   *  Open documents are searched as they are on screen (unsaved edits
+   *  included); every other file is searched on disk by the backend. */
+  async searchRequests(query: string): Promise<SearchHit[]> {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    const onDisk = await api.searchRequests(query);
+    const open = Object.values(this.docs).filter((d) => !d.missing);
+    const hits = onDisk.filter((h) => !open.some((d) => d.path === h.path));
+    for (const doc of open) {
+      const file = basename(doc.path).toLowerCase();
+      doc.file.requests.forEach((r, index) => {
+        const name = displayName(r);
+        if (terms.every((t) => `${name} ${r.method} ${r.url} ${file}`.toLowerCase().includes(t))) {
+          hits.push({ path: doc.path, index, name, method: r.method, url: r.url });
+        }
+      });
+    }
+    // Explorer order, as the backend returns them; files not in the tree go last.
+    const order = new Map<string, number>();
+    const walk = (n: TreeNode) => (n.kind === "file" ? order.set(n.path, order.size) : n.children?.forEach(walk));
+    if (this.tree) walk(this.tree);
+    const rank = (h: SearchHit) => order.get(h.path) ?? order.size;
+    return hits.sort((a, b) => rank(a) - rank(b) || (a.path === b.path ? a.index - b.index : 0));
+  }
+
+  /** Opens the request a search result points at. It is found by name + method
+   *  + URL, since unsaved edits may have moved it since the search; `index`
+   *  only breaks ties and is the fallback when nothing matches. */
+  async openSearchHit(hit: SearchHit) {
+    const doc = await this.loadDoc(hit.path);
+    if (!doc) return;
+    const want = signature(hit.name, hit.method, hit.url);
+    const reqs = doc.file.requests;
+    const same = (r: Request | undefined) => !!r && signature(displayName(r), r.method, r.url) === want;
+    const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
+    if (req) await this.openRequest(hit.path, { key: req._key });
+  }
+
   // ---------------------------------------------------------------- tabs
 
   async openRequest(path: string, which: { key?: string; index?: number }) {
@@ -406,9 +494,11 @@ class AppStore {
     }
   }
 
-  async closeTab(id: string) {
+  /** Closes a tab, asking first if it has unsaved edits. Returns false if it stays open
+   *  (the user cancelled or the save failed). */
+  async closeTab(id: string): Promise<boolean> {
     const tab = this.tabs.find((t) => t.id === id);
-    if (!tab) return;
+    if (!tab) return true;
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
@@ -416,11 +506,19 @@ class AppStore {
         { label: "Don't save", value: "discard", danger: true },
         { label: "Save", value: "save", primary: true },
       ]);
-      if (r.button === "cancel") return;
-      if (r.button === "save" && !(await this.saveTab(tab))) return;
+      if (r.button === "cancel") return false;
+      if (r.button === "save" && !(await this.saveTab(tab))) return false;
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     this.removeTab(id);
+    return true;
+  }
+
+  /** Closes tabs one after another (Close all / Close others), asking about each
+   *  unsaved one in turn. Stops at the first tab that stays open; the rest stay too. */
+  async closeTabs(ids: string[]): Promise<boolean> {
+    for (const id of ids) if (!(await this.closeTab(id))) return false;
+    return true;
   }
 
   revertRequest(path: string, key: string) {
@@ -590,7 +688,8 @@ class AppStore {
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading) return;
     const runId = uid();
-    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: this.runs[tabId]?.response };
+    const previous = this.runs[tabId]?.response;
+    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({
         runId,
@@ -601,13 +700,23 @@ class AppStore {
       });
       if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
     } catch (e) {
-      if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+      if (this.runs[tabId]?.runId !== runId) return;
+      this.runs[tabId] = this.cancelled.delete(runId)
+        ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
+        : { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+    } finally {
+      this.cancelled.delete(runId);
     }
   }
 
+  /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */
+  private cancelled = new Set<string>();
+
   async cancel(tabId: string) {
     const run = this.runs[tabId];
-    if (run?.loading) await api.cancelRequest(run.runId);
+    if (!run?.loading) return;
+    this.cancelled.add(run.runId);
+    await api.cancelRequest(run.runId);
   }
 
   // ---------------------------------------------------------------- environments
@@ -638,33 +747,52 @@ class AppStore {
   toast(kind: Toast["kind"], message: string) {
     const id = uid();
     this.toasts.push({ id, kind, message });
-    setTimeout(() => (this.toasts = this.toasts.filter((t) => t.id !== id)), kind === "error" ? 7000 : 3500);
+    const expire = () => {
+      // Held toasts (hovered, or with text selected) wait until released.
+      if (this.toasts.find((t) => t.id === id)?.held) setTimeout(expire, 1000);
+      else this.toasts = this.toasts.filter((t) => t.id !== id);
+    };
+    setTimeout(expire, kind === "error" ? 7000 : 3500);
   }
 
-  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+  /** Keeps a toast on screen while the user hovers it or selects its text. */
+  holdToast(id: string, held: boolean) {
+    const t = this.toasts.find((t) => t.id === id);
+    if (t) t.held = held;
+  }
+
+  /** Dialogs waiting for the one on screen (`dialog`) to be answered, oldest first. */
+  private dialogQueue: DialogState[] = [];
+
+  /** Shows the dialog, or queues it behind the one on screen. */
+  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string }> {
     return new Promise((resolve) => {
-      this.dialog = { title, message, buttons, resolve };
+      const next = { ...d, resolve };
+      if (this.dialog) this.dialogQueue.push(next);
+      else this.dialog = next;
     });
   }
 
+  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+    return this.openDialog({ title, message, buttons });
+  }
+
   async prompt(title: string, value: string, placeholder?: string, selectStem = false): Promise<string | null> {
-    const r = await new Promise<{ button: string; value: string }>((resolve) => {
-      this.dialog = {
-        title,
-        input: { value, placeholder, selectStem },
-        buttons: [
-          { label: "Cancel", value: "cancel" },
-          { label: "OK", value: "ok", primary: true },
-        ],
-        resolve,
-      };
+    const r = await this.openDialog({
+      title,
+      input: { value, placeholder, selectStem },
+      buttons: [
+        { label: "Cancel", value: "cancel" },
+        { label: "OK", value: "ok", primary: true },
+      ],
     });
     return r.button === "ok" ? r.value : null;
   }
 
+  /** Answers the dialog on screen and shows the next queued one, if any. */
   closeDialog(button: string, value = "") {
     const d = this.dialog;
-    this.dialog = null;
+    this.dialog = this.dialogQueue.shift() ?? null;
     d?.resolve({ button, value });
   }
 }

@@ -34,10 +34,6 @@ export function newRequest(name = "New request"): Request {
   };
 }
 
-export function emptyFile(): HttpFile {
-  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf", bom: false };
-}
-
 export function displayName(req: Request): string {
   if (req.name.trim()) return req.name.trim();
   const n = req.directives.find((d) => d.name === "name")?.value;
@@ -205,6 +201,35 @@ export function applyUrlText(req: Request, text: string): void {
   req.query.items = next;
 }
 
+// ------------------------------------------------------------------ bulk edit
+
+/** Key/value rows as bulk-edit text: one `name<sep> value` per line, `//` = disabled. */
+export function formatBulk(items: KeyValue[], separator: string, toggles: boolean): string {
+  return items
+    .filter((r) => r.name || r.value)
+    .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
+    .join("\n");
+}
+
+/** Bulk-edit text back to rows. Descriptions come from `previous` (matched by name),
+ *  which should be the rows as they were when bulk editing started. */
+export function parseBulk(text: string, separator: string, previous: KeyValue[]): KeyValue[] {
+  const docs = [...previous];
+  return text
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => {
+      const disabled = l.trimStart().startsWith("//");
+      const line = disabled ? l.trimStart().slice(2) : l;
+      const idx = line.indexOf(separator);
+      const name = (idx < 0 ? line : line.slice(0, idx)).trim();
+      const value = idx < 0 ? "" : line.slice(idx + 1).trim();
+      const at = docs.findIndex((p) => p.name === name);
+      const description = at < 0 ? undefined : docs.splice(at, 1)[0].description;
+      return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
+    });
+}
+
 // ------------------------------------------------------------------ headers
 
 export function findHeader(req: Request, name: string): KeyValue | undefined {
@@ -230,12 +255,24 @@ export const MODE_CONTENT_TYPES: Partial<Record<BodyMode, string>> = {
 
 const AUTO_TYPES = new Set(Object.values(MODE_CONTENT_TYPES).concat(["text/xml"]));
 
-/** Switches body mode and keeps Content-Type in sync, like Postman. */
+/** The Content-Type `setBodyMode` sets for `mode`: what HttpDesk adds by itself.
+ *  `current` supplies the boundary of a multipart header. */
+function autoContentType(mode: BodyMode, current: string): string | undefined {
+  if (mode === "multipart") return `multipart/form-data; boundary=${boundaryOf(current) ?? "HttpDeskBoundary"}`;
+  return MODE_CONTENT_TYPES[mode];
+}
+
+/** Switches body mode and keeps Content-Type in sync, like Postman. Switching to
+ *  none drops a Content-Type HttpDesk added itself, but not one the user typed. */
 export function setBodyMode(req: Request, mode: BodyMode): void {
   const prev = req.body.mode;
   req.body.mode = mode;
   const ct = findHeader(req, "content-type");
   const wanted = MODE_CONTENT_TYPES[mode];
+  if (mode === "none") {
+    if (ct && ct.value === autoContentType(prev, ct.value)) req.headers.items.splice(req.headers.items.indexOf(ct), 1);
+    return;
+  }
   if (mode === "multipart") {
     const boundary = boundaryOf(ct?.value ?? "") ?? "HttpDeskBoundary";
     setHeader(req, "Content-Type", `multipart/form-data; boundary=${boundary}`);
@@ -396,11 +433,8 @@ export function setDirective(req: Request, name: string, value: string | null): 
 
 // ------------------------------------------------------------------ variables
 
+/** A `{{name}}` reference; group 1 is the name. Global: use with matchAll. */
 export const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
-
-export function findVariables(text: string): string[] {
-  return [...text.matchAll(VAR_RE)].map((m) => m[1]);
-}
 
 /** All file-scoped variables: header + every request's `@var` lines. */
 export function fileVariables(file: HttpFile): Variable[] {

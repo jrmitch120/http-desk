@@ -4,7 +4,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecSettings, HttpResponse};
@@ -12,12 +11,12 @@ use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
 use httpdesk_core::{HttpFile, Request, Variable};
-use notify_debouncer_mini::{new_debouncer, notify::RecommendedWatcher, notify::RecursiveMode, DebounceEventResult, Debouncer};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 mod confine;
 mod self_writes;
+mod watcher;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -58,7 +57,7 @@ impl Default for AppSettings {
 #[derive(Default)]
 struct AppState {
     root: Mutex<Option<PathBuf>>,
-    watcher: Mutex<Option<Debouncer<RecommendedWatcher>>>,
+    watcher: Mutex<Option<watcher::Watcher>>,
     /// What our own file operations left on disk, to ignore their watcher events.
     self_writes: SelfWrites,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -79,8 +78,17 @@ impl AppState {
     }
 }
 
-/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs, tests).
+/// Managed state that gives one app instance its own config folder. The IPC tests
+/// use it because `HTTPDESK_CONFIG_DIR` is shared by every app in the process.
+#[cfg(test)]
+struct ConfigDir(PathBuf);
+
+/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs).
 fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = app.try_state::<ConfigDir>() {
+        return Some(dir.0.join("settings.json"));
+    }
     let dir = std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
 }
@@ -103,43 +111,8 @@ fn write_settings(path: &Path, settings: &AppSettings) -> std::io::Result<()> {
 struct WorkspaceInfo {
     root: PathBuf,
     tree: TreeNode,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChangeEvent {
-    paths: Vec<PathBuf>,
-}
-
-fn is_watched_noise(path: &Path) -> bool {
-    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    name.ends_with(".httpdesk-tmp")
-        || path.components().any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "node_modules" | "target")))
-}
-
-fn start_watcher<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, root: &Path) -> CmdResult<()> {
-    let app = app.clone();
-    let self_writes = state.self_writes.clone();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: DebounceEventResult| {
-        let Ok(events) = res else { return };
-        let mut paths: Vec<PathBuf> = Vec::new();
-        for ev in events {
-            if is_watched_noise(&ev.path) || paths.contains(&ev.path) {
-                continue;
-            }
-            if self_writes.is_own(&ev.path) {
-                continue;
-            }
-            paths.push(ev.path);
-        }
-        if !paths.is_empty() {
-            let _ = app.emit("workspace-changed", ChangeEvent { paths });
-        }
-    })
-    .map_err(err)?;
-    debouncer.watcher().watch(root, RecursiveMode::Recursive).map_err(err)?;
-    *state.watcher.lock().unwrap() = Some(debouncer);
-    Ok(())
+    /// Opening added the private env file to the workspace `.gitignore`.
+    gitignore_updated: bool,
 }
 
 #[tauri::command]
@@ -149,16 +122,18 @@ fn open_workspace<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppStat
         return Err(format!("{} is not a directory", root.display()));
     }
     let tree = workspace::tree(&root).map_err(err)?;
-    *state.watcher.lock().unwrap() = None;
-    start_watcher(&app, &state, &root)?;
+    let watcher = watcher::start(&app, state.self_writes.clone(), &root)?;
+    *state.watcher.lock().unwrap() = Some(watcher);
     *state.root.lock().unwrap() = Some(root.clone());
+    // Covers private env files created before HttpDesk handled workspaces inside a repo.
+    let gitignore_updated = env::ensure_gitignored(&root).unwrap_or(false);
 
     let mut settings = state.settings.lock().unwrap();
     settings.recent_workspaces.retain(|p| p != &root);
     settings.recent_workspaces.insert(0, root.clone());
     settings.recent_workspaces.truncate(10);
     persist_settings(&app, &settings);
-    Ok(WorkspaceInfo { root, tree })
+    Ok(WorkspaceInfo { root, tree, gitignore_updated })
 }
 
 #[tauri::command]
