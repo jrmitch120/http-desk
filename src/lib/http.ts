@@ -25,7 +25,7 @@ export function newRequest(name = "New request"): Request {
     httpVersion: null,
     query: { enabled: true, items: [] },
     headers: { enabled: true, items: [] },
-    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header" },
+    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header", raw: null },
     body: { enabled: true, mode: "none", text: "" },
     extraLines: [],
     responseHandler: null,
@@ -35,7 +35,7 @@ export function newRequest(name = "New request"): Request {
 }
 
 export function emptyFile(): HttpFile {
-  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf" };
+  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf", bom: false };
 }
 
 export function displayName(req: Request): string {
