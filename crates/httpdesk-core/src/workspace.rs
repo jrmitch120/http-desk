@@ -123,8 +123,25 @@ pub fn search(root: &Path, query: &str) -> Vec<SearchHit> {
     hits
 }
 
+/// Follows a chain of symlinks to the file it ends at (which may not exist yet).
+/// Paths that aren't symlinks are returned unchanged.
+pub fn resolve_symlinks(path: &Path) -> PathBuf {
+    let mut path = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&path) else { break };
+        path = match path.parent() {
+            Some(parent) if link.is_relative() => parent.join(link),
+            _ => link,
+        };
+    }
+    path
+}
+
 /// Writes via a temp file + rename so watchers never observe partial content.
+/// A symlink is written through to its target, and an existing file keeps its
+/// permissions.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let path = &resolve_symlinks(path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -132,8 +149,20 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ".{}.httpdesk-tmp",
         path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     ));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        // Apply the mode before any content lands, so a `chmod 600` file is never readable by others.
+        if let Some(p) = permissions {
+            f.set_permissions(p)?;
+        }
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
 }

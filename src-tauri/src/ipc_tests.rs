@@ -222,3 +222,114 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
     let ext = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("external change reported");
     assert!(ext.contains("a.http"), "{ext}");
 }
+
+#[cfg(unix)]
+#[test]
+fn saving_through_a_symlink_updates_the_target_and_keeps_the_link() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join("shared")).unwrap();
+    let target = root.join("shared/real.http");
+    std::fs::write(&target, "### R\nGET https://old\n").unwrap();
+    let link = root.join("link.http");
+    std::os::unix::fs::symlink("shared/real.http", &link).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let mut file = h.ok("read_http_file", json!({ "path": link }));
+    file["requests"][0]["url"] = json!("https://new");
+    h.ok("save_http_file", json!({ "path": link, "file": file }));
+
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "link was replaced by a file");
+    assert_eq!(std::fs::read_link(&link).unwrap(), std::path::Path::new("shared/real.http"));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "### R\nGET https://new\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn saving_keeps_the_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path().canonicalize().unwrap();
+    let path = root.join("private.http");
+    std::fs::write(&path, "### R\nGET https://old\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let mut file = h.ok("read_http_file", json!({ "path": path }));
+    file["requests"][0]["url"] = json!("https://new");
+    h.ok("save_http_file", json!({ "path": path, "file": file }));
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "### R\nGET https://new\n");
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+}
+
+/// Called directly: the harness's config dir is a process-wide env var, so a
+/// parallel test could redirect `save_settings` mid-test.
+#[cfg(unix)]
+#[test]
+fn settings_are_replaced_atomically_through_symlinks() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("dotfiles-settings.json");
+    std::fs::write(&real, "{}").unwrap();
+    let path = dir.path().join("settings.json");
+    std::os::unix::fs::symlink(&real, &path).unwrap();
+    let inode = std::fs::metadata(&real).unwrap().ino();
+
+    let settings = super::AppSettings { theme: "light".into(), ..Default::default() };
+    super::write_settings(&path, &settings).unwrap();
+
+    // A new inode means the file was replaced by a rename, not rewritten in place.
+    assert_ne!(std::fs::metadata(&real).unwrap().ino(), inode);
+    assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved["theme"], "light");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "no temp file left behind");
+}
+
+/// Paths reported by `workspace-changed` until no event has arrived for `quiet`.
+fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(payload) = rx.recv_timeout(quiet) {
+        let v: Value = serde_json::from_str(&payload).unwrap();
+        out.extend(v["paths"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_string()));
+    }
+    out
+}
+
+/// Delete isn't driven here: on macOS `trash` asks Finder, which would move test
+/// folders into the user's real Trash. It uses the same "absent" expectation as a move's source.
+#[test]
+fn watcher_ignores_our_own_renames_moves_and_new_folders() {
+    use tauri::Listener;
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path().canonicalize().unwrap();
+    std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
+    std::fs::create_dir(root.join("old")).unwrap();
+    std::fs::write(root.join("old/inner.http"), "GET https://inner\n").unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let (tx, rx) = mpsc::channel::<String>();
+    h.webview.listen_any("workspace-changed", move |e| {
+        let _ = tx.send(e.payload().to_string());
+    });
+    changed_paths(&rx, std::time::Duration::from_millis(600));
+
+    let p = |rel: &str| root.join(rel).to_string_lossy().to_string();
+    h.ok("rename_path", json!({ "from": p("a.http"), "to": p("b.http") }));
+    h.ok("create_dir", json!({ "path": p("dir") }));
+    h.ok("rename_path", json!({ "from": p("b.http"), "to": p("dir/b.http") }));
+    h.ok("rename_path", json!({ "from": p("old"), "to": p("new") }));
+
+    let own = changed_paths(&rx, std::time::Duration::from_secs(2));
+    assert!(own.is_empty(), "own operations were reported: {own:?}");
+
+    std::fs::write(root.join("dir/b.http"), "GET https://changed\n").unwrap();
+    std::fs::write(root.join("new/inner.http"), "GET https://changed\n").unwrap();
+    let ext = changed_paths(&rx, std::time::Duration::from_secs(2));
+    assert!(ext.contains(&p("dir/b.http")), "external change after a move is still reported: {ext:?}");
+    assert!(ext.contains(&p("new/inner.http")), "external change inside a moved folder is still reported: {ext:?}");
+}

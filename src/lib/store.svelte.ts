@@ -303,7 +303,20 @@ class AppStore {
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private async onExternalChange(paths: string[]) {
+  /** Whether `file`, fresh from disk, is still what the document was last loaded or saved as. */
+  private matchesSaved(doc: Doc, file: HttpFile): boolean {
+    const keys = doc.savedOrder ? doc.savedOrder.split(",") : [];
+    return (
+      JSON.stringify(file.header) === doc.savedHeader &&
+      file.trailing === doc.file.trailing &&
+      file.lineEnding === doc.file.lineEnding &&
+      file.requests.length === keys.length &&
+      file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
+    );
+  }
+
+  /** Handles a `workspace-changed` event from the watcher. */
+  async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p))) await this.loadEnvironments();
@@ -315,7 +328,9 @@ class AppStore {
         doc.missing = true;
       } else if (this.isDocDirty(p)) {
         doc.missing = false;
-        doc.externalChange = true;
+        // Our own rename or move (or a touch) leaves the content as loaded: nothing to warn about.
+        const disk = await api.readHttpFile(p).catch(() => null);
+        if (!disk || !this.matchesSaved(doc, disk)) doc.externalChange = true;
       } else {
         await this.reload(p);
       }

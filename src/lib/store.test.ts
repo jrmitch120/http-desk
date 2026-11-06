@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile } = vi.hoisted(() => ({ readHttpFile: vi.fn() }));
-vi.mock("./api", () => ({ api: { readHttpFile }, errorMessage: (e: unknown) => String(e) }));
+const { readHttpFile, renamePath, pathExists } = vi.hoisted(() => ({ readHttpFile: vi.fn(), renamePath: vi.fn(), pathExists: vi.fn() }));
+vi.mock("./api", () => ({ api: { readHttpFile, renamePath, pathExists }, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
 
@@ -26,6 +26,8 @@ const later = <T>(ms: number, value: T) => new Promise<T>((r) => setTimeout(() =
 
 beforeEach(() => {
   readHttpFile.mockReset();
+  renamePath.mockReset().mockResolvedValue(undefined);
+  pathExists.mockReset().mockResolvedValue(true);
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
@@ -58,5 +60,38 @@ describe("reloadOpen", () => {
     expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "New"]);
     expect(app.requestFor(app.tabs[0])?.name).toBe("List");
     expect(readHttpFile).toHaveBeenCalledTimes(2); // not-open.http isn't read
+  });
+});
+
+describe("watcher events", () => {
+  const MOVED = "/ws/api/library.http";
+
+  async function openAndEdit() {
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.openRequest(PATH, { index: 0 });
+    app.requestFor(app.tabs[0])!.url = "https://example.com/edited";
+  }
+
+  it("shows no banner when a dirty file renamed inside the app still holds what was loaded", async () => {
+    await openAndEdit();
+    await app.movePath(PATH, MOVED);
+
+    // A late event for our own rename: the disk still has the loaded content.
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.onExternalChange([PATH, MOVED]);
+
+    expect(app.docs[MOVED].externalChange).toBe(false);
+    expect(app.tabs[0].path).toBe(MOVED);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
+  });
+
+  it("still shows the banner when another editor changed a dirty file", async () => {
+    await openAndEdit();
+
+    readHttpFile.mockResolvedValueOnce(file("List", "Create", "Delete"));
+    await app.onExternalChange([PATH]);
+
+    expect(app.docs[PATH].externalChange).toBe(true);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
   });
 });
