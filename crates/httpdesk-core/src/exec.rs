@@ -24,10 +24,22 @@ pub enum ExecError {
     File { path: PathBuf, reason: String },
     #[error("TLS configuration error: {0}")]
     Tls(String),
-    #[error("Request timed out after {0:.1}s")]
-    Timeout(f64),
+    /// No data arrived for this many ms (`@timeout`, the idle timeout).
+    #[error("Read timeout: no data received for {}. Raise it with # @timeout or the idle timeout in Settings.", human_ms(*.0))]
+    ReadTimeout(u64),
+    /// Connecting (TCP and TLS) took longer than this many ms (`@connection-timeout`).
+    #[error("Connection timeout: couldn't connect within {}. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.", human_ms(*.0))]
+    ConnectTimeout(u64),
     #[error("{0}")]
     Http(String),
+}
+
+fn human_ms(ms: u64) -> String {
+    match ms {
+        m if m >= 60_000 && m % 60_000 == 0 => format!("{} min", m / 60_000),
+        m if m % 1000 == 0 => format!("{} s", m / 1000),
+        m => format!("{m} ms"),
+    }
 }
 
 impl Serialize for ExecError {
@@ -40,8 +52,11 @@ impl Serialize for ExecError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExecSettings {
-    /// Total request timeout in ms; 0 disables it.
+    /// Idle timeout in ms, as JetBrains `@timeout`: the longest wait for the next
+    /// data (response headers or a body chunk). 0 disables it. There is no total
+    /// deadline, so a download that keeps streaming finishes.
     pub timeout_ms: u64,
+    /// Connect timeout in ms (TCP and TLS), as JetBrains `@connection-timeout`. 0 disables it.
     pub connect_timeout_ms: u64,
     pub follow_redirects: bool,
     pub max_redirects: usize,
@@ -89,7 +104,7 @@ impl PreparedRequest {
     }
 }
 
-/// Parses `@timeout` style values: `30` (seconds), `500 ms`, `2m`.
+/// Parses `@timeout` / `@connection-timeout` values: `30` (seconds), `500 ms`, `2 m`.
 fn parse_duration_ms(v: &str) -> Option<u64> {
     let v = v.trim();
     let split = v.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(v.len());
@@ -321,7 +336,7 @@ fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -
         })
         .danger_accept_invalid_certs(!settings.verify_tls || ssl.verify_host_certificate == Some(false));
     if p.timeout_ms > 0 {
-        b = b.timeout(Duration::from_millis(p.timeout_ms));
+        b = b.read_timeout(Duration::from_millis(p.timeout_ms));
     }
     if p.connect_timeout_ms > 0 {
         b = b.connect_timeout(Duration::from_millis(p.connect_timeout_ms));
@@ -382,13 +397,10 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         builder = builder.body(body.clone());
     }
 
-    let timeout_secs = p.timeout_ms as f64 / 1000.0;
-    let map_err = |e: reqwest::Error| {
-        if e.is_timeout() {
-            ExecError::Timeout(timeout_secs)
-        } else {
-            ExecError::Http(error_chain(&e))
-        }
+    let map_err = |e: reqwest::Error| match (e.is_timeout(), e.is_connect()) {
+        (true, true) if p.connect_timeout_ms > 0 => ExecError::ConnectTimeout(p.connect_timeout_ms),
+        (true, false) if p.timeout_ms > 0 => ExecError::ReadTimeout(p.timeout_ms),
+        _ => ExecError::Http(error_chain(&e)),
     };
 
     let start = Instant::now();
