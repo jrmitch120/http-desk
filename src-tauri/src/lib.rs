@@ -127,6 +127,8 @@ fn write_settings(path: &Path, settings: &AppSettings) -> std::io::Result<()> {
 struct WorkspaceInfo {
     root: PathBuf,
     tree: TreeNode,
+    /// Opening added the private env file to the workspace `.gitignore`.
+    gitignore_updated: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -180,13 +182,15 @@ fn open_workspace_blocking<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppSta
     *state.watcher.lock().unwrap() = None;
     start_watcher(app, state, &root)?;
     *state.root.lock().unwrap() = Some(root.clone());
+    // Covers private env files created before HttpDesk handled workspaces inside a repo.
+    let gitignore_updated = env::ensure_gitignored(&root).unwrap_or(false);
 
     let mut settings = state.settings.lock().unwrap();
     settings.recent_workspaces.retain(|p| p != &root);
     settings.recent_workspaces.insert(0, root.clone());
     settings.recent_workspaces.truncate(10);
     persist_settings(app, &settings);
-    Ok(WorkspaceInfo { root, tree })
+    Ok(WorkspaceInfo { root, tree, gitignore_updated })
 }
 
 #[tauri::command]
