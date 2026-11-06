@@ -21,9 +21,11 @@
     onchange: (value: T) => void;
     /** Accessible name of the group. */
     label: string;
+    /** Shows the choice but doesn't let it change (e.g. while a filter fixes the view). */
+    disabled?: boolean;
   }
 
-  let { options, value, onchange, label }: Props = $props();
+  let { options, value, onchange, label, disabled = false }: Props = $props();
 
   const buttons: HTMLButtonElement[] = $state([]);
   // The one option reachable by Tab: the checked one, or the first if none is.
@@ -33,7 +35,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     const n = options.length;
-    if (!n) return;
+    if (!n || disabled) return;
     const from = options.findIndex((o) => o.value === value);
     let to: number;
     if (e.key in STEP) to = (((from < 0 ? 0 : from) + STEP[e.key]) % n + n) % n;
@@ -46,13 +48,14 @@
   }
 </script>
 
-<div class="segmented" role="radiogroup" aria-label={label} tabindex="-1" {onkeydown}>
+<div class="segmented" role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} tabindex="-1" {onkeydown}>
   {#each options as o, i (o.value)}
     <button
       type="button"
       role="radio"
       aria-checked={o.value === value}
       tabindex={i === tabStop ? 0 : -1}
+      {disabled}
       bind:this={buttons[i]}
       onclick={() => o.value !== value && onchange(o.value)}
     >
@@ -90,8 +93,12 @@
     white-space: nowrap;
     cursor: pointer;
   }
-  button:hover {
+  button:hover:not(:disabled) {
     color: var(--text);
+  }
+  button:disabled {
+    cursor: default;
+    opacity: 0.55;
   }
   button[aria-checked="true"] {
     background: var(--panel);

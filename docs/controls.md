@@ -55,7 +55,7 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
 - Props: `options` (`{ value, label, icon?, count? }[]`), `value`, `onchange(value)`,
-  `label` (the group's accessible name, required).
+  `label` (the group's accessible name, required), `disabled?`.
 - `count` shows a number after the label and is part of the option's name ("Headers 4").
   Leave it out and nothing shows; pass `0` only where an empty option says something
   (a response with no headers), so empty tabs don't fill up with zeros.
@@ -66,6 +66,9 @@ pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
   from its parent.
 - Keyboard: Tab reaches the checked option; arrows and Home/End move and select (wrapping).
 - Controlled: it never changes `value`; set it in `onchange`.
+- `disabled` shows the choice but doesn't let it change: the options are dimmed and
+  skip clicks and keys. The response view uses it while filter matches are showing,
+  since they're always pretty-printed. Put a tooltip on a wrapper to say why.
 - It wraps onto a second row when narrow. Past about eight options, or with long labels,
   use a Select.
 

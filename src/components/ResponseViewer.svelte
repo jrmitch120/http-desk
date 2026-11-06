@@ -1,6 +1,9 @@
 <script module lang="ts">
   type BodyView = "pretty" | "raw" | "preview";
-  const viewByTab = new Map<string, { tab: string; mode: BodyView; wrap: boolean }>();
+  /** Per editor tab, in memory only: viewer tab, body view, wrap, and the JSONPath filter. */
+  const viewByTab = new Map<string, { tab: string; mode: BodyView; wrap: boolean; filter: string }>();
+  /** Typing pauses this long before the filter runs again on the same response. */
+  const FILTER_DEBOUNCE_MS = 120;
   /** Above this many body bytes, copying a binary body as base64 asks first. */
   const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
@@ -23,6 +26,8 @@
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import ResponseFilter from "./ResponseFilter.svelte";
+  import type { FilterResult } from "../lib/types";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -33,9 +38,10 @@
   let view = $state(saved?.tab ?? "body");
   let mode = $state<BodyView>(saved?.mode ?? "pretty");
   let wrap = $state(saved?.wrap ?? false);
+  let filter = $state(saved?.filter ?? "");
   let editor: Editor | undefined = $state();
   $effect(() => {
-    viewByTab.set(tab.id, { tab: view, mode, wrap });
+    viewByTab.set(tab.id, { tab: view, mode, wrap, filter });
   });
 
   // Elapsed time while loading.
@@ -89,8 +95,38 @@
     api.formatBody(raw, "json", "pretty").then(keep, () => keep(raw));
   });
 
+  // The JSONPath filter runs in the core against the stored body, by response
+  // id, so a re-send re-runs it on the new response. Only for whole JSON bodies;
+  // otherwise the expression is kept for the next JSON response in this tab.
+  const canFilter = $derived(!!res && kind === "json" && res.bodyText !== null && !res.truncated);
+  const expression = $derived(canFilter ? filter.trim() : "");
+  let filterOutcome = $state<{ id: string; expression: string; result?: FilterResult; error?: string } | null>(null);
+  $effect(() => {
+    if (!res || !expression) return;
+    const { id } = res;
+    const expr = expression;
+    const last = untrack(() => filterOutcome);
+    if (last?.id === id && last.expression === expr) return;
+    const settle = (outcome: { result?: FilterResult; error?: string }) => {
+      if (res?.id === id && expression === expr) filterOutcome = { id, expression: expr, ...outcome };
+    };
+    // A new response is filtered at once; typing waits for a pause.
+    const timer = setTimeout(
+      () => api.filterResponse(id, expr).then((result) => settle({ result }), (e) => settle({ error: errorMessage(e) })),
+      last?.id === id ? FILTER_DEBOUNCE_MS : 0,
+    );
+    return () => clearTimeout(timer);
+  });
+  // This response's latest outcome. While a newer expression runs, its last
+  // matches stay up, so typing doesn't flash the full body.
+  const outcome = $derived(expression && filterOutcome?.id === res?.id ? filterOutcome : null);
+  const filterError = $derived(outcome?.expression === expression ? (outcome.error ?? null) : null);
+  /** The matches on screen (the body view is then always pretty, and Copy copies them). */
+  const filtered = $derived(outcome?.result && !filterError ? outcome.result : null);
+
   const bodyText = $derived.by(() => {
     if (!res) return "";
+    if (filtered) return filtered.text;
     if (res.bodyText === null) return hexdump(res.bodyBase64);
     if (effectiveMode !== "pretty") return res.bodyText;
     if (kind === "json") return formatted?.id === res.id ? formatted.text : res.bodyText;
@@ -116,6 +152,11 @@
 
   async function copyBody() {
     if (!res) return;
+    if (filtered) {
+      await navigator.clipboard.writeText(filtered.text);
+      app.toast("success", "Filter matches copied");
+      return;
+    }
     if (res.bodyText !== null) {
       await navigator.clipboard.writeText(res.bodyText);
       app.toast("success", "Response body copied");
@@ -206,8 +247,8 @@
         <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
-        <button class="icon-btn" aria-label="Copy body" use:tooltip={isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
-        <button class="icon-btn" aria-label="Save body to file" use:tooltip onclick={saveBody}><Icon name="download" /></button>
+        <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
+        <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
       {/if}
@@ -229,7 +270,10 @@
 
       {#if current === "body"}
         <div class="toolbar">
-          <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
+          <!-- Filter matches are always pretty-printed, so the view is fixed while they show. -->
+          <span class="tip" use:tooltip={filtered ? "Filter matches are always pretty-printed" : ""}>
+            <SegmentedControl label="Response view" options={viewOptions} value={filtered ? "pretty" : effectiveMode} disabled={!!filtered} onchange={(m) => (mode = m)} />
+          </span>
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
           <span class="spacer"></span>
           {#if effectiveMode !== "preview"}
@@ -241,6 +285,11 @@
             <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
           {/if}
         </div>
+        {#if canFilter}
+          <div class="filter-row">
+            <ResponseFilter value={filter} onchange={(v) => (filter = v)} matches={filtered?.matches ?? null} error={filterError} />
+          </div>
+        {/if}
         <div class="body">
           {#if effectiveMode === "preview" && dataUrl}
             {#if kind === "image"}
@@ -366,6 +415,11 @@
     align-items: center;
     gap: 8px;
     padding: 6px 10px 6px 16px;
+    flex: none;
+  }
+  .filter-row {
+    display: flex;
+    padding: 0 10px 6px 16px;
     flex: none;
   }
   .lang {

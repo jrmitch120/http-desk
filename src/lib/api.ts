@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   BodyKind,
+  FilterResult,
   FormatMode,
   EnvironmentSet,
   GenerateOptions,
@@ -51,6 +52,11 @@ export const api = {
    * strings stay exactly as written). Rejects with a message for invalid input.
    */
   formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
+  /**
+   * Runs an RFC 9535 JSONPath expression against a stored response body in the
+   * core. Rejects with a message for an invalid expression or a non-JSON body.
+   */
+  filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

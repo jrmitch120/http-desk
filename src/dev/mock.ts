@@ -77,6 +77,10 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
+/** Text bodies of the responses sent so far, by response id (the shell's `RecentBodies`). */
+const bodies: Record<string, string> = {};
+/** What "Save body to file" wrote, by path. */
+const savedBodies: Record<string, string> = {};
 let settingsServed = false;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
@@ -92,6 +96,9 @@ let settingsServed = false;
   /** The `.http` file models as last saved, by path (the mock has no serializer). */
   get files() {
     return clone(files);
+  },
+  get savedBodies() {
+    return clone(savedBodies);
   },
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
@@ -169,6 +176,9 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=bigint`: the JSON response carries an ID above 2^53 and a `10.50`.
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
+// `?response=store`: items with a `status` and 19-digit IDs, a new response id
+//   per send, and item 2 becomes "sold" from the second send on (filter tests).
+// `?response=html`: an HTML page. `?response=truncated`: a JSON body cut off at the size limit.
 const responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
 // events (bytes so far) every 100 ms, like the shell emits for a slow download.
@@ -195,6 +205,91 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
+
+/**
+ * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
+ * `.name`, `.*`, `..name`, `[n]`, `[*]`, `['name']`, and `[?(@.a.b OP literal)]`
+ * or `[?@.a]`. Numbers are kept as the server wrote them (`JSON.rawJSON`), so
+ * the output matches the core's.
+ */
+function mockFilter(body: string, expression: string): { matches: number; text: string } {
+  const J = JSON as any;
+  const doc = J.parse(body, (_k: string, v: unknown, ctx: { source?: string }) => (typeof v === "number" ? J.rawJSON(ctx.source) : v));
+  const isNode = (v: unknown): v is object => v !== null && typeof v === "object" && !J.isRawJSON(v);
+  const scalar = (v: any) => (J.isRawJSON(v) ? Number(v.rawJSON) : v);
+  const children = (v: unknown): unknown[] => (isNode(v) ? Object.values(v) : []);
+  const descendants = (v: unknown): unknown[] => [v, ...children(v).flatMap(descendants)];
+  const expr = expression.trim();
+  let i = 0;
+  const fail = (what: string): never => {
+    throw `Invalid JSONPath at position ${i + 1}: ${what}`;
+  };
+  const name = () => /^[A-Za-z_][\w]*/.exec(expr.slice(i))?.[0] ?? fail("expected a member name");
+  const relPath = (): string[] => {
+    const keys: string[] = [];
+    while (expr[i] === ".") {
+      i++;
+      const k = name();
+      keys.push(k);
+      i += k.length;
+    }
+    return keys;
+  };
+  const literal = (): unknown => {
+    const m = /^\s*("(?:[^"\\]|\\.)*"|'[^']*'|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/.exec(expr.slice(i)) ?? fail("expected a literal");
+    i += m[0].length;
+    return m[1].startsWith("'") ? m[1].slice(1, -1) : JSON.parse(m[1]);
+  };
+  if (expr[i] !== "$") fail("expected '$'");
+  i++;
+  let nodes: unknown[] = [doc];
+  while (i < expr.length) {
+    if (expr.startsWith("..", i)) {
+      i += 2;
+      const k = name();
+      i += k.length;
+      nodes = nodes.flatMap(descendants).flatMap((n) => (isNode(n) && !Array.isArray(n) && k in n ? [(n as any)[k]] : []));
+    } else if (expr.startsWith(".*", i) || expr.startsWith("[*]", i)) {
+      i += expr[i] === "." ? 2 : 3;
+      nodes = nodes.flatMap(children);
+    } else if (expr[i] === ".") {
+      i++;
+      const k = name();
+      i += k.length;
+      nodes = nodes.flatMap((n) => (isNode(n) && !Array.isArray(n) && k in n ? [(n as any)[k]] : []));
+    } else if (expr.startsWith("[?", i)) {
+      i += 2;
+      const paren = expr[i] === "(";
+      if (paren) i++;
+      if (expr[i] !== "@") fail("expected '@'");
+      i++;
+      const keys = relPath();
+      const op = /^\s*(==|!=|<=|>=|<|>)/.exec(expr.slice(i));
+      let test: (v: unknown) => boolean = (v) => v !== undefined;
+      if (op) {
+        i += op[0].length;
+        const lit = literal();
+        const cmp: Record<string, (a: any, b: any) => boolean> = {
+          "==": (a, b) => a === b, "!=": (a, b) => a !== b, "<": (a, b) => a < b, ">": (a, b) => a > b, "<=": (a, b) => a <= b, ">=": (a, b) => a >= b,
+        };
+        test = (v) => v !== undefined && cmp[op[1]](scalar(v), lit);
+      }
+      if (paren && expr[i++] !== ")") fail("expected ')'");
+      if (expr[i++] !== "]") fail("expected ']'");
+      const at = (n: unknown) => keys.reduce<any>((v, k) => (isNode(v) && k in v ? (v as any)[k] : undefined), n);
+      nodes = nodes.flatMap(children).filter((n) => test(at(n)));
+    } else if (expr[i] === "[") {
+      const m = /^\[\s*(?:(-?\d+)|'([^']*)'|"([^"]*)")\s*\]/.exec(expr.slice(i)) ?? fail("expected a selector");
+      i += m[0].length;
+      nodes = nodes.flatMap((n) => {
+        if (m[1] !== undefined) return Array.isArray(n) && n.at(Number(m[1])) !== undefined ? [n.at(Number(m[1]))] : [];
+        const k = m[2] ?? m[3];
+        return isNode(n) && !Array.isArray(n) && k in n ? [(n as any)[k]] : [];
+      });
+    } else fail("unexpected character");
+  }
+  return { matches: nodes.length, text: formatJson(JSON.stringify(nodes), "pretty") };
+}
 
 /**
  * Stand-in for the core's lossless `format_body` (JSON only): JSON.parse only
@@ -323,16 +418,25 @@ mockIPC(
             ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
             : responseKind === "invalidJson"
               ? `{"id": 9007199254740993, oops}`
-              : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+              : responseKind === "store"
+                ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
+                : responseKind === "html"
+                  ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
+                  : responseKind === "truncated"
+                    ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
+                    : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
         const gzip = responseKind === "gzip";
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
+        const id = responseKind === "store" ? `r1-${sent.length}` : "r1";
+        bodies[id] = body;
+        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : "application/json";
         return {
-          id: "r1", status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
+          id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
-          headers: [["content-type", "application/json"], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders],
-          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType: "application/json", contentEncoding: gzip ? "gzip" : null,
-          bodyText: body, bodyBase64: null, truncated: false,
+          headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders],
+          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, contentEncoding: gzip ? "gzip" : null,
+          bodyText: body, bodyBase64: null, truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
@@ -347,6 +451,22 @@ mockIPC(
         } catch (e) {
           throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
         }
+      case "filter_response": {
+        const body = bodies[args.responseId];
+        if (body === undefined) throw "Response is no longer available";
+        try {
+          JSON.parse(body);
+        } catch (e) {
+          throw `The body isn't valid JSON: ${e instanceof Error ? e.message : e}`;
+        }
+        return mockFilter(body, args.expression);
+      }
+      case "plugin:dialog|save":
+        return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
+      case "save_response_body":
+        if (bodies[args.responseId] === undefined) throw "Response is no longer available";
+        savedBodies[args.path] = bodies[args.responseId];
+        return null;
       case "openapi_load":
         await delay(300);
         return {

@@ -192,6 +192,13 @@ export type BodyKind = "json";
 /** Pretty: one member per line, two-space indent. Minify: no whitespace. */
 export type FormatMode = "pretty" | "minify";
 
+/** What a JSONPath filter selected (core `json_filter::FilterResult`). */
+export interface FilterResult {
+  matches: number;
+  /** The matches as a pretty-printed JSON array, numbers as the server sent them. */
+  text: string;
+}
+
 /** Why a send failed; mirrors the core's `ExecError` kinds. */
 export type SendErrorKind =
   | "dns"
