@@ -20,9 +20,7 @@ export const ALLOWLIST: Allowlist = {
     "src/components/OpenApiImport.svelte",
   ],
   radio: [],
-  number: [
-    "src/components/SettingsModal.svelte",
-  ],
+  number: [],
   datalist: [
     "src/components/KeyValueTable.svelte",
   ],

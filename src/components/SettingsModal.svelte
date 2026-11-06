@@ -7,6 +7,7 @@
   import type { AppSettings, ExecSettings } from "../lib/types";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
+  import NumberField from "./NumberField.svelte";
   import SegmentedControl from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
 
@@ -26,11 +27,6 @@
   ];
 
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
-
-  function num(e: Event, min = 0): number {
-    const n = Number((e.currentTarget as HTMLInputElement).value);
-    return Number.isFinite(n) ? Math.max(min, n) : min;
-  }
 
   function set(patch: Partial<AppSettings>) {
     app.updateSettings(patch);
@@ -121,17 +117,11 @@
         <h3>Requests</h3>
         <div class="setting">
           <div class="label"><span>Idle timeout</span><small class="muted">Longest wait for the next data from the server, in seconds; 0 disables it. Downloads that keep streaming are never cut off.</small></div>
-          <div class="unit">
-            <input class="input num" type="number" min="0" step="1" value={settings.exec.timeoutMs / 1000} onchange={(e) => setExec({ timeoutMs: Math.round(num(e) * 1000) })} />
-            <span class="muted">s</span>
-          </div>
+          <NumberField label="Idle timeout" unit="s" min={0} value={settings.exec.timeoutMs / 1000} onchange={(v) => setExec({ timeoutMs: Math.round(v * 1000) })} />
         </div>
         <div class="setting">
           <div class="label"><span>Connection timeout</span><small class="muted">Longest wait to connect, in seconds; 0 disables it</small></div>
-          <div class="unit">
-            <input class="input num" type="number" min="0" step="1" value={settings.exec.connectTimeoutMs / 1000} onchange={(e) => setExec({ connectTimeoutMs: Math.round(num(e) * 1000) })} />
-            <span class="muted">s</span>
-          </div>
+          <NumberField label="Connection timeout" unit="s" min={0} value={settings.exec.connectTimeoutMs / 1000} onchange={(v) => setExec({ connectTimeoutMs: Math.round(v * 1000) })} />
         </div>
         <div class="setting">
           <div class="label"><span>Follow redirects</span></div>
@@ -139,7 +129,7 @@
         </div>
         <div class="setting">
           <div class="label"><span>Maximum redirects</span></div>
-          <input class="input num" type="number" min="0" step="1" disabled={!settings.exec.followRedirects} value={settings.exec.maxRedirects} onchange={(e) => setExec({ maxRedirects: Math.round(num(e)) })} />
+          <NumberField label="Maximum redirects" integer min={0} disabled={!settings.exec.followRedirects} value={settings.exec.maxRedirects} onchange={(v) => setExec({ maxRedirects: v })} />
         </div>
         <p class="note muted">Per-request <span class="mono"># @timeout</span>, <span class="mono"># @connection-timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
       </section>
@@ -163,17 +153,14 @@
         <h3>Responses</h3>
         <div class="setting">
           <div class="label"><span>Maximum body size</span><small class="muted">Larger responses are truncated</small></div>
-          <div class="unit">
-            <input
-              class="input num"
-              type="number"
-              min="1"
-              step="1"
-              value={Math.round(settings.exec.maxBodyBytes / 1024 / 1024)}
-              onchange={(e) => setExec({ maxBodyBytes: Math.round(num(e, 1) * 1024 * 1024) })}
-            />
-            <span class="muted">MB</span>
-          </div>
+          <NumberField
+            label="Maximum body size"
+            unit="MB"
+            integer
+            min={1}
+            value={Math.round(settings.exec.maxBodyBytes / 1024 / 1024)}
+            onchange={(v) => setExec({ maxBodyBytes: v * 1024 * 1024 })}
+          />
         </div>
       </section>
     </div>
@@ -227,15 +214,6 @@
   }
   .grow {
     flex: 1;
-  }
-  .unit {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .num {
-    width: 84px;
-    text-align: right;
   }
   .note {
     margin: 4px 0 6px;
