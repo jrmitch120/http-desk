@@ -7,13 +7,13 @@ const warning = /http-client\.private\.env\.json is not ignored by git/;
 
 test("warns when the private env file is not ignored by git", async ({ page }) => {
   await openApp(page, "?privateFileIgnored=false");
-  await page.getByTitle(/Manage environments/).click();
+  await page.getByRole("button", { name: "Manage environments" }).click();
   await expect(page.getByText(warning)).toBeVisible();
 });
 
 test("shows no warning when the private env file is ignored", async ({ page }) => {
   await openApp(page);
-  await page.getByTitle(/Manage environments/).click();
+  await page.getByRole("button", { name: "Manage environments" }).click();
   await expect(page.getByPlaceholder("Filter variables")).toBeVisible();
   await expect(page.getByText(warning)).toHaveCount(0);
 });

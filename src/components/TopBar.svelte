@@ -4,6 +4,7 @@
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import { updates } from "../lib/updates.svelte";
 
   async function openFolder() {
@@ -25,7 +26,7 @@
 </script>
 
 <header class="topbar">
-  <button class="ws" onclick={workspaceMenu} title={app.root ?? ""}>
+  <button class="ws" onclick={workspaceMenu} use:tooltip={app.root}>
     <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true">
       <rect x="64" y="64" width="896" height="896" rx="200" fill="var(--accent)" />
       <path d="M300 330 L460 512 L300 694" fill="none" stroke="#fff" stroke-width="96" stroke-linecap="round" stroke-linejoin="round" />
@@ -37,7 +38,7 @@
 
   <div class="spacer"></div>
 
-  <button class="btn small ghost" onclick={() => (app.modal = "openapi")} title="Generate .http files from an OpenAPI specification">
+  <button class="btn small ghost" onclick={() => (app.modal = "openapi")} use:tooltip={"Generate .http files from an OpenAPI specification"}>
     <Icon name="import" size={14} />Import OpenAPI
   </button>
 
@@ -47,30 +48,32 @@
       class="env-select"
       value={app.envName ?? ""}
       onchange={(e) => app.selectEnvironment((e.currentTarget as HTMLSelectElement).value || null)}
-      title="Active environment"
+      aria-label="Active environment"
+      use:tooltip
     >
       <option value="">No environment</option>
       {#each envNames as n (n)}<option value={n}>{n}</option>{/each}
     </select>
-    <button class="icon-btn" onclick={() => (app.modal = "env")} title="Manage environments (⌘/Ctrl E)"><Icon name="layers" size={14} /></button>
+    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
   </div>
 
   {#if updates.progress !== null}
-    <span class="update-pill" title="Downloading the update; HttpDesk restarts when it's done">
+    <span class="update-pill" use:tooltip={"Downloading the update; HttpDesk restarts when it's done"}>
       <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
     </span>
   {/if}
   <button
     class="icon-btn"
-    title={layout === "horizontal" ? "Show response below" : "Show response on the right"}
+    aria-label={layout === "horizontal" ? "Show response below" : "Show response on the right"}
+    use:tooltip
     onclick={() => app.updateSettings({ layout: layout === "horizontal" ? "vertical" : "horizontal" })}
   >
     <Icon name={layout === "horizontal" ? "rows" : "columns"} />
   </button>
-  <button class="icon-btn" title="Toggle theme" onclick={() => app.updateSettings({ theme: theme === "dark" ? "light" : "dark" })}>
+  <button class="icon-btn" aria-label="Toggle theme" use:tooltip onclick={() => app.updateSettings({ theme: theme === "dark" ? "light" : "dark" })}>
     <Icon name={theme === "dark" ? "sun" : "moon"} />
   </button>
-  <button class="icon-btn" title="Settings (⌘/Ctrl ,)" onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  <button class="icon-btn" aria-label="Settings" use:tooltip={"Settings (⌘/Ctrl ,)"} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
 </header>
 
 <style>

@@ -57,6 +57,13 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+
+  /* the one floating surface: context menu, tooltips, selects, suggestion
+     lists and CodeMirror tooltips (.popup-surface below) */
+  --popup-bg: var(--panel-2);
+  --popup-border: 1px solid var(--border-strong);
+  --popup-radius: 8px;
+  --popup-shadow: var(--shadow);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
@@ -439,4 +446,37 @@ kbd {
 .cm-var-dyn {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
+}
+
+/* Shared popup layer (src/lib/popup/layer.ts): a zero-size fixed stacking
+   context at the end of <body>, above modals (100) and toasts (200). Every
+   popup inside it is position: fixed in viewport coordinates. */
+.popup-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 400;
+}
+.popup-surface {
+  position: fixed;
+  background: var(--popup-bg);
+  border: var(--popup-border);
+  border-radius: var(--popup-radius);
+  box-shadow: var(--popup-shadow);
+  color: var(--text);
+  animation: popup-in 120ms ease-out;
+}
+.popup-surface[data-side="top"] {
+  --popup-from: 3px;
+}
+@keyframes popup-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--popup-from, -3px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .popup-surface {
+    animation: none;
+  }
 }

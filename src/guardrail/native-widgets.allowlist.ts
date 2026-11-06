@@ -41,7 +41,6 @@ export const ALLOWLIST: Allowlist = {
     "src/components/TabBar.svelte",
     "src/components/Toasts.svelte",
     "src/components/Toggle.svelte",
-    "src/components/TopBar.svelte",
     "src/components/TreeItem.svelte",
     "src/components/Welcome.svelte",
     "src/lib/codemirror/setup.ts",
