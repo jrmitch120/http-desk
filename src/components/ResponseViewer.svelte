@@ -149,7 +149,12 @@
   const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
 
   const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
-  const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
+  const sizeTitle = $derived.by(() => {
+    if (!res) return "";
+    const headers = `Headers ${formatBytes(res.headersSize)}`;
+    if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
+    return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
+  });
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
