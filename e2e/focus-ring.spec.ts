@@ -56,3 +56,15 @@ test("owned controls use the same focus ring", async ({ page }) => {
   await page.locator(".subtab", { hasText: "Body" }).click();
   expect(await tabTo(page, '[role="radio"]')).toEqual(ring);
 });
+
+test("a grid's text cell shows the ring when clicked, as text fields do", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const cell = page.locator(".kv input.cell").first();
+  await cell.click();
+  const outline = await cell.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { style: s.outlineStyle, width: s.outlineWidth, color: s.outlineColor, offset: s.outlineOffset };
+  });
+  expect(outline).toEqual(ring);
+});

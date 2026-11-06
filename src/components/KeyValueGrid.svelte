@@ -478,6 +478,9 @@
   }
   .kv :global(.cell:focus) {
     background: var(--panel-2);
+  }
+  /* Text cells match :focus-visible on a click too, so they keep the ring then. */
+  .kv :global(.cell:focus-visible) {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }
