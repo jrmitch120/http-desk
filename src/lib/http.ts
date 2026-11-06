@@ -541,37 +541,8 @@ export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
-// JSON is formatted in the core (`api.formatBody`): a JSON.parse round trip
-// would change numbers (precision above 2^53, `10.50` → `10.5`).
-
-/** Minimal XML pretty printer: one element per line, two-space indent. */
-export function prettyXml(text: string): string {
-  const tokens = text.replace(/>\s+</g, "><").match(/<[^>]+>|[^<]+/g) ?? [];
-  const out: string[] = [];
-  let depth = 0;
-  const pad = () => "  ".repeat(Math.max(0, depth));
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i].trim();
-    if (!t) continue;
-    if (t.startsWith("</")) {
-      depth--;
-      out.push(pad() + t);
-    } else if (t.startsWith("<?") || t.startsWith("<!") || t.endsWith("/>") || !t.startsWith("<")) {
-      out.push(pad() + t);
-    } else {
-      const next = tokens[i + 1];
-      const close = tokens[i + 2];
-      if (next !== undefined && !next.startsWith("<") && close?.startsWith("</")) {
-        out.push(pad() + t + next.trim() + close);
-        i += 2;
-      } else {
-        out.push(pad() + t);
-        depth++;
-      }
-    }
-  }
-  return out.join("\n");
-}
+// JSON and XML are formatted in the core (`api.formatBody`): a JSON.parse
+// round trip would change numbers (precision above 2^53, `10.50` → `10.5`).
 
 export function statusClass(status: number): string {
   if (status >= 500) return "s-5xx";

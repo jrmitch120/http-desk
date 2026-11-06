@@ -169,6 +169,8 @@ export interface HttpResponse {
   request: SentRequest;
   warnings: string[];
   timings: Timings;
+  /** Every Set-Cookie received, redirect hops first. Shown only; never sent back. */
+  cookies: ResponseCookie[];
 }
 
 /**
@@ -186,8 +188,30 @@ export interface Timings {
   redirects: number;
 }
 
+/** One Set-Cookie header, parsed in the core (`httpdesk_core::cookies::ResponseCookie`). */
+export interface ResponseCookie {
+  name: string;
+  value: string;
+  /** Without a leading dot; null means host-only. */
+  domain: string | null;
+  path: string | null;
+  /** RFC 3339 UTC. */
+  expires: string | null;
+  /** Seconds; wins over `expires` when both are set. */
+  maxAge: number | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: "Strict" | "Lax" | "None" | null;
+  /** The URL of the response that set it (a redirect hop or the final one). */
+  url: string;
+  /** The header value as received. */
+  raw: string;
+  /** Set when the header couldn't be read as a cookie; the other fields are then empty. */
+  parseError: string | null;
+}
+
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
-export type BodyKind = "json";
+export type BodyKind = "json" | "xml";
 
 /** Pretty: one member per line, two-space indent. Minify: no whitespace. */
 export type FormatMode = "pretty" | "minify";

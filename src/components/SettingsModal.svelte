@@ -25,6 +25,15 @@
     { value: "vertical", label: "Response below", icon: "rows" },
   ];
 
+  // Opened from a fix-it button (a TLS send error): start at that section.
+  let tlsSection: HTMLElement | undefined = $state();
+  $effect(() => {
+    if (app.settingsSection === "tls" && tlsSection) {
+      tlsSection.scrollIntoView({ block: "start" });
+      app.settingsSection = null;
+    }
+  });
+
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
 
   function set(patch: Partial<AppSettings>) {
@@ -133,8 +142,8 @@
         <p class="note muted">Per-request <span class="mono"># @timeout</span>, <span class="mono"># @connection-timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
       </section>
 
-      <section>
-        <h3>TLS</h3>
+      <section aria-labelledby="settings-tls" bind:this={tlsSection}>
+        <h3 id="settings-tls">TLS</h3>
         <div class="setting">
           <div class="label"><span>Verify server certificates</span></div>
           <Toggle ariaLabel="Verify server certificates" checked={settings.exec.verifyTls} onchange={(v) => setExec({ verifyTls: v })} />

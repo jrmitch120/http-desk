@@ -321,6 +321,28 @@ fn a_beautified_body_is_saved_to_the_http_file_with_its_numbers_as_written() {
 }
 
 #[test]
+fn format_body_beautifies_xml_and_rejects_xml_that_doesnt_nest() {
+    let h = Harness::new();
+    let pretty = h.ok("format_body", json!({ "text": "<a><b>1</b></a>", "kind": "xml", "mode": "pretty" }));
+    assert_eq!(pretty, json!("<a>\n  <b>1</b>\n</a>"));
+    let err = h.call("format_body", json!({ "text": "<a><b></a>", "kind": "xml", "mode": "pretty" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid XML at line 1, column 7"), "{err}");
+}
+
+#[test]
+fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
+    let h = Harness::new();
+    // What send_request does with a response's body.
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push("resp-1".into(), b"\x89PNG\r\n\x1a\n".to_vec());
+
+    let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
+    assert_eq!(dump, json!(format!("00000000  89 50 4e 47 0d 0a 1a 0a{}  .PNG....", " ".repeat(24))));
+
+    let err = h.call("hexdump", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+#[test]
 fn a_sent_response_is_filtered_by_id_with_numbers_as_the_server_sent_them() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();

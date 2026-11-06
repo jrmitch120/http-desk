@@ -1,4 +1,4 @@
-// The response viewer's Body / Headers / Timing / Request switch is the design-system
+// The response viewer's Body / Headers / (Cookies) / Timing / Request switch is the design-system
 // SegmentedControl, and a tab can show a count of what's inside it.
 import { expect, test, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";

@@ -54,6 +54,11 @@ export const api = {
    */
   formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
   /**
+   * The Hex view of a binary response: a dump of the first 64 KB of the body
+   * the shell stored for it. Rejects once the body has been evicted.
+   */
+  hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
+  /**
    * Runs an RFC 9535 JSONPath expression against a stored response body in the
    * core. Rejects with a message for an invalid expression or a non-JSON body.
    */

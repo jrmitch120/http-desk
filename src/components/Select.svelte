@@ -72,6 +72,11 @@
     trigger?.focus();
   }
 
+  /** Opens the list and focuses the trigger, as a click would (e.g. a fix-it button's "Choose environment"). */
+  export function openList() {
+    if (!open) show();
+  }
+
   function close() {
     open = false;
     query = "";

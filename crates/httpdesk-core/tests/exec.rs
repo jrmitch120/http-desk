@@ -901,3 +901,92 @@ async fn a_redirect_to_another_server_times_the_final_hops_new_connection() {
     assert!(t.ttfb >= 40.0 && t.ttfb < 100.0, "waiting is the final hop's, not the first: {t:?}");
     assert!(resp.time_ms >= 100.0, "the total covers both hops: {}", resp.time_ms);
 }
+
+// Cookies.
+
+#[tokio::test]
+async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/home")
+                .insert_header("set-cookie", "a=1; Path=/; HttpOnly"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/home"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "b=2; Max-Age=60; SameSite=Lax")
+                .append_header("set-cookie", "not a cookie"),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/login\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert_eq!(resp.status, 200);
+
+    let got: Vec<_> = resp.cookies.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.url.as_str())).collect();
+    let (login, home) = (format!("{}/login", server.uri()), format!("{}/home", server.uri()));
+    assert_eq!(got, [("a", "1", login.as_str()), ("b", "2", home.as_str()), ("", "", home.as_str())]);
+    assert!(resp.cookies[0].http_only);
+    assert_eq!((resp.cookies[1].max_age, resp.cookies[1].same_site.as_deref()), (Some(60), Some("Lax")));
+    assert_eq!(resp.cookies[2].raw, "not a cookie");
+
+    let hops = server.received_requests().await.unwrap();
+    assert_eq!(hops.len(), 2);
+    assert!(hops.iter().all(|r| r.headers.get("cookie").is_none()), "a cookie was sent back");
+}
+
+#[tokio::test]
+async fn a_cookie_header_the_user_wrote_is_still_sent() {
+    let server = echo_server().await;
+    let req = parse("GET {{base}}/echo\nCookie: mine=1\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert!(resp.cookies.is_empty());
+    assert_eq!(header(&last_request(&server).await, "cookie"), Some("mine=1"));
+}
+
+#[tokio::test]
+async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
+    let server = MockServer::start().await;
+    for (route, cookie) in [("/one", "a=1"), ("/two", "b=2")] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", cookie))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/broken"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "c=3")
+                .insert_header("content-encoding", "gzip")
+                .set_body_string("not gzip"),
+        )
+        .mount(&server)
+        .await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared("GET {{base}}/one\n"), &settings, &SslConfig::default()).unwrap();
+
+    let names = |r: &exec::HttpResponse| r.cookies.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&first), ["a"]);
+    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&second), ["b"], "the first request's cookie leaked into the second");
+    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&again), ["a"]);
+
+    // A request that fails after its headers arrive never takes its cookies;
+    // the next one on the client must not inherit them.
+    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings).await;
+    assert!(matches!(failed, Err(ExecError::Other(_))), "a bad gzip body fails the send");
+    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&after), ["b"], "the failed request's cookie leaked into the next");
+
+    let sent = server.received_requests().await.unwrap();
+    assert_eq!(sent.len(), 5);
+    assert!(sent.iter().all(|r| r.headers.get("cookie").is_none()), "a reused client sent a cookie back");
+}

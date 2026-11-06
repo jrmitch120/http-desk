@@ -74,3 +74,25 @@ export function describeSendError(err: SendError): { heading: string; hint: stri
       return { heading: "Could not send request", hint: "Check the URL, the selected environment, and that the server is reachable." };
   }
 }
+
+/** What a fix-it button on the error panel opens. */
+export type SendErrorFix = "tlsSettings" | "requestSettings" | "environment";
+
+/**
+ * The fix-it button for an error, or `null` when Retry is all there is. A TLS
+ * error points at the certificate settings, never at a switch that turns
+ * verification off.
+ */
+export function sendErrorFix(err: SendError): { fix: SendErrorFix; label: string } | null {
+  switch (err.kind) {
+    case "tls":
+      return { fix: "tlsSettings", label: "Open Settings → TLS" };
+    case "timeoutIdle":
+    case "timeoutConnect":
+      return { fix: "requestSettings", label: "Open request Settings" };
+    case "unresolvedVariable":
+      return { fix: "environment", label: "Choose environment" };
+    default:
+      return null;
+  }
+}

@@ -28,6 +28,15 @@
   ]);
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
+  // "Choose environment" on an unresolved-variable error opens the picker.
+  let envSelect: { openList: () => void } | undefined = $state();
+  $effect(() => {
+    if (app.envPickerWanted && envSelect) {
+      envSelect.openList();
+      app.envPickerWanted = false;
+    }
+  });
+
   // The theme menu: System / Light / Dark, the current choice checked.
   let themeButton: HTMLButtonElement | undefined = $state();
   // "Theme: Light", or with System what it resolves to: "Theme: System (Dark)".
@@ -65,6 +74,7 @@
   <div class="env" class:none={!app.envName}>
     <Icon name="globe" size={14} />
     <Select
+      bind:this={envSelect}
       class="env-select"
       options={envOptions}
       value={app.envName ?? ""}

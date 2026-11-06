@@ -92,6 +92,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
     `background` to `transparent` through `class`.
 - Width belongs to the caller: pass `class="x"` and style `.parent :global(.x)`. Don't
   target Select's internal class names.
+- `openList()` (through `bind:this`) opens the list from code, focusing the trigger as a
+  click would. The send error panel's "Choose environment" uses it, through the store's
+  `app.chooseEnvironment()`.
 - Keyboard: Enter, Space or the arrows open it; typing filters (case-insensitive, anywhere
   in the label); arrows, Home/End and PageUp/PageDown move; Enter picks; Escape and Tab
   close without a change. Focus stays on the trigger throughout.
@@ -194,7 +197,7 @@ Global classes in `src/app.css`, not components:
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
-  toast and a `use:tooltip={"Click to copy"}` (response header values). Its accessible
+  toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its accessible
   name is the value. The text stays selectable; the click handler skips the copy when
   the click ended a drag that selected part of it.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
