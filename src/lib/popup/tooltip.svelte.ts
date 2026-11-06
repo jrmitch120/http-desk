@@ -48,10 +48,14 @@ function show(el: HTMLElement, text: string) {
   else timer = setTimeout(reveal, TOOLTIP_DELAY);
 }
 
-/** Hides the tooltip (or cancels a pending one). */
-export function hideTooltip() {
+/**
+ * Hides the tooltip (or cancels a pending one). `warm`: a tooltip shown right
+ * after this one appears without the delay (pointer moving along a toolbar);
+ * off for keys, so arrowing through a list doesn't flash one per row.
+ */
+export function hideTooltip(warm = true) {
   clearTimeout(timer);
-  if (tip.visible) hiddenAt = performance.now();
+  if (tip.visible && warm) hiddenAt = performance.now();
   if (tip.anchor) describe(tip.anchor, false);
   tip.anchor = null;
   tip.visible = false;
@@ -82,9 +86,10 @@ export function tooltip(node: HTMLElement, text?: string | null) {
     clicked = true;
     stop();
   };
-  // Keyboard focus only: a click also focuses, and shouldn't pop a tooltip.
+  // Keyboard focus only: a click also focuses (and text inputs match
+  // :focus-visible even then), and shouldn't pop a tooltip.
   const onFocus = () => {
-    if (node.matches(":focus-visible")) start();
+    if (!clicked && node.matches(":focus-visible")) start();
   };
 
   node.addEventListener("pointerenter", onEnter);

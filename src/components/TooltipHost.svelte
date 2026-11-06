@@ -22,13 +22,15 @@
   // leaving the window hides it, like a native tooltip.
   onMount(() => {
     const opts = { capture: true, passive: true };
-    window.addEventListener("keydown", hideTooltip, opts);
-    window.addEventListener("scroll", hideTooltip, opts);
-    window.addEventListener("blur", hideTooltip);
+    const onKey = () => hideTooltip(false);
+    const hide = () => hideTooltip();
+    window.addEventListener("keydown", onKey, opts);
+    window.addEventListener("scroll", hide, opts);
+    window.addEventListener("blur", hide);
     return () => {
-      window.removeEventListener("keydown", hideTooltip, opts);
-      window.removeEventListener("scroll", hideTooltip, opts);
-      window.removeEventListener("blur", hideTooltip);
+      window.removeEventListener("keydown", onKey, opts);
+      window.removeEventListener("scroll", hide, opts);
+      window.removeEventListener("blur", hide);
     };
   });
 </script>
