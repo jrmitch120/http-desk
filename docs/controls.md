@@ -203,7 +203,7 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `onchange(items)`.
+  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`.
 - How it's configured today:
   - Params and headers: enable, name, value, description, delete. Headers add
     name suggestions.
@@ -214,8 +214,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   - Environment variables: a custom value column (a password input with a reveal button
     for Secrets), a Secret lock column, and a search filter (`visible`). Bulk edit is
     off, because it would show Secret values as plain text.
-- The description sub-row only shows when "Show parameter descriptions" is on in
-  Settings.
+- The description sub-row only shows with `showDescriptions`; the request editor passes
+  Settings' "Show parameter descriptions".
 
 ### SplitPane
 

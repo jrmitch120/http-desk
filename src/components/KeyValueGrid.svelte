@@ -43,7 +43,6 @@
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { formatBulk, KEY_VALUE_ROWS, parseBulk } from "../lib/http";
-  import { app } from "../lib/store.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -71,6 +70,8 @@
     visible?: (row: R) => boolean;
     /** Offer bulk edit (the rows as text). */
     bulkEdit?: boolean;
+    /** Show the "description" column's line under each row (Settings' "Show parameter descriptions"). */
+    showDescriptions?: boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
   }
@@ -88,6 +89,7 @@
     nameError = () => null,
     visible = () => true,
     bulkEdit = true,
+    showDescriptions = true,
     onchange,
   }: Props = $props();
 
@@ -103,7 +105,7 @@
   );
   const has = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
   const toggles = $derived(has("enable"));
-  const showDesc = $derived(has("description") && app.settings?.showDescriptions !== false);
+  const showDesc = $derived(has("description") && showDescriptions);
   const template = $derived(tracks.map((t) => t.width).join(" "));
   /** Where the description and error lines start: under the first column after the checkbox. */
   const subStart = $derived(toggles ? 2 : 1);
