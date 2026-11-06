@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import { legacyPaneSizes } from "./panes";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
 
 export interface Doc {
@@ -126,6 +127,7 @@ class AppStore {
       this.toast("error", errorMessage(e));
     }
     this.applyTheme();
+    await this.migratePaneSizes();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
@@ -148,6 +150,14 @@ class AppStore {
     const exists = await Promise.all(recent.map((p) => api.pathExists(p).catch(() => true)));
     if (exists.includes(false)) await this.updateSettings({ recentWorkspaces: recent.filter((_, i) => exists[i]) });
     if (recent.length && exists[0]) await this.openWorkspace(recent[0]);
+  }
+
+  /** Moves pane sizes older versions kept in localStorage into settings, once. */
+  private async migratePaneSizes() {
+    const legacy = legacyPaneSizes();
+    if (!legacy || !this.settings) return;
+    // Kept until the settings are saved, so a failed save can try again next start.
+    if (!Object.keys(legacy.patch).length || (await this.updateSettings(legacy.patch))) legacy.remove();
   }
 
   applyTheme() {

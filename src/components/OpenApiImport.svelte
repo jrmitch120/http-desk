@@ -6,6 +6,7 @@
   import { joinPath, methodClass, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
+  import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
   import SegmentedControl from "./SegmentedControl.svelte";
@@ -71,11 +72,6 @@
     if (grouping === "single") return 1;
     return new Set(ops.map(grouping === "tag" ? groupOf : segmentOf)).size;
   });
-
-  function indeterminate(node: HTMLInputElement, value: boolean) {
-    node.indeterminate = value;
-    return { update: (v: boolean) => (node.indeterminate = v) };
-  }
 
   async function browseSpec() {
     const picked = await open({ multiple: false, filters: [{ name: "OpenAPI", extensions: ["yaml", "yml", "json"] }] });
@@ -252,12 +248,11 @@
                   <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} title={collapsed[g.name] ? "Expand" : "Collapse"}>
                     <Icon name={collapsed[g.name] ? "chevron-right" : "chevron-down"} size={13} />
                   </button>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={count === g.ops.length}
-                    use:indeterminate={count > 0 && count < g.ops.length}
+                    indeterminate={count > 0 && count < g.ops.length}
                     onchange={() => toggleGroup(g.ops)}
-                    aria-label="Select all in {g.name}"
+                    label="Select all in {g.name}"
                   />
                   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                   <span class="group-name" onclick={() => (collapsed[g.name] = !collapsed[g.name])}>{g.name}</span>
@@ -265,13 +260,12 @@
                 </div>
                 {#if !collapsed[g.name]}
                   {#each g.ops as op (op.id)}
-                    <label class="op" class:deprecated={op.deprecated}>
-                      <input type="checkbox" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)} />
+                    <Checkbox class="op{op.deprecated ? ' deprecated' : ''}" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)}>
                       <span class="method-badge {methodClass(op.method)}">{op.method}</span>
                       <span class="path mono ellipsis" title={op.path}>{op.path}</span>
                       <span class="summary muted ellipsis" title={op.summary ?? op.operationId ?? ""}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
-                    </label>
+                    </Checkbox>
                   {/each}
                 {/if}
               </div>
@@ -471,15 +465,13 @@
     flex: 1;
     cursor: pointer;
   }
-  .op {
+  .op-list :global(.op) {
     display: flex;
-    align-items: center;
+    width: 100%;
     gap: 10px;
     padding: 4px 12px 4px 38px;
-    cursor: pointer;
-    min-width: 0;
   }
-  .op:hover {
+  .op-list :global(.op:hover) {
     background: var(--hover);
   }
   .path {
@@ -492,8 +484,8 @@
     min-width: 0;
     font-size: 12px;
   }
-  .op.deprecated .path,
-  .op.deprecated .summary {
+  :global(.op.deprecated) .path,
+  :global(.op.deprecated) .summary {
     text-decoration: line-through;
     text-decoration-color: var(--faint);
   }
@@ -506,11 +498,6 @@
     border-radius: 3px;
     background: color-mix(in srgb, var(--warning) 18%, transparent);
     color: var(--warning);
-    flex: none;
-  }
-  input[type="checkbox"] {
-    accent-color: var(--accent);
-    margin: 0;
     flex: none;
   }
   .options {
