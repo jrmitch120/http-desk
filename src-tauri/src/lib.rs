@@ -83,7 +83,7 @@ struct AppState {
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
-    /// quit asks first. See quit.rs.
+    /// logout asks first. See quit.rs.
     unsaved: AtomicBool,
 }
 

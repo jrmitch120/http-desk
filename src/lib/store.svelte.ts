@@ -126,12 +126,13 @@ class AppStore {
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
-    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell turns
-    // those into a close request while files are unsaved; see quit.rs).
+    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
+    // turns those into a close request; see quit.rs). With nothing unsaved the
+    // window closes at once, which quits the app.
     await getCurrentWindow().onCloseRequested(async (e) => {
       if (!(await this.confirmQuit())) e.preventDefault();
     });
-    // Tells the shell whether quitting needs to ask first.
+    // Tells the shell whether a logout or shutdown needs to ask first.
     let unsaved = false;
     $effect.root(() => {
       $effect(() => {
