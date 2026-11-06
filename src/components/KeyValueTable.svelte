@@ -1,7 +1,9 @@
 <script lang="ts">
   // Editable key/value list with per-row enable checkboxes, a trailing blank
   // row that turns into a real row as you type, and a bulk-edit mode.
+  import { untrack } from "svelte";
   import type { KeyValue } from "../lib/types";
+  import { formatBulk, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
 
@@ -16,6 +18,8 @@
     separator?: string;
     /** Per-row descriptions shown under the key, editable in place. */
     docs?: boolean;
+    /** Why a name can't be saved (shown under the row), or null. */
+    nameError?: (name: string) => string | null;
   }
   let {
     items = $bindable(),
@@ -26,6 +30,7 @@
     suggestions = [],
     separator = ":",
     docs = false,
+    nameError = () => null,
   }: Props = $props();
 
   const listId = `kv-${Math.random().toString(36).slice(2)}`;
@@ -39,30 +44,31 @@
     else items[i][field] = v;
   }
 
+  /** Rows as they were when bulk editing started; descriptions are carried over from them. */
+  let bulkStart: KeyValue[] = [];
+
   function toggleBulk() {
     if (!bulk) {
-      bulkText = items
-        .filter((r) => r.name || r.value)
-        .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
-        .join("\n");
-    } else {
-      const previous = [...items];
-      items = bulkText
-        .split("\n")
-        .filter((l) => l.trim())
-        .map((l) => {
-          const disabled = l.trimStart().startsWith("//");
-          const line = disabled ? l.trimStart().slice(2) : l;
-          const idx = line.indexOf(separator);
-          const name = (idx < 0 ? line : line.slice(0, idx)).trim();
-          const value = idx < 0 ? "" : line.slice(idx + 1).trim();
-          const at = previous.findIndex((p) => p.name === name);
-          const description = at < 0 ? undefined : previous.splice(at, 1)[0].description;
-          return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
-        });
+      bulkStart = $state.snapshot(items) as KeyValue[];
+      bulkText = formatBulk(items, separator, toggles);
     }
     bulk = !bulk;
   }
+
+  // Applied on every keystroke, so switching tabs or saving never loses the text.
+  function applyBulk() {
+    items = parseBulk(bulkText, separator, bulkStart);
+  }
+
+  // Rows changed elsewhere while bulk editing (e.g. query params typed in the URL bar).
+  $effect(() => {
+    if (!bulk) return;
+    const current = formatBulk(items, separator, toggles);
+    if (current !== untrack(() => formatBulk(parseBulk(bulkText, separator, []), separator, toggles))) {
+      bulkStart = $state.snapshot(items) as KeyValue[];
+      bulkText = current;
+    }
+  });
 
   const showDesc = $derived(docs && app.settings?.showDescriptions !== false);
   let editing = $state<number | null>(null);
@@ -104,10 +110,6 @@
     return { destroy: () => el.removeEventListener("input", fit) };
   }
 
-  export function isBulk() {
-    return bulk;
-  }
-
   const allOn = $derived(items.length > 0 && items.every((r) => r.enabled));
 </script>
 
@@ -136,10 +138,11 @@
   </div>
 
   {#if bulk}
-    <textarea class="bulk-text mono" bind:value={bulkText} spellcheck="false" rows={Math.max(6, bulkText.split("\n").length + 1)}></textarea>
+    <textarea class="bulk-text mono" bind:value={bulkText} oninput={applyBulk} spellcheck="false" rows={Math.max(6, bulkText.split("\n").length + 1)}></textarea>
   {:else}
     {#each rows as row, i (i)}
       {@const ghost = i === items.length}
+      {@const error = ghost ? null : nameError(row.name)}
       <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost class:no-check={!toggles}>
         {#if toggles}
           <span class="c-check">
@@ -154,6 +157,7 @@
           placeholder={ghost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
           list={suggestions.length ? listId : undefined}
           spellcheck="false"
+          aria-invalid={error ? "true" : undefined}
           oninput={(e) => set(i, "name", e.currentTarget.value)}
         />
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
@@ -179,6 +183,9 @@
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
             <button class="desc add" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(i)}>Add description</button>
           {/if}
+        {/if}
+        {#if error}
+          <div class="row-error" role="alert">{error}</div>
         {/if}
       </div>
     {/each}
@@ -208,7 +215,7 @@
   .kv-row {
     display: grid;
     grid-template-columns: 34px 38% 1fr 34px;
-    grid-template-rows: 31px auto;
+    grid-template-rows: 31px auto auto;
   }
   .kv-row.no-check {
     grid-template-columns: 38% 1fr 34px;
@@ -249,8 +256,20 @@
     -webkit-user-select: text;
     white-space: pre-line;
   }
-  .kv-row.no-check .desc {
+  .kv-row.no-check .desc,
+  .kv-row.no-check .row-error {
     grid-column: 1 / -1;
+  }
+  .row-error {
+    grid-row: 3;
+    grid-column: 2 / -1;
+    padding: 4px 10px 5px;
+    font-size: 11.5px;
+    color: var(--danger);
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .cell[aria-invalid="true"] {
+    box-shadow: inset 0 0 0 1px var(--danger);
   }
   .desc:hover {
     color: var(--text-2);

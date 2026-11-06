@@ -86,6 +86,29 @@ fn rejects_invalid_documents_with_clear_errors() {
 }
 
 #[test]
+fn versions_newer_than_31_load_with_a_warning() {
+    let newer = |v: &str| format!("OpenAPI {v} is newer than 3.1; generating on a best-effort basis");
+    for v in ["3.2.0", "3.2", "3.3.1"] {
+        let doc =
+            OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\npaths: {{}}\n"), None).unwrap();
+        assert_eq!(doc.summary().warnings, [newer(v), "The specification defines no paths".into()]);
+        // Like 3.1, `paths` is optional.
+        let doc = OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\n"), None).unwrap();
+        assert_eq!(doc.summary().warnings, [newer(v), "The specification defines no paths".into()]);
+    }
+    let doc =
+        OpenApiDoc::parse(r#"{"openapi": "3.2.0", "info": {"title": "x", "version": "1"}, "paths": {"/a": {}}}"#, None)
+            .unwrap();
+    assert_eq!(doc.summary().warnings, [newer("3.2.0")], "JSON specs warn the same way");
+    for v in ["3.0.3", "3.1.0", "3.1.1"] {
+        let doc =
+            OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\npaths: {{/a: {{}}}}\n"), None)
+                .unwrap();
+        assert!(doc.summary().warnings.is_empty(), "{v}: {:?}", doc.summary().warnings);
+    }
+}
+
+#[test]
 fn errors_serialize_as_messages() {
     let err = OpenApiDoc::parse("{}", None).unwrap_err();
     assert_eq!(serde_json::to_value(&err).unwrap(), serde_json::Value::String(err.to_string()));
@@ -127,8 +150,14 @@ fn query_and_header_params_follow_required_flag() {
     assert_eq!(list.url, "{{baseUrl}}/pets");
     assert_eq!(kv(&list.query.items), [("limit", "20", false), ("status", "available", true)]);
     let docs: Vec<_> = list.query.items.iter().map(|i| i.description.as_str()).collect();
-    assert_eq!(docs, ["How many items to return at one time (max 100).", "Required. One of: available, pending, sold."]);
-    assert_eq!(list.headers.items.iter().find(|h| h.name == "X-Trace").unwrap().description, "Required. Default: trace-1.");
+    assert_eq!(
+        docs,
+        ["How many items to return at one time (max 100).", "Required. One of: available, pending, sold."]
+    );
+    assert_eq!(
+        list.headers.items.iter().find(|h| h.name == "X-Trace").unwrap().description,
+        "Required. Default: trace-1."
+    );
     let headers: Vec<_> = list.headers.items.iter().map(|h| (h.name.as_str(), h.value.as_str(), h.enabled)).collect();
     assert_eq!(
         headers,
@@ -151,7 +180,10 @@ fn path_params_become_file_variables() {
     assert_eq!(request(pet, "Upload a photo").url, "{{baseUrl}}/pets/{{petId}}/photo");
 
     let lib = generate(&library(), Grouping::Tag);
-    assert_eq!(file(&lib, "categories.http").header.variables[0], Variable { name: "categoryId".into(), value: "fiction".into() });
+    assert_eq!(
+        file(&lib, "categories.http").header.variables[0],
+        Variable { name: "categoryId".into(), value: "fiction".into() }
+    );
 }
 
 #[test]
@@ -161,10 +193,16 @@ fn auth_is_derived_from_security_requirements() {
     let list = request(pet, "List all pets");
     assert_eq!((list.auth.kind, list.auth.token.as_str()), (AuthKind::Bearer, "{{token}}"), "global security");
     let create = request(pet, "Create a pet");
-    assert_eq!((create.auth.kind, create.auth.username.as_str(), create.auth.password.as_str()), (AuthKind::Basic, "{{username}}", "{{password}}"));
+    assert_eq!(
+        (create.auth.kind, create.auth.username.as_str(), create.auth.password.as_str()),
+        (AuthKind::Basic, "{{username}}", "{{password}}")
+    );
     let show = request(pet, "Info for a specific pet");
     assert_eq!(show.auth.kind, AuthKind::ApiKey);
-    assert_eq!((show.auth.key_name.as_str(), show.auth.key_value.as_str(), show.auth.key_location), ("X-API-Key", "{{api_key}}", ApiKeyLocation::Header));
+    assert_eq!(
+        (show.auth.key_name.as_str(), show.auth.key_value.as_str(), show.auth.key_location),
+        ("X-API-Key", "{{api_key}}", ApiKeyLocation::Header)
+    );
     let order = request(file(&out, "store.http"), "Place an order");
     assert_eq!(order.auth.kind, AuthKind::None, "`security: []` disables auth");
 
@@ -188,9 +226,16 @@ fn bodies_are_derived_from_schemas_and_examples() {
     let upload = request(pet, "Upload a photo");
     assert_eq!(upload.body.mode, BodyMode::Multipart);
     assert_eq!(upload.header("Content-Type").unwrap().value, "multipart/form-data; boundary=WebAppBoundary");
-    assert!(upload.body.text.contains("name=\"file\"; filename=\"file.png\"\nContent-Type: image/png\n\n< ./file.png"), "{}", upload.body.text);
+    assert!(
+        upload.body.text.contains("name=\"file\"; filename=\"file.png\"\nContent-Type: image/png\n\n< ./file.png"),
+        "{}",
+        upload.body.text
+    );
     assert!(upload.body.text.contains("name=\"caption\"\n\nRex at the beach"));
-    assert!(upload.body.text.contains("name=\"metadata\"\nContent-Type: application/json\n\n{\"takenAt\":\"2024-01-01T12:00:00Z\"}"));
+    assert!(upload
+        .body
+        .text
+        .contains("name=\"metadata\"\nContent-Type: application/json\n\n{\"takenAt\":\"2024-01-01T12:00:00Z\"}"));
     assert!(upload.body.text.ends_with("--WebAppBoundary--"));
 
     let order = request(file(&out, "store.http"), "Place an order");
@@ -217,7 +262,10 @@ fn openapi_31_schemas_handle_type_arrays_const_and_recursion() {
         })
     );
     let search = request(file(&out, "books.http"), "Search books");
-    assert_eq!(kv(&search.query.items), [("q", "dune", true), ("filter[year]", "1965", false), ("filter[lang]", "en", false)]);
+    assert_eq!(
+        kv(&search.query.items),
+        [("q", "dune", true), ("filter[year]", "1965", false), ("filter[lang]", "en", false)]
+    );
 }
 
 #[test]
@@ -283,7 +331,8 @@ fn environments_hold_servers_and_secrets() {
     let secrets: Vec<_> = out.environments[0].secrets.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     assert_eq!(secrets, [("token", ""), ("username", ""), ("password", ""), ("api_key", "")]);
 
-    let custom = petstore().generate(&GenerateOptions { base_url_variable: "petstoreUrl".into(), ..Default::default() });
+    let custom =
+        petstore().generate(&GenerateOptions { base_url_variable: "petstoreUrl".into(), ..Default::default() });
     assert_eq!(custom.environments[0].variables[0].0, "petstoreUrl");
     assert!(custom.files[0].file.requests[0].url.starts_with("{{petstoreUrl}}/"));
 
@@ -308,7 +357,7 @@ fn generated_files_serialize_and_reparse() {
                 for (a, b) in back.requests.iter().zip(&f.file.requests) {
                     assert_eq!((&a.name, &a.method, &a.url), (&b.name, &b.method, &b.url));
                     assert_eq!(a.query.items.len(), b.query.items.len(), "{text}");
-                    assert_eq!(a.auth, b.auth, "{text}");
+                    assert_eq!(Auth { raw: None, ..a.auth.clone() }, b.auth, "{text}");
                     assert_eq!(a.body.text, b.body.text, "{text}");
                     assert_eq!(a.body.mode, b.body.mode, "{text}");
                 }
@@ -328,6 +377,111 @@ fn snapshot_petstore_pet_file() {
 fn snapshot_library_books_file() {
     let out = generate(&library(), Grouping::Tag);
     insta::assert_snapshot!("library_books", serialize(file(&out, "books.http")));
+}
+
+#[test]
+fn query_examples_are_decoded_in_the_table_and_escaped_once_in_the_file() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Search, version: '1'}
+paths:
+  /search:
+    get:
+      parameters:
+        - {name: q, in: query, required: true, example: 'two words & more'}
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let file = &out.files[0].file;
+    assert_eq!(kv(&file.requests[0].query.items), [("q", "two words & more", true)]);
+    let text = serialize(file);
+    assert!(text.contains("/search?q=two%20words%20%26%20more\n"), "{text}");
+}
+
+#[test]
+fn description_lines_starting_with_at_stay_comments() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Notes, version: '1'}
+paths:
+  /notes:
+    get:
+      operationId: listNotes
+      description: |
+        Lists notes.
+          @name other
+        @timeout 1
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let text = serialize(&out.files[0].file);
+    insta::assert_snapshot!("at_description_lines", text);
+    let back = parse(&text);
+    let names: Vec<_> = back.requests[0].directives.iter().map(|d| (d.name.as_str(), d.value.as_str())).collect();
+    assert_eq!(names, [("name", "listNotes")], "{text}");
+}
+
+#[test]
+fn example_bodies_never_contain_http_syntax_lines() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Notes, version: '1'}
+paths:
+  /notes:
+    post:
+      operationId: createNote
+      requestBody:
+        content:
+          text/plain:
+            example: |
+              Intro
+              ### Heading
+              >> saved.txt
+              > {% client.log(1) %}
+              > handler.js
+              ## not a separator
+              end
+      responses: {'200': {description: OK}}
+  /notes/{id}:
+    get:
+      operationId: getNote
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let generated = &out.files[0].file;
+    let text = serialize(generated);
+    insta::assert_snapshot!("http_syntax_in_examples", text);
+    let back = parse(&text);
+    assert_eq!(back.requests.len(), generated.requests.len(), "{text}");
+    let note = &back.requests[0];
+    assert_eq!(note.response_handler, None, "{text}");
+    assert_eq!(note.body.text, generated.requests[0].body.text.trim_end());
+}
+
+#[test]
+fn invalid_json_specs_report_json_errors() {
+    // Missing comma after the `openapi` member.
+    let text = "{\n  \"openapi\": \"3.0.0\"\n  \"info\": {\"title\": \"x\", \"version\": \"1\"},\n  \"paths\": {}\n}\n";
+    let err = OpenApiDoc::parse(text, None).unwrap_err();
+    assert!(matches!(err, OpenApiError::Parse(_)), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 3 column 3"), "{msg}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("api.json");
+    std::fs::write(&path, format!("\n\n{text}")).unwrap();
+    let msg = OpenApiDoc::load_file(&path).unwrap_err().to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 5 column 3"), "{msg}");
+
+    // A `.json` file that doesn't start with `{` is still judged as JSON.
+    std::fs::write(&path, "<html>\n").unwrap();
+    let msg = OpenApiDoc::load_file(&path).unwrap_err().to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 1 column 1"), "{msg}");
+
+    // YAML specs still report YAML errors.
+    let msg = OpenApiDoc::parse("openapi: 3.0.0\ninfo: [unclosed\n", None).unwrap_err().to_string();
+    assert!(msg.contains("invalid YAML"), "{msg}");
 }
 
 // ---------------------------------------------------------------- external refs
@@ -389,7 +543,12 @@ fn parameter_descriptions_can_be_turned_off() {
     for f in &out.files {
         let text = serialize(&f.file);
         assert!(!text.contains("# @param") && !text.contains("# @header"), "{text}");
-        assert!(f.file.requests.iter().all(|r| r.query.items.iter().chain(&r.headers.items).all(|i| i.description.is_empty())));
+        assert!(f.file.requests.iter().all(|r| r
+            .query
+            .items
+            .iter()
+            .chain(&r.headers.items)
+            .all(|i| i.description.is_empty())));
     }
     // Request descriptions (operation summaries/descriptions) are unaffected.
     assert!(out.files.iter().any(|f| f.file.requests.iter().any(|r| !r.comments.is_empty())));

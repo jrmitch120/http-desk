@@ -25,17 +25,13 @@ export function newRequest(name = "New request"): Request {
     httpVersion: null,
     query: { enabled: true, items: [] },
     headers: { enabled: true, items: [] },
-    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header" },
+    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header", raw: null },
     body: { enabled: true, mode: "none", text: "" },
     extraLines: [],
     responseHandler: null,
     leading: "",
     raw: null,
   };
-}
-
-export function emptyFile(): HttpFile {
-  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf" };
 }
 
 export function displayName(req: Request): string {
@@ -47,8 +43,110 @@ export function displayName(req: Request): string {
 
 // ------------------------------------------------------------------ URL ⇄ params
 
+// Query escaping per ADR-0001, mirroring crates/httpdesk-core/src/query.rs: the table
+// holds decoded values; the URL bar (like the file) escapes only what would change the
+// query's structure. Other `%XX` stay as written. `{{variable}}` references are kept.
+
+type Part = "name" | "value";
+
+function structural(c: string, part: Part): boolean {
+  return /\p{White_Space}/u.test(c) || c === "%" || c === "&" || c === "#" || (part === "name" && c === "=");
+}
+
+function escapedByte(s: string, i: number): number | null {
+  return s[i] === "%" && /^[0-9a-fA-F]{2}$/.test(s.slice(i + 1, i + 3)) ? parseInt(s.slice(i + 1, i + 3), 16) : null;
+}
+
+/** The character that the `%XX` escapes at `s[i]` decode to, and their length. */
+function escapedChar(s: string, i: number): [string, number] | null {
+  const lead = escapedByte(s, i);
+  if (lead === null) return null;
+  const len = lead < 0x80 ? 1 : lead >= 0xc0 && lead < 0xe0 ? 2 : lead >= 0xe0 && lead < 0xf0 ? 3 : lead >= 0xf0 && lead < 0xf8 ? 4 : 0;
+  if (!len) return null;
+  const bytes: number[] = [];
+  for (let k = 0; k < len; k++) {
+    const b = escapedByte(s, i + k * 3);
+    if (b === null) return null;
+    bytes.push(b);
+  }
+  try {
+    const c = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+    return [...c].length === 1 ? [c, len * 3] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Splits text into plain runs and `{{…}}` references, as the resolver finds them. */
+function segments(text: string): [boolean, string][] {
+  const out: [boolean, string][] = [];
+  let rest = text;
+  for (;;) {
+    const start = rest.indexOf("{{");
+    const end = start < 0 ? -1 : rest.indexOf("}}", start + 2);
+    if (end < 0) break;
+    out.push([false, rest.slice(0, start)], [true, rest.slice(start, end + 2)]);
+    rest = rest.slice(end + 2);
+  }
+  out.push([false, rest]);
+  return out;
+}
+
+function percentEncode(c: string): string {
+  return [...new TextEncoder().encode(c)].map((b) => "%" + b.toString(16).toUpperCase().padStart(2, "0")).join("");
+}
+
+function escapeParam(text: string, part: Part): string {
+  let out = "";
+  for (const [ref, s] of segments(text)) {
+    if (ref) {
+      out += s;
+      continue;
+    }
+    const chars = [...s];
+    let i = 0;
+    chars.forEach((c, k) => {
+      if (c === "%") {
+        const decoded = escapedChar(s, i);
+        const readsAsEscape = decoded !== null && structural(decoded[0], part);
+        const beforeEscape = k + 1 < chars.length && structural(chars[k + 1], part);
+        out += readsAsEscape || beforeEscape ? "%25" : "%";
+      } else {
+        out += structural(c, part) ? percentEncode(c) : c;
+      }
+      i += c.length;
+    });
+  }
+  return out;
+}
+
+function unescapeParam(text: string, part: Part): string {
+  let out = "";
+  for (const [ref, s] of segments(text)) {
+    if (ref) {
+      out += s;
+      continue;
+    }
+    let i = 0;
+    while (i < s.length) {
+      const decoded = escapedChar(s, i);
+      if (decoded && structural(decoded[0], part)) {
+        out += decoded[0];
+        i += decoded[1];
+      } else {
+        const c = String.fromCodePoint(s.codePointAt(i)!);
+        out += c;
+        i += c.length;
+      }
+    }
+  }
+  return out;
+}
+
 function renderParam(p: KeyValue): string {
-  return p.value === "" ? p.name : `${p.name}=${p.value}`;
+  const name = escapeParam(p.name, "name");
+  if (p.value === "") return p.equals ? `${name}=` : name;
+  return `${name}=${escapeParam(p.value, "value")}`;
 }
 
 export function parseQuery(qs: string): KeyValue[] {
@@ -57,7 +155,10 @@ export function parseQuery(qs: string): KeyValue[] {
     .filter((p) => p !== "")
     .map((p) => {
       const i = p.indexOf("=");
-      return i < 0 ? { enabled: true, name: p, value: "" } : { enabled: true, name: p.slice(0, i), value: p.slice(i + 1) };
+      if (i < 0) return { enabled: true, name: unescapeParam(p, "name"), value: "" };
+      const kv: KeyValue = { enabled: true, name: unescapeParam(p.slice(0, i), "name"), value: unescapeParam(p.slice(i + 1), "value") };
+      if (kv.value === "") kv.equals = true;
+      return kv;
     });
 }
 
@@ -100,6 +201,35 @@ export function applyUrlText(req: Request, text: string): void {
   req.query.items = next;
 }
 
+// ------------------------------------------------------------------ bulk edit
+
+/** Key/value rows as bulk-edit text: one `name<sep> value` per line, `//` = disabled. */
+export function formatBulk(items: KeyValue[], separator: string, toggles: boolean): string {
+  return items
+    .filter((r) => r.name || r.value)
+    .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
+    .join("\n");
+}
+
+/** Bulk-edit text back to rows. Descriptions come from `previous` (matched by name),
+ *  which should be the rows as they were when bulk editing started. */
+export function parseBulk(text: string, separator: string, previous: KeyValue[]): KeyValue[] {
+  const docs = [...previous];
+  return text
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => {
+      const disabled = l.trimStart().startsWith("//");
+      const line = disabled ? l.trimStart().slice(2) : l;
+      const idx = line.indexOf(separator);
+      const name = (idx < 0 ? line : line.slice(0, idx)).trim();
+      const value = idx < 0 ? "" : line.slice(idx + 1).trim();
+      const at = docs.findIndex((p) => p.name === name);
+      const description = at < 0 ? undefined : docs.splice(at, 1)[0].description;
+      return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
+    });
+}
+
 // ------------------------------------------------------------------ headers
 
 export function findHeader(req: Request, name: string): KeyValue | undefined {
@@ -125,12 +255,24 @@ export const MODE_CONTENT_TYPES: Partial<Record<BodyMode, string>> = {
 
 const AUTO_TYPES = new Set(Object.values(MODE_CONTENT_TYPES).concat(["text/xml"]));
 
-/** Switches body mode and keeps Content-Type in sync, like Postman. */
+/** The Content-Type `setBodyMode` sets for `mode`: what HttpDesk adds by itself.
+ *  `current` supplies the boundary of a multipart header. */
+function autoContentType(mode: BodyMode, current: string): string | undefined {
+  if (mode === "multipart") return `multipart/form-data; boundary=${boundaryOf(current) ?? "HttpDeskBoundary"}`;
+  return MODE_CONTENT_TYPES[mode];
+}
+
+/** Switches body mode and keeps Content-Type in sync, like Postman. Switching to
+ *  none drops a Content-Type HttpDesk added itself, but not one the user typed. */
 export function setBodyMode(req: Request, mode: BodyMode): void {
   const prev = req.body.mode;
   req.body.mode = mode;
   const ct = findHeader(req, "content-type");
   const wanted = MODE_CONTENT_TYPES[mode];
+  if (mode === "none") {
+    if (ct && ct.value === autoContentType(prev, ct.value)) req.headers.items.splice(req.headers.items.indexOf(ct), 1);
+    return;
+  }
   if (mode === "multipart") {
     const boundary = boundaryOf(ct?.value ?? "") ?? "HttpDeskBoundary";
     setHeader(req, "Content-Type", `multipart/form-data; boundary=${boundary}`);
@@ -172,12 +314,19 @@ function encodePreservingVars(s: string): string {
     .join("");
 }
 
+/** Joins one-field-per-line form bodies with `&`, like the sender does. */
+function joinFormLines(text: string): string {
+  let out = "";
+  for (const line of text.split("\n").map((l) => l.trim())) {
+    if (line === "") continue;
+    if (out !== "" && !out.endsWith("&") && !line.startsWith("&")) out += "&";
+    out += line;
+  }
+  return out;
+}
+
 export function parseForm(text: string): FormField[] {
-  const joined = text
-    .split("\n")
-    .map((l) => l.trim())
-    .join("");
-  return joined
+  return joinFormLines(text)
     .split("&")
     .filter((p) => p !== "")
     .map((p) => {
@@ -191,6 +340,24 @@ export function buildForm(fields: FormField[]): string {
     .filter((f) => f.name !== "")
     .map((f) => `${encodePreservingVars(f.name)}=${encodePreservingVars(f.value)}`)
     .join("\n&");
+}
+
+// ------------------------------------------------------------------ file
+
+export interface FileRef {
+  /** `<@ path`: variables in the file's content are substituted. */
+  substitute: boolean;
+  path: string;
+}
+
+/** `< path` or `<@ path` (space optional), the same rule as the sender. `<tag>` and `<?xml` are content. */
+export function parseFileRef(text: string): FileRef | null {
+  const t = text.trim();
+  const m = /^<(@?)\s*([^\n]*)$/.exec(t);
+  if (!m || t.startsWith("<?")) return null;
+  const path = m[2].trim();
+  if (path === "" || path.startsWith("<") || path.includes(">")) return null;
+  return { substitute: m[1] === "@", path };
 }
 
 // ------------------------------------------------------------------ multipart
@@ -221,9 +388,9 @@ export function parseMultipart(text: string, boundary: string): MultipartPart[] 
     const disp = /content-disposition:[^\n]*?;\s*name="([^"]*)"/i.exec(head);
     if (!disp) continue;
     const ct = /content-type:\s*([^\n]+)/i.exec(head)?.[1].trim();
-    const fileRef = /^<\s+(.+)$/.exec(content.trim());
-    const isFile = /filename=/i.test(head) && !!fileRef;
-    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef![1].trim() : content, contentType: ct });
+    const fileRef = parseFileRef(content);
+    const isFile = /filename=/i.test(head) && !!fileRef && !fileRef.substitute;
+    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef!.path : content, contentType: ct });
   }
   return parts;
 }
@@ -266,11 +433,8 @@ export function setDirective(req: Request, name: string, value: string | null): 
 
 // ------------------------------------------------------------------ variables
 
+/** A `{{name}}` reference; group 1 is the name. Global: use with matchAll. */
 export const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
-
-export function findVariables(text: string): string[] {
-  return [...text.matchAll(VAR_RE)].map((m) => m[1]);
-}
 
 /** All file-scoped variables: header + every request's `@var` lines. */
 export function fileVariables(file: HttpFile): Variable[] {
@@ -342,6 +506,62 @@ export function basename(path: string): string {
 export function dirname(path: string): string {
   const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i <= 0 ? path : path.slice(0, i);
+}
+
+/** Why `name` can't be used as a file or folder name, or null if it can. */
+export function nameError(name: string): string | null {
+  return /[\\/]/.test(name) || name === "." || name === ".." ? "Names can't contain / or \\, or be . or .." : null;
+}
+
+// ------------------------------------------------------------------ field safety
+// Mirrors the save-time checks in crates/httpdesk-core/src/serializer.rs.
+
+/** Why a header line with this name would read back as something else, or null. */
+export function headerNameError(name: string): string | null {
+  if (/[\r\n]/.test(name)) return "Header names can't contain line breaks";
+  if (/\s/.test(name)) return "Header names can't contain spaces";
+  if (name.includes(":")) return "Header names can't contain ':'";
+  const prefix = ["//", "#", "~", "|", "&", "?"].find((p) => name.startsWith(p));
+  return prefix ? `Header names can't start with '${prefix}'` : null;
+}
+
+/** Why a Basic auth username can't be saved, or null. The username ends at the first ':' (RFC 7617). */
+export function basicUsernameError(username: string): string | null {
+  return username.includes(":") ? "Basic auth usernames can't contain ':'" : null;
+}
+
+/** Why `@name = value` wouldn't read back as a variable, or null. Empty names aren't saved. */
+export function variableNameError(name: string): string | null {
+  return name === "" || /^[\p{Alphabetic}\p{N}_.$-]+$/u.test(name) ? null : "Variable names can only use letters, digits, _, -, . and $";
+}
+
+export interface BodySyntaxWarning {
+  /** 1-based line number. */
+  line: number;
+  message: string;
+}
+
+/** Response handler or output redirect at column 0, the same rule as the parser. */
+function isHandlerStart(line: string): boolean {
+  if (line.startsWith(">>")) return true;
+  if (!line.startsWith(">")) return false;
+  const rest = line.slice(1).trim();
+  return rest.startsWith("{%") || (rest !== "" && !/\s/.test(rest) && rest.endsWith(".js"));
+}
+
+/** Body lines that `.http` syntax (other clients, and HttpDesk on reload) reads as a separator or handler. */
+export function bodySyntaxWarnings(text: string): BodySyntaxWarning[] {
+  const out: BodySyntaxWarning[] = [];
+  text.split("\n").forEach((l, i) => {
+    const line = i + 1;
+    if (l.startsWith("###")) {
+      out.push({ line, message: `Line ${line} starts with ###, so it will be read as the start of a new request.` });
+    } else if (isHandlerStart(l)) {
+      const prefix = l.startsWith(">>") ? ">>" : ">";
+      out.push({ line, message: `Line ${line} starts with ${prefix}, so it and the lines after it will be read as a response handler.` });
+    }
+  });
+  return out;
 }
 
 export function joinPath(dir: string, name: string): string {

@@ -3,8 +3,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, newRequest, uid } from "./http";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -15,6 +15,9 @@ export interface Doc {
   savedHeader: string;
   externalChange: boolean;
   missing: boolean;
+  /** Requests of Orphaned tabs: gone from the file on disk but still open, with
+   *  their edits. Saving appends them back to the file (see `save`). */
+  orphans: Request[];
 }
 
 export interface Tab {
@@ -29,12 +32,16 @@ export interface RunState {
   startedAt: number;
   response?: HttpResponse;
   error?: string;
+  /** The last send was cancelled; `response` is still the one before it. */
+  cancelled?: boolean;
 }
 
 export interface Toast {
   id: string;
   kind: "info" | "success" | "error";
   message: string;
+  /** Hovered or has selected text: not auto-dismissed (see `holdToast`). */
+  held?: boolean;
 }
 
 export interface DialogButton {
@@ -42,6 +49,9 @@ export interface DialogButton {
   value: string;
   primary?: boolean;
   danger?: boolean;
+  /** Focused when the dialog opens, instead of the primary button. Set it on
+   *  Cancel for irreversible confirmations, so a stray Enter destroys nothing. */
+  focus?: boolean;
 }
 
 export interface DialogState {
@@ -57,6 +67,9 @@ export type ModalKind = "env" | "openapi" | "settings" | null;
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
 }
+
+/** Identifies a request across reloads and searches: name + method + URL. */
+const signature = (name: string, method: string, url: string) => `${name}\u0000${method}\u0000${url}`;
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -77,6 +90,9 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  /** True until `init` has finished reopening the last workspace, so the
+   *  Welcome screen doesn't flash first. */
+  starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
 
@@ -97,54 +113,101 @@ class AppStore {
 
   async init() {
     try {
+      await this.start();
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async start() {
+    try {
       this.settings = await api.getSettings();
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
     this.applyTheme();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
-    const win = getCurrentWindow();
-    await win.onCloseRequested(async (e) => {
-      const dirty = this.dirtyDocs();
-      if (!dirty.length) return;
-      e.preventDefault();
-      const r = await this.choose("Unsaved changes", `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`, [
-        { label: "Cancel", value: "cancel" },
-        { label: "Don't save", value: "discard", danger: true },
-        { label: "Save all", value: "save", primary: true },
-      ]);
-      if (r.button === "cancel") return;
-      if (r.button === "save") {
-        await this.saveAll();
-        if (this.dirtyDocs().length) return; // a save failed; stay open
-      }
-      await win.destroy();
+    await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
+    await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
+    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
+    // turns those into a close request; see quit.rs). With nothing unsaved the
+    // window closes at once, which quits the app.
+    await getCurrentWindow().onCloseRequested(async (e) => {
+      if (!(await this.confirmQuit())) e.preventDefault();
     });
-    const last = this.settings?.recentWorkspaces[0];
-    if (last && (await api.pathExists(last).catch(() => false))) await this.openWorkspace(last);
+    // Tells the shell whether a logout or shutdown needs to ask first.
+    let unsaved = false;
+    $effect.root(() => {
+      $effect(() => {
+        const now = this.dirtyDocs().length > 0;
+        if (now !== unsaved) api.setUnsaved((unsaved = now)).catch(() => {});
+      });
+    });
+    // Forget recent workspaces whose folders are gone, then reopen the last one.
+    const recent = this.settings?.recentWorkspaces ?? [];
+    const exists = await Promise.all(recent.map((p) => api.pathExists(p).catch(() => true)));
+    if (exists.includes(false)) await this.updateSettings({ recentWorkspaces: recent.filter((_, i) => exists[i]) });
+    if (recent.length && exists[0]) await this.openWorkspace(recent[0]);
   }
 
   applyTheme() {
     document.documentElement.dataset.theme = this.settings?.theme ?? "dark";
   }
 
-  async updateSettings(patch: Partial<AppSettings>) {
-    if (!this.settings) return;
+  /** Applies and saves settings; a failed save shows an error toast and returns false. */
+  async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
+    if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
-    await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+    try {
+      await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+      return true;
+    } catch (e) {
+      this.toast("error", `Could not save settings: ${errorMessage(e)}`);
+      return false;
+    }
+  }
+
+  /** The unsaved-changes flow for leaving the open documents behind (closing the
+   *  window, quitting, switching workspace). True to go ahead: nothing was
+   *  unsaved, the user chose Don't save, or Save all saved every file. */
+  async confirmUnsaved(question = ""): Promise<boolean> {
+    const dirty = this.dirtyDocs();
+    if (!dirty.length) return true;
+    const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
+    const r = await this.choose("Unsaved changes", question ? `${summary} ${question}` : summary, [
+      { label: "Cancel", value: "cancel" },
+      { label: "Don't save", value: "discard", danger: true },
+      { label: "Save all", value: "save", primary: true },
+    ]);
+    if (r.button === "cancel") return false;
+    if (r.button === "save") {
+      await this.saveAll();
+      if (this.dirtyDocs().length) return false; // a save failed; it was reported
+    }
+    return true;
+  }
+
+  private quitting = false;
+
+  /** Whether the window may close (and the app quit). Asks about unsaved files;
+   *  a request made while one is already asking is turned down. */
+  async confirmQuit(): Promise<boolean> {
+    if (this.quitting) return false;
+    this.quitting = true;
+    try {
+      return await this.confirmUnsaved();
+    } finally {
+      this.quitting = false;
+    }
   }
 
   async openWorkspace(path: string) {
-    if (this.dirtyDocs().length) {
-      const r = await this.choose("Unsaved changes", "Open another workspace and discard unsaved changes?", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Discard", value: "discard", danger: true },
-      ]);
-      if (r.button !== "discard") return;
-    }
+    if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {
       const info = await api.openWorkspace(path);
+      this.missingRoot = null;
+      if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
@@ -162,8 +225,11 @@ class AppStore {
     }
   }
 
+  /** A workspace folder that was deleted or moved while open; the user has been told. */
+  private missingRoot: string | null = null;
+
   async refreshTree() {
-    if (!this.root) return;
+    if (!this.root || this.root === this.missingRoot) return;
     try {
       this.tree = await api.getTree();
     } catch (e) {
@@ -173,16 +239,19 @@ class AppStore {
 
   // ---------------------------------------------------------------- documents
 
-  private makeDoc(path: string, file: HttpFile): Doc {
+  /** `orphans` keep their snapshot from `prevSaved`, so their edits still show as unsaved. */
+  private makeDoc(path: string, file: HttpFile, orphans: Request[] = [], prevSaved: Record<string, string> = {}): Doc {
     file.requests.forEach(ensureKey);
+    const orphanSaved = orphans.filter((r) => r._key! in prevSaved).map((r) => [r._key!, prevSaved[r._key!]]);
     return {
       path,
       file,
-      saved: Object.fromEntries(file.requests.map((r) => [r._key!, snapshot(r)])),
+      saved: Object.fromEntries([...orphanSaved, ...file.requests.map((r) => [r._key!, snapshot(r)])]),
       savedOrder: file.requests.map((r) => r._key).join(","),
       savedHeader: JSON.stringify(file.header),
       externalChange: false,
       missing: false,
+      orphans,
     };
   }
 
@@ -219,37 +288,58 @@ class AppStore {
 
   requestFor(tab: Tab | null): Request | undefined {
     if (!tab) return undefined;
-    return this.docs[tab.path]?.file.requests.find((r) => r._key === tab.key);
+    return this.findRequest(tab.path, tab.key);
+  }
+
+  /** A request of the document: in the file, or held by an Orphaned tab. */
+  private findRequest(path: string, key: string): Request | undefined {
+    const doc = this.docs[path];
+    return doc?.file.requests.find((r) => r._key === key) ?? doc?.orphans.find((r) => r._key === key);
+  }
+
+  /** True for an Orphaned tab: its request is no longer in the file on disk. */
+  isOrphaned(tab: Tab): boolean {
+    const doc = this.docs[tab.path];
+    return !!doc && (doc.missing || doc.orphans.some((r) => r._key === tab.key));
   }
 
   isRequestDirty(path: string, key: string): boolean {
     const doc = this.docs[path];
-    const req = doc?.file.requests.find((r) => r._key === key);
+    const req = this.findRequest(path, key);
     if (!doc || !req) return false;
     return doc.saved[key] !== snapshot(req);
   }
 
+  /** Edits in an Orphaned tab count too: they exist nowhere on disk. */
   isDocDirty(path: string): boolean {
     const doc = this.docs[path];
     if (!doc) return false;
     if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
     if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-    return doc.file.requests.some((r) => doc.saved[r._key!] !== snapshot(r));
+    return [...doc.file.requests, ...doc.orphans].some((r) => doc.saved[r._key!] !== snapshot(r));
   }
 
   dirtyDocs(): string[] {
     return Object.keys(this.docs).filter((p) => this.isDocDirty(p));
   }
 
-  async save(path: string): Promise<boolean> {
+  /** Saves the file. Orphaned requests with edits, or listed in `revive`, are
+   *  appended to it; unedited ones stay orphaned so a request another editor
+   *  removed isn't silently restored. */
+  async save(path: string, revive: string[] = []): Promise<boolean> {
     const doc = this.docs[path];
     if (!doc) return false;
     try {
-      const keys = doc.file.requests.map((r) => r._key!);
-      const fresh = await api.saveHttpFile(path, $state.snapshot(doc.file) as HttpFile);
+      const file = $state.snapshot(doc.file) as HttpFile;
+      const back = doc.orphans.filter((r) => revive.includes(r._key!) || doc.saved[r._key!] !== snapshot(r));
+      // Text that preceded the request in the old file may still be there.
+      file.requests.push(...back.map((r) => ({ ...($state.snapshot(r) as Request), leading: "" })));
+      const keys = file.requests.map((r) => r._key!);
+      const fresh = await api.saveHttpFile(path, file);
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
-      this.docs[path] = this.makeDoc(path, fresh);
+      const orphans = doc.orphans.filter((r) => !back.includes(r));
+      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -257,16 +347,22 @@ class AppStore {
     }
   }
 
+  /** Saves a tab's file; an Orphaned tab's request is written back into it. */
+  async saveTab(tab: Tab): Promise<boolean> {
+    return this.save(tab.path, [tab.key]);
+  }
+
   async saveActive() {
     const tab = this.activeTab;
-    if (tab) await this.save(tab.path);
+    if (tab) await this.saveTab(tab);
   }
 
   async saveAll() {
     for (const p of this.dirtyDocs()) await this.save(p);
   }
 
-  /** Reloads from disk, keeping tabs attached to the same requests where possible. */
+  /** Reloads from disk, keeping tabs attached to the same requests where possible.
+   *  Tabs whose request can't be found any more become Orphaned tabs. */
   async reload(path: string) {
     const old = this.docs[path];
     let file: HttpFile;
@@ -276,34 +372,71 @@ class AppStore {
       if (old) old.missing = true;
       return;
     }
+    let orphans: Request[] = [];
     if (old) {
-      const sig = (r: Request) => `${r.name}\u0000${r.method}\u0000${r.url}`;
-      const unused = new Map(old.file.requests.map((r) => [r._key!, r]));
-      for (const r of file.requests) {
-        const match = [...unused.values()].find((o) => sig(o) === sig(r));
-        if (match) {
-          r._key = match._key;
-          unused.delete(match._key!);
+      // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
+      const unused = new Map([...old.file.requests, ...old.orphans].map((r) => [r._key!, r]));
+      const sig = (r: Request) => signature(r.name, r.method, r.url);
+      const byName = (r: Request) => r.name;
+      for (const same of [sig, byName]) {
+        for (const r of file.requests) {
+          if (r._key || (same === byName && !r.name)) continue;
+          const match = [...unused.values()].find((o) => same(o) === same(r));
+          if (match) {
+            r._key = match._key;
+            unused.delete(match._key!);
+          }
         }
       }
-      if (file.requests.length === old.file.requests.length) {
-        file.requests.forEach((r, i) => {
-          const o = old.file.requests[i];
-          if (!r._key && unused.has(o._key!)) {
-            r._key = o._key;
-            unused.delete(o._key!);
-          }
-        });
-      }
+      // Then by position: a still-unmatched request takes the one now at its
+      // index, unless that one was already claimed.
+      old.file.requests.forEach((o, i) => {
+        const r = file.requests[i];
+        if (r && !r._key && unused.has(o._key!)) {
+          r._key = o._key;
+          unused.delete(o._key!);
+        }
+      });
+      const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
+      orphans = [...unused.values()].filter((r) => held.has(r._key!));
     }
-    this.docs[path] = this.makeDoc(path, file);
-    const keys = new Set(file.requests.map((r) => r._key));
-    for (const t of this.tabs.filter((t) => t.path === path && !keys.has(t.key))) this.removeTab(t.id);
+    this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
   }
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private async onExternalChange(paths: string[]) {
+  /** Whether `file`, fresh from disk, is still what the document was last loaded or saved as. */
+  private matchesSaved(doc: Doc, file: HttpFile): boolean {
+    const keys = doc.savedOrder ? doc.savedOrder.split(",") : [];
+    return (
+      JSON.stringify(file.header) === doc.savedHeader &&
+      file.trailing === doc.file.trailing &&
+      file.lineEnding === doc.file.lineEnding &&
+      file.requests.length === keys.length &&
+      file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
+    );
+  }
+
+  /** Asks before OpenAPI generation overwrites `conflicts` (existing files),
+   *  naming the open ones with unsaved edits, which the overwrite discards. */
+  async confirmOverwrite(conflicts: string[]): Promise<boolean> {
+    const names = conflicts.map(basename);
+    const list = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
+    const one = conflicts.length === 1;
+    let message = `${conflicts.length} file${one ? "" : "s"} already exist${one ? "s" : ""}: ${list}. Overwriting replaces their contents.`;
+    const unsaved = conflicts.filter((p) => this.isDocDirty(p)).map(basename);
+    if (unsaved.length) {
+      message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
+    }
+    const r = await this.choose("Overwrite existing files?", message, [
+      { label: "Cancel", value: "cancel", focus: true },
+      { label: "Overwrite", value: "overwrite", danger: true },
+    ]);
+    return r.button === "overwrite";
+  }
+
+  /** Handles a `workspace-changed` event from the watcher. */
+  async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p))) await this.loadEnvironments();
@@ -315,11 +448,66 @@ class AppStore {
         doc.missing = true;
       } else if (this.isDocDirty(p)) {
         doc.missing = false;
-        doc.externalChange = true;
+        // Our own rename or move (or a touch) leaves the content as loaded: nothing to warn about.
+        const disk = await api.readHttpFile(p).catch(() => null);
+        if (!disk || !this.matchesSaved(doc, disk)) doc.externalChange = true;
       } else {
         await this.reload(p);
       }
     }
+  }
+
+  /** Handles a `workspace-missing` event: the open workspace folder was deleted or moved. */
+  onWorkspaceMissing(root: string) {
+    if (root !== this.root || root === this.missingRoot) return;
+    this.missingRoot = root;
+    this.toast("error", `The workspace folder "${basename(root)}" was deleted or moved. Open it again from where it is now.`);
+  }
+
+  /** Handles a `workspace-watch-error` event. */
+  onWatchError(message: string) {
+    this.toast("error", `Watching the workspace for changes failed: ${message}. Changes made outside HttpDesk may not show up.`);
+  }
+
+  // ---------------------------------------------------------------- search
+
+  /** Case-insensitive search over request names, methods, URLs and file names.
+   *  Open documents are searched as they are on screen (unsaved edits
+   *  included); every other file is searched on disk by the backend. */
+  async searchRequests(query: string): Promise<SearchHit[]> {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    const onDisk = await api.searchRequests(query);
+    const open = Object.values(this.docs).filter((d) => !d.missing);
+    const hits = onDisk.filter((h) => !open.some((d) => d.path === h.path));
+    for (const doc of open) {
+      const file = basename(doc.path).toLowerCase();
+      doc.file.requests.forEach((r, index) => {
+        const name = displayName(r);
+        if (terms.every((t) => `${name} ${r.method} ${r.url} ${file}`.toLowerCase().includes(t))) {
+          hits.push({ path: doc.path, index, name, method: r.method, url: r.url });
+        }
+      });
+    }
+    // Explorer order, as the backend returns them; files not in the tree go last.
+    const order = new Map<string, number>();
+    const walk = (n: TreeNode) => (n.kind === "file" ? order.set(n.path, order.size) : n.children?.forEach(walk));
+    if (this.tree) walk(this.tree);
+    const rank = (h: SearchHit) => order.get(h.path) ?? order.size;
+    return hits.sort((a, b) => rank(a) - rank(b) || (a.path === b.path ? a.index - b.index : 0));
+  }
+
+  /** Opens the request a search result points at. It is found by name + method
+   *  + URL, since unsaved edits may have moved it since the search; `index`
+   *  only breaks ties and is the fallback when nothing matches. */
+  async openSearchHit(hit: SearchHit) {
+    const doc = await this.loadDoc(hit.path);
+    if (!doc) return;
+    const want = signature(hit.name, hit.method, hit.url);
+    const reqs = doc.file.requests;
+    const same = (r: Request | undefined) => !!r && signature(displayName(r), r.method, r.url) === want;
+    const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
+    if (req) await this.openRequest(hit.path, { key: req._key });
   }
 
   // ---------------------------------------------------------------- tabs
@@ -342,14 +530,21 @@ class AppStore {
   private removeTab(id: string) {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
-    this.tabs.splice(idx, 1);
+    const [tab] = this.tabs.splice(idx, 1);
     delete this.runs[id];
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
+    // An orphaned request lives only in its tab.
+    const doc = this.docs[tab.path];
+    if (doc && !this.tabs.some((t) => t.path === tab.path && t.key === tab.key)) {
+      doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
+    }
   }
 
-  async closeTab(id: string) {
+  /** Closes a tab, asking first if it has unsaved edits. Returns false if it stays open
+   *  (the user cancelled or the save failed). */
+  async closeTab(id: string): Promise<boolean> {
     const tab = this.tabs.find((t) => t.id === id);
-    if (!tab) return;
+    if (!tab) return true;
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
@@ -357,11 +552,19 @@ class AppStore {
         { label: "Don't save", value: "discard", danger: true },
         { label: "Save", value: "save", primary: true },
       ]);
-      if (r.button === "cancel") return;
-      if (r.button === "save" && !(await this.save(tab.path))) return;
+      if (r.button === "cancel") return false;
+      if (r.button === "save" && !(await this.saveTab(tab))) return false;
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     this.removeTab(id);
+    return true;
+  }
+
+  /** Closes tabs one after another (Close all / Close others), asking about each
+   *  unsaved one in turn. Stops at the first tab that stays open; the rest stay too. */
+  async closeTabs(ids: string[]): Promise<boolean> {
+    for (const id of ids) if (!(await this.closeTab(id))) return false;
+    return true;
   }
 
   revertRequest(path: string, key: string) {
@@ -438,7 +641,7 @@ class AppStore {
 
   async createFile(dir: string) {
     const name = await this.prompt("New .http file", "requests.http", "requests.http", true);
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     const file = name.match(/\.(http|rest)$/i) ? name : `${name}.http`;
     const path = joinPath(dir, file);
     const content = "### New request\nGET https://httpbin.org/get\nAccept: application/json\n";
@@ -455,7 +658,7 @@ class AppStore {
 
   async createFolder(dir: string) {
     const name = await this.prompt("New folder", "", "folder name");
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     try {
       await api.createDir(joinPath(dir, name));
       this.expanded[dir] = true;
@@ -466,9 +669,21 @@ class AppStore {
   }
 
   async renamePath(path: string) {
-    const name = await this.prompt("Rename", basename(path), undefined, true);
-    if (!name || name === basename(path)) return;
+    const old = basename(path);
+    const typed = await this.prompt("Rename", old, undefined, true);
+    if (!typed || !this.validName(typed)) return;
+    // A request file keeps its extension when the new name leaves it out.
+    const ext = old.match(/\.(http|rest)$/i)?.[0];
+    const name = ext && !/\.(http|rest)$/i.test(typed) ? typed + ext : typed;
+    if (name === old) return;
     await this.movePath(path, joinPath(dirname(path), name));
+  }
+
+  /** Shows why a typed file/folder name is invalid; true if it's fine. */
+  private validName(name: string): boolean {
+    const error = nameError(name);
+    if (error) this.toast("error", error);
+    return !error;
   }
 
   async movePath(from: string, to: string) {
@@ -499,7 +714,14 @@ class AppStore {
     ]);
     if (r.button !== "delete") return;
     try {
-      await api.deletePath(path);
+      if ((await api.deletePath(path)) === "trashUnavailable") {
+        const ok = await this.choose("Couldn't move to trash", `Delete "${basename(path)}" permanently? This can't be undone.`, [
+          { label: "Cancel", value: "cancel", focus: true },
+          { label: "Delete permanently", value: "delete", danger: true },
+        ]);
+        if (ok.button !== "delete") return;
+        await api.deletePermanently(path);
+      }
     } catch (e) {
       this.toast("error", errorMessage(e));
       return;
@@ -519,7 +741,8 @@ class AppStore {
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading) return;
     const runId = uid();
-    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: this.runs[tabId]?.response };
+    const previous = this.runs[tabId]?.response;
+    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({
         runId,
@@ -530,13 +753,23 @@ class AppStore {
       });
       if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
     } catch (e) {
-      if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+      if (this.runs[tabId]?.runId !== runId) return;
+      this.runs[tabId] = this.cancelled.delete(runId)
+        ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
+        : { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+    } finally {
+      this.cancelled.delete(runId);
     }
   }
 
+  /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */
+  private cancelled = new Set<string>();
+
   async cancel(tabId: string) {
     const run = this.runs[tabId];
-    if (run?.loading) await api.cancelRequest(run.runId);
+    if (!run?.loading) return;
+    this.cancelled.add(run.runId);
+    await api.cancelRequest(run.runId);
   }
 
   // ---------------------------------------------------------------- environments
@@ -567,33 +800,52 @@ class AppStore {
   toast(kind: Toast["kind"], message: string) {
     const id = uid();
     this.toasts.push({ id, kind, message });
-    setTimeout(() => (this.toasts = this.toasts.filter((t) => t.id !== id)), kind === "error" ? 7000 : 3500);
+    const expire = () => {
+      // Held toasts (hovered, or with text selected) wait until released.
+      if (this.toasts.find((t) => t.id === id)?.held) setTimeout(expire, 1000);
+      else this.toasts = this.toasts.filter((t) => t.id !== id);
+    };
+    setTimeout(expire, kind === "error" ? 7000 : 3500);
   }
 
-  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+  /** Keeps a toast on screen while the user hovers it or selects its text. */
+  holdToast(id: string, held: boolean) {
+    const t = this.toasts.find((t) => t.id === id);
+    if (t) t.held = held;
+  }
+
+  /** Dialogs waiting for the one on screen (`dialog`) to be answered, oldest first. */
+  private dialogQueue: DialogState[] = [];
+
+  /** Shows the dialog, or queues it behind the one on screen. */
+  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string }> {
     return new Promise((resolve) => {
-      this.dialog = { title, message, buttons, resolve };
+      const next = { ...d, resolve };
+      if (this.dialog) this.dialogQueue.push(next);
+      else this.dialog = next;
     });
   }
 
+  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+    return this.openDialog({ title, message, buttons });
+  }
+
   async prompt(title: string, value: string, placeholder?: string, selectStem = false): Promise<string | null> {
-    const r = await new Promise<{ button: string; value: string }>((resolve) => {
-      this.dialog = {
-        title,
-        input: { value, placeholder, selectStem },
-        buttons: [
-          { label: "Cancel", value: "cancel" },
-          { label: "OK", value: "ok", primary: true },
-        ],
-        resolve,
-      };
+    const r = await this.openDialog({
+      title,
+      input: { value, placeholder, selectStem },
+      buttons: [
+        { label: "Cancel", value: "cancel" },
+        { label: "OK", value: "ok", primary: true },
+      ],
     });
     return r.button === "ok" ? r.value : null;
   }
 
+  /** Answers the dialog on screen and shows the next queued one, if any. */
   closeDialog(button: string, value = "") {
     const d = this.dialog;
-    this.dialog = null;
+    this.dialog = this.dialogQueue.shift() ?? null;
     d?.resolve({ button, value });
   }
 }

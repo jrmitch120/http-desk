@@ -4,10 +4,11 @@ use serde_json::{Map, Value};
 
 use super::example::{is_binary, schema_type, Ctx};
 use super::{
-    GenerateOptions, GeneratedEnvironment, GeneratedFile, GenerationOutput, Grouping, OpenApiDoc,
-    OperationInfo, ServerInfo,
+    GenerateOptions, GeneratedEnvironment, GeneratedFile, GenerationOutput, Grouping, OpenApiDoc, OperationInfo,
+    ServerInfo,
 };
 use crate::model::*;
+use crate::parser;
 
 pub const HTTP_METHODS: &[&str] = &["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 const BOUNDARY: &str = "WebAppBoundary";
@@ -122,7 +123,8 @@ pub(crate) fn generate(doc: &OpenApiDoc, opts: &GenerateOptions) -> GenerationOu
             }
         }
         for op in list {
-            let req = build_request(&ctx, op, base_var, opts.param_descriptions, &mut file.header.variables, &mut secrets);
+            let req =
+                build_request(&ctx, op, base_var, opts.param_descriptions, &mut file.header.variables, &mut secrets);
             file.requests.push(req);
         }
         files.push(GeneratedFile { relative_path: file_name, file });
@@ -225,10 +227,8 @@ pub(crate) fn slug(s: &str) -> String {
 
 /// Characters allowed in `.http` variable names.
 fn sanitize_var(s: &str) -> String {
-    let out: String = s
-        .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' })
-        .collect();
+    let out: String =
+        s.chars().map(|c| if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
     if out.is_empty() {
         "value".into()
     } else {
@@ -346,9 +346,8 @@ fn param_doc<'a>(ctx: &Ctx<'a>, p: &'a Value, required: bool) -> String {
     if p.get("deprecated").and_then(Value::as_bool).unwrap_or(false) {
         parts.push("Deprecated.".into());
     }
-    let values = schema.and_then(|s| {
-        s.get("enum").or_else(|| s.get("items").map(|i| ctx.deref(i)).and_then(|i| i.get("enum")))
-    });
+    let values =
+        schema.and_then(|s| s.get("enum").or_else(|| s.get("items").map(|i| ctx.deref(i)).and_then(|i| i.get("enum"))));
     if let Some(values) = values.and_then(Value::as_array).filter(|v| !v.is_empty()) {
         let shown: Vec<String> = values.iter().take(MAX_DOC_ENUM).map(value_to_string).collect();
         let more = if values.len() > MAX_DOC_ENUM { format!(", … ({} total)", values.len()) } else { String::new() };
@@ -367,7 +366,10 @@ fn merged_parameters<'a>(ctx: &Ctx<'a>, op: &Op<'a>) -> Vec<&'a Value> {
         for p in list {
             let p = ctx.deref(p);
             let key = |v: &Value| {
-                (v.get("name").and_then(Value::as_str).map(str::to_string), v.get("in").and_then(Value::as_str).map(str::to_string))
+                (
+                    v.get("name").and_then(Value::as_str).map(str::to_string),
+                    v.get("in").and_then(Value::as_str).map(str::to_string),
+                )
             };
             let k = key(p);
             match out.iter_mut().find(|e| key(e) == k) {
@@ -405,14 +407,15 @@ fn build_request<'a>(
         let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
         let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |e| e + 1);
         for l in lines[start..end].iter().take(MAX_COMMENT_LINES) {
-            // A leading `@` would be read back as a directive.
-            req.comments.push(match l.strip_prefix('@') {
-                Some(rest) => format!("@ {rest}"),
-                None => l.to_string(),
-            });
+            // A leading `@`, even after indentation, would read as a directive in other clients.
+            req.comments.push(crate::serializer::description_line(l).into_owned());
         }
     }
-    let id = info.operation_id.as_deref().map(sanitize_ident).unwrap_or_else(|| derived_operation_id(&info.method, &info.path));
+    let id = info
+        .operation_id
+        .as_deref()
+        .map(sanitize_ident)
+        .unwrap_or_else(|| derived_operation_id(&info.method, &info.path));
     req.directives.push(Directive { name: "name".into(), value: id });
 
     // ---- URL + path params ----
@@ -454,11 +457,17 @@ fn build_request<'a>(
         let required = p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let value = param_example(ctx, p);
         let description = if with_docs { param_doc(ctx, p, required) } else { String::new() };
-        let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v, description: description.clone() };
+        let mk = |n: String, v: String| KeyValue {
+            enabled: required,
+            name: n,
+            value: v,
+            description: description.clone(),
+            ..Default::default()
+        };
         match p.get("in").and_then(Value::as_str) {
             Some("query") => {
                 for (n, v) in expand_query(name, &value, p) {
-                    req.query.items.push(mk(n, encode_component(&v)));
+                    req.query.items.push(mk(n, v));
                 }
             }
             Some("header") => {
@@ -579,9 +588,7 @@ fn build_body<'a>(ctx: &Ctx<'a>, op: &'a Value) -> Option<(String, Body)> {
                     .and_then(|s| ctx.resolve(s).1)
                     .and_then(|r| r.rsplit('/').next())
                     .map(str::to_string)
-                    .or_else(|| {
-                        schema_obj.and_then(|s| s.get("xml")?.get("name")?.as_str().map(str::to_string))
-                    })
+                    .or_else(|| schema_obj.and_then(|s| s.get("xml")?.get("name")?.as_str().map(str::to_string)))
                     .unwrap_or_else(|| "root".into());
                 format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{}", to_xml(&root_name, &v, 0))
             }
@@ -611,7 +618,17 @@ fn build_body<'a>(ctx: &Ctx<'a>, op: &'a Value) -> Option<(String, Body)> {
             (ct, BodyMode::Raw, text)
         }
     };
-    Some((content_type, Body { enabled: true, mode, text }))
+    Some((content_type, Body { enabled: true, mode, text: indent_http_syntax(&text) }))
+}
+
+/// Indents example lines that `.http` syntax would read as a request separator
+/// or response handler, so the generated request stays one request.
+fn indent_http_syntax(text: &str) -> String {
+    let collides = |l: &str| parser::is_separator(l) || parser::is_handler_start(l);
+    if !text.lines().any(collides) {
+        return text.to_string();
+    }
+    text.split('\n').map(|l| if collides(l) { format!(" {l}") } else { l.to_string() }).collect::<Vec<_>>().join("\n")
 }
 
 fn extension_for(media_type: &str) -> &'static str {
@@ -645,7 +662,12 @@ fn form_body(map: &Map<String, Value>) -> String {
     pairs.join("&")
 }
 
-fn multipart_body<'a>(ctx: &Ctx<'a>, schema: Option<&'a Value>, example: Option<Value>, encoding: Option<&'a Value>) -> String {
+fn multipart_body<'a>(
+    ctx: &Ctx<'a>,
+    schema: Option<&'a Value>,
+    example: Option<Value>,
+    encoding: Option<&'a Value>,
+) -> String {
     let props = schema.map(|s| ctx.properties(s)).unwrap_or_default();
     let example_map = match &example {
         Some(Value::Object(m)) => m.clone(),
@@ -687,11 +709,8 @@ fn multipart_body<'a>(ctx: &Ctx<'a>, schema: Option<&'a Value>, example: Option<
             lines.push(format!("< ./{file_name}"));
             continue;
         }
-        let value = example_map
-            .get(name)
-            .cloned()
-            .or_else(|| prop.map(|p| ctx.schema_example(p)))
-            .unwrap_or(Value::Null);
+        let value =
+            example_map.get(name).cloned().or_else(|| prop.map(|p| ctx.schema_example(p))).unwrap_or(Value::Null);
         let is_structured = matches!(value, Value::Object(_) | Value::Array(_))
             || prop_obj.and_then(schema_type).is_some_and(|t| t == "object");
         lines.push(format!("Content-Disposition: form-data; name=\"{name}\""));
@@ -758,16 +777,15 @@ fn apply_security<'a>(
     secrets: &mut Vec<String>,
 ) {
     let requirements = op.op.get("security").or_else(|| ctx.root.get("security")).and_then(Value::as_array);
-    let Some(requirement) = requirements
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_object)
-        .find(|r| !r.is_empty())
+    let Some(requirement) = requirements.into_iter().flatten().filter_map(Value::as_object).find(|r| !r.is_empty())
     else {
         return;
     };
     for scheme_name in requirement.keys() {
-        let Some(scheme) = ctx.root.pointer(&format!("/components/securitySchemes/{}", scheme_name.replace('~', "~0").replace('/', "~1"))) else {
+        let Some(scheme) = ctx
+            .root
+            .pointer(&format!("/components/securitySchemes/{}", scheme_name.replace('~', "~0").replace('/', "~1")))
+        else {
             ctx.warn(format!("Unknown security scheme `{scheme_name}`"));
             continue;
         };

@@ -5,6 +5,7 @@ import {
   buildMultipart,
   composeUrl,
   newRequest,
+  parseFileRef,
   parseForm,
   parseMultipart,
   prettyXml,
@@ -13,6 +14,12 @@ import {
   setDirective,
   getDirective,
   findHeader,
+  formatBulk,
+  parseBulk,
+  headerNameError,
+  basicUsernameError,
+  variableNameError,
+  bodySyntaxWarnings,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -61,6 +68,24 @@ describe("URL ⇄ query params", () => {
     ]);
   });
 
+  it("shows the file's escaping in the URL bar and decoded values in the table (ADR-0001)", () => {
+    const r = newRequest();
+    r.url = "https://x/s";
+    r.query.items = [
+      { enabled: true, name: "q", value: "a&b=c" },
+      { enabled: true, name: "a=b c", value: "100% of #1 and %20" },
+      { enabled: true, name: "t", value: "{{ term }}" },
+      { enabled: true, name: "email", value: "a%40b.c" },
+      { enabled: true, name: "flag", value: "", equals: true },
+      { enabled: true, name: "bare", value: "" },
+    ];
+    const url = composeUrl(r);
+    expect(url).toBe("https://x/s?q=a%26b=c&a%3Db%20c=100%25%20of%20%231%20and%20%2520&t={{ term }}&email=a%40b.c&flag=&bare");
+    const items = r.query.items.map((i) => ({ ...i }));
+    applyUrlText(r, url);
+    expect(r.query.items).toEqual(items.map((i) => (i.equals ? i : { enabled: true, name: i.name, value: i.value })));
+  });
+
   it("typing params re-enables a disabled section", () => {
     const r = newRequest();
     r.query.enabled = false;
@@ -85,6 +110,27 @@ describe("form bodies", () => {
       { name: "a", value: "1" },
       { name: "b", value: "two words" },
     ]);
+  });
+
+  it("reads a body written one field per line, as it is sent", () => {
+    expect(parseForm("a=1\nb=2\n&c=3&\nd=4")).toEqual([
+      { name: "a", value: "1" },
+      { name: "b", value: "2" },
+      { name: "c", value: "3" },
+      { name: "d", value: "4" },
+    ]);
+  });
+});
+
+describe("file bodies", () => {
+  it("reads `< path` and `<@ path` with or without a space, as they are sent", () => {
+    expect(parseFileRef("< ./a.json")).toEqual({ substitute: false, path: "./a.json" });
+    expect(parseFileRef("<./a.json")).toEqual({ substitute: false, path: "./a.json" });
+    expect(parseFileRef("<@./a.json\n")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<@ ./a.json")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<tag/>")).toBeNull();
+    expect(parseFileRef("<?xml version=1.0")).toBeNull();
+    expect(parseFileRef("< ./a.json\n< ./b.json")).toBeNull();
   });
 });
 
@@ -155,6 +201,59 @@ describe("body mode switching", () => {
     expect(findHeader(r, "content-type")?.value).toBe("multipart/form-data; boundary=HttpDeskBoundary");
     expect(parseMultipart(r.body.text, "HttpDeskBoundary").map((p) => p.name)).toEqual(["a", "b"]);
   });
+
+  it("removes the Content-Type it added when switching to none", () => {
+    const r = newRequest();
+    r.headers.items.push({ enabled: true, name: "Accept", value: "application/json" });
+    setBodyMode(r, "json");
+    setBodyMode(r, "none");
+    expect(r.headers.items).toEqual([{ enabled: true, name: "Accept", value: "application/json" }]);
+
+    setBodyMode(r, "multipart");
+    setBodyMode(r, "none");
+    expect(findHeader(r, "content-type")).toBeUndefined();
+  });
+
+  it("keeps a Content-Type the user typed when switching to none", () => {
+    const r = newRequest();
+    setBodyMode(r, "json");
+    findHeader(r, "content-type")!.value = "application/json; charset=utf-8";
+    setBodyMode(r, "none");
+    expect(findHeader(r, "content-type")?.value).toBe("application/json; charset=utf-8");
+
+    const typed = newRequest();
+    typed.body.mode = "text";
+    typed.headers.items.push({ enabled: true, name: "Content-Type", value: "application/xml" });
+    setBodyMode(typed, "none");
+    expect(findHeader(typed, "content-type")?.value).toBe("application/xml");
+  });
+});
+
+describe("bulk edit", () => {
+  const headers = [
+    { enabled: true, name: "Accept", value: "application/json", description: "What we read" },
+    { enabled: false, name: "X-Debug", value: "1" },
+  ];
+
+  it("shows rows as text, one per line, with // marking disabled ones", () => {
+    expect(formatBulk(headers, ":", true)).toBe("Accept: application/json\n//X-Debug: 1");
+    expect(formatBulk([{ enabled: true, name: "page", value: "2" }], "=", true)).toBe("page=2");
+  });
+
+  it("turns text back into rows, keeping descriptions by name", () => {
+    expect(parseBulk("//X-Debug: 1\n\nAccept: text/plain\nX-New", ":", headers)).toEqual([
+      { enabled: false, name: "X-Debug", value: "1" },
+      { enabled: true, name: "Accept", value: "text/plain", description: "What we read" },
+      { enabled: true, name: "X-New", value: "" },
+    ]);
+  });
+
+  it("keeps a description while its name is retyped, since every keystroke is applied", () => {
+    // Rows are re-parsed from the text on each input, always against the rows
+    // the bulk edit started from, so a half-typed name doesn't lose the doc.
+    expect(parseBulk("Acc: application/json", ":", headers)[0].description).toBeUndefined();
+    expect(parseBulk("Accept: application/json", ":", headers)[0].description).toBe("What we read");
+  });
 });
 
 describe("directives", () => {
@@ -182,5 +281,41 @@ describe("misc", () => {
   it("computes relative paths", () => {
     expect(relativePath("/w/api", "/w/api/files/a.json")).toBe("./files/a.json");
     expect(relativePath("/w/api", "/w/data/a.json")).toBe("../data/a.json");
+  });
+});
+
+describe("field safety", () => {
+  it("accepts header names that read back as headers", () => {
+    for (const n of ["Accept", "X-Request-Id", "{{headerName}}", "X-Ok!", ""]) expect(headerNameError(n)).toBeNull();
+  });
+
+  it("rejects header names that would read back as something else", () => {
+    expect(headerNameError("X\nEvil")).toBe("Header names can't contain line breaks");
+    expect(headerNameError("X Trace")).toBe("Header names can't contain spaces");
+    expect(headerNameError("X:Trace")).toBe("Header names can't contain ':'");
+    expect(headerNameError("#Trace")).toBe("Header names can't start with '#'");
+    expect(headerNameError("//Trace")).toBe("Header names can't start with '//'");
+    for (const p of ["~", "|", "&", "?"]) expect(headerNameError(`${p}x`)).toBe(`Header names can't start with '${p}'`);
+  });
+
+  it("validates variable names like the parser", () => {
+    for (const n of ["host", "$pet.id-2_x", "café", "v2", ""]) expect(variableNameError(n)).toBeNull();
+    for (const n of ["base url", "a=b", "a\nb", "{{x}}"]) expect(variableNameError(n)).toBe("Variable names can only use letters, digits, _, -, . and $");
+  });
+
+  it("rejects Basic auth usernames containing ':' (RFC 7617)", () => {
+    for (const n of ["alice", "{{user}}", "first last", ""]) expect(basicUsernameError(n)).toBeNull();
+    expect(basicUsernameError("dom:ain")).toBe("Basic auth usernames can't contain ':'");
+  });
+
+  it("warns about body lines that .http syntax reads as a separator or handler", () => {
+    const text = ["Intro", "### Heading", "  ### indented is fine", ">> out.txt", "> {% client.log(1) %}", "> check.js", "  > {% indented %}", "> quoted text", "end"].join("\n");
+    expect(bodySyntaxWarnings(text)).toEqual([
+      { line: 2, message: "Line 2 starts with ###, so it will be read as the start of a new request." },
+      { line: 4, message: "Line 4 starts with >>, so it and the lines after it will be read as a response handler." },
+      { line: 5, message: "Line 5 starts with >, so it and the lines after it will be read as a response handler." },
+      { line: 6, message: "Line 6 starts with >, so it and the lines after it will be read as a response handler." },
+    ]);
+    expect(bodySyntaxWarnings('{\n  "a": 1\n}')).toEqual([]);
   });
 });

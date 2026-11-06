@@ -2,12 +2,15 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import type { Request, BodyMode } from "../lib/types";
   import type { VarProvider } from "../lib/codemirror/setup";
+  import { bodySyntaxHighlight } from "../lib/codemirror/setup";
   import {
+    bodySyntaxWarnings,
     boundaryOf,
     buildForm,
     buildMultipart,
     dirname,
     findHeader,
+    parseFileRef,
     parseForm,
     parseMultipart,
     prettyJson,
@@ -22,7 +25,7 @@
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
 
-  let { req, filePath, variables }: { req: Request; filePath: string; variables: VarProvider | null } = $props();
+  let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
   const modes: { value: BodyMode; label: string }[] = [
     { value: "none", label: "none" },
@@ -70,7 +73,7 @@
   }
 
   // ---- file
-  const fileRef = $derived(/^<(@?)\s+(.*)$/.exec(body.text.trim()));
+  const fileRef = $derived(parseFileRef(body.text));
   function setFileRef(path: string, substitute: boolean) {
     body.text = `<${substitute ? "@" : ""} ${path}`;
   }
@@ -83,6 +86,9 @@
       body.text = prettyXml(body.text);
     }
   }
+
+  // A disabled body is written as `#~|` lines, so it can't collide.
+  const syntaxWarnings = $derived(body.enabled && body.mode !== "none" && body.mode !== "file" ? bodySyntaxWarnings(body.text) : []);
 
   const language = $derived(body.mode === "json" ? "json" : body.mode === "xml" ? "xml" : "text");
   const formRowsView = $derived([...formRows, { name: "", value: "" }]);
@@ -151,12 +157,12 @@
       <label class="field">
         <span class="muted">File (relative to the .http file)</span>
         <span class="row">
-          <input class="input mono" value={fileRef?.[2] ?? ""} placeholder="./payload.json" spellcheck="false" oninput={(e) => setFileRef(e.currentTarget.value, fileRef?.[1] === "@")} />
-          <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, fileRef?.[1] === "@"))}>Choose…</button>
+          <input class="input mono" value={fileRef?.path ?? ""} placeholder="./payload.json" spellcheck="false" oninput={(e) => setFileRef(e.currentTarget.value, !!fileRef?.substitute)} />
+          <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, !!fileRef?.substitute))}>Choose…</button>
         </span>
       </label>
       <label class="check">
-        <input type="checkbox" checked={fileRef?.[1] === "@"} onchange={(e) => setFileRef(fileRef?.[2] ?? "", e.currentTarget.checked)} />
+        <input type="checkbox" checked={!!fileRef?.substitute} onchange={(e) => setFileRef(fileRef?.path ?? "", e.currentTarget.checked)} />
         Substitute <code>{"{{variables}}"}</code> inside the file
       </label>
       <label class="field">
@@ -172,7 +178,16 @@
       </label>
     {/if}
     <div class="code">
-      <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} placeholder="Request body" />
+      <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} {onsend} placeholder="Request body" extensions={bodySyntaxHighlight} />
+    </div>
+  {/if}
+  {#if syntaxWarnings.length}
+    <div class="syntax-warnings" role="status">
+      <Icon name="alert" size={13} />
+      <div>
+        {#each syntaxWarnings as w (w.line)}<div>{w.message}</div>{/each}
+        <div class="muted">Other .http clients read it the same way, and so does HttpDesk when it reloads the file. Indent the line to keep it in the body.</div>
+      </div>
     </div>
   {/if}
 </div>
@@ -207,6 +222,21 @@
   }
   .content.off {
     opacity: 0.55;
+  }
+  .syntax-warnings {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 8px;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    background: rgba(232, 182, 76, 0.12);
+    color: var(--warning);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .syntax-warnings .muted {
+    color: var(--muted);
   }
   .none {
     padding: 30px 0;

@@ -6,10 +6,11 @@ pub mod exec;
 pub mod model;
 pub mod openapi;
 pub mod parser;
+mod query;
 pub mod serializer;
 pub mod vars;
 pub mod workspace;
 
 pub use model::*;
 pub use parser::parse;
-pub use serializer::{render_request, serialize};
+pub use serializer::{render_request, serialize, try_serialize, InvalidField};

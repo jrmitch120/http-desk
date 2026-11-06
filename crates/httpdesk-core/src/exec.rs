@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::SslConfig;
 use crate::model::*;
+use crate::query::{self, Part};
 use crate::vars::Resolver;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,10 +25,27 @@ pub enum ExecError {
     File { path: PathBuf, reason: String },
     #[error("TLS configuration error: {0}")]
     Tls(String),
-    #[error("Request timed out after {0:.1}s")]
-    Timeout(f64),
+    /// No data arrived for this many ms (`@timeout`, the idle timeout).
+    #[error("Read timeout: no data received for {}. Raise it with # @timeout or the idle timeout in Settings.", human_ms(*.0))]
+    ReadTimeout(u64),
+    /// Connecting (TCP and TLS) took longer than this many ms (`@connection-timeout`).
+    #[error("Connection timeout: couldn't connect within {}. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.", human_ms(*.0))]
+    ConnectTimeout(u64),
     #[error("{0}")]
     Http(String),
+    /// Unresolved variables in the URL's scheme or host.
+    #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
+    UnresolvedHost(Vec<String>),
+    #[error("{}", .0.join("\n"))]
+    DynamicVariable(Vec<String>),
+}
+
+fn human_ms(ms: u64) -> String {
+    match ms {
+        m if m >= 60_000 && m % 60_000 == 0 => format!("{} min", m / 60_000),
+        m if m % 1000 == 0 => format!("{} s", m / 1000),
+        m => format!("{m} ms"),
+    }
 }
 
 impl Serialize for ExecError {
@@ -40,8 +58,11 @@ impl Serialize for ExecError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExecSettings {
-    /// Total request timeout in ms; 0 disables it.
+    /// Idle timeout in ms, as JetBrains `@timeout`: the longest wait for the next
+    /// data (response headers or a body chunk). 0 disables it. There is no total
+    /// deadline, so a download that keeps streaming finishes.
     pub timeout_ms: u64,
+    /// Connect timeout in ms (TCP and TLS), as JetBrains `@connection-timeout`. 0 disables it.
     pub connect_timeout_ms: u64,
     pub follow_redirects: bool,
     pub max_redirects: usize,
@@ -89,7 +110,7 @@ impl PreparedRequest {
     }
 }
 
-/// Parses `@timeout` style values: `30` (seconds), `500 ms`, `2m`.
+/// Parses `@timeout` / `@connection-timeout` values: `30` (seconds), `500 ms`, `2 m`.
 fn parse_duration_ms(v: &str) -> Option<u64> {
     let v = v.trim();
     let split = v.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(v.len());
@@ -111,20 +132,7 @@ fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
 
 /// `< path` (raw) or `<@ path` (variables substituted). `None` if not a file reference.
 fn file_reference(line: &str, resolver: &Resolver, base_dir: &Path) -> Option<Result<Vec<u8>, ExecError>> {
-    let t = line.trim();
-    let rest = t.strip_prefix('<')?;
-    let (substitute, path) = match rest.strip_prefix('@') {
-        Some(p) => (true, p),
-        None => (false, rest),
-    };
-    // `< ./file` needs whitespace after the marker; `<tag>` is content, not a file.
-    if !path.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let path = path.trim();
-    if path.is_empty() || path.contains('>') {
-        return None;
-    }
+    let crate::parser::FileReference { substitute, path } = crate::parser::file_reference(line)?;
     let path = resolver.resolve(path);
     Some(read_file(base_dir, &path).map(|bytes| {
         if substitute {
@@ -157,11 +165,23 @@ fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Optio
             }
             out
         }
-        // VS Code allows `a=1\n&b=2` continuation lines.
-        BodyMode::FormUrlEncoded => resolver.resolve(&text.lines().map(str::trim).collect::<String>()).into_bytes(),
+        BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
         _ => resolver.resolve(text).into_bytes(),
     };
     Ok(Some(bytes))
+}
+
+/// Joins a form body written one field per line with `&`. Lines that already
+/// start (or the previous line ends) with `&`, as VS Code writes them, are kept.
+fn join_form_lines(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !out.is_empty() && !out.ends_with('&') && !line.starts_with('&') {
+            out.push('&');
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 fn default_content_type(mode: BodyMode) -> Option<&'static str> {
@@ -174,8 +194,71 @@ fn default_content_type(mode: BodyMode) -> Option<&'static str> {
     }
 }
 
+fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
+    let errors = resolver.errors();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ExecError::DynamicVariable(errors))
+    }
+}
+
+/// The URL without its query string and fragment, which may themselves contain `://`.
+fn before_query(url: &str) -> &str {
+    &url[..url.find(['?', '#']).unwrap_or(url.len())]
+}
+
+fn has_scheme(url: &str) -> bool {
+    before_query(url).contains("://")
+}
+
+/// The `scheme://user:pass@host:port` part of an absolute URL.
+fn origin(url: &str) -> &str {
+    let url = before_query(url);
+    let start = url.find("://").map_or(0, |i| i + 3);
+    &url[..start + url[start..].find('/').unwrap_or(url.len() - start)]
+}
+
+/// Names of the `{{name}}` references left in `text`, in order of appearance.
+fn variable_names(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for segment in crate::vars::segments(text) {
+        if let crate::vars::Segment::Reference { name, .. } = segment {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// A query param as sent (ADR-0001): written as in the file, variables resolved, then
+/// percent-encoded unless the request has `# @no-auto-encoding`. Escaping and encoding
+/// go part by part, so `&`, `=` or `#` from a variable can't split the param.
+fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
+    let part = |text: &str, part: Part| {
+        let written = query::escape(text, part);
+        if auto_encode {
+            query::encode(&written, part, |r| resolver.resolve(r))
+        } else {
+            resolver.resolve(&written)
+        }
+    };
+    let name = part(&p.name, Part::Name);
+    if p.value.is_empty() && !p.equals {
+        name
+    } else {
+        format!("{name}={}", part(&p.value, Part::Value))
+    }
+}
+
 /// Resolves variables and applies enablement. Disabled components are never included.
-pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &ExecSettings) -> Result<PreparedRequest, ExecError> {
+pub fn prepare(
+    req: &Request,
+    resolver: &Resolver,
+    base_dir: &Path,
+    settings: &ExecSettings,
+) -> Result<PreparedRequest, ExecError> {
     let method = req.method.trim().to_ascii_uppercase();
     let method = if method.is_empty() { "GET".to_string() } else { method };
 
@@ -186,9 +269,14 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         match auth.kind {
             AuthKind::Basic => {
                 let creds = format!("{}:{}", resolver.resolve(&auth.username), resolver.resolve(&auth.password));
-                headers.push(("Authorization".into(), format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(creds))));
+                headers.push((
+                    "Authorization".into(),
+                    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(creds)),
+                ));
             }
-            AuthKind::Bearer => headers.push(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim())))),
+            AuthKind::Bearer => {
+                headers.push(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim()))))
+            }
             AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
                 headers.push((auth.key_name.clone(), resolver.resolve(&auth.key_value)));
             }
@@ -199,35 +287,40 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
 
     // URL
     let mut url = resolver.resolve(req.url.trim());
-    let mut params: Vec<String> = req
-        .query
-        .active()
-        .map(|p| {
-            let (n, v) = (resolver.resolve(&p.name), resolver.resolve(&p.value));
-            if v.is_empty() { n } else { format!("{n}={v}") }
-        })
-        .collect();
-    if auth.enabled && auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query && !auth.key_name.is_empty() {
-        params.push(format!("{}={}", auth.key_name, resolver.resolve(&auth.key_value)));
+    let auto_encode = req.directive("no-auto-encoding").is_none();
+    let mut params: Vec<String> = req.query.active().map(|p| wire_param(p, resolver, auto_encode)).collect();
+    if auth.enabled
+        && auth.kind == AuthKind::ApiKey
+        && auth.key_location == ApiKeyLocation::Query
+        && !auth.key_name.is_empty()
+    {
+        params.push(wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode));
     }
     if !params.is_empty() {
         url.push(if url.contains('?') { '&' } else { '?' });
         url.push_str(&params.join("&"));
     }
-    if !url.contains("://") {
+    if !has_scheme(&url) {
         url = if url.starts_with('/') {
-            let host = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(|| {
-                ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() }
-            })?;
+            let host =
+                headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(
+                    || ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() },
+                )?;
             format!("http://{host}{url}")
         } else {
             format!("http://{url}")
         };
     }
+    dynamic_errors(resolver)?;
+    let host_vars = variable_names(origin(&url));
+    if !host_vars.is_empty() {
+        return Err(ExecError::UnresolvedHost(host_vars));
+    }
     url::Url::parse(&url).map_err(|e| ExecError::InvalidUrl { url: url.clone(), reason: e.to_string() })?;
 
     // Body
     let body = build_body(&req.body, resolver, base_dir)?;
+    dynamic_errors(resolver)?;
     if body.is_some() && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
         if let Some(ct) = default_content_type(req.body.mode) {
             headers.push(("Content-Type".into(), ct.into()));
@@ -243,14 +336,16 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         warnings.push(format!("Unresolved variables: {}", unresolved.join(", ")));
     }
     if req.body.enabled && req.body.mode == BodyMode::Multipart {
-        let ct = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.as_str()).unwrap_or("");
+        let ct =
+            headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.as_str()).unwrap_or("");
         if !ct.contains("boundary=") {
             warnings.push("Multipart body without a boundary in Content-Type".into());
         }
     }
 
     let timeout_ms = req.directive("timeout").and_then(parse_duration_ms).unwrap_or(settings.timeout_ms);
-    let connect_timeout_ms = req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
+    let connect_timeout_ms =
+        req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
     let follow_redirects = settings.follow_redirects && req.directive("no-redirect").is_none();
 
     Ok(PreparedRequest { method, url, headers, body, follow_redirects, timeout_ms, connect_timeout_ms, warnings })
@@ -321,7 +416,7 @@ fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -
         })
         .danger_accept_invalid_certs(!settings.verify_tls || ssl.verify_host_certificate == Some(false));
     if p.timeout_ms > 0 {
-        b = b.timeout(Duration::from_millis(p.timeout_ms));
+        b = b.read_timeout(Duration::from_millis(p.timeout_ms));
     }
     if p.connect_timeout_ms > 0 {
         b = b.connect_timeout(Duration::from_millis(p.connect_timeout_ms));
@@ -371,24 +466,24 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
 
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
     let client = build_client(&p, settings, ssl)?;
-    let method = reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
+    let method =
+        reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
     let mut builder = client.request(method, &p.url);
     for (n, v) in &p.headers {
-        let name = reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
-        let value = reqwest::header::HeaderValue::from_str(v).map_err(|_| ExecError::InvalidHeader(format!("{n}: {v}")))?;
+        let name =
+            reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
+        let value =
+            reqwest::header::HeaderValue::from_str(v).map_err(|_| ExecError::InvalidHeader(format!("{n}: {v}")))?;
         builder = builder.header(name, value);
     }
     if let Some(body) = &p.body {
         builder = builder.body(body.clone());
     }
 
-    let timeout_secs = p.timeout_ms as f64 / 1000.0;
-    let map_err = |e: reqwest::Error| {
-        if e.is_timeout() {
-            ExecError::Timeout(timeout_secs)
-        } else {
-            ExecError::Http(error_chain(&e))
-        }
+    let map_err = |e: reqwest::Error| match (e.is_timeout(), e.is_connect()) {
+        (true, true) if p.connect_timeout_ms > 0 => ExecError::ConnectTimeout(p.connect_timeout_ms),
+        (true, false) if p.timeout_ms > 0 => ExecError::ReadTimeout(p.timeout_ms),
+        _ => ExecError::Http(error_chain(&e)),
     };
 
     let start = Instant::now();
@@ -404,7 +499,8 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
         .collect();
     let headers_size = headers.iter().map(|(n, v)| n.len() + v.len() + 4).sum::<usize>();
-    let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let content_type =
+        resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
 
     let mut body = Vec::new();
     let mut truncated = false;
@@ -429,7 +525,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         body_size: p.body.as_ref().map_or(0, Vec::len),
         body_preview: p.body.as_ref().map(|b| {
             let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
-            if b.len() > 64 * 1024 { format!("{s}\n… ({} bytes total)", b.len()) } else { s }
+            if b.len() > 64 * 1024 {
+                format!("{s}\n… ({} bytes total)", b.len())
+            } else {
+                s
+            }
         }),
     };
 

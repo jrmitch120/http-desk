@@ -26,7 +26,10 @@ export const api = {
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),
-  deletePath: (path: string) => invoke<void>("delete_path", { path }),
+  /** Moves to the OS trash; never unlinks. "trashUnavailable" leaves the entry in place. */
+  deletePath: (path: string) => invoke<"trashed" | "trashUnavailable">("delete_path", { path }),
+  /** Unlinks for good. Only call after the user confirmed it. */
+  deletePermanently: (path: string) => invoke<void>("delete_permanently", { path }),
   pathExists: (path: string) => invoke<boolean>("path_exists", { path }),
 
   loadEnvironments: () => invoke<EnvironmentSet>("load_environments"),
@@ -44,6 +47,8 @@ export const api = {
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
+  /** Whether any open file has unsaved edits (macOS asks before a logout then). */
+  setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 
   openapiLoad: (source: string) => invoke<SpecSummary>("openapi_load", { source }),
   openapiGenerate: (args: {

@@ -1,10 +1,17 @@
 <script lang="ts">
   import type { Auth, AuthKind } from "../lib/types";
+  import { basicUsernameError, headerNameError } from "../lib/http";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
 
   let { auth }: { auth: Auth } = $props();
   let reveal = $state(false);
+
+  // A header key is written as a header line; either way the name goes on the `# @httpdesk-auth` line, which splits at spaces.
+  const keyNameError = $derived(
+    auth.keyLocation === "header" ? headerNameError(auth.keyName) : /\s/.test(auth.keyName) ? "Key names can't contain spaces" : null,
+  );
+  const usernameError = $derived(basicUsernameError(auth.username));
 
   const kinds: { value: AuthKind; label: string }[] = [
     { value: "none", label: "No Auth" },
@@ -58,7 +65,11 @@
 
   <div class="right">
     {#if auth.kind === "basic"}
-      <label class="field"><span>Username</span><input class="input mono" bind:value={auth.username} placeholder={"{{username}}"} spellcheck="false" /></label>
+      <label class="field">
+        <span>Username</span>
+        <input class="input mono" bind:value={auth.username} placeholder={"{{username}}"} spellcheck="false" aria-invalid={usernameError ? "true" : undefined} />
+        {#if usernameError}<span class="field-error" role="alert">{usernameError}</span>{/if}
+      </label>
       <label class="field">
         <span>Password</span>
         <div class="with-btn">
@@ -75,7 +86,11 @@
         </div>
       </label>
     {:else if auth.kind === "apiKey"}
-      <label class="field"><span>Key</span><input class="input mono" bind:value={auth.keyName} placeholder="X-API-Key" spellcheck="false" /></label>
+      <label class="field">
+        <span>Key</span>
+        <input class="input mono" bind:value={auth.keyName} placeholder="X-API-Key" spellcheck="false" aria-invalid={keyNameError ? "true" : undefined} />
+        {#if keyNameError}<span class="field-error" role="alert">{keyNameError}</span>{/if}
+      </label>
       <label class="field"><span>Value</span><input class="input mono" bind:value={auth.keyValue} placeholder={"{{apiKey}}"} spellcheck="false" /></label>
       <label class="field">
         <span>Add to</span>
@@ -120,6 +135,13 @@
   .field .select {
     width: 100%;
     color: var(--text);
+  }
+  .field-error {
+    color: var(--danger);
+    font-size: 11.5px;
+  }
+  .field .input[aria-invalid="true"] {
+    border-color: var(--danger);
   }
   .with-btn {
     display: flex;

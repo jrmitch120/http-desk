@@ -7,7 +7,7 @@
   import { untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, methodClass, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -25,6 +25,7 @@
   const run = $derived(app.runs[tab.id]);
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
+  const orphaned = $derived(app.isOrphaned(tab));
   const variables = $derived(doc ? makeVarProvider(app.envVariables, fileVariables(doc.file), app.envName) : null);
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
@@ -82,6 +83,10 @@
   <div class="editor">
     {#if doc.missing}
       <div class="banner error"><Icon name="alert" />{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</div>
+    {:else if orphaned}
+      <div class="banner error">
+        <Icon name="alert" />This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
+      </div>
     {:else if doc.externalChange}
       <div class="banner warning">
         <Icon name="alert" />
@@ -100,7 +105,7 @@
       <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} title="Show the .http source for this request">
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small" disabled={!docDirty} onclick={() => app.save(tab.path)} title="Save (⌘/Ctrl S)">
+      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} title="Save (⌘/Ctrl S)">
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
@@ -160,14 +165,14 @@
           <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
         {:else if section === "headers"}
           <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueTable bind:items={req.headers.items} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} docs />
+          <KeyValueTable bind:items={req.headers.items} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} docs />
           {#if req.auth.kind !== "none" && req.auth.enabled}
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
         {:else if section === "auth"}
           <AuthEditor auth={req.auth} />
         {:else if section === "body"}
-          <BodyEditor {req} filePath={tab.path} {variables} />
+          <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
           <RequestSettings {req} file={doc.file} />
         {/if}

@@ -143,17 +143,23 @@ impl OpenApiDoc {
     /// Parses a YAML or JSON spec. Relative-file `$ref`s are resolved against
     /// `base_dir` when given.
     pub fn parse(text: &str, base_dir: Option<&Path>) -> Result<OpenApiDoc, OpenApiError> {
-        let mut root = parse_value(text).map_err(OpenApiError::Parse)?;
+        Self::parse_as(text, base_dir, false)
+    }
+
+    /// `json` marks the text as JSON (e.g. a `.json` file) even when it
+    /// doesn't start with `{`.
+    fn parse_as(text: &str, base_dir: Option<&Path>, json: bool) -> Result<OpenApiDoc, OpenApiError> {
+        let mut root = parse_value(text, json).map_err(OpenApiError::Parse)?;
         let mut warnings = validate(&root)?;
         refs::bundle_external(&mut root, base_dir.map(Path::to_path_buf), &mut warnings);
         Ok(OpenApiDoc { root, source_url: None, warnings })
     }
 
     pub fn load_file(path: &Path) -> Result<OpenApiDoc, OpenApiError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| OpenApiError::Io(format!("{}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(path).map_err(|e| OpenApiError::Io(format!("{}: {e}", path.display())))?;
         let dir: PathBuf = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        Self::parse(&text, Some(&dir))
+        let json = has_json_extension(path);
+        Self::parse_as(&text, Some(&dir), json)
     }
 
     pub async fn load_url(url: &str) -> Result<OpenApiDoc, OpenApiError> {
@@ -165,7 +171,10 @@ impl OpenApiDoc {
             .map_err(|e| OpenApiError::Http(e.to_string()))?;
         let resp = client
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.8")
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.8",
+            )
             .send()
             .await
             .map_err(|e| OpenApiError::Http(e.to_string()))?;
@@ -255,15 +264,25 @@ impl OpenApiDoc {
     }
 }
 
+/// Whether a spec file is named as JSON (`.json`, any case), so [`parse_value`] expects JSON.
+fn has_json_extension(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
+
 /// Parses JSON or YAML into a JSON value (YAML keys are stringified).
-fn parse_value(text: &str) -> Result<Value, String> {
-    if text.trim_start().starts_with('{') {
-        if let Ok(v) = serde_json::from_str::<Value>(text) {
-            return Ok(v);
-        }
+///
+/// Text that starts with `{` (or is marked `json`) is JSON. Invalid JSON is
+/// still accepted when it reads as a YAML mapping (lenient JSON, misnamed YAML
+/// files); otherwise the JSON error is reported, not a YAML one.
+fn parse_value(text: &str, json: bool) -> Result<Value, String> {
+    let yaml = |text: &str| serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).map(yaml_to_json);
+    if json || text.trim_start().starts_with('{') {
+        return serde_json::from_str::<Value>(text).or_else(|e| match yaml(text) {
+            Ok(v) if v.is_object() => Ok(v),
+            _ => Err(format!("invalid JSON: {e}")),
+        });
     }
-    let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
-    Ok(yaml_to_json(yaml))
+    yaml(text).map_err(|e| format!("invalid YAML: {e}"))
 }
 
 fn yaml_to_json(v: serde_yaml_ng::Value) -> Value {
@@ -316,13 +335,16 @@ fn validate(root: &Value) -> Result<Vec<String>, OpenApiError> {
         None => return Err(OpenApiError::NotOpenApi("missing the `openapi` version field".into())),
     };
     let mut warnings = Vec::new();
-    let is_31 = version.starts_with("3.1") || version.starts_with("3.2");
-    if !(version.starts_with("3.0") || is_31) {
-        if version.starts_with("3.") {
-            warnings.push(format!("OpenAPI {version} is newer than 3.1; generating on a best-effort basis"));
-        } else {
-            return Err(OpenApiError::Unsupported(format!("OpenAPI version {version} (expected 3.0 or 3.1)")));
-        }
+    // 3.x minor version; anything newer than 3.1 is read like 3.1.
+    let minor = version
+        .strip_prefix("3.")
+        .map(|rest| rest.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("").parse::<u32>().unwrap_or(0));
+    let Some(minor) = minor else {
+        return Err(OpenApiError::Unsupported(format!("OpenAPI version {version} (expected 3.0 or 3.1)")));
+    };
+    let is_31 = minor >= 1;
+    if minor > 1 {
+        warnings.push(format!("OpenAPI {version} is newer than 3.1; generating on a best-effort basis"));
     }
     if !obj.get("info").is_some_and(Value::is_object) {
         return Err(OpenApiError::Invalid("missing the `info` object".into()));

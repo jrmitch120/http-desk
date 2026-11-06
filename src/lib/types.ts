@@ -19,6 +19,8 @@ export interface KeyValue {
   value: string;
   /** Params/headers only: saved as `# @param name: …` / `# @header Name: …`. */
   description?: string;
+  /** Query params only: an empty value is written `name=` rather than `name`. */
+  equals?: boolean;
 }
 
 export interface KvSection {
@@ -38,6 +40,8 @@ export interface Auth {
   keyName: string;
   keyValue: string;
   keyLocation: ApiKeyLocation;
+  /** `Authorization` value as written; reused while it carries the same credentials. */
+  raw: string | null;
 }
 
 export type BodyMode = "none" | "json" | "xml" | "text" | "formUrlEncoded" | "multipart" | "file" | "raw";
@@ -46,6 +50,13 @@ export interface Body {
   enabled: boolean;
   mode: BodyMode;
   text: string;
+}
+
+/** An unrecognized header-area line, kept verbatim and in place. */
+export interface ExtraLine {
+  text: string;
+  /** Header name (or `&name` for a disabled query param) the line sat above; null = after the headers. */
+  before: string | null;
 }
 
 export interface Request {
@@ -61,7 +72,7 @@ export interface Request {
   headers: KvSection;
   auth: Auth;
   body: Body;
-  extraLines: string[];
+  extraLines: ExtraLine[];
   responseHandler: string | null;
   leading: string;
   raw: string | null;
@@ -80,6 +91,8 @@ export interface HttpFile {
   requests: Request[];
   trailing: string;
   lineEnding: LineEnding;
+  /** The file started with a UTF-8 BOM; written back on save. */
+  bom: boolean;
 }
 
 export interface TreeNode {
@@ -92,6 +105,8 @@ export interface TreeNode {
 export interface WorkspaceInfo {
   root: string;
   tree: TreeNode;
+  /** Opening added the private env file to the workspace `.gitignore`. */
+  gitignoreUpdated: boolean;
 }
 
 export interface SearchHit {
@@ -102,10 +117,14 @@ export interface SearchHit {
   url: string;
 }
 
+/** JSON type an env value was read with; saving writes it back with it (missing = string). */
+export type JsonType = "string" | "number" | "boolean" | "null";
+
 export interface EnvVar {
   name: string;
   value: string;
   secret: boolean;
+  jsonType?: JsonType;
 }
 
 export interface Environment {

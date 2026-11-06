@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
-  import { api, errorMessage } from "../lib/api";
+  import { errorMessage } from "../lib/api";
   import { basename, joinPath, methodClass } from "../lib/http";
   import type { SearchHit } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
@@ -8,9 +8,12 @@
 
   let query = $state("");
   let hits = $state<SearchHit[]>([]);
+  /** Index of the result Enter opens; Up/Down move it. */
+  let selected = $state(0);
   let searching = $state(false);
   let searchInput: HTMLInputElement | undefined = $state();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let seq = 0;
 
   $effect(() => {
     if (app.focusSearch) searchInput?.focus();
@@ -19,20 +22,29 @@
   $effect(() => {
     const q = query.trim();
     clearTimeout(timer);
+    const run = ++seq;
     if (!q) {
       hits = [];
+      searching = false;
       return;
     }
     searching = true;
     timer = setTimeout(async () => {
       try {
-        hits = await api.searchRequests(q);
+        const found = await app.searchRequests(q);
+        if (run !== seq) return; // a newer query is on its way
+        hits = found;
+        selected = 0;
       } catch (e) {
         app.toast("error", errorMessage(e));
       } finally {
-        searching = false;
+        if (run === seq) searching = false;
       }
     }, 150);
+  });
+
+  $effect(() => {
+    if (hits.length) document.getElementById(`search-hit-${selected}`)?.scrollIntoView({ block: "nearest" });
   });
 
   function collapseAll() {
@@ -41,10 +53,62 @@
 
   function onSearchKey(e: KeyboardEvent) {
     if (e.key === "Escape") query = "";
-    if (e.key === "Enter" && hits[0]) app.openRequest(hits[0].path, { index: hits[0].index });
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (hits.length) selected = Math.max(0, Math.min(hits.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
+    } else if (e.key === "Enter" && hits[selected]) app.openSearchHit(hits[selected]);
   }
 
   let rootDrop = $state(false);
+
+  // Explorer keyboard: one row is in the Tab order at a time (the last one
+  // focused, else the active request, else the first), and the arrow keys move
+  // between rows. TreeItem renders rows with tabindex -1; this sets the one at 0.
+  let treeEl: HTMLDivElement | undefined = $state();
+  const rows = () => [...(treeEl?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])];
+  const level = (row: HTMLElement | undefined) => Number(row?.getAttribute("aria-level") ?? 0);
+  const isRow = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "treeitem";
+
+  function makeCurrent(row: HTMLElement) {
+    for (const r of rows()) r.tabIndex = r === row ? 0 : -1;
+  }
+
+  $effect(() => {
+    const el = treeEl;
+    if (!el) return;
+    const ensureCurrent = () => {
+      const all = rows();
+      if (all.length && !all.some((r) => r.tabIndex === 0)) makeCurrent(el.querySelector<HTMLElement>('[role="treeitem"].active') ?? all[0]);
+    };
+    ensureCurrent();
+    const observer = new MutationObserver(ensureCurrent);
+    observer.observe(el, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  });
+
+  /** Up/Down/Home/End move; Right expands, then enters; Left collapses, then goes to the parent. */
+  function onTreeKey(e: KeyboardEvent) {
+    const row = e.target;
+    if (!isRow(row)) return;
+    const all = rows();
+    const i = all.indexOf(row);
+    const expanded = row.getAttribute("aria-expanded");
+    const path = row.dataset.path;
+    let to: HTMLElement | undefined;
+    if (e.key === "ArrowDown") to = all[i + 1];
+    else if (e.key === "ArrowUp") to = all[i - 1];
+    else if (e.key === "Home") to = all[0];
+    else if (e.key === "End") to = all[all.length - 1];
+    else if (e.key === "ArrowRight") {
+      if (expanded === "false" && path) app.expanded[path] = true;
+      else if (expanded === "true" && level(all[i + 1]) > level(row)) to = all[i + 1];
+    } else if (e.key === "ArrowLeft") {
+      if (expanded === "true" && path) app.expanded[path] = false;
+      else to = all.slice(0, i).reverse().find((r) => level(r) === level(row) - 1);
+    } else return;
+    e.preventDefault();
+    to?.focus();
+  }
 </script>
 
 <div class="sidebar">
@@ -60,8 +124,18 @@
 
   <div class="search">
     <Icon name="search" size={13} />
-    <input bind:this={searchInput} bind:value={query} placeholder="Search requests" onkeydown={onSearchKey} spellcheck="false" />
-    {#if query}<button class="icon-btn" onclick={() => (query = "")}><Icon name="x" size={12} /></button>{/if}
+    <input
+      bind:this={searchInput}
+      bind:value={query}
+      placeholder="Search requests"
+      onkeydown={onSearchKey}
+      spellcheck="false"
+      role="combobox"
+      aria-expanded={!!query.trim() && hits.length > 0}
+      aria-controls="search-results"
+      aria-activedescendant={hits.length ? `search-hit-${selected}` : undefined}
+    />
+    {#if query}<button class="icon-btn" aria-label="Clear search" title="Clear search" onclick={() => (query = "")}><Icon name="x" size={12} /></button>{/if}
   </div>
 
   <div class="scroll">
@@ -69,19 +143,35 @@
       {#if !hits.length && !searching}
         <div class="none muted">No requests match “{query}”.</div>
       {/if}
-      {#each hits as h (h.path + h.index)}
-        <button class="hit" onclick={() => app.openRequest(h.path, { index: h.index })}>
-          <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
-          <span class="hit-text">
-            <span class="ellipsis">{h.name}</span>
-            <span class="file ellipsis">{basename(h.path)} · {h.url}</span>
-          </span>
-        </button>
-      {/each}
+      <div id="search-results" role="listbox" aria-label="Search results">
+        {#each hits as h, i (h.path + h.index)}
+          <button
+            id="search-hit-{i}"
+            class="hit"
+            class:selected={i === selected}
+            role="option"
+            aria-selected={i === selected}
+            tabindex="-1"
+            onclick={() => app.openSearchHit(h)}
+          >
+            <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
+            <span class="hit-text">
+              <span class="ellipsis">{h.name}</span>
+              <span class="file ellipsis">{basename(h.path)} · {h.url}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
     {:else if app.tree}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="tree"
+        bind:this={treeEl}
+        role="tree"
+        aria-label="Explorer"
+        tabindex="-1"
+        onkeydown={onTreeKey}
+        onfocusin={(e) => isRow(e.target) && makeCurrent(e.target)}
         class:drop={rootDrop}
         ondragover={(e) => {
           if (e.target === e.currentTarget) {
@@ -187,6 +277,9 @@
   }
   .hit:hover {
     background: var(--hover);
+  }
+  .hit.selected {
+    background: var(--accent-soft);
   }
   .hit-text {
     display: flex;

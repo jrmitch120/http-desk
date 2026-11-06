@@ -1,16 +1,20 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { HttpFile, KeyValue, Request } from "../lib/types";
-  import { getDirective, setDirective } from "../lib/http";
+  import { getDirective, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
   import KeyValueTable from "./KeyValueTable.svelte";
 
   let { req, file }: { req: Request; file: HttpFile } = $props();
 
   const followRedirects = $derived(getDirective(req, "no-redirect") === undefined);
-  const timeout = $derived(getDirective(req, "timeout") ?? "");
+  // JetBrains semantics: `@timeout` is the idle time between received data, `@connection-timeout` limits only connecting.
+  const timeouts = [
+    { directive: "timeout", label: "Idle timeout", hint: "Longest wait for the next data from the server." },
+    { directive: "connection-timeout", label: "Connection timeout", hint: "Longest wait to connect." },
+  ];
   const description = $derived(req.comments.join("\n"));
-  const otherDirectives = $derived(req.directives.filter((d) => !["no-redirect", "timeout"].includes(d.name.toLowerCase())));
+  const otherDirectives = $derived(req.directives.filter((d) => !["no-redirect", "timeout", "connection-timeout"].includes(d.name.toLowerCase())));
 
   // File variables are edited as KeyValue rows (always enabled). Rows are re-read
   // when the file object changes (e.g. reloaded from disk) and written back on edit.
@@ -61,18 +65,21 @@
       </div>
       <Toggle checked={followRedirects} onchange={(v) => setDirective(req, "no-redirect", v ? null : "")} />
     </div>
-    <div class="line">
-      <div>
-        <div>Timeout</div>
-        <div class="muted sub">Seconds; empty uses the app default. Saved as <code># @timeout</code></div>
+    {#each timeouts as t (t.directive)}
+      <div class="line">
+        <div>
+          <div>{t.label}</div>
+          <div class="muted sub">{t.hint} Seconds, or e.g. <code>500 ms</code>, <code>2 m</code>; empty uses the app default. Saved as <code># @{t.directive}</code></div>
+        </div>
+        <input
+          class="input mono num"
+          aria-label={t.label}
+          value={getDirective(req, t.directive) ?? ""}
+          placeholder="default"
+          oninput={(e) => setDirective(req, t.directive, e.currentTarget.value.trim() ? e.currentTarget.value.trim() : null)}
+        />
       </div>
-      <input
-        class="input mono num"
-        value={timeout}
-        placeholder="default"
-        oninput={(e) => setDirective(req, "timeout", e.currentTarget.value.trim() ? e.currentTarget.value.trim() : null)}
-      />
-    </div>
+    {/each}
     <label class="field">
       <span>HTTP version <em class="muted">(optional, e.g. HTTP/1.1)</em></span>
       <input class="input mono narrow" value={req.httpVersion ?? ""} oninput={(e) => (req.httpVersion = e.currentTarget.value.trim() || null)} placeholder="—" />
@@ -82,7 +89,7 @@
   <section>
     <h3>File variables</h3>
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
-    <KeyValueTable bind:items={fileVars} toggles={false} namePlaceholder="Variable" valuePlaceholder="Value" separator="=" />
+    <KeyValueTable bind:items={fileVars} toggles={false} namePlaceholder="Variable" valuePlaceholder="Value" separator="=" nameError={variableNameError} />
   </section>
 
   {#if otherDirectives.length || preserved.length}

@@ -125,7 +125,10 @@
         <span class="loading"><span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}</span>
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
+      {:else if run.cancelled && !res}
+        <span class="pill cancelled">Cancelled</span>
       {:else if res}
+        {#if run.cancelled}<span class="pill cancelled" title="The last send was cancelled; this is the response before it">Cancelled</span>{/if}
         <span class="pill {statusClass(res.status)}" title={statusTitle}>{res.status} {res.statusText}</span>
         <span class="metric" title={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" title={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
@@ -137,7 +140,9 @@
       {/if}
     </div>
 
-    {#if run.error && !run.loading}
+    {#if run.cancelled && !res}
+      <div class="empty-state small">Request cancelled.</div>
+    {:else if run.error && !run.loading}
       <div class="error">
         <Icon name="alert" size={22} />
         <div>
@@ -178,6 +183,7 @@
             <button class="icon-btn" title="Search (⌘/Ctrl F)" onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
             {#if kind === "json" || kind === "xml"}
               <button class="icon-btn" title="Fold all" onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+              <button class="icon-btn" title="Unfold all" onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
             {/if}
             <button class="icon-btn" class:active={wrap} title="Wrap lines" onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
           {/if}
@@ -264,6 +270,9 @@
     padding: 2px 8px;
     border-radius: 4px;
     background: color-mix(in srgb, currentColor 13%, transparent);
+  }
+  .pill.cancelled {
+    color: var(--muted);
   }
   .metric {
     font-size: 12px;

@@ -26,7 +26,8 @@ let envSet = {
     { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:8765", secret: false }, { name: "token", value: "dev-token-123", secret: true }] },
     { name: "staging", variables: [{ name: "baseUrl", value: "https://staging.example.com", secret: false }] },
   ],
-  privateFileIgnored: true,
+  // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
+  privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
@@ -37,6 +38,48 @@ let settings = {
   checkUpdates: true,
   showDescriptions: true,
 };
+
+/** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
+const sent: unknown[] = [];
+(window as unknown as { __mock: unknown }).__mock = { sent };
+
+type Node = { name: string; path: string; kind: string; children?: Node[] };
+const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
+const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+const findNode = (n: Node, path: string): Node | undefined =>
+  n.path === path ? n : n.children?.map((c) => findNode(c, path)).find(Boolean);
+function addNode(path: string, kind: "dir" | "file") {
+  findNode(tree, parentOf(path))?.children?.push({ name: nameOf(path), path, kind, ...(kind === "dir" ? { children: [] } : {}) });
+}
+/** Re-points a node and everything below it, plus any file contents, to a new path. */
+function moveNode(from: string, to: string) {
+  const node = findNode(tree, from);
+  const parent = findNode(tree, parentOf(from));
+  if (!node || !parent) return;
+  parent.children = parent.children!.filter((c) => c !== node);
+  const remap = (n: Node) => {
+    n.path = to + n.path.slice(from.length);
+    n.children?.forEach(remap);
+  };
+  remap(node);
+  node.name = nameOf(to);
+  findNode(tree, parentOf(to))?.children?.push(node);
+  for (const p of Object.keys(files).filter((p) => p === from || p.startsWith(from + "/"))) {
+    files[to + p.slice(from.length)] = files[p];
+    delete files[p];
+  }
+}
+
+/** Drops a node, everything below it, and any file contents. */
+function removeNode(path: string) {
+  const parent = findNode(tree, parentOf(path));
+  if (parent?.children) parent.children = parent.children.filter((c) => c.path !== path);
+  for (const p of Object.keys(files).filter((p) => p === path || p.startsWith(path + "/"))) delete files[p];
+}
+// `?trash=unavailable` simulates a volume without a trash: `delete_path` refuses.
+const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
+// `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
+const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -53,7 +96,7 @@ mockIPC(
       case "path_exists":
         return true;
       case "open_workspace":
-        return { root: ROOT, tree };
+        return { root: ROOT, tree, gitignoreUpdated: false };
       case "get_tree":
         return tree;
       case "load_environments":
@@ -66,13 +109,43 @@ mockIPC(
       case "save_http_file":
         files[args.path] = clone(args.file);
         return clone(args.file);
+      case "create_file": {
+        // Parsing `args.content` needs the Rust core; one request from the fixture stands in.
+        const req = { ...clone((pets as any).requests[0]), name: "New request", raw: null, leading: "" };
+        files[args.path] = { ...clone(pets as any), requests: [req], trailing: "" };
+        addNode(args.path, "file");
+        return null;
+      }
+      case "create_dir":
+        addNode(args.path, "dir");
+        return null;
+      case "rename_path":
+        moveNode(args.from, args.to);
+        return null;
+      case "delete_path":
+        if (trashUnavailable) return "trashUnavailable";
+        removeNode(args.path);
+        return "trashed";
+      case "delete_permanently":
+        removeNode(args.path);
+        return null;
       case "render_request": {
         const r = args.request;
         return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
       }
-      case "search_requests":
-        return [{ path: `${ROOT}/api/pets.http`, index: 0, name: "List pets", method: "GET", url: "{{baseUrl}}/pets" }];
+      case "search_requests": {
+        // Same matching as the backend: every term in name, method, URL or file name.
+        const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
+        return Object.entries(files).flatMap(([path, f]: [string, any]) =>
+          f.requests.flatMap((r: any, index: number) => {
+            const name = r.name.trim() || `${r.method} ${r.url}`;
+            const hay = `${name} ${r.method} ${r.url} ${path.split("/").pop()}`.toLowerCase();
+            return terms.every((t) => hay.includes(t)) ? [{ path, index, name, method: r.method, url: r.url }] : [];
+          }),
+        );
+      }
       case "send_request": {
+        sent.push(clone(args.request));
         await delay(450);
         const r = args.request;
         if (r.url.includes("png")) {
@@ -112,8 +185,12 @@ mockIPC(
           ],
           warnings: ["Unresolved external $ref: https://example.com/common.yaml#/Error"],
         };
-      case "openapi_generate":
-        return { files: [`${ROOT}/swagger-petstore/pet.http`], conflicts: [], written: !args.dryRun, environments: ["production"], envDir: ROOT, gitignoreUpdated: false, warnings: [] };
+      case "openapi_generate": {
+        const files = [`${ROOT}/swagger-petstore/pet.http`];
+        const conflicts = openapiConflicts ? files : [];
+        const written = !args.dryRun && (args.overwrite || !conflicts.length);
+        return { files, conflicts, written, environments: ["production"], envDir: ROOT, gitignoreUpdated: false, warnings: [] };
+      }
       default:
         return null; // plugins (dialog, window title, opener), cancel, etc.
     }

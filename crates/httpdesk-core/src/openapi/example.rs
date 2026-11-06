@@ -92,14 +92,15 @@ impl<'a> Ctx<'a> {
                     merged.extend(m);
                 }
             }
-            return Some(if merged.is_empty() { scalar.unwrap_or(Value::Object(merged)) } else { Value::Object(merged) });
+            return Some(if merged.is_empty() {
+                scalar.unwrap_or(Value::Object(merged))
+            } else {
+                Value::Object(merged)
+            });
         }
         for key in ["oneOf", "anyOf"] {
             if let Some(variants) = obj.get(key).and_then(Value::as_array) {
-                let pick = variants
-                    .iter()
-                    .find(|v| !is_null_schema(self.deref(v)))
-                    .or_else(|| variants.first());
+                let pick = variants.iter().find(|v| !is_null_schema(self.deref(v))).or_else(|| variants.first());
                 if let Some(v) = pick {
                     let mut out = self.example(v, depth, stack);
                     // Sibling properties next to oneOf/anyOf are merged in.
@@ -222,7 +223,8 @@ pub(crate) fn schema_type(obj: &Map<String, Value>) -> Option<String> {
     match obj.get("type") {
         Some(Value::String(t)) => return Some(t.clone()),
         Some(Value::Array(types)) => {
-            let t = types.iter().filter_map(Value::as_str).find(|t| *t != "null").or(types.first().and_then(Value::as_str));
+            let t =
+                types.iter().filter_map(Value::as_str).find(|t| *t != "null").or(types.first().and_then(Value::as_str));
             return t.map(str::to_string);
         }
         _ => {}

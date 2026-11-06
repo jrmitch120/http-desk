@@ -33,6 +33,41 @@ pub struct EnvVar {
     pub value: String,
     /// Stored in the private env file.
     pub secret: bool,
+    /// JSON type the value was read with, so saving writes it back the same way.
+    pub json_type: JsonType,
+}
+
+/// JSON type of an environment value. Values are edited as text; on save they are written
+/// back with this type when the text still fits it (`"8080"` as a number, `""` as `null`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum JsonType {
+    #[default]
+    String,
+    Number,
+    Boolean,
+    Null,
+}
+
+impl JsonType {
+    fn of(v: &Value) -> Self {
+        match v {
+            Value::Number(_) => Self::Number,
+            Value::Bool(_) => Self::Boolean,
+            Value::Null => Self::Null,
+            _ => Self::String,
+        }
+    }
+
+    fn to_json(self, value: &str) -> Value {
+        let typed = match self {
+            Self::String => None,
+            Self::Number => serde_json::from_str::<serde_json::Number>(value).ok().map(Value::Number),
+            Self::Boolean => value.parse().ok().map(Value::Bool),
+            Self::Null => value.is_empty().then_some(Value::Null),
+        };
+        typed.unwrap_or_else(|| Value::String(value.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -85,13 +120,14 @@ fn scalar(v: &Value) -> Option<String> {
     }
 }
 
-fn upsert(vars: &mut Vec<EnvVar>, name: &str, value: String, secret: bool) {
+fn upsert(vars: &mut Vec<EnvVar>, name: &str, value: String, json_type: JsonType, secret: bool) {
     match vars.iter_mut().find(|v| v.name == name) {
         Some(v) => {
             v.value = value;
+            v.json_type = json_type;
             v.secret |= secret;
         }
-        None => vars.push(EnvVar { name: name.into(), value, secret }),
+        None => vars.push(EnvVar { name: name.into(), value, secret, json_type }),
     }
 }
 
@@ -113,7 +149,7 @@ pub fn load(dir: &Path) -> Result<EnvironmentSet, EnvError> {
             };
             for (k, v) in obj {
                 if let Some(value) = scalar(v) {
-                    upsert(vars, k, value, secret);
+                    upsert(vars, k, value, JsonType::of(v), secret);
                 }
             }
         }
@@ -130,15 +166,22 @@ pub fn variables(set: &EnvironmentSet, env_name: Option<&str>) -> HashMap<String
     out
 }
 
-fn build_object(vars: &[EnvVar], old: Option<&Value>, write_secrets: bool, old_public: Option<&Value>) -> Map<String, Value> {
+fn build_object(
+    vars: &[EnvVar],
+    old: Option<&Value>,
+    write_secrets: bool,
+    old_public: Option<&Value>,
+) -> Map<String, Value> {
     let mut obj = Map::new();
     for v in vars.iter().filter(|v| !v.name.is_empty()) {
         if v.secret == write_secrets {
-            obj.insert(v.name.clone(), Value::String(v.value.clone()));
+            obj.insert(v.name.clone(), v.json_type.to_json(&v.value));
         } else if !write_secrets {
-            // A secret that also has a placeholder in the public file keeps that placeholder.
-            if let Some(placeholder) = old_public.and_then(|o| o.get(&v.name)).filter(|p| scalar(p).is_some()) {
-                obj.insert(v.name.clone(), placeholder.clone());
+            // A Secret already listed in the public file keeps an entry there, but only as an
+            // empty placeholder (`null` stays `null`): never its value.
+            if let Some(old) = old_public.and_then(|o| o.get(&v.name)).filter(|p| scalar(p).is_some()) {
+                let placeholder = if old.is_null() { Value::Null } else { Value::String(String::new()) };
+                obj.insert(v.name.clone(), placeholder);
             }
         }
     }
@@ -158,7 +201,8 @@ pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
 
     let mut public = Map::new();
     let mut private = Map::new();
-    let named = std::iter::once((SHARED, &set.shared)).chain(set.environments.iter().map(|e| (e.name.as_str(), &e.variables)));
+    let named =
+        std::iter::once((SHARED, &set.shared)).chain(set.environments.iter().map(|e| (e.name.as_str(), &e.variables)));
     for (name, vars) in named {
         let pub_obj = build_object(vars, old_public.get(name), false, old_public.get(name));
         let priv_obj = build_object(vars, old_private.get(name), true, None);
@@ -174,26 +218,29 @@ pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
 
     let write = |path: &Path, map: Map<String, Value>| -> Result<(), EnvError> {
         let text = serde_json::to_string_pretty(&Value::Object(map)).unwrap() + "\n";
-        crate::workspace::write_atomic(path, text.as_bytes()).map_err(|source| EnvError::Io { path: path.into(), source })
+        crate::workspace::write_atomic(path, text.as_bytes())
+            .map_err(|source| EnvError::Io { path: path.into(), source })
     };
 
     if !public.is_empty() || public_path.exists() {
         write(&public_path, public)?;
     }
     let mut report = SaveReport::default();
-    let private_existed = private_path.exists();
-    if !private.is_empty() || private_existed {
+    if !private.is_empty() || private_path.exists() {
         write(&private_path, private)?;
-        if !private_existed {
-            report.gitignore_updated = ensure_gitignored(dir).unwrap_or(false);
-        }
+        report.gitignore_updated = ensure_gitignored(dir).unwrap_or(false);
     }
     Ok(report)
 }
 
 /// Adds variables that don't exist yet to `env_name` (creating it if needed).
 /// Existing values are never overwritten.
-pub fn merge_variables(dir: &Path, env_name: &str, vars: &[(String, String)], secret: bool) -> Result<SaveReport, EnvError> {
+pub fn merge_variables(
+    dir: &Path,
+    env_name: &str,
+    vars: &[(String, String)],
+    secret: bool,
+) -> Result<SaveReport, EnvError> {
     let mut set = load(dir)?;
     if !set.environments.iter().any(|e| e.name == env_name) {
         set.environments.push(Environment { name: env_name.to_string(), variables: vec![] });
@@ -201,29 +248,68 @@ pub fn merge_variables(dir: &Path, env_name: &str, vars: &[(String, String)], se
     let env = set.environments.iter_mut().find(|e| e.name == env_name).unwrap();
     for (k, v) in vars {
         if !env.variables.iter().any(|e| &e.name == k) {
-            env.variables.push(EnvVar { name: k.clone(), value: v.clone(), secret });
+            env.variables.push(EnvVar { name: k.clone(), value: v.clone(), secret, ..Default::default() });
         }
     }
     save(dir, &set)
 }
 
-fn ignore_patterns_match(line: &str) -> bool {
-    let l = line.trim().trim_start_matches('/').trim_start_matches("**/");
-    matches!(l, PRIVATE_ENV_FILE | "*.private.env.json" | "*private.env.json" | "*.env.json")
+/// What the repository's `.gitignore` rules say about the private env file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitignoreRule {
+    /// A rule ignores it (or a folder it is in).
+    Ignored,
+    /// A `!` rule un-ignores it: the user wants it tracked.
+    Negated,
+    /// No rule matches it.
+    Unmatched,
 }
 
-fn gitignore_status(dir: &Path) -> Option<bool> {
-    let gitignore = dir.join(".gitignore");
-    if !dir.join(".git").exists() && !gitignore.exists() {
-        return None;
+/// The rule that decides whether git ignores the private env file in `dir`, judged by the
+/// `.gitignore` files from the nearest enclosing repository root (a `.git` dir or file) down
+/// to `dir`. `None` when `dir` isn't inside a git repository. Local-only rules
+/// (`.git/info/exclude`, global excludes) don't count, since they don't protect teammates' clones.
+fn gitignore_rule(dir: &Path) -> Option<GitignoreRule> {
+    use ignore::gitignore::Gitignore;
+    use ignore::Match;
+
+    let root = dir.ancestors().find(|d| d.join(".git").exists())?;
+    // Deepest first: a deeper `.gitignore` overrides a shallower one.
+    let rules: Vec<Gitignore> =
+        dir.ancestors().take_while(|d| d.starts_with(root)).map(|d| Gitignore::new(d.join(".gitignore")).0).collect();
+    let file = dir.join(PRIVATE_ENV_FILE);
+    let parts: Vec<_> = file.strip_prefix(root).ok()?.components().collect();
+    // Like git, walk down from the root: once a folder is ignored, everything in it is.
+    let mut path = root.to_path_buf();
+    let mut rule = GitignoreRule::Unmatched;
+    for (i, part) in parts.iter().enumerate() {
+        path.push(part);
+        let parent = path.parent()?;
+        let verdict = rules
+            .iter()
+            .filter(|g| parent.starts_with(g.path()))
+            .map(|g| g.matched(&path, i + 1 < parts.len()))
+            .find(|m| !m.is_none());
+        match verdict {
+            Some(Match::Ignore(_)) => return Some(GitignoreRule::Ignored),
+            Some(Match::Whitelist(_)) if i + 1 == parts.len() => rule = GitignoreRule::Negated,
+            _ => {}
+        }
     }
-    let text = std::fs::read_to_string(gitignore).unwrap_or_default();
-    Some(text.lines().any(ignore_patterns_match))
+    Some(rule)
 }
 
-/// Appends the private env file to `.gitignore` in git workspaces. Returns whether it changed.
+/// Whether git ignores the private env file in `dir`; `None` outside a git repository.
+fn gitignore_status(dir: &Path) -> Option<bool> {
+    gitignore_rule(dir).map(|r| r == GitignoreRule::Ignored)
+}
+
+/// Makes sure git ignores the private env file, if there is one in `dir`: when `dir` is
+/// inside a git repository and no rule matches the file at all, appends it to
+/// `dir/.gitignore`. An explicit `!` negation is the user's choice and is left alone (the
+/// Environments editor still warns). Returns whether `.gitignore` changed.
 pub fn ensure_gitignored(dir: &Path) -> std::io::Result<bool> {
-    if gitignore_status(dir) != Some(false) {
+    if !dir.join(PRIVATE_ENV_FILE).exists() || gitignore_rule(dir) != Some(GitignoreRule::Unmatched) {
         return Ok(false);
     }
     let path = dir.join(".gitignore");
@@ -277,7 +363,10 @@ mod tests {
         let token = set.environments[0].variables.iter_mut().find(|v| v.name == "token").unwrap();
         token.value = "s3cret".into();
         token.secret = true;
-        set.environments.push(Environment { name: "prod".into(), variables: vec![EnvVar { name: "baseUrl".into(), value: "https://api".into(), secret: false }] });
+        set.environments.push(Environment {
+            name: "prod".into(),
+            variables: vec![EnvVar { name: "baseUrl".into(), value: "https://api".into(), ..Default::default() }],
+        });
         let report = save(dir.path(), &set).unwrap();
         assert!(report.gitignore_updated);
 
@@ -296,6 +385,126 @@ mod tests {
         assert_eq!(vars["v"], "1");
         assert_eq!(vars["port"], "8080");
         assert_eq!(ssl_config(dir.path(), "dev").verify_host_certificate, Some(false));
+    }
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn ticking_secret_moves_the_value_out_of_the_shared_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(ENV_FILE), r#"{ "dev": { "baseUrl": "http://localhost", "token": "s3cret" } }"#)
+            .unwrap();
+        let mut set = load(dir.path()).unwrap();
+        set.environments[0].variables.iter_mut().find(|v| v.name == "token").unwrap().secret = true;
+        save(dir.path(), &set).unwrap();
+
+        assert_eq!(
+            read_json(&dir.path().join(ENV_FILE)),
+            serde_json::json!({ "dev": { "baseUrl": "http://localhost", "token": "" } })
+        );
+        assert_eq!(read_json(&dir.path().join(PRIVATE_ENV_FILE)), serde_json::json!({ "dev": { "token": "s3cret" } }));
+        assert_eq!(variables(&load(dir.path()).unwrap(), Some("dev"))["token"], "s3cret");
+    }
+
+    #[test]
+    fn numbers_booleans_and_null_keep_their_json_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = serde_json::json!({ "dev": { "port": 8080, "ratio": 1.5, "debug": true, "proxy": null, "name": "api", "code": "007" } });
+        std::fs::write(dir.path().join(ENV_FILE), original.to_string()).unwrap();
+
+        save(dir.path(), &load(dir.path()).unwrap()).unwrap();
+        assert_eq!(read_json(&dir.path().join(ENV_FILE)), original);
+
+        // Edited values keep their type when they still fit it; a Secret keeps it in the private file.
+        let mut set = load(dir.path()).unwrap();
+        let vars = &mut set.environments[0].variables;
+        let var = |vars: &mut Vec<EnvVar>, name: &str| vars.iter_mut().position(|v| v.name == name).unwrap();
+        let i = var(vars, "port");
+        vars[i].value = "9090".into();
+        vars[i].secret = true;
+        let i = var(vars, "debug");
+        vars[i].value = "false".into();
+        let i = var(vars, "ratio");
+        vars[i].value = "lots".into();
+        save(dir.path(), &set).unwrap();
+        assert_eq!(
+            read_json(&dir.path().join(ENV_FILE)),
+            serde_json::json!({ "dev": { "port": "", "ratio": "lots", "debug": false, "proxy": null, "name": "api", "code": "007" } })
+        );
+        assert_eq!(read_json(&dir.path().join(PRIVATE_ENV_FILE)), serde_json::json!({ "dev": { "port": 9090 } }));
+    }
+
+    /// A git repo with the workspace in `api/`, holding a private env file.
+    fn repo_with_workspace_subfolder() -> (tempfile::TempDir, PathBuf) {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        let ws = repo.path().join("api");
+        std::fs::create_dir(&ws).unwrap();
+        std::fs::write(ws.join(PRIVATE_ENV_FILE), r#"{ "dev": { "token": "s3cret" } }"#).unwrap();
+        (repo, ws)
+    }
+
+    #[test]
+    fn private_file_in_a_repo_subfolder_gets_gitignored() {
+        let (repo, ws) = repo_with_workspace_subfolder();
+        // A root-anchored rule only covers the repo root, not this folder.
+        std::fs::write(repo.path().join(".gitignore"), "/http-client.private.env.json\n").unwrap();
+        assert_eq!(load(&ws).unwrap().private_file_ignored, Some(false));
+
+        assert!(ensure_gitignored(&ws).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(ws.join(".gitignore")).unwrap(),
+            format!("# HttpDesk: secrets\n{PRIVATE_ENV_FILE}\n")
+        );
+        assert_eq!(load(&ws).unwrap().private_file_ignored, Some(true));
+        assert!(!ensure_gitignored(&ws).unwrap(), "second call changes nothing");
+    }
+
+    #[test]
+    fn existing_repo_rules_that_ignore_the_private_file_are_respected() {
+        for rule in ["*.private.env.json", "api/", "/api/http-client.private.env.json", "**/http-client.*.env.json"] {
+            let (repo, ws) = repo_with_workspace_subfolder();
+            std::fs::write(repo.path().join(".gitignore"), format!("{rule}\n")).unwrap();
+            assert_eq!(load(&ws).unwrap().private_file_ignored, Some(true), "{rule}");
+            assert!(!ensure_gitignored(&ws).unwrap(), "{rule}");
+            assert!(!ws.join(".gitignore").exists(), "{rule}");
+        }
+        // A deeper negation un-ignores it again.
+        let (repo, ws) = repo_with_workspace_subfolder();
+        std::fs::write(repo.path().join(".gitignore"), "*.private.env.json\n").unwrap();
+        std::fs::write(ws.join(".gitignore"), format!("!{PRIVATE_ENV_FILE}\n")).unwrap();
+        assert_eq!(load(&ws).unwrap().private_file_ignored, Some(false));
+    }
+
+    #[test]
+    fn an_explicit_negation_is_the_users_choice() {
+        let (repo, ws) = repo_with_workspace_subfolder();
+        let negation = format!("*.private.env.json\n!{PRIVATE_ENV_FILE}\n");
+        std::fs::write(repo.path().join(".gitignore"), &negation).unwrap();
+
+        assert!(!ensure_gitignored(&ws).unwrap(), "nothing appended");
+        let mut set = load(&ws).unwrap();
+        assert_eq!(set.private_file_ignored, Some(false), "the Environments warning still shows");
+        set.environments[0].variables[0].value = "n3w".into();
+        let report = save(&ws, &set).unwrap();
+        assert!(!report.gitignore_updated, "saving environments doesn't re-append it either");
+        assert!(!ws.join(".gitignore").exists());
+        assert_eq!(std::fs::read_to_string(repo.path().join(".gitignore")).unwrap(), negation);
+    }
+
+    #[test]
+    fn gitignore_is_left_alone_without_a_private_file_or_a_repo() {
+        let (_repo, ws) = repo_with_workspace_subfolder();
+        std::fs::remove_file(ws.join(PRIVATE_ENV_FILE)).unwrap();
+        assert!(!ensure_gitignored(&ws).unwrap());
+        assert!(!ws.join(".gitignore").exists());
+
+        let plain = tempfile::tempdir().unwrap();
+        std::fs::write(plain.path().join(PRIVATE_ENV_FILE), "{}").unwrap();
+        assert_eq!(load(plain.path()).unwrap().private_file_ignored, None);
+        assert!(!ensure_gitignored(plain.path()).unwrap());
     }
 
     #[test]

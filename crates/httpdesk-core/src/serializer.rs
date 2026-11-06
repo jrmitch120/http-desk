@@ -4,46 +4,214 @@
 //! canonical output as the edited model is emitted byte-for-byte; only edited
 //! requests are re-rendered. See `docs/ARCHITECTURE.md` §2.
 
+use base64::Engine;
+
 use crate::model::*;
-use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
+use crate::parser::{
+    self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE,
+};
+use crate::query::{escape, Part};
+
+/// A model field whose text would change the file's structure if written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidField(pub String);
+
+/// Serializes `file`, refusing a model whose single-line fields contain line
+/// breaks or whose names would be read back as something else. Use this for
+/// models that come from outside (the UI); `serialize` doesn't check.
+pub fn try_serialize(file: &HttpFile) -> Result<String, InvalidField> {
+    check_file(file)?;
+    Ok(serialize(file))
+}
+
+fn has_line_break(s: &str) -> bool {
+    s.contains(['\n', '\r'])
+}
+
+/// `Err` with "`context`: `what` contains a line break" when `value` has one.
+fn single_line(context: &str, what: impl FnOnce() -> String, value: &str) -> Result<(), InvalidField> {
+    if has_line_break(value) {
+        return Err(InvalidField(format!("{context}: {} contains a line break", what())));
+    }
+    Ok(())
+}
+
+fn check_file(file: &HttpFile) -> Result<(), InvalidField> {
+    for c in &file.header.comments {
+        single_line("File header", || "a comment line".into(), c)?;
+    }
+    for v in &file.header.variables {
+        check_variable("File variables", v)?;
+    }
+    for req in &file.requests {
+        check_request(req)?;
+    }
+    Ok(())
+}
+
+fn check_variable(context: &str, v: &Variable) -> Result<(), InvalidField> {
+    single_line(context, || format!("variable name {:?}", v.name), &v.name)?;
+    single_line(context, || format!("the value of variable {:?}", v.name), &v.value)?;
+    // Empty names aren't written. Any other name must read back as a variable line.
+    if !v.name.is_empty() && !parser::is_variable_name(&v.name) {
+        return Err(InvalidField(format!(
+            "{context}: variable name {:?} can only use letters, digits, _, -, . and $",
+            v.name
+        )));
+    }
+    Ok(())
+}
+
+/// Why a header line with this name would read back as something else (a
+/// comment, a disabled query param or body line, or no header at all).
+fn header_name_problem(name: &str) -> Option<String> {
+    if name.contains(char::is_whitespace) {
+        return Some("can't contain spaces".into());
+    }
+    if name.contains(':') {
+        return Some("can't contain ':'".into());
+    }
+    ["//", "#", "~", "|", "&", "?"].into_iter().find(|p| name.starts_with(p)).map(|p| format!("can't start with '{p}'"))
+}
+
+fn check_header_name(context: &str, what: &str, name: &str) -> Result<(), InvalidField> {
+    match header_name_problem(name) {
+        Some(problem) if !name.is_empty() => Err(InvalidField(format!("{context}: {what} {name:?} {problem}"))),
+        _ => Ok(()),
+    }
+}
+
+fn check_items(context: &str, kind: &str, items: &[KeyValue]) -> Result<(), InvalidField> {
+    for kv in items {
+        single_line(context, || format!("{kind} name {:?}", kv.name), &kv.name)?;
+        single_line(context, || format!("the value of {kind} {:?}", kv.name), &kv.value)?;
+    }
+    Ok(())
+}
+
+fn check_request(req: &Request) -> Result<(), InvalidField> {
+    let context = format!("Request {:?}", req.display_name());
+    let context = context.as_str();
+    single_line(context, || "the name".into(), &req.name)?;
+    single_line(context, || "the method".into(), &req.method)?;
+    single_line(context, || "the URL".into(), &req.url)?;
+    single_line(context, || "the HTTP version".into(), req.http_version.as_deref().unwrap_or(""))?;
+    // The request line splits at whitespace.
+    if req.method.trim().contains(char::is_whitespace) {
+        return Err(InvalidField(format!("{context}: the method {:?} can't contain spaces", req.method)));
+    }
+    for d in &req.directives {
+        single_line(context, || format!("directive @{}", d.name), &d.name)?;
+        single_line(context, || format!("directive @{}", d.name), &d.value)?;
+    }
+    for v in &req.variables {
+        check_variable(context, v)?;
+    }
+    check_items(context, "query param", &req.query.items)?;
+    check_items(context, "header", &req.headers.items)?;
+    // `# @param a:b: text` would attach the text to `a`.
+    for p in &req.query.items {
+        if p.name.contains(':') && p.description.lines().any(|l| !l.trim().is_empty()) {
+            return Err(InvalidField(format!(
+                "{context}: query param name {:?} can't contain ':' while it has a description",
+                p.name
+            )));
+        }
+    }
+
+    let a = &req.auth;
+    let auth_fields = [
+        ("the username", &a.username),
+        ("the password", &a.password),
+        ("the bearer token", &a.token),
+        ("the API key name", &a.key_name),
+        ("the API key value", &a.key_value),
+    ];
+    for (what, value) in auth_fields {
+        single_line(context, || what.into(), value)?;
+    }
+    for h in &req.headers.items {
+        check_header_name(context, "header name", &h.name)?;
+    }
+    // RFC 7617: the username ends at the first `:`, so it can't be written back.
+    if a.kind == AuthKind::Basic && a.username.contains(':') {
+        return Err(InvalidField(format!("{context}: the Basic auth username {:?} can't contain ':'", a.username)));
+    }
+    if a.kind == AuthKind::ApiKey {
+        match a.key_location {
+            ApiKeyLocation::Header => check_header_name(context, "API key header name", &a.key_name)?,
+            // `# @httpdesk-auth apikey query <name>` splits at whitespace.
+            ApiKeyLocation::Query if a.key_name.contains(char::is_whitespace) => {
+                return Err(InvalidField(format!("{context}: the API key name {:?} can't contain spaces", a.key_name)));
+            }
+            ApiKeyLocation::Query => {}
+        }
+    }
+    single_line(context, || "the Authorization header".into(), a.raw.as_deref().unwrap_or(""))?;
+    for e in &req.extra_lines {
+        single_line(context, || "a header-area line".into(), &e.text)?;
+    }
+    Ok(())
+}
+
+/// Splits on `\r\n`, `\r` or `\n`.
+fn split_lines(s: &str) -> impl Iterator<Item = &str> {
+    s.split('\n').flat_map(|l| l.strip_suffix('\r').unwrap_or(l).split('\r'))
+}
+
+/// A description line as it must be written so it reads back as description:
+/// when its first non-space character is `@` followed by a directive name, a
+/// space goes after the `@` (`@timeout 1` becomes `@ timeout 1`), so neither
+/// HttpDesk nor other clients read it as a directive. The OpenAPI generator
+/// uses the same rule. Other lines are returned as they are.
+pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let body = line.trim_start();
+    match body.strip_prefix('@') {
+        Some(rest) if rest.starts_with(|c: char| !c.is_whitespace() && c != '=') => {
+            format!("{}@ {rest}", &line[..line.len() - body.len()]).into()
+        }
+        _ => line.into(),
+    }
+}
 
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
 
-    let header_text = render_header(&file.header);
-    let header_raw = file
-        .header
-        .raw
-        .as_ref()
-        .filter(|raw| render_header(&parser::parse_header(raw)) == header_text);
-    match header_raw {
-        Some(raw) => out.push_str(raw),
-        None if !header_text.is_empty() => {
-            out.push_str(&header_text);
-            prev_rendered = true;
+    let in_place = file.header.raw.as_deref().and_then(|raw| Some((render_header_in_place(&file.header, raw)?, raw)));
+    match in_place {
+        Some((text, raw)) => {
+            // Blank lines are dropped once nothing else is left, unless that's how the file was.
+            if !text.trim().is_empty() || text == raw {
+                out.push_str(&text);
+            }
         }
-        None => {}
+        None => {
+            out.push_str(&render_header(&file.header));
+            prev_rendered = !out.is_empty();
+        }
     }
-    let has_header = !header_text.is_empty();
-
-    for (i, req) in file.requests.iter().enumerate() {
+    for req in &file.requests {
         if !req.leading.is_empty() {
             separate(&mut out, prev_rendered);
             out.push_str(&req.leading);
             prev_rendered = false;
         }
         let rendered = render_request(req);
+        // Rendered with its raw text too, so both sides use the same section order.
         let raw = req.raw.as_ref().filter(|raw| {
-            // A header followed by a request without `###` would merge into one block.
-            let needs_separator = i == 0 && has_header && req.leading.is_empty();
-            !(needs_separator && !raw.starts_with("###"))
-                && parser::parse_block(raw).map(|p| render_request(&p)).as_deref()
-                    == Some(rendered.as_str())
+            parser::parse_block(raw).map(|p| render_request(&Request { raw: Some(raw.to_string()), ..p })).as_deref()
+                == Some(rendered.as_str())
         });
         match raw {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
+                // Only a file's first block may omit `###`; anywhere else it would
+                // merge into the block before it.
+                if !out.is_empty() && !parser::is_separator(raw) {
+                    out.push_str("###\n");
+                }
                 out.push_str(raw);
                 prev_rendered = false;
             }
@@ -60,10 +228,13 @@ pub fn serialize(file: &HttpFile) -> String {
         out.push_str(&file.trailing);
     }
 
-    match file.line_ending {
-        LineEnding::Lf => out,
-        LineEnding::Crlf => out.replace('\n', "\r\n"),
+    if file.line_ending == LineEnding::Crlf {
+        out = out.replace('\n', "\r\n");
     }
+    if file.bom {
+        out.insert(0, parser::BOM);
+    }
+    out
 }
 
 /// Ensures `out` ends with a newline, plus a blank line when `blank` is set.
@@ -89,6 +260,67 @@ pub fn render_header(h: &FileHeader) -> String {
     }
 }
 
+/// Renders the header inside its original text so comments and blank lines stay
+/// put: variable lines are updated in place (unchanged ones keep their bytes,
+/// remaining ones follow the model's order), removed ones are dropped, and new
+/// ones follow the last variable line. `None` when the comments were edited.
+fn render_header_in_place(h: &FileHeader, raw: &str) -> Option<String> {
+    if parser::parse_header(raw).comments != h.comments {
+        return None;
+    }
+    let vars: Vec<&Variable> = h.variables.iter().filter(|v| !v.name.is_empty()).collect();
+    let lines: Vec<(&str, Option<Variable>)> =
+        raw.split_inclusive('\n').map(|l| (l, parser::parse_variable(l.trim()))).collect();
+
+    // A variable line is kept while some model variable still has its name.
+    let mut matched = vec![false; vars.len()];
+    let kept: Vec<bool> = lines
+        .iter()
+        .map(|(_, orig)| {
+            let Some(orig) = orig else { return false };
+            let found = (0..vars.len()).find(|&j| !matched[j] && vars[j].name == orig.name);
+            found.inspect(|&j| matched[j] = true).is_some()
+        })
+        .collect();
+    let mut fill = vars.iter().zip(&matched).filter(|(_, m)| **m).map(|(v, _)| *v);
+    let mut added = vars.iter().zip(&matched).filter(|(_, m)| !**m).map(|(v, _)| *v).peekable();
+    let insert_after =
+        lines.iter().rposition(|(_, v)| v.is_some()).or_else(|| lines.iter().rposition(|(l, _)| !l.trim().is_empty()));
+
+    let mut out = String::new();
+    let mut push_added = |out: &mut String| {
+        for v in added.by_ref() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&render_variable(v));
+            out.push('\n');
+        }
+    };
+    if insert_after.is_none() {
+        push_added(&mut out);
+    }
+    for (i, (line, orig)) in lines.iter().enumerate() {
+        if kept[i] {
+            let v = fill.next()?;
+            if orig.as_ref() == Some(v) {
+                out.push_str(line);
+            } else {
+                out.push_str(&render_variable(v));
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        } else if orig.is_none() {
+            out.push_str(line);
+        }
+        if Some(i) == insert_after {
+            push_added(&mut out);
+        }
+    }
+    Some(out)
+}
+
 fn render_variable(v: &Variable) -> String {
     format!("@{} = {}", v.name, v.value)
 }
@@ -101,11 +333,18 @@ fn marker(depth: usize) -> String {
     }
 }
 
-fn render_param(p: &KeyValue) -> String {
+/// `name=value` as written in the file, escaping only what would change the query's
+/// structure (ADR-0001).
+pub(crate) fn render_param(p: &KeyValue) -> String {
+    let name = escape(&p.name, Part::Name);
     if p.value.is_empty() {
-        p.name.clone()
+        if p.equals {
+            name + "="
+        } else {
+            name
+        }
     } else {
-        format!("{}={}", p.name, p.value)
+        format!("{name}={}", escape(&p.value, Part::Value))
     }
 }
 
@@ -116,7 +355,11 @@ fn render_basic(auth: &Auth) -> String {
         return v;
     }
     v.push(' ');
-    if !u.is_empty() && !p.is_empty() && !u.contains(':') && !u.contains(char::is_whitespace) {
+    // JetBrains and VS Code split `Basic …` at the first whitespace, so a username
+    // with a space (or a password with edge whitespace) only survives pre-encoded.
+    if u.contains(char::is_whitespace) || p.trim() != p {
+        v.push_str(&base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}")));
+    } else if !u.is_empty() && !p.is_empty() && !u.contains(':') {
         v.push_str(&format!("{u} {p}"));
     } else {
         v.push_str(&format!("{u}:{p}"));
@@ -124,15 +367,49 @@ fn render_basic(auth: &Auth) -> String {
     v
 }
 
+/// The `# @httpdesk-disabled` line, if any section is off. Sections keep the
+/// order (and spelling) of the line in the request's original text; sections
+/// turned off since then follow, in canonical order (query, headers, unknown).
+fn section_line(req: &Request, unknown: &[&str]) -> Option<String> {
+    let mut rest: Vec<&str> = Vec::new();
+    if !req.query.enabled {
+        rest.push("query");
+    }
+    if !req.headers.enabled {
+        rest.push("headers");
+    }
+    rest.extend(unknown);
+    if rest.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for t in req.raw.as_deref().map(parser::section_tokens).unwrap_or_default() {
+        let name = if t == "params" { "query" } else { t.as_str() };
+        if let Some(i) = rest.iter().position(|r| *r == name) {
+            rest.remove(i);
+            names.push(t);
+        }
+    }
+    names.extend(rest.into_iter().map(str::to_string));
+    Some(format!("# @{} {}", SECTION_DIRECTIVE, names.join(", ")))
+}
+
 /// Canonical rendering of a single request block (always starts with `###`).
 pub fn render_request(req: &Request) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(if req.name.trim().is_empty() { "###".into() } else { format!("### {}", req.name.trim()) });
 
-    for c in &req.comments {
-        lines.push(if c.is_empty() { "#".into() } else { format!("# {c}") });
+    // A multi-line description entry becomes one `#` line per line.
+    for c in req.comments.iter().flat_map(|c| split_lines(c)) {
+        lines.push(if c.is_empty() { "#".into() } else { format!("# {}", description_line(c)) });
     }
+    // Section names this version doesn't know, written back on the section line below.
+    let mut unknown: Vec<&str> = Vec::new();
     for d in &req.directives {
+        if d.name == SECTION_DIRECTIVE {
+            unknown.extend(parser::section_names(&d.value));
+            continue;
+        }
         lines.push(if d.value.is_empty() { format!("# @{}", d.name) } else { format!("# @{} {}", d.name, d.value) });
     }
     let docs = [(PARAM_DOC_DIRECTIVE, &req.query.items), (HEADER_DOC_DIRECTIVE, &req.headers.items)];
@@ -143,16 +420,7 @@ pub fn render_request(req: &Request) -> String {
             }
         }
     }
-    let mut off = Vec::new();
-    if !req.query.enabled {
-        off.push("query");
-    }
-    if !req.headers.enabled {
-        off.push("headers");
-    }
-    if !off.is_empty() {
-        lines.push(format!("# @{} {}", SECTION_DIRECTIVE, off.join(", ")));
-    }
+    lines.extend(section_line(req, &unknown));
     let auth = &req.auth;
     if auth.kind == AuthKind::ApiKey {
         let loc = match auth.key_location {
@@ -168,9 +436,8 @@ pub fn render_request(req: &Request) -> String {
 
     // Request line with enabled query params.
     let mut active: Vec<String> = req.query.active().map(render_param).collect();
-    let api_key_query = auth.kind == AuthKind::ApiKey
-        && auth.key_location == ApiKeyLocation::Query
-        && !auth.key_name.is_empty();
+    let api_key_query =
+        auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query && !auth.key_name.is_empty();
     if api_key_query && auth.enabled {
         active.push(render_param(&KeyValue::new(&auth.key_name, &auth.key_value)));
     }
@@ -185,37 +452,57 @@ pub fn render_request(req: &Request) -> String {
     }
     lines.push(line);
 
-    // Disabled query params (item and/or section disabled).
+    // Header area as (anchor key, line): disabled query params, auth, headers.
+    let mut area: Vec<(String, String)> = Vec::new();
     let section_off = usize::from(!req.query.enabled);
     for p in req.query.items.iter().filter(|p| !p.name.is_empty()) {
         let depth = usize::from(!p.enabled) + section_off;
         if depth > 0 {
-            lines.push(format!("{}&{}", marker(depth), render_param(p)));
+            area.push((format!("&{}", p.name), format!("{}&{}", marker(depth), render_param(p))));
         }
     }
     if api_key_query && !auth.enabled {
-        lines.push(format!("{}&{}", marker(1), render_param(&KeyValue::new(&auth.key_name, &auth.key_value))));
+        let p = KeyValue::new(&auth.key_name, &auth.key_value);
+        area.push((format!("&{}", p.name), format!("{}&{}", marker(1), render_param(&p))));
     }
 
-    // Auth header.
-    let auth_line = match auth.kind {
-        AuthKind::Basic => Some(format!("Authorization: {}", render_basic(auth))),
-        AuthKind::Bearer => Some(format!("Authorization: Bearer {}", auth.token).trim_end().to_string()),
-        AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
-            Some(format!("{}: {}", auth.key_name, auth.key_value).trim_end().to_string())
+    // Auth header, as written while it still carries the same credentials.
+    let as_written = auth.raw.as_ref().filter(|raw| {
+        parser::parse_authorization(raw).is_some_and(|p| {
+            (p.kind, &p.username, &p.password, &p.token) == (auth.kind, &auth.username, &auth.password, &auth.token)
+        })
+    });
+    let auth_line = match (auth.kind, as_written) {
+        (AuthKind::Basic | AuthKind::Bearer, Some(raw)) => Some(("Authorization", format!("Authorization: {raw}"))),
+        (AuthKind::Basic, None) => Some(("Authorization", format!("Authorization: {}", render_basic(auth)))),
+        (AuthKind::Bearer, None) => {
+            Some(("Authorization", format!("Authorization: Bearer {}", auth.token).trim_end().to_string()))
+        }
+        (AuthKind::ApiKey, _) if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
+            Some((auth.key_name.as_str(), format!("{}: {}", auth.key_name, auth.key_value).trim_end().to_string()))
         }
         _ => None,
     };
-    if let Some(l) = auth_line {
-        lines.push(format!("{}{}", marker(usize::from(!auth.enabled)), l));
+    if let Some((name, l)) = auth_line {
+        area.push((name.to_string(), format!("{}{}", marker(usize::from(!auth.enabled)), l)));
     }
 
     let section_off = usize::from(!req.headers.enabled);
     for h in req.headers.items.iter().filter(|h| !h.name.is_empty()) {
         let depth = usize::from(!h.enabled) + section_off;
-        lines.push(format!("{}{}: {}", marker(depth), h.name, h.value).trim_end().to_string());
+        area.push((h.name.clone(), format!("{}{}: {}", marker(depth), h.name, h.value).trim_end().to_string()));
     }
-    lines.extend(req.extra_lines.iter().cloned());
+
+    // Extra lines go back above the line they preceded, else after the headers.
+    for e in &req.extra_lines {
+        let at = e.before.as_ref().and_then(|b| area.iter().position(|(k, _)| k.eq_ignore_ascii_case(b)));
+        let item = (String::new(), e.text.clone());
+        match at {
+            Some(i) => area.insert(i, item),
+            None => area.push(item),
+        }
+    }
+    lines.extend(area.into_iter().map(|(_, l)| l));
 
     let body = &req.body;
     let body_text = body.text.trim_end_matches(['\n', '\r', ' ', '\t']);

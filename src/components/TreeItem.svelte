@@ -72,6 +72,8 @@
   const pad = $derived(10 + depth * 14);
 </script>
 
+<!-- Rows start out of the Tab order; Sidebar's tree puts the current one back
+     in (roving tabindex) and handles the arrow keys. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="row-item"
@@ -81,7 +83,9 @@
   role="treeitem"
   aria-selected="false"
   aria-expanded={open}
-  tabindex="0"
+  aria-level={depth + 1}
+  data-path={node.path}
+  tabindex="-1"
   title={node.path}
   onclick={toggle}
   onkeydown={(e) => e.key === "Enter" && toggle()}
@@ -123,7 +127,8 @@
         style:padding-left="{pad + 26}px"
         role="treeitem"
         aria-selected={active}
-        tabindex="0"
+        aria-level={depth + 2}
+        tabindex="-1"
         onclick={() => app.openRequest(node.path, { key: req._key })}
         onkeydown={(e) => e.key === "Enter" && app.openRequest(node.path, { key: req._key })}
         oncontextmenu={(e) => requestMenu(e, req._key!)}

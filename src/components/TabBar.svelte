@@ -9,8 +9,8 @@
   function tabMenu(e: MouseEvent, tab: Tab) {
     menu.show(e, [
       { label: "Close", icon: "x", action: () => app.closeTab(tab.id) },
-      { label: "Close others", action: () => app.tabs.filter((t) => t.id !== tab.id).forEach((t) => app.closeTab(t.id)) },
-      { label: "Close all", action: () => [...app.tabs].forEach((t) => app.closeTab(t.id)) },
+      { label: "Close others", action: () => app.closeTabs(app.tabs.filter((t) => t.id !== tab.id).map((t) => t.id)) },
+      { label: "Close all", action: () => app.closeTabs(app.tabs.map((t) => t.id)) },
       { separator: true },
       { label: "Duplicate request", icon: "copy", action: () => app.duplicateRequest(tab.path, tab.key) },
     ]);
@@ -21,6 +21,22 @@
     else if (app.root) app.createFile(app.root);
   }
 
+  /** Left/Right (wrapping), Home/End move focus between tabs; Enter/Space switch to the focused one. */
+  function onTabKey(e: KeyboardEvent, tab: Tab) {
+    if (e.target !== e.currentTarget) return; // keys on the close button
+    const all = [...(strip?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+    const i = all.indexOf(e.currentTarget as HTMLElement);
+    let to: HTMLElement | undefined;
+    if (e.key === "ArrowRight") to = all[(i + 1) % all.length];
+    else if (e.key === "ArrowLeft") to = all[(i - 1 + all.length) % all.length];
+    else if (e.key === "Home") to = all[0];
+    else if (e.key === "End") to = all[all.length - 1];
+    else if (e.key === "Enter" || e.key === " ") app.activeTabId = tab.id;
+    else return;
+    e.preventDefault();
+    to?.focus();
+  }
+
   $effect(() => {
     const id = app.activeTabId;
     strip?.querySelector<HTMLElement>(`[data-tab="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -28,18 +44,24 @@
 </script>
 
 <div class="tabbar">
-  <div class="strip" bind:this={strip} onwheel={(e) => strip && (strip.scrollLeft += e.deltaY)}>
+  <div class="strip" bind:this={strip} role="tablist" aria-label="Open requests" tabindex="-1" onwheel={(e) => strip && (strip.scrollLeft += e.deltaY)}>
     {#each app.tabs as tab (tab.id)}
       {@const req = app.requestFor(tab)}
       {@const dirty = app.isRequestDirty(tab.path, tab.key)}
       {@const loading = app.runs[tab.id]?.loading}
-      <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+      {@const orphaned = app.isOrphaned(tab)}
+      {@const active = tab.id === app.activeTabId}
       <div
         class="tab"
-        class:active={tab.id === app.activeTabId}
+        class:active
+        class:orphaned
         data-tab={tab.id}
-        title="{req ? displayName(req) : ''} — {basename(tab.path)}"
+        role="tab"
+        aria-selected={active}
+        tabindex={active ? 0 : -1}
+        title="{req ? displayName(req) : ''} — {orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}"
         onclick={() => (app.activeTabId = tab.id)}
+        onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
@@ -47,6 +69,7 @@
           <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
+        {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}
           {#if dirty}<span class="dot"></span>{/if}
@@ -94,6 +117,10 @@
     background: var(--panel-2);
     color: var(--text-2);
   }
+  .tab:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
+  }
   .tab.active {
     background: var(--bg);
     color: var(--text);
@@ -122,6 +149,15 @@
   .name {
     flex: 1;
     min-width: 0;
+  }
+  .tab.orphaned .name {
+    font-style: italic;
+    text-decoration: line-through;
+  }
+  .orphan-icon {
+    display: flex;
+    flex: none;
+    color: var(--danger);
   }
   .end {
     width: 22px;

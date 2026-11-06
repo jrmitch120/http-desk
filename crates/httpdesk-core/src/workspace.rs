@@ -26,13 +26,21 @@ pub struct TreeNode {
 }
 
 pub fn is_http_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| HTTP_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| HTTP_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-fn is_ignored_dir(name: &str) -> bool {
+/// Whether the explorer skips a folder with this name: dot-folders (`.git`,
+/// `.venv`, `.cache`, …), dependencies, build output, virtualenvs and caches.
+/// The watcher uses the same rule, so churn the explorer doesn't show causes no reloads.
+pub fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || IGNORED_DIRS.contains(&name)
+}
+
+/// Whether `path` lies inside an ignored folder below `root`. The folders `root`
+/// itself sits in don't count, nor does `path`'s own name.
+pub fn inside_ignored_dir(root: &Path, path: &Path) -> bool {
+    let Some(dirs) = path.strip_prefix(root).ok().and_then(Path::parent) else { return false };
+    dirs.components().any(|c| is_ignored_dir(&c.as_os_str().to_string_lossy()))
 }
 
 /// Lists directories and `.http`/`.rest` files under `root`, directories first.
@@ -113,7 +121,13 @@ pub fn search(root: &Path, query: &str) -> Vec<SearchHit> {
             let name = req.display_name();
             let haystack = format!("{} {} {} {}", name, req.method, req.url, file_name).to_lowercase();
             if terms.iter().all(|t| haystack.contains(t)) {
-                hits.push(SearchHit { path: path.clone(), index, name, method: req.method.clone(), url: req.url.clone() });
+                hits.push(SearchHit {
+                    path: path.clone(),
+                    index,
+                    name,
+                    method: req.method.clone(),
+                    url: req.url.clone(),
+                });
             }
             if hits.len() >= 500 {
                 return hits;
@@ -123,8 +137,25 @@ pub fn search(root: &Path, query: &str) -> Vec<SearchHit> {
     hits
 }
 
+/// Follows a chain of symlinks to the file it ends at (which may not exist yet).
+/// Paths that aren't symlinks are returned unchanged.
+pub fn resolve_symlinks(path: &Path) -> PathBuf {
+    let mut path = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&path) else { break };
+        path = match path.parent() {
+            Some(parent) if link.is_relative() => parent.join(link),
+            _ => link,
+        };
+    }
+    path
+}
+
 /// Writes via a temp file + rename so watchers never observe partial content.
+/// A symlink is written through to its target, and an existing file keeps its
+/// permissions.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let path = &resolve_symlinks(path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -132,8 +163,20 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         ".{}.httpdesk-tmp",
         path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     ));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        // Apply the mode before any content lands, so a `chmod 600` file is never readable by others.
+        if let Some(p) = permissions {
+            f.set_permissions(p)?;
+        }
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
 }
@@ -156,7 +199,11 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root.join("api/users")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
-        std::fs::write(root.join("api/users/users.http"), "### List users\nGET https://x/users\n\n### Create user\nPOST https://x/users\n").unwrap();
+        std::fs::write(
+            root.join("api/users/users.http"),
+            "### List users\nGET https://x/users\n\n### Create user\nPOST https://x/users\n",
+        )
+        .unwrap();
         std::fs::write(root.join("node_modules/x/a.http"), "GET https://ignored\n").unwrap();
         std::fs::write(root.join("readme.md"), "").unwrap();
         write_atomic(&root.join("a.rest"), b"GET https://x/a\n").unwrap();
