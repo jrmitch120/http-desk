@@ -6,6 +6,7 @@
 // replaces the file's `__THEME__` placeholder with the setting; the test defines
 // it as a global.
 import { expect, test, type Page } from "@playwright/test";
+import { releaseSettings } from "./helpers";
 
 const BOOT = "src-tauri/src/theme-boot.js";
 const BG = { dark: "rgb(28, 29, 32)", light: "rgb(243, 244, 246)" };
@@ -28,13 +29,12 @@ async function startApp(page: Page, theme: string, os: "light" | "dark", boot = 
   await page.waitForFunction(() => "__mock" in window && "__firstFrameTheme" in window);
 }
 
-type Mock = { settingsServed: boolean; releaseSettings: () => void };
-const releaseSettings = (page: Page) => page.evaluate(() => (window as unknown as { __mock: Mock }).__mock.releaseSettings());
 
 /** What the page shows now, and whether settings have arrived yet. */
 const snapshot = (page: Page) =>
   page.evaluate(() => {
-    const w = window as unknown as { __firstFrameTheme?: string; __mock: Mock };
+    // Read in one go with what the page shows, so they describe the same moment.
+    const w = window as unknown as { __firstFrameTheme?: string; __mock: { settingsServed: boolean } };
     return {
       settingsServed: w.__mock.settingsServed,
       firstFrame: w.__firstFrameTheme,

@@ -2,7 +2,7 @@
 // `filter_response` evaluates a subset of RFC 9535 and keeps number tokens as
 // the server wrote them, like the core.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests, tab } from "./helpers";
+import { mockState, openApp, openRequest, sentRequests, tab } from "./helpers";
 
 const SOLD_IDS = '$.items[?(@.status=="sold")].id';
 
@@ -68,7 +68,7 @@ test("Copy copies the filtered text and Save writes the full body", async ({ pag
   ]);
 
   await page.getByRole("button", { name: "Save body to file" }).click();
-  const saved = () => page.evaluate(() => (window as unknown as { __mock: { savedBodies: Record<string, string> } }).__mock.savedBodies);
+  const saved = () => mockState(page, "savedBodies");
   await expect.poll(async () => Object.values(await saved())).toHaveLength(1);
   const [body] = Object.values(await saved());
   expect(body).toContain('"status":"available"');

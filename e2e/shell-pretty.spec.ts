@@ -2,13 +2,13 @@
 // small body arrives with its Pretty text; a large one (`?largeBody=1`) is
 // formatted on demand with `pretty_response` when Pretty is opened.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { mockState, openApp, openRequest, resetPrettyRequests } from "./helpers";
 
 const RAW = '{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"GET"}';
 
 /** How many times the viewer asked the shell to format a response. */
 function prettyRequests(page: Page): Promise<number> {
-  return page.evaluate(() => (window as unknown as { __mock: { prettyRequests: number } }).__mock.prettyRequests);
+  return mockState(page, "prettyRequests");
 }
 
 async function send(page: Page, query: string) {
@@ -51,7 +51,7 @@ test("a large response opened in Raw isn't formatted until Pretty is chosen", as
   await views.getByRole("radio", { name: "Raw" }).click();
 
   // The tab remembers Raw, so the next response isn't formatted.
-  await page.evaluate(() => (window as unknown as { __mock: { prettyRequests: number } }).__mock.prettyRequests = 0);
+  await resetPrettyRequests(page);
   await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText(/^Sending/)).toHaveCount(0);
   await expect(page.locator(".body .cm-content")).toHaveText(RAW);
