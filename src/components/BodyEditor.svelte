@@ -24,6 +24,7 @@
   import Editor from "../lib/codemirror/Editor.svelte";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
 
   let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
@@ -101,13 +102,8 @@
   {/if}
 </SectionBar>
 
-<div class="modes" role="radiogroup">
-  {#each modes as m (m.value)}
-    <label class="mode" class:active={body.mode === m.value}>
-      <input type="radio" name="body-mode" checked={body.mode === m.value} onchange={() => setBodyMode(req, m.value)} />
-      {m.label}
-    </label>
-  {/each}
+<div class="modes">
+  <SegmentedControl label="Body type" options={modes} value={body.mode} onchange={(m) => setBodyMode(req, m)} />
 </div>
 
 <div class="content" class:off={!body.enabled && body.mode !== "none"}>
@@ -195,24 +191,7 @@
 <style>
   .modes {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
     margin-bottom: 10px;
-  }
-  .mode {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .mode.active {
-    color: var(--text);
-  }
-  .mode input {
-    accent-color: var(--accent);
-    margin: 0;
   }
   .content {
     flex: 1;

@@ -8,7 +8,18 @@
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
+
+  const sources: { value: "file" | "url"; label: string; icon: string }[] = [
+    { value: "file", label: "File", icon: "file" },
+    { value: "url", label: "URL", icon: "globe" },
+  ];
+  const groupings: { value: Grouping; label: string }[] = [
+    { value: "tag", label: "Tag" },
+    { value: "path", label: "Path" },
+    { value: "single", label: "Single file" },
+  ];
 
   let step = $state<"source" | "select">("source");
   let kind = $state<"file" | "url">("file");
@@ -171,10 +182,7 @@
       <p class="intro muted">
         Generate standard <span class="mono">.http</span> files from an OpenAPI 3.0 or 3.1 specification (JSON or YAML). Requests stay plain, portable text you can edit anywhere.
       </p>
-      <div class="seg" role="tablist">
-        <button class:on={kind === "file"} onclick={() => (kind = "file")} role="tab" aria-selected={kind === "file"}><Icon name="file" size={14} />File</button>
-        <button class:on={kind === "url"} onclick={() => (kind = "url")} role="tab" aria-selected={kind === "url"}><Icon name="globe" size={14} />URL</button>
-      </div>
+      <SegmentedControl label="Specification source" options={sources} value={kind} onchange={(v) => (kind = v)} />
       {#if kind === "file"}
         <label class="field">
           <span>Specification file</span>
@@ -277,11 +285,7 @@
           <h3>Output</h3>
           <div class="field">
             <span>Organize files by</span>
-            <div class="seg small">
-              <button class:on={grouping === "tag"} onclick={() => (grouping = "tag")}>Tag</button>
-              <button class:on={grouping === "path"} onclick={() => (grouping = "path")}>Path</button>
-              <button class:on={grouping === "single"} onclick={() => (grouping = "single")}>Single file</button>
-            </div>
+            <SegmentedControl label="Organize files by" options={groupings} value={grouping} onchange={(v) => (grouping = v)} />
           </div>
           <label class="field">
             <span>Base URL variable</span>
@@ -341,35 +345,6 @@
   .intro {
     margin: 0;
     line-height: 1.55;
-  }
-  .seg {
-    display: inline-flex;
-    align-self: flex-start;
-    padding: 2px;
-    border-radius: 6px;
-    background: var(--panel-3);
-    border: 1px solid var(--border);
-  }
-  .seg button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: none;
-    background: none;
-    color: var(--muted);
-    padding: 5px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: 500;
-  }
-  .seg button.on {
-    background: var(--panel);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  }
-  .seg.small button {
-    padding: 4px 10px;
-    font-size: 12px;
   }
   .field {
     display: flex;
