@@ -8,9 +8,7 @@
 import type { Allowlist } from "./native-widgets";
 
 export const ALLOWLIST: Allowlist = {
-  select: [
-    "src/components/BodyEditor.svelte",
-  ],
+  select: [],
   checkbox: [],
   radio: [],
   number: [],
