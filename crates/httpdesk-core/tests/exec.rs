@@ -757,6 +757,55 @@ async fn an_expired_certificate_is_a_tls_error_saying_so() {
     assert_eq!(tls_reason(params).await, "expired");
 }
 
+// ---------------------------------------------------------------- download progress
+
+/// Sends `req` with default settings, recording each progress report and when it came.
+async fn send_with_progress(req: &Request) -> (exec::HttpResponse, Vec<(std::time::Instant, usize)>) {
+    let settings = ExecSettings::default();
+    let prepared = prepare(req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+    let mut reports = Vec::new();
+    let out = exec::execute_with_progress(prepared, &settings, &SslConfig::default(), |n| {
+        reports.push((std::time::Instant::now(), n))
+    })
+    .await
+    .unwrap();
+    (out.response, reports)
+}
+
+#[tokio::test]
+async fn a_trickled_body_reports_growing_byte_counts_until_it_completes() {
+    let mut parts = vec![response_head(5000)];
+    parts.extend((0..5).map(|i| vec![b'a' + i; 1000]));
+    let base = trickle_server(parts, Duration::from_millis(150));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    let counts: Vec<usize> = reports.iter().map(|r| r.1).collect();
+    assert!(counts.len() >= 3, "too few progress reports: {counts:?}");
+    assert!(counts.windows(2).all(|w| w[0] < w[1]), "counts must grow: {counts:?}");
+    assert!(counts[0] < 5000, "the first report comes before the body is complete: {counts:?}");
+    assert!(*counts.last().unwrap() <= 5000, "{counts:?}");
+    assert_eq!(resp.transferred_size, 5000);
+}
+
+#[tokio::test]
+async fn progress_reports_are_rate_limited_however_small_the_chunks() {
+    let mut parts = vec![response_head(60)];
+    parts.extend((0..60).map(|_| b"x".to_vec()));
+    let base = trickle_server(parts, Duration::from_millis(10));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    assert_eq!(resp.body_size, 60);
+    assert!(reports.len() >= 2, "a slow body still reports progress: {reports:?}");
+    let gaps: Vec<Duration> = reports.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    assert!(gaps.iter().all(|g| *g >= Duration::from_millis(90)), "more than ~10 reports a second: {gaps:?}");
+    let window = Duration::from_millis(resp.time_ms as u64);
+    assert!(reports.len() as u128 <= window.as_millis() / 100 + 1, "{} reports in {window:?}", reports.len());
+}
+
 #[tokio::test]
 async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
     let server = MockServer::start().await;
