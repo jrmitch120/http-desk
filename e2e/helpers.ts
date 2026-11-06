@@ -35,6 +35,21 @@ export function urlBar(page: Page): Locator {
   return page.locator(".url-input .cm-content");
 }
 
+/** The sidebar search box (⌘/Ctrl P focuses it). */
+export function searchBox(page: Page): Locator {
+  return page.getByPlaceholder("Search requests");
+}
+
+/** The rows of the sidebar search results, in order. */
+export function searchResults(page: Page): Locator {
+  return page.getByRole("listbox", { name: "Search results" }).getByRole("option");
+}
+
+/** The active tab in the tab bar. */
+export function activeTab(page: Page): Locator {
+  return page.locator(".tabbar .tab.active");
+}
+
 function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
