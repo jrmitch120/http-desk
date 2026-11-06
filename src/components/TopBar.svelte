@@ -3,6 +3,7 @@
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
+  import { THEMES, themeLabel } from "../lib/themes";
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -29,20 +30,16 @@
 
   // The theme menu: System / Light / Dark, the current choice checked.
   let themeButton: HTMLButtonElement | undefined = $state();
-  const themes = [
-    { value: "system", label: "System", icon: "monitor" },
-    { value: "light", label: "Light", icon: "sun" },
-    { value: "dark", label: "Dark", icon: "moon" },
-  ] as const;
+  // "Theme: Light", or with System what it resolves to: "Theme: System (Dark)".
   const themeTip = $derived(
-    app.themeChoice === "system" ? `Theme: System (${app.effectiveTheme === "dark" ? "Dark" : "Light"})` : `Theme: ${app.themeChoice === "dark" ? "Dark" : "Light"}`,
+    `Theme: ${themeLabel(app.themeChoice)}${app.themeChoice === "system" ? ` (${themeLabel(app.effectiveTheme)})` : ""}`,
   );
 
   function themeMenu(e: MouseEvent) {
     if (menu.isOpenFrom(themeButton)) return menu.close(false);
     menu.show(
       e,
-      themes.map((t) => ({ label: t.label, icon: t.icon, checked: app.themeChoice === t.value, action: () => app.updateSettings({ theme: t.value }) })),
+      THEMES.map((t) => ({ label: t.label, icon: t.icon, checked: app.themeChoice === t.value, action: () => app.updateSettings({ theme: t.value }) })),
       { anchor: themeButton, align: "end", label: "Theme" },
     );
   }

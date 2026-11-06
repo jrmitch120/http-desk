@@ -12,14 +12,14 @@
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
-  import SegmentedControl from "./SegmentedControl.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
 
-  const sources: { value: "file" | "url"; label: string; icon: string }[] = [
+  const sources: SegmentedOption<"file" | "url">[] = [
     { value: "file", label: "File", icon: "file" },
     { value: "url", label: "URL", icon: "globe" },
   ];
-  const groupings: { value: Grouping; label: string }[] = [
+  const groupings: SegmentedOption<Grouping>[] = [
     { value: "tag", label: "Tag" },
     { value: "path", label: "Path" },
     { value: "single", label: "Single file" },

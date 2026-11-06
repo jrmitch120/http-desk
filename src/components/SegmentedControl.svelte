@@ -1,15 +1,19 @@
+<script module lang="ts">
+  export interface SegmentedOption<V extends string = string> {
+    value: V;
+    label: string;
+    /** An Icon name shown before the label. */
+    icon?: string;
+  }
+</script>
+
 <script lang="ts" generics="T extends string">
   // Pick one of a few options (ADR 0002). An ARIA radiogroup with roving focus:
   // Tab reaches the checked option, arrow keys (and Home/End) move and select.
   import Icon from "./Icon.svelte";
 
-  interface Option {
-    value: T;
-    label: string;
-    icon?: string;
-  }
   interface Props {
-    options: Option[];
+    options: readonly SegmentedOption<T>[];
     value: T;
     onchange: (value: T) => void;
     /** Accessible name of the group. */

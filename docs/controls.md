@@ -51,8 +51,8 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 
 ### SegmentedControl
 
-`SegmentedControl.svelte`. A row of pill buttons for one exclusive choice; an ARIA
-`radiogroup` of `radio` buttons.
+`SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
+pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
 - Props: `options` (`{ value, label, icon? }[]`), `value`, `onchange(value)`, `label` (the
   group's accessible name, required).

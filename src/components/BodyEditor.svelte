@@ -27,11 +27,11 @@
   import Select, { type SelectOption } from "./Select.svelte";
   import SectionBar from "./SectionBar.svelte";
   import Banner from "./Banner.svelte";
-  import SegmentedControl from "./SegmentedControl.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
 
   let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
-  const modes: { value: BodyMode; label: string }[] = [
+  const modes: SegmentedOption<BodyMode>[] = [
     { value: "none", label: "none" },
     { value: "json", label: "JSON" },
     { value: "xml", label: "XML" },

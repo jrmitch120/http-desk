@@ -15,7 +15,7 @@
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import SegmentedControl from "./SegmentedControl.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -60,7 +60,7 @@
   const isBinary = $derived(!!res && res.bodyText === null);
 
   const effectiveMode = $derived<BodyView>(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
-  const viewOptions = $derived<{ value: BodyView; label: string }[]>([
+  const viewOptions = $derived<SegmentedOption<BodyView>[]>([
     ...(isBinary ? [] : [{ value: "pretty" as const, label: "Pretty" }]),
     { value: "raw", label: isBinary ? "Hex" : "Raw" },
     ...(canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),

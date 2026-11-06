@@ -10,7 +10,8 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import NumberField from "./NumberField.svelte";
-  import SegmentedControl from "./SegmentedControl.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import { THEMES } from "../lib/themes";
   import Toggle from "./Toggle.svelte";
 
   // Edits apply straight to the live settings, through the same save path as the
@@ -19,12 +20,7 @@
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
 
-  const themes: { value: AppSettings["theme"]; label: string; icon: string }[] = [
-    { value: "system", label: "System", icon: "monitor" },
-    { value: "light", label: "Light", icon: "sun" },
-    { value: "dark", label: "Dark", icon: "moon" },
-  ];
-  const layouts: { value: AppSettings["layout"]; label: string; icon: string }[] = [
+  const layouts: SegmentedOption<AppSettings["layout"]>[] = [
     { value: "horizontal", label: "Response on the right", icon: "columns" },
     { value: "vertical", label: "Response below", icon: "rows" },
   ];
@@ -90,7 +86,7 @@
         <h3>Appearance</h3>
         <div class="setting">
           <div class="label"><span>Theme</span></div>
-          <SegmentedControl label="Theme" options={themes} value={settings.theme} onchange={(v) => set({ theme: v })} />
+          <SegmentedControl label="Theme" options={THEMES} value={settings.theme} onchange={(v) => set({ theme: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Layout</span></div>
