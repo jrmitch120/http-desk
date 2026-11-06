@@ -5,6 +5,7 @@
   import type { KeyValue } from "../lib/types";
   import { formatBulk, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
+  import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -116,14 +117,13 @@
 <div class="kv" class:section-off={!sectionEnabled}>
   <div class="kv-head">
     {#if toggles}
-      <span class="c-check">
+      <span class="c-check" title={!bulk && items.length ? "Enable/disable all" : undefined}>
         {#if !bulk && items.length}
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allOn}
             indeterminate={!allOn && items.some((r) => r.enabled)}
-            onchange={(e) => items.forEach((r) => (r.enabled = e.currentTarget.checked))}
-            title="Enable/disable all"
+            onchange={(on) => items.forEach((r) => (r.enabled = on))}
+            label="Enable all"
           />
         {/if}
       </span>
@@ -145,9 +145,9 @@
       {@const error = ghost ? null : nameError(row.name)}
       <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost class:no-check={!toggles}>
         {#if toggles}
-          <span class="c-check">
+          <span class="c-check" title={ghost ? undefined : row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"}>
             {#if !ghost}
-              <input type="checkbox" checked={row.enabled} onchange={(e) => (items[i].enabled = e.currentTarget.checked)} title={row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"} />
+              <Checkbox checked={row.enabled} onchange={(on) => (items[i].enabled = on)} label="Enable {row.name || namePlaceholder.toLowerCase()}" />
             {/if}
           </span>
         {/if}
@@ -385,13 +385,6 @@
   }
   .section-off .kv-row:not(.ghost) {
     background: repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--panel-3) 35%, transparent) 6px 7px);
-  }
-  input[type="checkbox"] {
-    accent-color: var(--accent);
-    width: 14px;
-    height: 14px;
-    margin: 0;
-    cursor: pointer;
   }
   .kv-head .c-value {
     overflow: hidden;
