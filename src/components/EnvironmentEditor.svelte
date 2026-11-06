@@ -54,7 +54,7 @@
     const q = filter.trim().toLowerCase();
     return (v: EnvVar) => !q || v.name.toLowerCase().includes(q) || (!v.secret && v.value.toLowerCase().includes(q));
   });
-  const blankVar =(): EnvVar => ({ name: "", value: "", secret: false });
+  const blankVar = (): EnvVar => ({ name: "", value: "", secret: false });
   const valueColumn: Column<EnvVar> = { id: "value", header: "Value", width: "1fr", cell: valueCell };
   const lockColumn: Column<EnvVar> = { id: "secret", header: "", width: "34px", cell: lockCell };
 
@@ -248,12 +248,10 @@
           bind:items={() => vars, setVars}
           columns={[{ id: "name", width: "34%" }, valueColumn, lockColumn, "delete"]}
           blank={blankVar}
-          carry={["secret", "jsonType"]}
           label="Variables"
           visible={matches}
+          bulkEdit={false}
           namePlaceholder="Variable"
-          valuePlaceholder="Value"
-          separator="="
         />
       </div>
     </section>

@@ -70,6 +70,8 @@
     nameError?: (name: string) => string | null;
     /** Which rows to show (e.g. a search filter). The ghost row and rows added here always show. */
     visible?: (row: R) => boolean;
+    /** Offer bulk edit (the rows as text). */
+    bulkEdit?: boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
   }
@@ -86,6 +88,7 @@
     separator = ":",
     nameError = () => null,
     visible = () => true,
+    bulkEdit = true,
     onchange,
   }: Props = $props();
 
@@ -237,7 +240,7 @@
         {/if}
       {/each}
     {/if}
-    <button class="link bulk" onclick={toggleBulk}>{bulk ? "Key-value edit" : "Bulk edit"}</button>
+    {#if bulkEdit}<button class="link bulk" onclick={toggleBulk}>{bulk ? "Key-value edit" : "Bulk edit"}</button>{/if}
   </div>
 
   {#if bulk}

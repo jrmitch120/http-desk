@@ -86,6 +86,12 @@ test("the filter narrows the variables by name or shareable value", async ({ pag
   await expect(names(grid).nth(1)).toHaveValue("apiKey");
 });
 
+test("variables have no bulk edit, which would show Secrets as plain text", async ({ page }) => {
+  const grid = await variables(page);
+  await expect(grid.locator(".kv-row").first()).toBeVisible();
+  await expect(grid.getByRole("button", { name: "Bulk edit" })).toHaveCount(0);
+});
+
 type EnvFiles = { shared: Record<string, Record<string, unknown>>; private: Record<string, Record<string, unknown>> };
 const envFiles = (page: Page) => page.evaluate(() => (window as unknown as { __mock: { envFiles: EnvFiles } }).__mock.envFiles);
 
