@@ -47,24 +47,25 @@
   const boundary = $derived(boundaryOf(contentType) ?? "HttpDeskBoundary");
 
   // ---- form-urlencoded and multipart: local rows, parsed from the body text and
-  // written back on every edit in the grid. No enable column: a disabled field
-  // can't be saved to the .http file yet (#41).
+  // written back on every edit in the grid. A disabled row is a `#~` line in the
+  // text (ARCHITECTURE §5, ADR-0003).
   let formRows = $state<FormField[]>([]);
   $effect(() => {
     if (body.mode === "formUrlEncoded" && buildForm(formRows) !== body.text) formRows = parseForm(body.text);
   });
-  const blankField = (): FormField => ({ name: "", value: "" });
+  const blankField = (): FormField => ({ name: "", value: "", enabled: true });
 
   let parts = $state<MultipartPart[]>([]);
   $effect(() => {
     if (body.mode === "multipart" && buildMultipart(parts, boundary) !== body.text) parts = parseMultipart(body.text, boundary);
   });
-  const blankPart = (): MultipartPart => ({ name: "", kind: "text", value: "" });
+  const blankPart = (): MultipartPart => ({ name: "", kind: "text", value: "", enabled: true });
   const kinds: SelectOption<MultipartPart["kind"]>[] = [
     { value: "text", label: "Text" },
     { value: "file", label: "File" },
   ];
   const partColumns: Column<MultipartPart>[] = [
+    "enable",
     { id: "name", width: "26%" },
     { id: "kind", header: "Type", width: "84px", cell: kindCell },
     { id: "value", header: "Value", width: "1fr", cell: partValueCell },
@@ -131,7 +132,7 @@
   {#if body.mode === "none"}
     <div class="none muted">This request does not have a body.</div>
   {:else if body.mode === "formUrlEncoded"}
-    <KeyValueGrid bind:items={formRows} label="Form fields" columns={["name", "value", "delete"]} blank={blankField} carry={[]} separator="=" onchange={(rows) => (body.text = buildForm(rows))} />
+    <KeyValueGrid bind:items={formRows} label="Form fields" columns={["enable", "name", "value", "delete"]} blank={blankField} carry={["comments", "after"]} separator="=" onchange={(rows) => (body.text = buildForm(rows))} />
   {:else if body.mode === "multipart"}
     <KeyValueGrid bind:items={parts} label="Form-data parts" columns={partColumns} blank={blankPart} carry={["kind", "contentType"]} onchange={(rows) => (body.text = buildMultipart(rows, boundary))} />
     <p class="muted note">Boundary <code>{boundary}</code> (from the Content-Type header). Files are referenced relative to the .http file.</p>

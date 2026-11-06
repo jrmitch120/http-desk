@@ -91,7 +91,7 @@ pub(crate) fn parse_header(raw: &str) -> FileHeader {
 }
 
 /// Returns the text after a `#` or `//` comment prefix.
-fn comment_body(t: &str) -> Option<&str> {
+pub(crate) fn comment_body(t: &str) -> Option<&str> {
     t.strip_prefix("//").or_else(|| t.strip_prefix('#'))
 }
 
@@ -343,6 +343,8 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
     let mut header_items: Vec<(usize, KeyValue)> = Vec::new();
     let mut disabled_body: Vec<String> = Vec::new();
     let mut disabled_body_raw: Vec<String> = Vec::new();
+    let mut disabled_parts: Vec<String> = Vec::new();
+    let mut disabled_parts_raw: Vec<String> = Vec::new();
     // Extra lines from this index on are still waiting for the line they sit above.
     let mut unanchored = 0;
     while let Some(line) = lines.get(idx) {
@@ -354,6 +356,12 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         let anchor = if let Some(after) = t.strip_prefix(DISABLED_MARKER) {
             let depth = 1 + after.chars().take_while(|c| *c == '~').count();
             let rest = after.trim_start_matches('~');
+            // A disabled multipart part: held inline in the body text as `#~` lines.
+            if let Some(p) = rest.strip_prefix('=') {
+                disabled_parts.push(format!("{DISABLED_MARKER}{p}"));
+                disabled_parts_raw.push(line.to_string());
+                continue;
+            }
             if let Some(b) = rest.strip_prefix('|') {
                 disabled_body.push(strip_one_space(b).to_string());
                 disabled_body_raw.push(line.to_string());
@@ -454,8 +462,27 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         let text = trim_blank_lines(&refs).join("\n");
         req.body = Body { enabled: false, mode: detect_body_mode(content_type.as_deref(), &text), text };
     }
+    if !disabled_parts.is_empty() {
+        if req.body.mode == BodyMode::Multipart {
+            req.body.text = insert_disabled_parts(&req.body.text, &disabled_parts);
+        } else {
+            req.extra_lines.extend(disabled_parts_raw.into_iter().map(ExtraLine::new));
+        }
+    }
 
     Some(req)
+}
+
+/// Puts disabled part lines before the closing `--boundary--` line, or at the end.
+fn insert_disabled_parts(text: &str, parts: &[String]) -> String {
+    let mut lines: Vec<&str> = text.lines().collect();
+    let closing = lines.last().is_some_and(|l| {
+        let t = l.trim();
+        t.len() > 4 && t.starts_with("--") && t.ends_with("--")
+    });
+    let at = if closing { lines.len() - 1 } else { lines.len() };
+    lines.splice(at..at, parts.iter().map(String::as_str));
+    lines.join("\n")
 }
 
 fn resolve_section(items: Vec<(usize, KeyValue)>, marked_disabled: bool) -> KvSection {

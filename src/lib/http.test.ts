@@ -21,7 +21,7 @@ import {
   variableNameError,
   bodySyntaxWarnings,
   customMethod,
-  type FormField,
+  type BulkRow,
   type MultipartPart,
 } from "./http";
 
@@ -99,29 +99,46 @@ describe("URL ⇄ query params", () => {
   });
 });
 
+const on = (name: string, value: string) => ({ name, value, enabled: true });
+const off = (name: string, value: string) => ({ name, value, enabled: false });
+
 describe("form bodies", () => {
   it("round-trips with encoding but keeps variables", () => {
-    const fields = [
-      { name: "name", value: "John Doe" },
-      { name: "token", value: "{{token}}" },
-      { name: "q", value: "a&b=c" },
-    ];
+    const fields = [on("name", "John Doe"), on("token", "{{token}}"), on("q", "a&b=c")];
     const text = buildForm(fields);
     expect(text).toBe("name=John%20Doe\n&token={{token}}\n&q=a%26b%3Dc");
     expect(parseForm(text)).toEqual(fields);
-    expect(parseForm("a=1&b=two+words")).toEqual([
-      { name: "a", value: "1" },
-      { name: "b", value: "two words" },
-    ]);
+    expect(parseForm("a=1&b=two+words")).toEqual([on("a", "1"), on("b", "two words")]);
   });
 
   it("reads a body written one field per line, as it is sent", () => {
-    expect(parseForm("a=1\nb=2\n&c=3&\nd=4")).toEqual([
-      { name: "a", value: "1" },
-      { name: "b", value: "2" },
-      { name: "c", value: "3" },
-      { name: "d", value: "4" },
+    expect(parseForm("a=1\nb=2\n&c=3&\nd=4")).toEqual([on("a", "1"), on("b", "2"), on("c", "3"), on("d", "4")]);
+  });
+
+  it("writes disabled fields in place as #~ lines, the first sent field without &", () => {
+    // JetBrains sends an empty body when the first line it sends starts with `&`.
+    const fields = [off("a", "1"), on("b", "2"), off("c", "3"), on("d", "4")];
+    const text = buildForm(fields);
+    expect(text).toBe("#~ a=1\nb=2\n#~ &c=3\n&d=4");
+    expect(parseForm(text)).toEqual(fields);
+    expect(parseForm("#~ a=1&b=2\n&c=3")).toEqual([off("a", "1"), off("b", "2"), on("c", "3")]);
+  });
+
+  it("never writes a field that would read back as a comment", () => {
+    const fields = [on("//x", "1"), off("//y", "2")];
+    // `#` and `/` are escaped, so a field never starts with `#` or `//`.
+    expect(buildForm(fields)).toBe("%2F%2Fx=1\n#~ &%2F%2Fy=2");
+    expect(parseForm(buildForm(fields))).toEqual(fields);
+  });
+
+  it("keeps plain comments as comments, not fields", () => {
+    const text = "a=1\n# a note\n// another\n&c=3\n# at the end";
+    const fields = parseForm(text);
+    expect(fields.map((f) => [f.name, f.enabled])).toEqual([
+      ["a", true],
+      ["c", true],
     ]);
+    expect(buildForm(fields)).toBe(text);
   });
 });
 
@@ -140,8 +157,8 @@ describe("file bodies", () => {
 describe("multipart bodies", () => {
   it("round-trips text and file parts", () => {
     const parts = [
-      { name: "title", kind: "text" as const, value: "Hello" },
-      { name: "doc", kind: "file" as const, value: "./files/report.pdf", contentType: "application/pdf" },
+      { name: "title", kind: "text" as const, value: "Hello", enabled: true },
+      { name: "doc", kind: "file" as const, value: "./files/report.pdf", contentType: "application/pdf", enabled: true },
     ];
     const text = buildMultipart(parts, "B");
     expect(text).toBe(
@@ -159,9 +176,40 @@ describe("multipart bodies", () => {
       ].join("\n"),
     );
     expect(parseMultipart(text, "B")).toEqual([
-      { name: "title", kind: "text", value: "Hello", contentType: undefined },
-      { name: "doc", kind: "file", value: "./files/report.pdf", contentType: "application/pdf" },
+      { name: "title", kind: "text", value: "Hello", contentType: undefined, enabled: true },
+      { name: "doc", kind: "file", value: "./files/report.pdf", contentType: "application/pdf", enabled: true },
     ]);
+  });
+
+  it("holds disabled parts inline as #~ lines, in place", () => {
+    // The serializer moves these lines to the header area (#~=), because
+    // JetBrains sends comment lines inside a part.
+    const parts = [
+      { name: "a", kind: "text" as const, value: "1", enabled: false },
+      { name: "b", kind: "text" as const, value: "two\nlines", enabled: true },
+      { name: "f", kind: "file" as const, value: "./x.bin", contentType: "image/png", enabled: false },
+    ];
+    const text = buildMultipart(parts, "B");
+    expect(text).toBe(
+      [
+        "#~ --B",
+        '#~ Content-Disposition: form-data; name="a"',
+        "#~",
+        "#~ 1",
+        "--B",
+        'Content-Disposition: form-data; name="b"',
+        "",
+        "two",
+        "lines",
+        "#~ --B",
+        '#~ Content-Disposition: form-data; name="f"; filename="x.bin"',
+        "#~ Content-Type: image/png",
+        "#~",
+        "#~ < ./x.bin",
+        "--B--",
+      ].join("\n"),
+    );
+    expect(parseMultipart(text, "B")).toEqual(parts);
   });
 
   it("parses the JetBrains sample", () => {
@@ -203,6 +251,19 @@ describe("body mode switching", () => {
     setBodyMode(r, "multipart");
     expect(findHeader(r, "content-type")?.value).toBe("multipart/form-data; boundary=HttpDeskBoundary");
     expect(parseMultipart(r.body.text, "HttpDeskBoundary").map((p) => p.name)).toEqual(["a", "b"]);
+  });
+
+  it("keeps each field's enabled state between form and multipart", () => {
+    const r = newRequest();
+    setBodyMode(r, "formUrlEncoded");
+    r.body.text = "a=1\n#~ &b=2";
+    setBodyMode(r, "multipart");
+    expect(parseMultipart(r.body.text, "HttpDeskBoundary").map((p) => [p.name, p.enabled])).toEqual([
+      ["a", true],
+      ["b", false],
+    ]);
+    setBodyMode(r, "formUrlEncoded");
+    expect(r.body.text).toBe("a=1\n#~ &b=2");
   });
 
   it("removes the Content-Type it added when switching to none", () => {
@@ -260,20 +321,20 @@ describe("bulk edit", () => {
 
   it("works on any row type, carrying the fields the text can't show over by name", () => {
     const parts: MultipartPart[] = [
-      { name: "avatar", kind: "file", value: "./cat.png", contentType: "image/png" },
-      { name: "note", kind: "text", value: "hi" },
+      { name: "avatar", kind: "file", value: "./cat.png", contentType: "image/png", enabled: true },
+      { name: "note", kind: "text", value: "hi", enabled: false },
     ];
-    expect(formatBulk(parts, ":", false)).toBe("avatar: ./cat.png\nnote: hi");
-    const blank = (): MultipartPart => ({ name: "", kind: "text", value: "" });
-    expect(parseBulk("note: hello\navatar: ./dog.png\nextra: 1", ":", parts, { blank, carry: ["kind", "contentType"] })).toEqual([
-      { name: "note", kind: "text", value: "hello" },
-      { name: "avatar", kind: "file", value: "./dog.png", contentType: "image/png" },
-      { name: "extra", kind: "text", value: "1" },
+    expect(formatBulk(parts, ":", true)).toBe("avatar: ./cat.png\n//note: hi");
+    const blank = (): MultipartPart => ({ name: "", kind: "text", value: "", enabled: true });
+    expect(parseBulk("note: hello\n//avatar: ./dog.png\nextra: 1", ":", parts, { blank, carry: ["kind", "contentType"] })).toEqual([
+      { name: "note", kind: "text", value: "hello", enabled: true },
+      { name: "avatar", kind: "file", value: "./dog.png", contentType: "image/png", enabled: false },
+      { name: "extra", kind: "text", value: "1", enabled: true },
     ]);
   });
 
   it("reads // as disabled only for rows that can be disabled", () => {
-    const blank = (): FormField => ({ name: "", value: "" });
+    const blank = (): BulkRow => ({ name: "", value: "" });
     expect(parseBulk("//a=1\nb=2", "=", [], { blank, carry: [] })).toEqual([
       { name: "//a", value: "1" },
       { name: "b", value: "2" },

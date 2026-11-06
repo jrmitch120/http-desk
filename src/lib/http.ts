@@ -313,16 +313,19 @@ export function setBodyMode(req: Request, mode: BodyMode): void {
     if (prev !== "multipart") req.body.text = buildMultipart(parseFormish(req.body.text, prev), boundary);
     return;
   }
+  // Read before the Content-Type below replaces it.
+  const prevBoundary = boundaryOf(ct?.value ?? "") ?? "";
   if (wanted && (!ct || AUTO_TYPES.has(ct.value.split(";")[0].trim()) || ct.value.startsWith("multipart/"))) {
     setHeader(req, "Content-Type", wanted);
   }
   if (mode === "formUrlEncoded" && prev === "multipart") {
-    req.body.text = buildForm(parseMultipart(req.body.text, boundaryOf(ct?.value ?? "") ?? "").filter((p) => p.kind === "text"));
+    req.body.text = buildForm(parseMultipart(req.body.text, prevBoundary).filter((p) => p.kind === "text"));
   }
 }
 
 function parseFormish(text: string, mode: BodyMode): MultipartPart[] {
-  return mode === "formUrlEncoded" ? parseForm(text).map((f) => ({ ...f, kind: "text" as const })) : [];
+  if (mode !== "formUrlEncoded") return [];
+  return parseForm(text).map(({ name, value, enabled }) => ({ name, value, enabled, kind: "text" as const }));
 }
 
 // ------------------------------------------------------------------ form-urlencoded
@@ -330,6 +333,12 @@ function parseFormish(text: string, mode: BodyMode): MultipartPart[] {
 export interface FormField {
   name: string;
   value: string;
+  /** Off: written in place as a `#~` line, which no client sends. */
+  enabled: boolean;
+  /** Plain `#` / `//` comment lines just above the field, kept as written. */
+  comments?: string[];
+  /** Comment lines after the last field. */
+  after?: string[];
 }
 
 function safeDecode(s: string): string {
@@ -348,32 +357,53 @@ function encodePreservingVars(s: string): string {
     .join("");
 }
 
-/** Joins one-field-per-line form bodies with `&`, like the sender does. */
-function joinFormLines(text: string): string {
-  let out = "";
+const DISABLED = "#~";
+
+function parsePair(p: string): { name: string; value: string } {
+  const i = p.indexOf("=");
+  return i < 0 ? { name: safeDecode(p), value: "" } : { name: safeDecode(p.slice(0, i)), value: safeDecode(p.slice(i + 1)) };
+}
+
+/** Reads a form body one line at a time, as it is sent: each line holds one or
+ *  more `&`-joined fields. A `#~` line holds disabled fields; other `#` and `//`
+ *  lines are comments, which no client sends. */
+export function parseForm(text: string): FormField[] {
+  const fields: FormField[] = [];
+  let comments: string[] = [];
   for (const line of text.split("\n").map((l) => l.trim())) {
     if (line === "") continue;
-    if (out !== "" && !out.endsWith("&") && !line.startsWith("&")) out += "&";
-    out += line;
+    const disabled = line.startsWith(DISABLED);
+    if (!disabled && (line.startsWith("#") || line.startsWith("//"))) {
+      comments.push(line);
+      continue;
+    }
+    const rest = disabled ? line.replace(/^#~+/, "").trim() : line;
+    for (const p of rest.split("&").filter((p) => p !== "")) {
+      const field: FormField = { ...parsePair(p), enabled: !disabled };
+      if (comments.length) [field.comments, comments] = [comments, []];
+      fields.push(field);
+    }
   }
-  return out;
+  if (comments.length && fields.length) fields[fields.length - 1].after = comments;
+  return fields;
 }
 
-export function parseForm(text: string): FormField[] {
-  return joinFormLines(text)
-    .split("&")
-    .filter((p) => p !== "")
-    .map((p) => {
-      const i = p.indexOf("=");
-      return i < 0 ? { name: safeDecode(p), value: "" } : { name: safeDecode(p.slice(0, i)), value: safeDecode(p.slice(i + 1)) };
-    });
-}
-
+/** One field per line. A disabled field stays in place as a `#~` line. The first
+ *  field sent has no leading `&`: JetBrains sends an empty body if it does. */
 export function buildForm(fields: FormField[]): string {
-  return fields
-    .filter((f) => f.name !== "")
-    .map((f) => `${encodePreservingVars(f.name)}=${encodePreservingVars(f.value)}`)
-    .join("\n&");
+  const lines: string[] = [];
+  let first = true;
+  let sent = false;
+  for (const f of fields.filter((f) => f.name !== "")) {
+    lines.push(...(f.comments ?? []));
+    const pair = `${encodePreservingVars(f.name)}=${encodePreservingVars(f.value)}`;
+    if (f.enabled) lines.push(sent ? `&${pair}` : pair);
+    else lines.push(`${DISABLED} ${first ? "" : "&"}${pair}`);
+    sent ||= f.enabled;
+    first = false;
+    lines.push(...(f.after ?? []));
+  }
+  return lines.join("\n");
 }
 
 // ------------------------------------------------------------------ file
@@ -402,6 +432,8 @@ export interface MultipartPart {
   /** Text value, or the file path for file parts. */
   value: string;
   contentType?: string;
+  /** Off: every line of the part, boundary included, is held as a `#~` line. */
+  enabled: boolean;
 }
 
 export function boundaryOf(contentType: string): string | null {
@@ -409,8 +441,7 @@ export function boundaryOf(contentType: string): string | null {
   return m ? m[2] : null;
 }
 
-export function parseMultipart(text: string, boundary: string): MultipartPart[] {
-  if (!boundary) return [];
+function parseParts(text: string, boundary: string, enabled: boolean): MultipartPart[] {
   const parts: MultipartPart[] = [];
   const chunks = text.split(new RegExp(`^--${boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:--)?\\s*$`, "m"));
   for (const chunk of chunks) {
@@ -424,24 +455,46 @@ export function parseMultipart(text: string, boundary: string): MultipartPart[] 
     const ct = /content-type:\s*([^\n]+)/i.exec(head)?.[1].trim();
     const fileRef = parseFileRef(content);
     const isFile = /filename=/i.test(head) && !!fileRef && !fileRef.substitute;
-    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef!.path : content, contentType: ct });
+    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef!.path : content, contentType: ct, enabled });
   }
+  return parts;
+}
+
+/** Runs of `#~` lines are disabled parts; the rest is the body as sent. */
+export function parseMultipart(text: string, boundary: string): MultipartPart[] {
+  if (!boundary) return [];
+  const parts: MultipartPart[] = [];
+  let run: string[] = [];
+  let runDisabled = false;
+  const flush = () => {
+    const uncommented = runDisabled ? run.map((l) => l.replace(/^#~ ?/, "")) : run;
+    parts.push(...parseParts(uncommented.join("\n"), boundary, !runDisabled));
+    run = [];
+  };
+  for (const line of text.split("\n")) {
+    const disabled = line.startsWith(DISABLED);
+    if (disabled !== runDisabled && run.length) flush();
+    runDisabled = disabled;
+    run.push(line);
+  }
+  if (run.length) flush();
   return parts;
 }
 
 export function buildMultipart(parts: MultipartPart[], boundary: string): string {
   const lines: string[] = [];
   for (const p of parts.filter((p) => p.name !== "")) {
-    lines.push(`--${boundary}`);
+    const part = [`--${boundary}`];
     if (p.kind === "file") {
       const filename = p.value.split(/[\\/]/).pop() || "file";
-      lines.push(`Content-Disposition: form-data; name="${p.name}"; filename="${filename}"`);
-      lines.push(`Content-Type: ${p.contentType || "application/octet-stream"}`, "", `< ${p.value}`);
+      part.push(`Content-Disposition: form-data; name="${p.name}"; filename="${filename}"`);
+      part.push(`Content-Type: ${p.contentType || "application/octet-stream"}`, "", `< ${p.value}`);
     } else {
-      lines.push(`Content-Disposition: form-data; name="${p.name}"`);
-      if (p.contentType) lines.push(`Content-Type: ${p.contentType}`);
-      lines.push("", p.value);
+      part.push(`Content-Disposition: form-data; name="${p.name}"`);
+      if (p.contentType) part.push(`Content-Type: ${p.contentType}`);
+      part.push("", ...p.value.split("\n"));
     }
+    lines.push(...(p.enabled ? part : part.map((l) => (l === "" ? DISABLED : `${DISABLED} ${l}`))));
   }
   lines.push(`--${boundary}--`);
   return lines.join("\n");

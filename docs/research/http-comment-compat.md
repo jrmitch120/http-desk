@@ -38,7 +38,7 @@ Legend: **Safe**: documented or verified in source, no effect on the sent reques
 | 1a | `#` / `//` comment between `###` and the method line | **Safe**. Spec §2.4 ("before or after a request"), docs examples. | **Safe**. These lines are parsed for metadata, then stripped (`selector.ts` L66, L83-113). |
 | 1b | Comment between header lines | **Safe, verified** (Case C, F): headers on both sides of the comment arrive. | **Safe**. All comment lines are removed before header parsing (`selector.ts` L66). |
 | 1c | Comment between multi-line query continuation lines | **Breaks, verified**. A column-0 comment ends the query, the next `&` line is parsed as a header and the request fails (Case B). An indented comment is pasted into the URL (Case B2). | **Safe**. The line is removed before the URL lines are joined (`selector.ts` L66, `httpRequestParser.ts` L46-59, L76). |
-| 1d | Comment inside body | **Sent as body content, verified** (Case D). This differs from VS Code, so the two tools send different bodies. | **Stripped, never sent**. Any line matching `^\s*(#\|//)` is removed, including body lines (`selector.ts` L66, `constants.ts` L69). |
+| 1d | Comment inside body | Depends on the body type, verified. **JSON / text:** sent as body content when it follows body content (Case D); a comment on the body's first line is dropped (Appendix C, G4, G6). **Form-urlencoded:** dropped, never sent (Appendix C). **Multipart:** sent as part content (Appendix C). | **Stripped, never sent**. Any line matching `^\s*(#\|//)` is removed, including body lines (`selector.ts` L66, `constants.ts` L69). |
 | 2 | Unrecognised `# @foo …` above the request line | **Harmless, verified** (Case A, E, H): the request is sent unchanged and the CLI prints no warning. Editor inspections are not covered by the CLI run. | **Silently ignored**. `fromString()` returns `undefined` and the line is skipped (`selector.ts` L96-110, `requestMetadata.ts` L26-30). |
 | 2 | Recognised tags | `@name`, `@no-redirect`, `@no-log`, `@no-cookie-jar`, `@no-auto-encoding`, `@timeout`, `@connection-timeout`, `@use-os-credentials`. Also `### text` gives a request name. | `@name`, `@note`, `@no-redirect`, `@no-cookie-jar`, `@prompt`. Matching is case-insensitive. |
 | 3a | `GET /x` / `# doc` / `&limit=5` | **Breaks, verified** (Case B, B2). See 1c. | **Joins correctly** to `/x&limit=5` (the comment is removed first). |
@@ -184,7 +184,7 @@ Classification only, from the evidence above. This is not a design.
 **Risky**
 
 - **Breaks JetBrains:** comment lines between multi-line query continuation lines. A column-0 comment makes the following `&` line a header and the request fails. An indented comment is pasted into the URL (verified, Cases B and B2). REST Client handles both.
-- **Tools disagree:** any comment inside the request body. REST Client strips it, while JetBrains sends it as body content (verified, Case D).
+- **Tools disagree:** a comment inside a JSON, text or multipart body. REST Client strips it, while JetBrains sends it as body content (verified, Case D and Appendix C). In a form-urlencoded body both tools drop it (Appendix C).
 - Metadata lines starting with `###` or `####`. Both tools treat these as separators, and JetBrains also reads the text as a request name.
 - `//TIP` prefixes (JetBrains onboarding rendering) and `TODO` / `FIXME` prefixes (JetBrains TODO index).
 - Bare `@x = y` lines without a comment marker. Both tools treat these as variables (REST Client anywhere in the file).
@@ -306,3 +306,66 @@ GET http://hd-echo:18765/h?x=1
 ```
 
 VS Code REST Client verdicts are still based on reading the source (commit `0773d56`). The extension was not run.
+
+---
+
+## Appendix C: comment lines in form-urlencoded and multipart bodies (JetBrains)
+
+Run on 2026-11-06 with the same image as Appendix B (`jetbrains/intellij-http-client`, digest `sha256:4afde15abef4a712e407d0d4a83b9a1dd557dffa3fc203bd8d943d609ef5c3d6`) against an echo server that logs the raw body (chunked bodies decoded). Each request carried an `X-Case` header and the `Content-Type` shown.
+
+### Form-urlencoded (`Content-Type: application/x-www-form-urlencoded`)
+
+| Case | Body as written | Body received |
+|---|---|---|
+| F1 | `a=1` / `#~ &b=2` / `&c=3` | `a=1&c=3` |
+| F2 | `a=1` / `  #~ &b=2` (indented) / `&c=3` | `a=1&c=3` |
+| F3 | `a=1` / `// &b=2` / `&c=3` | `a=1&c=3` |
+| F4 | `#~ a=1` / `&b=2` | empty (`content-length: 0`) |
+| F5 | `a=1` / `#~ &b=2` | `a=1` |
+| F6 | `a=1&c=3` / `#~ &b=2` | `a=1&c=3` |
+| F7 | `a=1` / `# b=2` / `c=3` | `a=1%0Ac%3D3` |
+| G1 | `#~ a=1` / `b=2` | `b=2` |
+| G2 | `#~ a=1` / `&b=2` / `&c=3` | empty |
+| G3 | `// a=1` / `&b=2` | empty |
+| G5 | `&b=2` (no comment) | empty |
+| G7 | `a=1` / `#~ &b=2` / `#~ &c=3` / `&d=4` | `a=1&d=4` |
+| G8 | `a=1&c=3` / `#~ &b=2` / `&d=4` | `a=1&c=3&d=4` |
+
+- `#` and `//` lines are dropped from a form body wherever they are, indented or not.
+- When the first line left after dropping comments starts with `&`, the whole body is sent empty (F4, G2, G3, and G5 without any comment).
+- A line that doesn't start with `&` is joined to the line before it with a newline, and the newline and `=` are percent-encoded (F7). Only a leading `&` starts a new field.
+
+### Multipart (`Content-Type: multipart/form-data; boundary=B`)
+
+JetBrains parses the parts and re-encodes the body with its own boundary and per-part headers (`content-length`, `content-type: */*; charset=UTF-8`).
+
+| Case | What is commented | Received |
+|---|---|---|
+| M1 | A whole middle part, its `--B` line included, as `#~` lines | The `#~` lines are sent inside the **previous** part's content. The next part arrives. |
+| M2 | `# hash line` and indented `// slash` lines inside a part value | Sent as part of the value. |
+| M3 | A whole last part as `//` lines | Sent inside the previous part's content. |
+| M4 | A whole first part as `#~` lines, before the first active `--B` | Dropped (text before the first boundary is not a part). |
+| M5 | A whole last file part as `#~` lines | Sent inside the previous part's content; the file is not read. |
+| M6 | A whole part as indented `#~` lines | Sent inside the previous part's content. |
+
+- Comment lines after the first boundary are part content and are sent.
+
+### JSON and text bodies, first line
+
+| Case | Body | Received |
+|---|---|---|
+| G4 | `# c` / `{"a":1}` (`application/json`) | `{"a":1}` |
+| G6 | `# c` / `hello` (`text/plain`) | `hello` |
+
+A comment on the first body line is dropped. Case D shows comments after body content are sent.
+
+### HttpDesk's saved format (#41)
+
+A file written by HttpDesk's serializer, with disabled form fields in the body and disabled multipart parts in the header area (`#~=`), sent through the same CLI:
+
+| Case | Model | Received |
+|---|---|---|
+| S1 | Form: `a` off, `b` on, `c` off, `d` on (`#~ a=1` / `b=2` / `#~ &c=3` / `&d=4`) | `b=2&d=4` |
+| S2 | Form: `a` on, `b` off | `a=1` |
+| S3 | Multipart: `a` off, `b` on, `c` off (`#~=` lines in the header area) | Only part `b` |
+| S4 | Multipart with part `b` off and the whole body off (`#~|` lines, the disabled part nested as `#~| #~`) | empty (`content-length: 0`) |

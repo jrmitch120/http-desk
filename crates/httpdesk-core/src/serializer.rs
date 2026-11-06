@@ -512,8 +512,18 @@ pub fn render_request(req: &Request) -> String {
         }
     }
     if body.is_present() && body.enabled {
-        lines.push(String::new());
-        lines.push(body_text.to_string());
+        let mut text = body_text.to_string();
+        // Disabled multipart parts (`#~` lines) go in the header area as `#~=`,
+        // because JetBrains sends comment lines inside a part (ADR-0003).
+        if body.mode == BodyMode::Multipart {
+            let (off, on): (Vec<&str>, Vec<&str>) = body_text.lines().partition(|l| l.starts_with(DISABLED_MARKER));
+            lines.extend(off.iter().map(|l| format!("{DISABLED_MARKER}={}", &l[DISABLED_MARKER.len()..])));
+            text = on.join("\n");
+        }
+        if !text.trim().is_empty() {
+            lines.push(String::new());
+            lines.push(text);
+        }
     }
     if let Some(h) = &req.response_handler {
         lines.push(String::new());

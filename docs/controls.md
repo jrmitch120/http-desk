@@ -208,9 +208,9 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   - Params and headers: enable, name, value, description, delete. Headers add
     name suggestions.
   - File variables: name, value, delete.
-  - Form fields and multipart parts: no enable column, because a disabled field can't be
-    saved to the `.http` file yet (#41). Multipart adds a part type Select and a content
-    type column.
+  - Form fields and multipart parts: enable, name, value, delete. A disabled field is
+    kept as `#~` lines in the body text (ARCHITECTURE §5). Multipart adds a part type
+    Select and a content type column.
   - Environment variables: a custom value column (a password input with a reveal button
     for Secrets), a Secret lock column, and a search filter (`visible`). Bulk edit is
     off, because it would show Secret values as plain text.
