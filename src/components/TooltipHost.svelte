@@ -2,7 +2,7 @@
   // The one tooltip element (see lib/popup/tooltip.svelte.ts). Mounted once in App.
   import { onMount } from "svelte";
   import { portal } from "../lib/popup/layer";
-  import { place } from "../lib/popup/place";
+  import { placeElement } from "../lib/popup/place";
   import { hideTooltip, tip, TOOLTIP_ID } from "../lib/popup/tooltip.svelte";
 
   let el: HTMLDivElement | undefined = $state();
@@ -12,10 +12,7 @@
     void tip.text;
     if (!tip.visible || !anchor || !el) return;
     if (!anchor.isConnected) return hideTooltip();
-    const p = place(anchor.getBoundingClientRect(), { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight }, { align: "center", gap: 6 });
-    el.style.left = `${p.x}px`;
-    el.style.top = `${p.y}px`;
-    el.dataset.side = p.side;
+    placeElement(el, anchor.getBoundingClientRect(), { align: "center", gap: 6 });
   });
 
   // Any key (Escape included, which still reaches modals and menus), a scroll or

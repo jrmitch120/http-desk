@@ -1,5 +1,6 @@
-// Where a floating surface goes next to its anchor so it stays on screen.
-// Pure geometry (no DOM), shared by every popup in the layer.
+// Where a floating surface goes next to its anchor so it stays on screen,
+// shared by every popup in the layer: `place` is the geometry (no DOM, unit
+// tested), `placeElement` applies it to an element.
 
 export type Side = "top" | "bottom";
 export type Align = "start" | "center" | "end";
@@ -44,4 +45,16 @@ export function place(
     y: clamp(pick.y, margin, viewport.height - margin - size.height),
     side: pick.side,
   };
+}
+
+/**
+ * Moves `el` (a `position: fixed` surface) next to `anchor` and sets its
+ * `data-side`, which picks the direction of the open animation. Uses the layout
+ * size, so the animation's transform doesn't skew it.
+ */
+export function placeElement(el: HTMLElement, anchor: AnchorRect, options?: PlaceOptions) {
+  const p = place(anchor, { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight }, options);
+  el.style.left = `${p.x}px`;
+  el.style.top = `${p.y}px`;
+  el.dataset.side = p.side;
 }

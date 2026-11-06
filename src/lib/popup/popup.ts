@@ -14,7 +14,7 @@
 // doesn't restore it. Give the element the `popup-surface` class for the
 // shared look, and keep it the only top-level node of its `{#if}` block.
 import { onEscape, portal } from "./layer";
-import { place, type AnchorRect, type PlaceOptions } from "./place";
+import { placeElement, type AnchorRect, type PlaceOptions } from "./place";
 import { hideTooltip } from "./tooltip.svelte";
 
 export type CloseReason = "escape" | "outside" | "blur";
@@ -36,11 +36,7 @@ export function popup(node: HTMLElement, options: PopupOptions) {
   function position() {
     const r = anchorRect();
     if (opts.matchWidth) node.style.minWidth = `${r.right - r.left}px`;
-    // offsetWidth/Height: the layout size, unaffected by the open animation's transform.
-    const p = place(r, { width: node.offsetWidth, height: node.offsetHeight }, { width: innerWidth, height: innerHeight }, opts);
-    node.style.left = `${p.x}px`;
-    node.style.top = `${p.y}px`;
-    node.dataset.side = p.side;
+    placeElement(node, r, opts);
   }
 
   const onOutside = (e: MouseEvent) => {
