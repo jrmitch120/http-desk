@@ -33,12 +33,14 @@
       {@const req = app.requestFor(tab)}
       {@const dirty = app.isRequestDirty(tab.path, tab.key)}
       {@const loading = app.runs[tab.id]?.loading}
+      {@const orphaned = app.isOrphaned(tab)}
       <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
       <div
         class="tab"
         class:active={tab.id === app.activeTabId}
+        class:orphaned
         data-tab={tab.id}
-        title="{req ? displayName(req) : ''} — {basename(tab.path)}"
+        title="{req ? displayName(req) : ''} — {orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}"
         onclick={() => (app.activeTabId = tab.id)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
@@ -47,6 +49,7 @@
           <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
+        {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}
           {#if dirty}<span class="dot"></span>{/if}
@@ -122,6 +125,15 @@
   .name {
     flex: 1;
     min-width: 0;
+  }
+  .tab.orphaned .name {
+    font-style: italic;
+    text-decoration: line-through;
+  }
+  .orphan-icon {
+    display: flex;
+    flex: none;
+    color: var(--danger);
   }
   .end {
     width: 22px;
