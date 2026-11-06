@@ -409,6 +409,36 @@ describe("saving settings", () => {
     expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["error", "Could not save settings: disk full"]]);
   });
 
+  it("saves one at a time, so rapid changes end with the latest settings saved", async () => {
+    // The backend keeps whichever save finishes last, and the first one is slow
+    // (arrow presses on a pane separator, a live setting changed meanwhile).
+    let stored: AppSettings | null = null;
+    let inFlight = 0;
+    let most = 0;
+    const delays = [20, 1, 1, 1];
+    api.saveSettings.mockImplementation(async (s: AppSettings) => {
+      most = Math.max(most, ++inFlight);
+      stored = await later(delays.shift() ?? 1, s);
+      inFlight--;
+    });
+
+    const saves = [201, 202, 203].map((sidebarWidth) => app.updateSettings({ sidebarWidth }));
+    expect(await Promise.all(saves)).toEqual([true, true, true]);
+    expect(stored!.sidebarWidth).toBe(203);
+    expect(most).toBe(1);
+
+    // Later changes still save.
+    await app.updateSettings({ sidebarWidth: 250 });
+    expect(stored!.sidebarWidth).toBe(250);
+  });
+
+  it("reports a failed save to every change it carried", async () => {
+    api.saveSettings.mockImplementationOnce(() => later(10, undefined));
+    api.saveSettings.mockRejectedValueOnce("disk full");
+    const saves = [app.updateSettings({ sidebarWidth: 201 }), app.updateSettings({ sidebarWidth: 202 }), app.updateSettings({ sidebarWidth: 203 })];
+    expect(await Promise.all(saves)).toEqual([true, false, false]);
+  });
+
   it("shows an error toast when the selected environment can't be saved", async () => {
     api.saveSettings.mockRejectedValueOnce("disk full");
     await app.selectEnvironment("staging");
