@@ -37,6 +37,25 @@
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --radius: 6px;
   --radius-sm: 4px;
+
+  /* control heights: inputs, selects and buttons; small buttons; icon buttons */
+  --control-h: 30px;
+  --control-h-sm: 24px;
+  --control-h-icon: 26px;
+
+  /* the one focus ring every control uses: outline: var(--focus-ring);
+     outline-offset: var(--focus-ring-offset) */
+  --focus-ring: 2px solid var(--focus);
+  --focus-ring-offset: -1px;
+
+  /* spacing scale, on a 4px grid */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
@@ -137,7 +156,7 @@ textarea,
 
 .input,
 .select {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 9px;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -148,6 +167,8 @@ textarea,
 .input:focus,
 .select:focus {
   border-color: var(--focus);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 .input::placeholder {
   color: var(--faint);
@@ -171,8 +192,16 @@ textarea.input {
   resize: vertical;
 }
 
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.link:focus-visible,
+.subtab:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .btn {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
@@ -217,14 +246,14 @@ textarea.input {
   background: var(--hover);
 }
 .btn.small {
-  height: 24px;
+  height: var(--control-h-sm);
   padding: 0 8px;
   font-size: 12px;
 }
 
 .icon-btn {
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-icon);
+  height: var(--control-h-icon);
   display: inline-flex;
   align-items: center;
   justify-content: center;
