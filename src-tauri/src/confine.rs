@@ -38,6 +38,19 @@ pub(crate) fn entry_within(root: &Path, path: &Path) -> CmdResult<PathBuf> {
     Ok(resolved)
 }
 
+/// Like [`entry_within`], for a file about to be written. Writes go through
+/// symlinks (#22), so a symlink's final target must lie inside the workspace
+/// too, even when it dangles: otherwise the write, and the parent folders it
+/// creates, would land outside.
+pub(crate) fn write_within(root: &Path, path: &Path) -> CmdResult<PathBuf> {
+    let entry = entry_within(root, path)?;
+    let target = httpdesk_core::workspace::resolve_symlinks(&entry);
+    if target != entry && within(root, &target).is_err() {
+        return Err(format!("{} points outside the workspace", path.display()));
+    }
+    Ok(entry)
+}
+
 /// Canonicalizes the longest existing prefix of `path`, then applies the
 /// remaining (not yet existing) components lexically.
 fn resolve(path: &Path) -> CmdResult<PathBuf> {
@@ -88,5 +101,10 @@ impl AppState {
     /// [`entry_within`] the open workspace.
     pub(crate) fn confine_entry(&self, path: &Path) -> CmdResult<PathBuf> {
         entry_within(&self.root()?, path)
+    }
+
+    /// [`write_within`] the open workspace.
+    pub(crate) fn confine_write(&self, path: &Path) -> CmdResult<PathBuf> {
+        write_within(&self.root()?, path)
     }
 }

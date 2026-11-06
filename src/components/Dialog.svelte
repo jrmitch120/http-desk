@@ -12,10 +12,11 @@
   const primary = $derived(d.buttons.find((b) => b.primary) ?? d.buttons[d.buttons.length - 1]);
 
   // Once per dialog: re-selecting on every keystroke would replace what was typed.
-  // A confirm (no input) focuses its primary button, so Enter confirms.
+  // A confirm (no input) focuses its primary button, so Enter confirms, unless
+  // a button asks for focus (Cancel on irreversible confirmations).
   onMount(() => {
     if (!input || !d.input) {
-      buttons[d.buttons.indexOf(primary)]?.focus();
+      buttons[d.buttons.indexOf(d.buttons.find((b) => b.focus) ?? primary)]?.focus();
       return;
     }
     input.focus();

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { activeTab, dialog, openApp, openRequest, tab, treeItem, urlBar } from "./helpers";
+import { activeTab, dialog, openApp, openRequest, tab, treeItem, treeMenu, urlBar } from "./helpers";
 
 test("a confirm dialog focuses its primary button, keeps Tab inside and gives focus back on close", async ({ page }) => {
   await openApp(page);
@@ -34,6 +34,35 @@ test("Enter confirms a Delete dialog", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(dialog(page, "Delete request")).toHaveCount(0);
   await expect(treeItem(page, "Create pet")).toHaveCount(0);
+});
+
+test("an irreversible permanent delete focuses Cancel, so a double Enter keeps the file", async ({ page }) => {
+  await openApp(page, "?trash=unavailable");
+  await treeItem(page, "api").click();
+  await treeMenu(page, "pets.http", "Move to trash");
+
+  await expect(dialog(page, "Move to trash").getByRole("button", { name: "Move to trash" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dialog(page, "Couldn't move to trash").getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(treeItem(page, "pets.http")).toBeVisible();
+});
+
+test("the OpenAPI Overwrite dialog focuses Cancel", async ({ page }) => {
+  await openApp(page, "?openapiConflicts=1");
+  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await page.getByPlaceholder("/path/to/openapi.yaml").fill("/demo/openapi.yaml");
+  await page.keyboard.press("Enter");
+  await page.getByPlaceholder("Choose a folder").fill("/demo/swagger-petstore");
+  await page.getByRole("button", { name: "Generate" }).click();
+
+  const overwrite = dialog(page, "Overwrite existing files?");
+  await expect(overwrite.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(overwrite).toHaveCount(0);
+  await expect(dialog(page, "Import OpenAPI specification")).toBeVisible();
 });
 
 test("the unsaved-changes dialog focuses Save", async ({ page }) => {

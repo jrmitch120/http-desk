@@ -38,6 +38,21 @@ test("file variable names are validated", async ({ page }) => {
   await expect(page.getByRole("alert")).toHaveText("Variable names can only use letters, digits, _, -, . and $");
 });
 
+test("a Basic auth username containing ':' shows an inline error", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.locator(".subtab", { hasText: "Authorization" }).click();
+  await page.locator(".auth select").first().selectOption("basic");
+
+  const username = page.getByPlaceholder("{{username}}");
+  await username.fill("dom:ain");
+  await expect(username).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("alert")).toHaveText("Basic auth usernames can't contain ':'");
+
+  await username.fill("domain");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("a body line starting with ### shows an inline warning", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "Create pet");

@@ -203,3 +203,46 @@ fn rename_never_replaces_another_file() {
     assert_eq!(to_other_case.is_err(), case_insensitive, "{to_other_case:?}");
     assert_eq!(std::fs::read_to_string(f.root.join("b.http")).unwrap(), "GET https://b\n");
 }
+
+/// A symlink inside the workspace whose target is outside (or dangling towards
+/// outside) is never written through: the write is refused before anything,
+/// parent folders included, is created outside.
+#[cfg(unix)]
+#[test]
+fn symlinks_pointing_outside_are_never_written_through() {
+    let f = Fixture::new();
+    let link = |name: &str, target: &Path| std::os::unix::fs::symlink(target, f.root.join(name)).unwrap();
+    // Dangling, towards a folder that doesn't exist yet.
+    link("dangling.http", &f.outside.join("new/x.http"));
+    // Towards an existing file outside.
+    std::fs::write(f.outside.join("real.http"), "GET https://secret\n").unwrap();
+    link("existing.http", &f.outside.join("real.http"));
+
+    f.rejected("create_file", json!({ "path": f.root.join("dangling.http"), "content": "GET https://a\n" }));
+    std::fs::write(f.root.join("a.http"), "### R\nGET https://a\n").unwrap();
+    let file = f.h.ok("read_http_file", json!({ "path": f.root.join("a.http") }));
+    f.rejected("save_http_file", json!({ "path": f.root.join("dangling.http"), "file": file }));
+    f.rejected("save_http_file", json!({ "path": f.root.join("existing.http"), "file": file }));
+
+    // OpenAPI output whose target file is such a link.
+    let spec = f.root.join("spec.yaml");
+    std::fs::write(
+        &spec,
+        "openapi: 3.0.3\ninfo: {title: Mini, version: '1'}\nservers: [{url: 'https://api.mini.dev'}]\npaths:\n  /things:\n    get:\n      operationId: listThings\n      tags: [things]\n      responses: {'200': {description: ok}}\n",
+    )
+    .unwrap();
+    let source = spec.to_string_lossy().to_string();
+    f.h.ok("openapi_load", json!({ "source": source }));
+    std::fs::create_dir(f.root.join("mini")).unwrap();
+    std::os::unix::fs::symlink(f.outside.join("gen/things.http"), f.root.join("mini/things.http")).unwrap();
+    for (overwrite, dry_run) in [(false, false), (true, false), (false, true)] {
+        f.rejected(
+            "openapi_generate",
+            json!({ "source": source, "options": { "operationIds": [], "grouping": "tag", "baseUrlVariable": "baseUrl", "singleFileName": null },
+                    "outputDir": f.root.join("mini"), "overwrite": overwrite, "dryRun": dry_run }),
+        );
+    }
+
+    assert_eq!(names(&f.outside), ["real.http"], "nothing is created outside the workspace");
+    assert_eq!(std::fs::read_to_string(f.outside.join("real.http")).unwrap(), "GET https://secret\n");
+}

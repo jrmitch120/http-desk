@@ -11,6 +11,30 @@ use crate::model::Variable;
 
 const MAX_DEPTH: usize = 10;
 
+/// A run of plain text, or one `{{…}}` reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Segment<'a> {
+    Text(&'a str),
+    /// `whole` is the reference as written, braces included; `name` is what's
+    /// between the braces, trimmed.
+    Reference { whole: &'a str, name: &'a str },
+}
+
+/// Splits `text` into plain runs and `{{…}}` references, the way the resolver
+/// reads them. An unclosed `{{` is plain text.
+pub(crate) fn segments(text: &str) -> Vec<Segment<'_>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let Some(len) = rest[start + 2..].find("}}") else { break };
+        out.push(Segment::Text(&rest[..start]));
+        out.push(Segment::Reference { whole: &rest[start..start + 4 + len], name: rest[start + 2..start + 2 + len].trim() });
+        rest = &rest[start + 4 + len..];
+    }
+    out.push(Segment::Text(rest));
+    out
+}
+
 /// Resolves `{{name}}` references against a flat variable map.
 #[derive(Debug, Default)]
 pub struct Resolver {
@@ -55,14 +79,14 @@ impl Resolver {
 
     fn resolve_depth(&self, text: &str, depth: usize) -> String {
         let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(start) = rest.find("{{") {
-            let Some(len) = rest[start + 2..].find("}}") else { break };
-            out.push_str(&rest[..start]);
-            let inner = rest[start + 2..start + 2 + len].trim();
-            let whole = &rest[start..start + 4 + len];
-            rest = &rest[start + 4 + len..];
-
+        for segment in segments(text) {
+            let (whole, inner) = match segment {
+                Segment::Text(s) => {
+                    out.push_str(s);
+                    continue;
+                }
+                Segment::Reference { whole, name } => (whole, name),
+            };
             let value = if let Some(dynamic) = inner.strip_prefix('$') {
                 match self.dynamic(dynamic) {
                     Ok(v) => v,
@@ -90,7 +114,6 @@ impl Resolver {
                 }
             }
         }
-        out.push_str(rest);
         out
     }
 

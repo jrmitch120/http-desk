@@ -370,6 +370,13 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
     let req = parse("GET /users\nHost: {{apiHost}}\n").requests.remove(0);
     let msg = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err().to_string();
     assert!(msg.contains("apiHost"), "{msg}");
+
+    // An unresolved scheme gets the same error, not "relative URL without a base".
+    let req = parse("GET {{scheme}}://api/x?id={{id}}\n").requests.remove(0);
+    let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["scheme"]), "{msg}");
+    assert!(msg.contains("environment"), "{msg}");
 }
 
 // ---------------------------------------------------------------- query encoding (ADR-0001)

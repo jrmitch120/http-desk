@@ -33,7 +33,8 @@ pub enum ExecError {
     ConnectTimeout(u64),
     #[error("{0}")]
     Http(String),
-    #[error("The URL's host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
+    /// Unresolved variables in the URL's scheme or host.
+    #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
     #[error("{}", .0.join("\n"))]
     DynamicVariable(Vec<String>),
@@ -207,24 +208,22 @@ fn has_scheme(url: &str) -> bool {
     before_query(url).contains("://")
 }
 
-/// The `user:pass@host:port` part of an absolute URL.
-fn authority(url: &str) -> &str {
+/// The `scheme://user:pass@host:port` part of an absolute URL.
+fn origin(url: &str) -> &str {
     let url = before_query(url);
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    &rest[..rest.find('/').unwrap_or(rest.len())]
+    let start = url.find("://").map_or(0, |i| i + 3);
+    &url[..start + url[start..].find('/').unwrap_or(url.len() - start)]
 }
 
 /// Names of the `{{name}}` references left in `text`, in order of appearance.
 fn variable_names(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("{{") {
-        let Some(len) = rest[start + 2..].find("}}") else { break };
-        let name = rest[start + 2..start + 2 + len].trim().to_string();
-        if !names.contains(&name) {
-            names.push(name);
+    let mut names: Vec<String> = Vec::new();
+    for segment in crate::vars::segments(text) {
+        if let crate::vars::Segment::Reference { name, .. } = segment {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
         }
-        rest = &rest[start + 4 + len..];
     }
     names
 }
@@ -286,7 +285,7 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         };
     }
     dynamic_errors(resolver)?;
-    let host_vars = variable_names(authority(&url));
+    let host_vars = variable_names(origin(&url));
     if !host_vars.is_empty() {
         return Err(ExecError::UnresolvedHost(host_vars));
     }

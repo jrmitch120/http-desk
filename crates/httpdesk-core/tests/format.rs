@@ -491,6 +491,33 @@ fn unknown_httpdesk_directive_values_survive_a_resave() {
 }
 
 #[test]
+fn section_directive_keeps_its_order_on_resave() {
+    let out = resave("# @httpdesk-disabled headers, query\nGET https://x\n#~ &a=1\n#~ A: 1\n");
+    assert!(out.starts_with("###\n# @httpdesk-disabled headers, query\nPUT "), "{out}");
+
+    let out = resave("# @httpdesk-disabled cookies, headers\nGET https://x\n#~ A: 1\n");
+    assert!(out.starts_with("###\n# @httpdesk-disabled cookies, headers\nPUT "), "{out}");
+
+    // Sections turned off by the edit go after the ones already listed; ones turned on are dropped.
+    let mut f = parse("# @httpdesk-disabled cookies, headers\nGET https://x?a=1\n#~ A: 1\n");
+    f.requests[0].headers.enabled = true;
+    f.requests[0].query.enabled = false;
+    let out = serialize(&f);
+    assert!(out.starts_with("###\n# @httpdesk-disabled cookies, query\nGET "), "{out}");
+
+    // An unedited request with a non-canonical order is still written byte for byte.
+    let text = "### A\n# @httpdesk-disabled headers, query\nGET https://x\n#~ &a=1\n#~ A: 1\n";
+    assert_eq!(serialize(&parse(text)), text);
+}
+
+#[test]
+fn a_header_of_only_blank_lines_is_kept() {
+    let text = "\n\n### A\nGET https://x\n";
+    assert_eq!(serialize(&parse(text)), text);
+    assert_eq!(resave(text), "\n\n### A\nPUT https://x\n");
+}
+
+#[test]
 fn header_area_comments_keep_their_position_on_resave() {
     let text = "GET https://x?a=1\n\
 # about b\n\
@@ -606,6 +633,27 @@ fn multi_line_descriptions_save_as_one_comment_line_per_line() {
 }
 
 #[test]
+fn description_lines_starting_with_at_reload_as_description() {
+    let mut f = parse("### A\n# @name a\nGET https://x\n");
+    f.requests[0].comments = vec!["Uses:".into(), "@timeout 1".into(), "  @no-redirect".into(), "@ already safe".into(), "@".into()];
+    let out = try_serialize(&f).unwrap();
+    // The same `@ ` spacing the OpenAPI generator uses.
+    assert_eq!(out, "### A\n# Uses:\n# @ timeout 1\n#   @ no-redirect\n# @ already safe\n# @\n# @name a\nGET https://x\n");
+    let back = &parse(&out).requests[0];
+    assert_eq!(back.comments, ["Uses:", "@ timeout 1", "  @ no-redirect", "@ already safe", "@"]);
+    let directives: Vec<_> = back.directives.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(directives, ["name"], "{out}");
+}
+
+#[test]
+fn indented_description_lines_are_never_directives() {
+    let req = &parse("#   @timeout 5\n//  @no-redirect\n#\t@no-log\n# @name a\n#@no-cookie-jar\nGET https://x\n").requests[0];
+    assert_eq!(req.comments, ["  @timeout 5", " @no-redirect", "\t@no-log"]);
+    let directives: Vec<_> = req.directives.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(directives, ["name", "no-cookie-jar"]);
+}
+
+#[test]
 fn only_column_zero_handler_lines_end_the_body() {
     // JetBrains reads `>` / `>>` as a handler only at the start of a line.
     let text = "POST https://x\n\nquote:\n  > {% not a script %}\n  >> not.txt\n\n> {% client.log(1) %}\n";
@@ -681,6 +729,24 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
             }),
             "Request \"List pets\": the API key name \"api key\" can't contain spaces",
         ),
+        // The request line splits at whitespace.
+        (Box::new(|f| f.requests[0].method = "GET X".into()), "Request \"List pets\": the method \"GET X\" can't contain spaces"),
+        // `# @param a:b: text` would attach the description to `a`.
+        (
+            Box::new(|f| {
+                let p = &mut f.requests[0].query.items[0];
+                (p.name, p.description) = ("a:b".into(), "Page size".into());
+            }),
+            "Request \"List pets\": query param name \"a:b\" can't contain ':' while it has a description",
+        ),
+        // RFC 7617: the username ends at the first `:`.
+        (
+            Box::new(|f| {
+                let auth = &mut f.requests[0].auth;
+                (auth.kind, auth.username, auth.password, auth.raw) = (AuthKind::Basic, "dom:ain".into(), "pw".into(), None);
+            }),
+            "Request \"List pets\": the Basic auth username \"dom:ain\" can't contain ':'",
+        ),
     ];
     for (edit, want) in cases {
         assert_eq!(save_error(edit), want);
@@ -691,9 +757,11 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
     f.requests[0].variables[0].name = "$pet.id-2_x".into();
     f.requests[0].headers.items[0].name = "{{headerName}}".into();
     f.requests[0].headers.items.push(KeyValue::disabled("X-Ok!", "1"));
+    f.requests[0].query.items.push(KeyValue::new("a:b", "1"));
     let out = try_serialize(&f).unwrap();
     let back = &parse(&out).requests[0];
     assert_eq!(back.variables[0].name, "$pet.id-2_x");
     assert_eq!(back.headers.items[0].name, "{{headerName}}");
     assert_eq!(back.headers.items[1], KeyValue::disabled("X-Ok!", "1"));
+    assert_eq!(back.query.items[1].name, "a:b", "a ':' is fine in a param without a description");
 }

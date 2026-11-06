@@ -41,7 +41,7 @@ src-tauri/              thin Tauri shell: commands, app state
   self_writes.rs        self-write suppression for the watcher
   deleting.rs           trash, and the confirmed permanent delete
   bodies.rs             recent response bodies kept for "save to file"
-  quit.rs               macOS ⌘Q / Dock Quit go through the unsaved-changes flow
+  quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
 src/                    Svelte 5 frontend
 ```
 
@@ -61,7 +61,7 @@ SEPARATOR     := line starting with "###"  (text after it = request name, JetBra
 block         := preamble request-line query-cont* header-line* [ blank body ] [ handler ]
 preamble      := ( blank | comment | directive | file-variable | pre-script )*
 comment       := ("#" | "//") text
-directive     := ("#" | "//") "@" key [ value ]       e.g. # @name, # @no-redirect, # @timeout 30
+directive     := ("#" | "//") [ " " ] "@" key [ value ] e.g. # @name, # @no-redirect, # @timeout 30
 file-variable := "@" name "=" value                     (VS Code; JetBrains in-place vars)
 pre-script    := "<" "{%" … "%}" | "<" path             (JetBrains; preserved verbatim, not executed)
 request-line  := [ METHOD ] URL [ HTTP/version ]        (METHOD defaults to GET; custom methods allowed)
@@ -70,6 +70,9 @@ header-line   := Name ":" value | comment | disabled item (§5)
 body          := everything up to a response handler or end of block
 handler       := "> {% … %}" | "> path.js" | ">> file" | ">>! file"   (at column 0; preserved verbatim)
 ```
+
+A directive's `@` comes right after the comment prefix or one space. A comment indented
+further (`#   @x`) is description text, never a directive.
 
 Every `@name = value` line is a **File variable**, wherever it is written. A handler
 starts only at column 0, as in the JetBrains grammar, so an indented `>` or `>>` line
@@ -91,8 +94,8 @@ Only requests the user actually edited are re-emitted in canonical form. Effects
 
 * Opening and saving an untouched file is byte-identical when the file uses one line
   ending throughout (covered by tests for LF, CRLF, a UTF-8 BOM, and no final newline).
-  Two things are normalized: a file with mixed line endings is saved with its dominant
-  ending, and blank lines that are the only content before the first `###` are dropped.
+  One thing is normalized: a file with mixed line endings is saved with its dominant
+  ending. Blank lines that are the only content before the first `###` are kept.
 * Hand-written formatting, alignment and comments in requests you didn't touch survive a
   GUI edit elsewhere in the file.
 * Diffs in source control stay small.
@@ -110,10 +113,14 @@ back.
 * Unrecognized header-area lines (comments) stay above the header or disabled query
   param they preceded (`ExtraLine.before`), or go after the headers if that item is gone.
 * Unknown directives, unrecognized `@httpdesk-auth` / `@httpdesk-disabled` values and
-  `# @param` / `# @header` docs with no text are kept.
+  `# @param` / `# @header` docs with no text are kept. The `@httpdesk-disabled` line keeps
+  the order of the original line (read from `Request.raw`); sections turned off by the
+  edit follow it.
 * The `Authorization` header is written as it was (`Auth.raw`, e.g. pre-encoded base64)
   for as long as it still parses to the same credentials.
-* A description with several lines is written as one `#` line per line.
+* A description with several lines is written as one `#` line per line. A description
+  line whose first non-space character is `@` followed by a name is written as `@ name`
+  (the OpenAPI generator's rule, one shared helper), so no client reads it as a directive.
 
 **File header.** An edited header is rendered inside its original text (`FileHeader.raw`):
 comments and blank lines stay put, unchanged variable lines keep their bytes, removed
@@ -129,10 +136,13 @@ use, refuses a model that would change the file's structure, and the file is lef
 untouched. It refuses line breaks in single-line fields (name, method, URL, HTTP version,
 directives, variable names and values, query param and header names and values, auth
 fields, `Auth.raw`, extra lines, file-header comments). It also refuses variable names
-that wouldn't read back as variables, API key names with whitespace, and header names
+that wouldn't read back as variables, API key names with whitespace, header names
 (including an API key sent as a header) that contain whitespace or `:`, or start with
-`//`, `#`, `~`, `|`, `&` or `?`. The error names the request and the field. This backs up the UI, which checks header, API-key and variable
-names as you type and edits single-line fields in plain inputs that can't hold a line
+`//`, `#`, `~`, `|`, `&` or `?`, a method containing whitespace, a query param name
+containing `:` while it has a description (`# @param` splits at the first `:`), and a
+Basic auth username containing `:` (RFC 7617 can't represent it). The error names the
+request and the field. This backs up the UI, which checks header, API-key, Basic
+username and variable names as you type and edits single-line fields in plain inputs that can't hold a line
 break. Body text is written as is. A body line that `.http` would read as syntax (a
 `###` separator, or a column-0 `>>`, `> {%` or `> file.js` handler) gets an inline
 warning in the body editor instead.
@@ -361,7 +371,8 @@ unsupported security schemes.
 * **Names:** `### {summary | operationId | METHOD path}`, with `# @name {operationId}`
   (derived from the method and path when there is none). The description is written as
   comments, with `# DEPRECATED` first when applicable. A description line starting with
-  `@` is written as `@ …`, so it isn't read back as a directive.
+  `@` (even indented) is written as `@ …`, the serializer's rule for descriptions (§2),
+  so it isn't read back as a directive.
 
 The output is ordinary `.http` text produced by the same serializer the editor uses.
 
@@ -389,8 +400,9 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 * **Frontend handling:**
   * The tree refreshes (debounced), and environments reload when an env file changes.
   * An open file with **no unsaved edits** is reloaded silently, and its tabs are remapped
-    to their requests (by name + method + URL, then by name, then by index when the
-    request count is unchanged). A tab left unmatched becomes an **Orphaned tab**: it
+    to their requests (by name + method + URL, then by name, then by position: a
+    still-unmatched request takes the one now at its index if no other tab claimed that
+    one, even when requests were added or removed). A tab left unmatched becomes an **Orphaned tab**: it
     keeps its edits and last response, and saving it appends the request to the file.
   * An open file **with unsaved edits** whose content on disk differs from what was last
     loaded or saved shows a banner, *"… changed on disk while you have unsaved edits"*,
@@ -400,16 +412,22 @@ The output is ordinary `.http` text produced by the same serializer the editor u
   * A missing workspace folder or a watch error is shown as an error toast.
 * **Workspace confinement:** every command that takes a workspace path (read, save, new
   file or folder, rename, move, delete, OpenAPI output) resolves it against the canonical
-  workspace root and refuses anything outside it before touching the disk. Name prompts
-  also reject `/`, `\`, `.` and `..`.
+  workspace root and refuses anything outside it before touching the disk. A write
+  (save, new file, OpenAPI output) through a symlink is also refused when the link's
+  final target, dangling or not, lies outside the workspace. Name prompts also reject
+  `/`, `\`, `.` and `..`.
 * Workspace files, environment files and settings are written to a temp file that is
   then renamed over the target, so external tools never see half-written files. A symlink
-  is written through to its target, and an existing file keeps its permissions.
+  whose target is inside the workspace is written through to its target, and an existing
+  file keeps its permissions. A settings file that can't be written is reported ("Could
+  not save settings: …" toast).
 * Deletion moves items to the OS trash (`trash` crate) rather than unlinking them. If
   the trash is unavailable, `delete_path` reports that and leaves the item in place. The
   UI then asks *"Couldn't move to trash"* (*Delete "name" permanently?*), and only a
   confirmed *Delete permanently* calls `delete_permanently`, the one command that
-  unlinks. A delete from the explorer closes the tabs of the deleted files.
+  unlinks. That dialog, like OpenAPI's *Overwrite existing files?*, opens with Cancel
+  focused, so a stray Enter destroys nothing. A delete from the explorer closes the tabs
+  of the deleted files.
 
 ---
 
@@ -426,7 +444,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Huge OpenAPI specs (thousands of operations) | Generation is linear. The operation picker groups operations under collapsible headings and has a filter; it is not virtualized. |
 | External `$ref` to remote URLs | Not fetched (warning); relative-file refs are resolved for specs loaded from a file. |
 | Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand. |
-| Secrets in env files | **Secrets** are written only to `http-client.private.env.json`; the shared file keeps at most an empty placeholder. If the workspace is inside a git repository (the nearest `.git` at or above it) and no `.gitignore` from the repo root down ignores the private file, HttpDesk appends it to the workspace's `.gitignore` on open and on save, once a private file exists. The Environments editor warns when there are Secrets and the private file is still not ignored. Env values keep their JSON type (number, boolean, null) on save. |
+| Secrets in env files | **Secrets** are written only to `http-client.private.env.json`; the shared file keeps at most an empty placeholder. If the workspace is inside a git repository (the nearest `.git` at or above it) and no `.gitignore` rule from the repo root down matches the private file at all, HttpDesk appends it to the workspace's `.gitignore` on open and on save, once a private file exists. An explicit `!` negation of the file is the user's choice and is left alone. The Environments editor warns when there are Secrets and the private file is still not ignored. Env values keep their JSON type (number, boolean, null) on save. |
 
 ---
 
@@ -463,7 +481,7 @@ Decisions made during implementation, beyond the plan above:
   `$random.*`, `$datetime`, `$localDatetime`, `$processEnv`, `$env.X`, `$dotenv`) are
   resolved at send time. A dynamic variable with invalid or out-of-range arguments stops
   the send with an error naming it.
-* **Unresolved variables:** if the URL's host still contains an unresolved
+* **Unresolved variables:** if the URL's scheme or host still contains an unresolved
   `{{variable}}` (typically `{{baseUrl}}` with no environment selected), the send fails
   with an error naming the variables and suggesting an environment that defines them.
   Anywhere else, unresolved variables are sent as written (in the query they are
@@ -543,8 +561,10 @@ Decisions made during implementation, beyond the plan above:
 * No cookie jar; responses' `Set-Cookie` is not replayed.
 * Scripts (`< {% %}`, `> {% %}`) are preserved but not executed (out of scope).
 * Request-to-request variables (`{{login.response.body.token}}`) are not supported.
-* A Basic auth username containing `:` doesn't survive a save and reload (RFC 7617
-  can't express it).
-* A description line that starts with `@word` (including an indented one written by
-  hand) is read back as a directive.
+* A Basic auth username containing `:` can't be represented (RFC 7617), so saving one is
+  refused with an error, and the auth editor flags it inline.
+* A description line typed as `@word` comes back as `@ word` after a save (§2).
+* On macOS, a logout or shutdown (unlike ⌘Q) relies on the unsaved flag the frontend
+  reports, so it isn't blocked when nothing is unsaved; a flag that never arrived would
+  let it through without asking.
 * No code signing or notarization in the release workflow.

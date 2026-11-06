@@ -98,6 +98,10 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     single_line(context, || "the method".into(), &req.method)?;
     single_line(context, || "the URL".into(), &req.url)?;
     single_line(context, || "the HTTP version".into(), req.http_version.as_deref().unwrap_or(""))?;
+    // The request line splits at whitespace.
+    if req.method.trim().contains(char::is_whitespace) {
+        return Err(InvalidField(format!("{context}: the method {:?} can't contain spaces", req.method)));
+    }
     for d in &req.directives {
         single_line(context, || format!("directive @{}", d.name), &d.name)?;
         single_line(context, || format!("directive @{}", d.name), &d.value)?;
@@ -107,6 +111,15 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     }
     check_items(context, "query param", &req.query.items)?;
     check_items(context, "header", &req.headers.items)?;
+    // `# @param a:b: text` would attach the text to `a`.
+    for p in &req.query.items {
+        if p.name.contains(':') && p.description.lines().any(|l| !l.trim().is_empty()) {
+            return Err(InvalidField(format!(
+                "{context}: query param name {:?} can't contain ':' while it has a description",
+                p.name
+            )));
+        }
+    }
 
     let a = &req.auth;
     let auth_fields = [
@@ -121,6 +134,10 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     }
     for h in &req.headers.items {
         check_header_name(context, "header name", &h.name)?;
+    }
+    // RFC 7617: the username ends at the first `:`, so it can't be written back.
+    if a.kind == AuthKind::Basic && a.username.contains(':') {
+        return Err(InvalidField(format!("{context}: the Basic auth username {:?} can't contain ':'", a.username)));
     }
     if a.kind == AuthKind::ApiKey {
         match a.key_location {
@@ -144,14 +161,30 @@ fn split_lines(s: &str) -> impl Iterator<Item = &str> {
     s.split('\n').flat_map(|l| l.strip_suffix('\r').unwrap_or(l).split('\r'))
 }
 
+/// A description line as it must be written so it reads back as description:
+/// when its first non-space character is `@` followed by a directive name, a
+/// space goes after the `@` (`@timeout 1` becomes `@ timeout 1`), so neither
+/// HttpDesk nor other clients read it as a directive. The OpenAPI generator
+/// uses the same rule. Other lines are returned as they are.
+pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let body = line.trim_start();
+    match body.strip_prefix('@') {
+        Some(rest) if rest.starts_with(|c: char| !c.is_whitespace() && c != '=') => {
+            format!("{}@ {rest}", &line[..line.len() - body.len()]).into()
+        }
+        _ => line.into(),
+    }
+}
+
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
 
-    let in_place = file.header.raw.as_deref().and_then(|raw| render_header_in_place(&file.header, raw));
+    let in_place = file.header.raw.as_deref().and_then(|raw| Some((render_header_in_place(&file.header, raw)?, raw)));
     match in_place {
-        Some(text) => {
-            if !text.trim().is_empty() {
+        Some((text, raw)) => {
+            // Blank lines are dropped once nothing else is left, unless that's how the file was.
+            if !text.trim().is_empty() || text == raw {
                 out.push_str(&text);
             }
         }
@@ -167,10 +200,11 @@ pub fn serialize(file: &HttpFile) -> String {
             prev_rendered = false;
         }
         let rendered = render_request(req);
-        let raw = req
-            .raw
-            .as_ref()
-            .filter(|raw| parser::parse_block(raw).map(|p| render_request(&p)).as_deref() == Some(rendered.as_str()));
+        // Rendered with its raw text too, so both sides use the same section order.
+        let raw = req.raw.as_ref().filter(|raw| {
+            parser::parse_block(raw).map(|p| render_request(&Request { raw: Some(raw.to_string()), ..p })).as_deref()
+                == Some(rendered.as_str())
+        });
         match raw {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
@@ -332,6 +366,33 @@ fn render_basic(auth: &Auth) -> String {
     v
 }
 
+/// The `# @httpdesk-disabled` line, if any section is off. Sections keep the
+/// order (and spelling) of the line in the request's original text; sections
+/// turned off since then follow, in canonical order (query, headers, unknown).
+fn section_line(req: &Request, unknown: &[&str]) -> Option<String> {
+    let mut rest: Vec<&str> = Vec::new();
+    if !req.query.enabled {
+        rest.push("query");
+    }
+    if !req.headers.enabled {
+        rest.push("headers");
+    }
+    rest.extend(unknown);
+    if rest.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for t in req.raw.as_deref().map(parser::section_tokens).unwrap_or_default() {
+        let name = if t == "params" { "query" } else { t.as_str() };
+        if let Some(i) = rest.iter().position(|r| *r == name) {
+            rest.remove(i);
+            names.push(t);
+        }
+    }
+    names.extend(rest.into_iter().map(str::to_string));
+    Some(format!("# @{} {}", SECTION_DIRECTIVE, names.join(", ")))
+}
+
 /// Canonical rendering of a single request block (always starts with `###`).
 pub fn render_request(req: &Request) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -339,13 +400,13 @@ pub fn render_request(req: &Request) -> String {
 
     // A multi-line description entry becomes one `#` line per line.
     for c in req.comments.iter().flat_map(|c| split_lines(c)) {
-        lines.push(if c.is_empty() { "#".into() } else { format!("# {c}") });
+        lines.push(if c.is_empty() { "#".into() } else { format!("# {}", description_line(c)) });
     }
     // Section names this version doesn't know, written back on the section line below.
-    let mut off: Vec<&str> = Vec::new();
+    let mut unknown: Vec<&str> = Vec::new();
     for d in &req.directives {
         if d.name == SECTION_DIRECTIVE {
-            off.push(&d.value);
+            unknown.extend(parser::section_names(&d.value));
             continue;
         }
         lines.push(if d.value.is_empty() { format!("# @{}", d.name) } else { format!("# @{} {}", d.name, d.value) });
@@ -358,15 +419,7 @@ pub fn render_request(req: &Request) -> String {
             }
         }
     }
-    if !req.headers.enabled {
-        off.insert(0, "headers");
-    }
-    if !req.query.enabled {
-        off.insert(0, "query");
-    }
-    if !off.is_empty() {
-        lines.push(format!("# @{} {}", SECTION_DIRECTIVE, off.join(", ")));
-    }
+    lines.extend(section_line(req, &unknown));
     let auth = &req.auth;
     if auth.kind == AuthKind::ApiKey {
         let loc = match auth.key_location {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Auth, AuthKind } from "../lib/types";
-  import { headerNameError } from "../lib/http";
+  import { basicUsernameError, headerNameError } from "../lib/http";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
 
@@ -11,6 +11,7 @@
   const keyNameError = $derived(
     auth.keyLocation === "header" ? headerNameError(auth.keyName) : /\s/.test(auth.keyName) ? "Key names can't contain spaces" : null,
   );
+  const usernameError = $derived(basicUsernameError(auth.username));
 
   const kinds: { value: AuthKind; label: string }[] = [
     { value: "none", label: "No Auth" },
@@ -64,7 +65,11 @@
 
   <div class="right">
     {#if auth.kind === "basic"}
-      <label class="field"><span>Username</span><input class="input mono" bind:value={auth.username} placeholder={"{{username}}"} spellcheck="false" /></label>
+      <label class="field">
+        <span>Username</span>
+        <input class="input mono" bind:value={auth.username} placeholder={"{{username}}"} spellcheck="false" aria-invalid={usernameError ? "true" : undefined} />
+        {#if usernameError}<span class="field-error" role="alert">{usernameError}</span>{/if}
+      </label>
       <label class="field">
         <span>Password</span>
         <div class="with-btn">

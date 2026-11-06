@@ -239,19 +239,29 @@ fn environments_and_openapi_over_ipc() {
     assert!(env.contains("https://api.mini.dev"), "{env}");
 }
 
+/// ⌘Q and Dock Quit always go through the window's close flow, which asks the
+/// frontend (the source of truth for unsaved edits) and closes at once when
+/// nothing is unsaved. So a lost or late `set_unsaved` can't skip the prompt.
+/// Only a logout or shutdown trusts the flag, so a clean app doesn't block it.
 #[test]
-fn quitting_goes_through_the_window_close_flow_only_while_files_are_unsaved() {
+fn quitting_always_asks_the_window_and_only_logout_trusts_the_unsaved_flag() {
+    use super::quit::{on_quit_request, QuitReason::*};
     use tauri::Manager;
     let h = Harness::new();
     let app = h.webview.app_handle();
-    assert!(super::quit::on_quit_request(app), "nothing unsaved: quit at once");
+
+    // `set_unsaved` never arrived (failed, or ⌘Q came first).
+    assert!(!on_quit_request(app, User), "a quit by the user defers to the window");
+    assert!(app.get_webview_window("main").is_some());
+    assert!(on_quit_request(app, Logout), "nothing reported unsaved: logout isn't blocked");
 
     h.ok("set_unsaved", json!({ "unsaved": true }));
-    assert!(!super::quit::on_quit_request(app), "unsaved: the window asks instead");
-    assert!(app.get_webview_window("main").is_some());
+    assert!(!on_quit_request(app, User));
+    assert!(!on_quit_request(app, Logout), "unsaved: even a logout asks first");
 
     h.ok("set_unsaved", json!({ "unsaved": false }));
-    assert!(super::quit::on_quit_request(app));
+    assert!(!on_quit_request(app, User));
+    assert!(on_quit_request(app, Logout));
 }
 
 #[test]
@@ -412,6 +422,22 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     let ext = changed_paths(&rx, std::time::Duration::from_secs(2));
     assert!(ext.contains(&p("dir/b.http")), "external change after a move is still reported: {ext:?}");
     assert!(ext.contains(&p("new/inner.http")), "external change inside a moved folder is still reported: {ext:?}");
+}
+
+/// Story 53: a settings save that can't be written is reported, so the UI can
+/// show "Could not save settings: …" instead of pretending it worked.
+#[test]
+fn saving_settings_reports_a_failed_write() {
+    let h = Harness::new();
+    let settings = h.ok("get_settings", json!({}));
+    h.ok("save_settings", json!({ "settings": settings }));
+    assert!(h.config_dir().join("settings.json").is_file());
+
+    // A folder where the settings file should go: the write can't replace it.
+    std::fs::remove_file(h.config_dir().join("settings.json")).unwrap();
+    std::fs::create_dir(h.config_dir().join("settings.json")).unwrap();
+    let err = h.call("save_settings", json!({ "settings": settings })).expect_err("a failed write was reported as saved");
+    assert!(err.as_str().unwrap().starts_with("Could not save settings to "), "{err}");
 }
 
 #[test]

@@ -83,7 +83,7 @@ struct AppState {
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
-    /// quit asks first. See quit.rs.
+    /// logout asks first. See quit.rs.
     unsaved: AtomicBool,
 }
 
@@ -113,10 +113,9 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     Some(dir.join("settings.json"))
 }
 
-fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) {
-    if let Some(path) = settings_path(app) {
-        let _ = write_settings(&path, settings);
-    }
+fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> CmdResult<()> {
+    let Some(path) = settings_path(app) else { return Ok(()) };
+    write_settings(&path, settings).map_err(|e| format!("Could not save settings to {}: {e}", path.display()))
 }
 
 /// Recents in the form `open_workspace` now stores (older versions saved
@@ -168,7 +167,8 @@ fn open_workspace_blocking<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppSta
     settings.recent_workspaces.retain(|p| p != &root);
     settings.recent_workspaces.insert(0, root.clone());
     settings.recent_workspaces.truncate(10);
-    persist_settings(app, &settings);
+    // The workspace is open either way; a lost recents entry isn't worth failing for.
+    let _ = persist_settings(app, &settings);
     Ok(WorkspaceInfo { root, tree, gitignore_updated })
 }
 
@@ -194,7 +194,7 @@ fn read_http_file(state: State<'_, AppState>, path: PathBuf) -> CmdResult<HttpFi
 /// Serializes and writes the file, returning it re-parsed (fresh `raw` snapshots).
 #[tauri::command]
 fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> CmdResult<HttpFile> {
-    let path = state.confine_entry(&path)?;
+    let path = state.confine_write(&path)?;
     let text = httpdesk_core::try_serialize(&file).map_err(err)?;
     state.write_file(&path, &text)?;
     Ok(httpdesk_core::parse(&text))
@@ -207,7 +207,7 @@ fn render_request(request: Request) -> String {
 
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
-    let path = state.confine_entry(&path)?;
+    let path = state.confine_write(&path)?;
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
@@ -255,7 +255,7 @@ async fn delete_permanently<R: tauri::Runtime>(app: AppHandle<R>, path: PathBuf)
     off_main(app, move |state| {
         let path = state.confine_entry(&path)?;
         state.self_writes.removing(&path);
-        deleting::permanently(&path)
+        deleting::delete_permanently(&path)
     })
     .await
 }
@@ -357,9 +357,11 @@ fn get_settings(state: State<'_, AppState>) -> AppSettings {
 }
 
 #[tauri::command]
-fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, settings: AppSettings) {
-    persist_settings(&app, &settings);
+fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, settings: AppSettings) -> CmdResult<()> {
+    // Applied either way: the UI already shows the new values for this session.
+    let saved = persist_settings(&app, &settings);
     *state.settings.lock().unwrap() = settings;
+    saved
 }
 
 #[tauri::command]
@@ -410,24 +412,32 @@ async fn openapi_generate<R: tauri::Runtime>(
     overwrite: bool,
     dry_run: bool,
 ) -> CmdResult<GenerateReport> {
-    off_main(app, move |state| openapi_generate_blocking(state, &source, &options, &output_dir, overwrite, dry_run)).await
+    let request = GenerateRequest { source, options, output_dir, overwrite, dry_run };
+    off_main(app, move |state| openapi_generate_blocking(state, &request)).await
 }
 
-fn openapi_generate_blocking(
-    state: &AppState,
-    source: &str,
-    options: &GenerateOptions,
-    output_dir: &Path,
+/// The arguments of `openapi_generate`.
+struct GenerateRequest {
+    /// The loaded specification (as passed to `openapi_load`).
+    source: String,
+    options: GenerateOptions,
+    output_dir: PathBuf,
+    /// Replace files that already exist; otherwise they are only reported.
     overwrite: bool,
+    /// Report what would be written without writing anything.
     dry_run: bool,
-) -> CmdResult<GenerateReport> {
+}
+
+fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> CmdResult<GenerateReport> {
+    let GenerateRequest { source, options, output_dir, overwrite, dry_run } = request;
+    let (overwrite, dry_run) = (*overwrite, *dry_run);
     let output = {
         let specs = state.specs.lock().unwrap();
         let doc = specs.get(source.trim()).ok_or("Load the specification first")?;
         doc.generate(options)
     };
     let output_dir = state.confine(output_dir)?;
-    let files = output.files.iter().map(|f| state.confine_entry(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
+    let files = output.files.iter().map(|f| state.confine_write(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
     let conflicts: Vec<PathBuf> = files.iter().filter(|p| p.exists()).cloned().collect();
     // Output is confined to the workspace, so environments always go to its root.
     let env_dir = state.root()?;

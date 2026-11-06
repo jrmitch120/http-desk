@@ -49,6 +49,9 @@ export interface DialogButton {
   value: string;
   primary?: boolean;
   danger?: boolean;
+  /** Focused when the dialog opens, instead of the primary button. Set it on
+   *  Cancel for irreversible confirmations, so a stray Enter destroys nothing. */
+  focus?: boolean;
 }
 
 export interface DialogState {
@@ -126,12 +129,13 @@ class AppStore {
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
-    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell turns
-    // those into a close request while files are unsaved; see quit.rs).
+    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
+    // turns those into a close request; see quit.rs). With nothing unsaved the
+    // window closes at once, which quits the app.
     await getCurrentWindow().onCloseRequested(async (e) => {
       if (!(await this.confirmQuit())) e.preventDefault();
     });
-    // Tells the shell whether quitting needs to ask first.
+    // Tells the shell whether a logout or shutdown needs to ask first.
     let unsaved = false;
     $effect.root(() => {
       $effect(() => {
@@ -384,15 +388,15 @@ class AppStore {
           }
         }
       }
-      if (file.requests.length === old.file.requests.length) {
-        file.requests.forEach((r, i) => {
-          const o = old.file.requests[i];
-          if (!r._key && unused.has(o._key!)) {
-            r._key = o._key;
-            unused.delete(o._key!);
-          }
-        });
-      }
+      // Then by position: a still-unmatched request takes the one now at its
+      // index, unless that one was already claimed.
+      old.file.requests.forEach((o, i) => {
+        const r = file.requests[i];
+        if (r && !r._key && unused.has(o._key!)) {
+          r._key = o._key;
+          unused.delete(o._key!);
+        }
+      });
       const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
       orphans = [...unused.values()].filter((r) => held.has(r._key!));
     }
@@ -425,7 +429,7 @@ class AppStore {
       message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
     }
     const r = await this.choose("Overwrite existing files?", message, [
-      { label: "Cancel", value: "cancel" },
+      { label: "Cancel", value: "cancel", focus: true },
       { label: "Overwrite", value: "overwrite", danger: true },
     ]);
     return r.button === "overwrite";
@@ -712,7 +716,7 @@ class AppStore {
     try {
       if ((await api.deletePath(path)) === "trashUnavailable") {
         const ok = await this.choose("Couldn't move to trash", `Delete "${basename(path)}" permanently? This can't be undone.`, [
-          { label: "Cancel", value: "cancel" },
+          { label: "Cancel", value: "cancel", focus: true },
           { label: "Delete permanently", value: "delete", danger: true },
         ]);
         if (ok.button !== "delete") return;

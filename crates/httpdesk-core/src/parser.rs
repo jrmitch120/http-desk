@@ -128,6 +128,37 @@ fn parse_directive(c: &str) -> Option<Directive> {
     Some(Directive { name: name.to_string(), value: value.to_string() })
 }
 
+/// The values of a `# @httpdesk-disabled` line as written in a raw block's
+/// preamble, in order (`query`, `headers` and unknown section names).
+pub(crate) fn section_tokens(raw: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() || is_separator(t) {
+            continue;
+        }
+        let Some(c) = comment_body(t) else {
+            // Variables and pre-request scripts are preamble too; anything else is the request line.
+            if t.starts_with('@') || t.starts_with('<') {
+                continue;
+            }
+            break;
+        };
+        if !strip_one_space(c).starts_with('@') {
+            continue;
+        }
+        if let Some(d) = parse_directive(c).filter(|d| d.name == SECTION_DIRECTIVE) {
+            tokens.extend(section_names(&d.value).map(str::to_string));
+        }
+    }
+    tokens
+}
+
+/// The section names in a `@httpdesk-disabled` value (comma- or space-separated).
+pub(crate) fn section_names(value: &str) -> impl Iterator<Item = &str> {
+    value.split(|c: char| c == ',' || c.is_whitespace()).map(str::trim).filter(|s| !s.is_empty())
+}
+
 fn is_method(token: &str) -> Option<String> {
     let upper = token.to_ascii_uppercase();
     if KNOWN_METHODS.contains(&upper.as_str()) {
@@ -222,14 +253,15 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
             continue;
         }
         if let Some(c) = comment_body(t) {
-            match parse_directive(c) {
+            // `# @name` or `#@name`. An indented `#   @x` is description text.
+            let directive = if strip_one_space(c).starts_with('@') { parse_directive(c) } else { None };
+            match directive {
                 Some(d) if d.name == SECTION_DIRECTIVE => {
                     let mut unknown = Vec::new();
-                    for s in d.value.split(|c: char| c == ',' || c.is_whitespace()) {
-                        match s.trim() {
+                    for s in section_names(&d.value) {
+                        match s {
                             "query" | "params" => query_marked_disabled = true,
                             "headers" => headers_marked_disabled = true,
-                            "" => {}
                             other => unknown.push(other),
                         }
                     }

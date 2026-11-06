@@ -525,6 +525,11 @@ export function headerNameError(name: string): string | null {
   return prefix ? `Header names can't start with '${prefix}'` : null;
 }
 
+/** Why a Basic auth username can't be saved, or null. The username ends at the first ':' (RFC 7617). */
+export function basicUsernameError(username: string): string | null {
+  return username.includes(":") ? "Basic auth usernames can't contain ':'" : null;
+}
+
 /** Why `@name = value` wouldn't read back as a variable, or null. Empty names aren't saved. */
 export function variableNameError(name: string): string | null {
   return name === "" || /^[\p{Alphabetic}\p{N}_.$-]+$/u.test(name) ? null : "Variable names can only use letters, digits, _, -, . and $";
