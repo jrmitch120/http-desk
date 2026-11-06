@@ -42,6 +42,7 @@ src-tauri/              thin Tauri shell: commands, app state
   deleting.rs           trash, and the confirmed permanent delete
   bodies.rs             recent response bodies kept for "save to file"
   quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
+  theme.rs              creates the main window in the saved theme (no dark flash at start-up)
 src/                    Svelte 5 frontend
 ```
 
@@ -534,6 +535,12 @@ Decisions made during implementation, beyond the plan above:
 * **Settings** (timeouts, redirects, TLS, theme, layout, recent workspaces) are
   app metadata, stored in the OS config dir (`HTTPDESK_CONFIG_DIR` overrides it) and
   written atomically. Per-request overrides are standard directives in the file.
+* **Theme** (System, Light or Dark): the page CSS defaults to dark, and the frontend
+  applies the setting once it arrives over IPC. So that a light theme doesn't start
+  dark, the shell creates the main window itself (`"create": false` in
+  tauri.conf.json) after loading settings: with the window theme pinned for Light or
+  Dark, a background colour matching `--bg`, and an init script that sets `data-theme`
+  on `<html>` before the first paint (System resolved through `prefers-color-scheme`).
 * **Release:** the release workflow runs on a `v*` tag push, or manually with an
   existing tag as input. A pre-flight job checks that the tag matches the version in
   every manifest (`scripts/check-release-version.mjs`) and runs the tests; the bundle
