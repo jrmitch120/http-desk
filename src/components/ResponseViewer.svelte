@@ -1,5 +1,6 @@
 <script module lang="ts">
-  const viewByTab = new Map<string, { tab: string; mode: string }>();
+  type BodyView = "pretty" | "raw" | "preview";
+  const viewByTab = new Map<string, { tab: string; mode: BodyView }>();
 </script>
 
 <script lang="ts">
@@ -11,6 +12,7 @@
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Icon from "./Icon.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -19,7 +21,7 @@
 
   const saved = untrack(() => viewByTab.get(tab.id));
   let view = $state(saved?.tab ?? "body");
-  let mode = $state(saved?.mode ?? "pretty");
+  let mode = $state<BodyView>(saved?.mode ?? "pretty");
   let wrap = $state(false);
   let editor: Editor | undefined = $state();
   $effect(() => {
@@ -54,7 +56,12 @@
   const canPreview = $derived(["html", "image", "pdf", "media"].includes(kind));
   const isBinary = $derived(!!res && res.bodyText === null);
 
-  const effectiveMode = $derived(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
+  const effectiveMode = $derived<BodyView>(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
+  const viewOptions = $derived<{ value: BodyView; label: string }[]>([
+    ...(isBinary ? [] : [{ value: "pretty" as const, label: "Pretty" }]),
+    { value: "raw", label: isBinary ? "Hex" : "Raw" },
+    ...(canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),
+  ]);
 
   const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
 
@@ -168,15 +175,7 @@
 
       {#if view === "body"}
         <div class="toolbar">
-          <div class="seg">
-            {#if !isBinary}
-              <button class:active={effectiveMode === "pretty"} onclick={() => (mode = "pretty")}>Pretty</button>
-            {/if}
-            <button class:active={effectiveMode === "raw"} onclick={() => (mode = "raw")}>{isBinary ? "Hex" : "Raw"}</button>
-            {#if canPreview}
-              <button class:active={effectiveMode === "preview"} onclick={() => (mode = "preview")}>Preview</button>
-            {/if}
-          </div>
+          <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
           <span class="spacer"></span>
           {#if effectiveMode !== "preview"}
@@ -328,27 +327,6 @@
     gap: 8px;
     padding: 6px 10px 6px 16px;
     flex: none;
-  }
-  .seg {
-    display: inline-flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-  .seg button {
-    border: none;
-    background: var(--panel-2);
-    padding: 3px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    color: var(--muted);
-  }
-  .seg button + button {
-    border-left: 1px solid var(--border);
-  }
-  .seg button.active {
-    background: var(--active);
-    color: var(--text);
   }
   .lang {
     font-size: 11px;
