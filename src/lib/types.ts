@@ -181,7 +181,8 @@ export interface AppSettings {
   exec: ExecSettings;
   recentWorkspaces: string[];
   environments: Record<string, string>;
-  theme: "dark" | "light";
+  /** "system" follows the OS appearance (prefers-color-scheme). */
+  theme: "system" | "light" | "dark";
   layout: "horizontal" | "vertical";
   checkUpdates: boolean;
   showDescriptions: boolean;

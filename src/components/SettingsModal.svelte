@@ -20,8 +20,9 @@
   getVersion().then((v) => (version = v)).catch(() => {});
 
   const themes: { value: AppSettings["theme"]; label: string; icon: string }[] = [
-    { value: "dark", label: "Dark", icon: "moon" },
+    { value: "system", label: "System", icon: "monitor" },
     { value: "light", label: "Light", icon: "sun" },
+    { value: "dark", label: "Dark", icon: "moon" },
   ];
   const layouts: { value: AppSettings["layout"]; label: string; icon: string }[] = [
     { value: "horizontal", label: "Response on the right", icon: "columns" },
