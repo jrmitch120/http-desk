@@ -61,7 +61,7 @@ struct AppSettings {
     split_ratio: SplitRatio,
 }
 
-/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts.
+/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct SplitRatio {

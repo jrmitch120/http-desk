@@ -1,5 +1,6 @@
 // Sizes of the two split panes (sidebar, request/response), stored in AppSettings.
-// The defaults must match `AppSettings::default()` in src-tauri/src/lib.rs.
+// The defaults must match `AppSettings::default()` in src-tauri/src/lib.rs
+// (panes.test.ts checks).
 import type { AppSettings } from "./types";
 
 export interface PaneLimits {
