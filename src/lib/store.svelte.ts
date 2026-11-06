@@ -3,7 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, newRequest, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
 
 export interface Doc {
@@ -15,6 +15,9 @@ export interface Doc {
   savedHeader: string;
   externalChange: boolean;
   missing: boolean;
+  /** Requests of Orphaned tabs: gone from the file on disk but still open, with
+   *  their edits. Saving appends them back to the file (see `save`). */
+  orphans: Request[];
 }
 
 export interface Tab {
@@ -173,16 +176,19 @@ class AppStore {
 
   // ---------------------------------------------------------------- documents
 
-  private makeDoc(path: string, file: HttpFile): Doc {
+  /** `orphans` keep their snapshot from `prevSaved`, so their edits still show as unsaved. */
+  private makeDoc(path: string, file: HttpFile, orphans: Request[] = [], prevSaved: Record<string, string> = {}): Doc {
     file.requests.forEach(ensureKey);
+    const orphanSaved = orphans.filter((r) => r._key! in prevSaved).map((r) => [r._key!, prevSaved[r._key!]]);
     return {
       path,
       file,
-      saved: Object.fromEntries(file.requests.map((r) => [r._key!, snapshot(r)])),
+      saved: Object.fromEntries([...orphanSaved, ...file.requests.map((r) => [r._key!, snapshot(r)])]),
       savedOrder: file.requests.map((r) => r._key).join(","),
       savedHeader: JSON.stringify(file.header),
       externalChange: false,
       missing: false,
+      orphans,
     };
   }
 
@@ -219,37 +225,58 @@ class AppStore {
 
   requestFor(tab: Tab | null): Request | undefined {
     if (!tab) return undefined;
-    return this.docs[tab.path]?.file.requests.find((r) => r._key === tab.key);
+    return this.findRequest(tab.path, tab.key);
+  }
+
+  /** A request of the document: in the file, or held by an Orphaned tab. */
+  private findRequest(path: string, key: string): Request | undefined {
+    const doc = this.docs[path];
+    return doc?.file.requests.find((r) => r._key === key) ?? doc?.orphans.find((r) => r._key === key);
+  }
+
+  /** True for an Orphaned tab: its request is no longer in the file on disk. */
+  isOrphaned(tab: Tab): boolean {
+    const doc = this.docs[tab.path];
+    return !!doc && (doc.missing || doc.orphans.some((r) => r._key === tab.key));
   }
 
   isRequestDirty(path: string, key: string): boolean {
     const doc = this.docs[path];
-    const req = doc?.file.requests.find((r) => r._key === key);
+    const req = this.findRequest(path, key);
     if (!doc || !req) return false;
     return doc.saved[key] !== snapshot(req);
   }
 
+  /** Edits in an Orphaned tab count too: they exist nowhere on disk. */
   isDocDirty(path: string): boolean {
     const doc = this.docs[path];
     if (!doc) return false;
     if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
     if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-    return doc.file.requests.some((r) => doc.saved[r._key!] !== snapshot(r));
+    return [...doc.file.requests, ...doc.orphans].some((r) => doc.saved[r._key!] !== snapshot(r));
   }
 
   dirtyDocs(): string[] {
     return Object.keys(this.docs).filter((p) => this.isDocDirty(p));
   }
 
-  async save(path: string): Promise<boolean> {
+  /** Saves the file. Orphaned requests with edits, or listed in `revive`, are
+   *  appended to it; unedited ones stay orphaned so a request another editor
+   *  removed isn't silently restored. */
+  async save(path: string, revive: string[] = []): Promise<boolean> {
     const doc = this.docs[path];
     if (!doc) return false;
     try {
-      const keys = doc.file.requests.map((r) => r._key!);
-      const fresh = await api.saveHttpFile(path, $state.snapshot(doc.file) as HttpFile);
+      const file = $state.snapshot(doc.file) as HttpFile;
+      const back = doc.orphans.filter((r) => revive.includes(r._key!) || doc.saved[r._key!] !== snapshot(r));
+      // Text that preceded the request in the old file may still be there.
+      file.requests.push(...back.map((r) => ({ ...($state.snapshot(r) as Request), leading: "" })));
+      const keys = file.requests.map((r) => r._key!);
+      const fresh = await api.saveHttpFile(path, file);
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
-      this.docs[path] = this.makeDoc(path, fresh);
+      const orphans = doc.orphans.filter((r) => !back.includes(r));
+      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -257,16 +284,22 @@ class AppStore {
     }
   }
 
+  /** Saves a tab's file; an Orphaned tab's request is written back into it. */
+  async saveTab(tab: Tab): Promise<boolean> {
+    return this.save(tab.path, [tab.key]);
+  }
+
   async saveActive() {
     const tab = this.activeTab;
-    if (tab) await this.save(tab.path);
+    if (tab) await this.saveTab(tab);
   }
 
   async saveAll() {
     for (const p of this.dirtyDocs()) await this.save(p);
   }
 
-  /** Reloads from disk, keeping tabs attached to the same requests where possible. */
+  /** Reloads from disk, keeping tabs attached to the same requests where possible.
+   *  Tabs whose request can't be found any more become Orphaned tabs. */
   async reload(path: string) {
     const old = this.docs[path];
     let file: HttpFile;
@@ -276,14 +309,20 @@ class AppStore {
       if (old) old.missing = true;
       return;
     }
+    let orphans: Request[] = [];
     if (old) {
+      // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
+      const unused = new Map([...old.file.requests, ...old.orphans].map((r) => [r._key!, r]));
       const sig = (r: Request) => `${r.name}\u0000${r.method}\u0000${r.url}`;
-      const unused = new Map(old.file.requests.map((r) => [r._key!, r]));
-      for (const r of file.requests) {
-        const match = [...unused.values()].find((o) => sig(o) === sig(r));
-        if (match) {
-          r._key = match._key;
-          unused.delete(match._key!);
+      const byName = (r: Request) => r.name;
+      for (const same of [sig, byName]) {
+        for (const r of file.requests) {
+          if (r._key || (same === byName && !r.name)) continue;
+          const match = [...unused.values()].find((o) => same(o) === same(r));
+          if (match) {
+            r._key = match._key;
+            unused.delete(match._key!);
+          }
         }
       }
       if (file.requests.length === old.file.requests.length) {
@@ -295,10 +334,10 @@ class AppStore {
           }
         });
       }
+      const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
+      orphans = [...unused.values()].filter((r) => held.has(r._key!));
     }
-    this.docs[path] = this.makeDoc(path, file);
-    const keys = new Set(file.requests.map((r) => r._key));
-    for (const t of this.tabs.filter((t) => t.path === path && !keys.has(t.key))) this.removeTab(t.id);
+    this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
   }
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -342,9 +381,14 @@ class AppStore {
   private removeTab(id: string) {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
-    this.tabs.splice(idx, 1);
+    const [tab] = this.tabs.splice(idx, 1);
     delete this.runs[id];
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
+    // An orphaned request lives only in its tab.
+    const doc = this.docs[tab.path];
+    if (doc && !this.tabs.some((t) => t.path === tab.path && t.key === tab.key)) {
+      doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
+    }
   }
 
   async closeTab(id: string) {
@@ -358,7 +402,7 @@ class AppStore {
         { label: "Save", value: "save", primary: true },
       ]);
       if (r.button === "cancel") return;
-      if (r.button === "save" && !(await this.save(tab.path))) return;
+      if (r.button === "save" && !(await this.saveTab(tab))) return;
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     this.removeTab(id);
@@ -438,7 +482,7 @@ class AppStore {
 
   async createFile(dir: string) {
     const name = await this.prompt("New .http file", "requests.http", "requests.http", true);
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     const file = name.match(/\.(http|rest)$/i) ? name : `${name}.http`;
     const path = joinPath(dir, file);
     const content = "### New request\nGET https://httpbin.org/get\nAccept: application/json\n";
@@ -455,7 +499,7 @@ class AppStore {
 
   async createFolder(dir: string) {
     const name = await this.prompt("New folder", "", "folder name");
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     try {
       await api.createDir(joinPath(dir, name));
       this.expanded[dir] = true;
@@ -466,9 +510,21 @@ class AppStore {
   }
 
   async renamePath(path: string) {
-    const name = await this.prompt("Rename", basename(path), undefined, true);
-    if (!name || name === basename(path)) return;
+    const old = basename(path);
+    const typed = await this.prompt("Rename", old, undefined, true);
+    if (!typed || !this.validName(typed)) return;
+    // A request file keeps its extension when the new name leaves it out.
+    const ext = old.match(/\.(http|rest)$/i)?.[0];
+    const name = ext && !/\.(http|rest)$/i.test(typed) ? typed + ext : typed;
+    if (name === old) return;
     await this.movePath(path, joinPath(dirname(path), name));
+  }
+
+  /** Shows why a typed file/folder name is invalid; true if it's fine. */
+  private validName(name: string): boolean {
+    const error = nameError(name);
+    if (error) this.toast("error", error);
+    return !error;
   }
 
   async movePath(from: string, to: string) {

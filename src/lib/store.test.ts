@@ -1,11 +1,20 @@
-// Store behaviour that depends on async ordering: concurrent loads of the same
-// file and refreshing open documents after the app itself rewrote them.
+// Store behaviour that depends on async ordering (concurrent loads of the same
+// file, refreshing documents the app itself rewrote) and Orphaned tabs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HttpFile } from "./types";
+import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile } = vi.hoisted(() => ({ readHttpFile: vi.fn() }));
-vi.mock("./api", () => ({ api: { readHttpFile }, errorMessage: (e: unknown) => String(e) }));
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath } = vi.hoisted(() => ({
+  readHttpFile: vi.fn(),
+  saveHttpFile: vi.fn(),
+  createFile: vi.fn(),
+  createDir: vi.fn(),
+  renamePath: vi.fn(),
+}));
+vi.mock("./api", () => ({
+  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath },
+  errorMessage: (e: unknown) => String(e),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
 
@@ -25,8 +34,22 @@ function file(...names: string[]): HttpFile {
 
 const later = <T>(ms: number, value: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(value)), ms));
 
+/** A file of requests given as "METHOD name url" triples. */
+function fileOf(...reqs: [method: string, name: string, url: string][]): HttpFile {
+  return { ...file(), requests: reqs.map(([method, name, url]) => ({ ...newRequest(name), method, url })) };
+}
+
+/** Opens a tab on every request of the file at PATH. */
+async function openAll(f: HttpFile) {
+  readHttpFile.mockResolvedValueOnce(f);
+  for (let i = 0; i < f.requests.length; i++) await app.openRequest(PATH, { index: i });
+  return [...app.tabs];
+}
+
 beforeEach(() => {
-  readHttpFile.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, renamePath]) fn.mockReset();
+  app.dialog = null;
+  app.toasts = [];
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
@@ -59,5 +82,202 @@ describe("reloadOpen", () => {
     expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "New"]);
     expect(app.requestFor(app.tabs[0])?.name).toBe("List");
     expect(readHttpFile).toHaveBeenCalledTimes(2); // not-open.http isn't read
+  });
+});
+
+/** Types `value` into the name prompt the action opens and presses OK. */
+async function answerPrompt<T>(action: Promise<T>, value: string): Promise<T> {
+  await vi.waitFor(() => expect(app.dialog?.input).toBeTruthy());
+  app.closeDialog("ok", value);
+  return action;
+}
+
+const errors = () => app.toasts.filter((t) => t.kind === "error").map((t) => t.message);
+
+describe("name prompts", () => {
+  const bad = ["../x.http", "sub/x.http", "sub\\x.http", ".."];
+
+  it.each(bad)("new file rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.createFile("/ws"), name);
+    expect(createFile).not.toHaveBeenCalled();
+    expect(errors()).toEqual(["Names can't contain / or \\, or be . or .."]);
+  });
+
+  it.each(bad)("new folder rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.createFolder("/ws"), name);
+    expect(createDir).not.toHaveBeenCalled();
+    expect(errors()).toHaveLength(1);
+  });
+
+  it.each(bad)("rename rejects %s before calling the backend", async (name) => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), name);
+    expect(renamePath).not.toHaveBeenCalled();
+    expect(errors()).toHaveLength(1);
+  });
+
+  it("accepts ordinary names, including ones with dots", async () => {
+    await answerPrompt(app.createFolder("/ws"), "v1..v2");
+    expect(createDir).toHaveBeenCalledWith("/ws/v1..v2");
+    expect(errors()).toEqual([]);
+  });
+});
+
+describe("renamePath", () => {
+  it("keeps the .http extension when it's omitted", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), "dogs");
+    expect(renamePath).toHaveBeenCalledWith("/ws/pets.http", "/ws/dogs.http");
+  });
+
+  it("renaming pets.http to pets leaves pets.http", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.http"), "pets");
+    expect(renamePath).not.toHaveBeenCalledWith("/ws/pets.http", "/ws/pets");
+    expect(errors()).toEqual([]);
+  });
+
+  it("keeps a .rest extension", async () => {
+    await answerPrompt(app.renamePath("/ws/pets.rest"), "dogs");
+    expect(renamePath).toHaveBeenCalledWith("/ws/pets.rest", "/ws/dogs.rest");
+  });
+
+  it("doesn't add an extension to folders", async () => {
+    await answerPrompt(app.renamePath("/ws/api"), "v2");
+    expect(renamePath).toHaveBeenCalledWith("/ws/api", "/ws/v2");
+  });
+
+  it("allows case-only renames", async () => {
+    await answerPrompt(app.renamePath("/ws/api.http"), "API.http");
+    expect(renamePath).toHaveBeenCalledWith("/ws/api.http", "/ws/API.http");
+  });
+});
+
+describe("Orphaned tabs after reload", () => {
+  it("re-attaches tabs by name + method + URL, then by name, then by position", async () => {
+    const [list, create, get] = await openAll(
+      fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]),
+    );
+
+    // Another editor reordered List, changed Create's URL and renamed Get in place.
+    readHttpFile.mockResolvedValueOnce(
+      fileOf(["POST", "Create", "https://x/books/new"], ["GET", "List", "https://x/books"], ["GET", "Fetch", "https://x/books/{id}"]),
+    );
+    await app.reload(PATH);
+
+    expect(app.tabs.map((t) => app.requestFor(t)?.name)).toEqual(["List", "Create", "Fetch"]);
+    expect(app.requestFor(create)?.url).toBe("https://x/books/new");
+    expect([list, create, get].map((t) => app.isOrphaned(t))).toEqual([false, false, false]);
+  });
+
+  it("keeps an unmatched tab open as an Orphaned tab with its edits and last response", async () => {
+    const [list, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    app.requestFor(remove)!.headers.items.push({ enabled: true, name: "X-Reason", value: "cleanup" });
+    const response = { status: 204, statusText: "No Content" } as HttpResponse;
+    app.runs[remove.id] = { runId: "r1", loading: false, startedAt: 0, response };
+
+    // Another editor removed the request; the user picks "Reload from disk".
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    expect(app.tabs.map((t) => t.id)).toEqual([list.id, remove.id]);
+    expect(app.isOrphaned(remove)).toBe(true);
+    expect(app.isOrphaned(list)).toBe(false);
+    expect(app.requestFor(remove)?.headers.items).toEqual([{ enabled: true, name: "X-Reason", value: "cleanup" }]);
+    expect(app.runs[remove.id].response).toEqual(response);
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List"]);
+  });
+});
+
+describe("saving an Orphaned tab", () => {
+  /** The backend writes the file and returns it re-parsed (without frontend keys). */
+  const echoSave = () =>
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => ({
+      ...f,
+      requests: f.requests.map(({ _key, ...r }) => r),
+    }));
+
+  it("appends its request to the file and the tab becomes normal again", async () => {
+    echoSave();
+    const [, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Create", "https://x/books/new"], ["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    app.activeTabId = remove.id;
+    await app.saveActive();
+
+    const written: HttpFile = saveHttpFile.mock.calls[0][1];
+    expect(written.requests.map((r) => `${r.method} ${r.name}`)).toEqual(["GET Create", "GET List", "DELETE Remove"]);
+    expect(app.isOrphaned(remove)).toBe(false);
+    expect(app.requestFor(remove)?.name).toBe("Remove");
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("counts its edits as unsaved changes, so Save all writes them back", async () => {
+    echoSave();
+    const [, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    app.requestFor(remove)!.url = "https://x/books/2";
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    expect(app.isRequestDirty(PATH, remove.key)).toBe(true);
+    expect(app.dirtyDocs()).toEqual([PATH]);
+
+    await app.saveAll();
+
+    const written: HttpFile = saveHttpFile.mock.calls[0][1];
+    expect(written.requests.map((r) => r.url)).toEqual(["https://x/books", "https://x/books/2"]);
+    expect(app.isOrphaned(remove)).toBe(false);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  it("leaves an unedited Orphaned tab out when the file is saved from another tab", async () => {
+    echoSave();
+    const [list, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+    expect(app.isRequestDirty(PATH, remove.key)).toBe(false);
+
+    app.requestFor(list)!.url = "https://x/books?page=2";
+    app.activeTabId = list.id;
+    await app.saveActive();
+
+    const written: HttpFile = saveHttpFile.mock.calls[0][1];
+    expect(written.requests.map((r) => r.name)).toEqual(["List"]);
+    expect(app.isOrphaned(remove)).toBe(true);
+    expect(app.requestFor(remove)?.name).toBe("Remove");
+  });
+});
+
+describe("Orphaned tabs of a deleted file", () => {
+  it("stay open, and saving recreates the file with all its requests", async () => {
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => f);
+    const [list, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    readHttpFile.mockRejectedValueOnce("not found");
+    await app.reload(PATH);
+
+    expect(app.tabs).toHaveLength(2);
+    expect([list, remove].map((t) => app.isOrphaned(t))).toEqual([true, true]);
+
+    app.activeTabId = list.id;
+    await app.saveActive();
+
+    expect(saveHttpFile.mock.calls[0][1].requests.map((r: { name: string }) => r.name)).toEqual(["List", "Remove"]);
+    expect([list, remove].map((t) => app.isOrphaned(t))).toEqual([false, false]);
+  });
+});
+
+describe("closing an Orphaned tab", () => {
+  it("drops its request when the user discards its edits", async () => {
+    const [, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
+    app.requestFor(remove)!.url = "https://x/books/2";
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    const closing = app.closeTab(remove.id);
+    expect(app.dialog?.title).toBe('Save changes to "Remove"?');
+    app.closeDialog("discard");
+    await closing;
+
+    expect(app.tabs).toHaveLength(1);
+    expect(app.dirtyDocs()).toEqual([]);
+    expect(saveHttpFile).not.toHaveBeenCalled();
   });
 });

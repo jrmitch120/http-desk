@@ -100,7 +100,15 @@ Tests:
 cargo test --workspace  # parser/serializer, enablement, execution, env, OpenAPI, IPC + watcher
 pnpm test               # frontend helpers (URL⇄params sync, form/multipart editors, …)
 pnpm check              # svelte-check / TypeScript
+pnpm test:e2e           # browser tests (Playwright, headless Chromium)
 ```
+
+The browser tests in `e2e/` drive the real UI in headless Chromium against the
+mocked backend described below. Playwright starts the Vite dev server itself
+(on port 1430, or `E2E_PORT`), so nothing else needs to be running. Install the
+browser once with `pnpm exec playwright install chromium`. Use
+`pnpm test:e2e --headed` or `--ui` to watch them, and
+`pnpm exec playwright show-trace test-results/…/trace.zip` after a failure.
 
 UI-only work: `pnpm dev` and open <http://localhost:1420>. Outside Tauri the app
 runs against a mocked backend (`src/dev/mock.ts`, never shipped in production

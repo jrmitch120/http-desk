@@ -28,6 +28,10 @@ pub enum ExecError {
     Timeout(f64),
     #[error("{0}")]
     Http(String),
+    #[error("The URL's host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
+    UnresolvedHost(Vec<String>),
+    #[error("{}", .0.join("\n"))]
+    DynamicVariable(Vec<String>),
 }
 
 impl Serialize for ExecError {
@@ -111,20 +115,7 @@ fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
 
 /// `< path` (raw) or `<@ path` (variables substituted). `None` if not a file reference.
 fn file_reference(line: &str, resolver: &Resolver, base_dir: &Path) -> Option<Result<Vec<u8>, ExecError>> {
-    let t = line.trim();
-    let rest = t.strip_prefix('<')?;
-    let (substitute, path) = match rest.strip_prefix('@') {
-        Some(p) => (true, p),
-        None => (false, rest),
-    };
-    // `< ./file` needs whitespace after the marker; `<tag>` is content, not a file.
-    if !path.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let path = path.trim();
-    if path.is_empty() || path.contains('>') {
-        return None;
-    }
+    let crate::parser::FileReference { substitute, path } = crate::parser::file_reference(line)?;
     let path = resolver.resolve(path);
     Some(read_file(base_dir, &path).map(|bytes| {
         if substitute {
@@ -157,11 +148,23 @@ fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Optio
             }
             out
         }
-        // VS Code allows `a=1\n&b=2` continuation lines.
-        BodyMode::FormUrlEncoded => resolver.resolve(&text.lines().map(str::trim).collect::<String>()).into_bytes(),
+        BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
         _ => resolver.resolve(text).into_bytes(),
     };
     Ok(Some(bytes))
+}
+
+/// Joins a form body written one field per line with `&`. Lines that already
+/// start (or the previous line ends) with `&`, as VS Code writes them, are kept.
+fn join_form_lines(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !out.is_empty() && !out.ends_with('&') && !line.starts_with('&') {
+            out.push('&');
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 fn default_content_type(mode: BodyMode) -> Option<&'static str> {
@@ -172,6 +175,42 @@ fn default_content_type(mode: BodyMode) -> Option<&'static str> {
         BodyMode::FormUrlEncoded => Some("application/x-www-form-urlencoded"),
         _ => None,
     }
+}
+
+fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
+    let errors = resolver.errors();
+    if errors.is_empty() { Ok(()) } else { Err(ExecError::DynamicVariable(errors)) }
+}
+
+/// The URL without its query string and fragment, which may themselves contain `://`.
+fn before_query(url: &str) -> &str {
+    &url[..url.find(['?', '#']).unwrap_or(url.len())]
+}
+
+fn has_scheme(url: &str) -> bool {
+    before_query(url).contains("://")
+}
+
+/// The `user:pass@host:port` part of an absolute URL.
+fn authority(url: &str) -> &str {
+    let url = before_query(url);
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    &rest[..rest.find('/').unwrap_or(rest.len())]
+}
+
+/// Names of the `{{name}}` references left in `text`, in order of appearance.
+fn variable_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let Some(len) = rest[start + 2..].find("}}") else { break };
+        let name = rest[start + 2..start + 2 + len].trim().to_string();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+        rest = &rest[start + 4 + len..];
+    }
+    names
 }
 
 /// Resolves variables and applies enablement. Disabled components are never included.
@@ -214,7 +253,7 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         url.push(if url.contains('?') { '&' } else { '?' });
         url.push_str(&params.join("&"));
     }
-    if !url.contains("://") {
+    if !has_scheme(&url) {
         url = if url.starts_with('/') {
             let host = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(|| {
                 ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() }
@@ -224,10 +263,16 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
             format!("http://{url}")
         };
     }
+    dynamic_errors(resolver)?;
+    let host_vars = variable_names(authority(&url));
+    if !host_vars.is_empty() {
+        return Err(ExecError::UnresolvedHost(host_vars));
+    }
     url::Url::parse(&url).map_err(|e| ExecError::InvalidUrl { url: url.clone(), reason: e.to_string() })?;
 
     // Body
     let body = build_body(&req.body, resolver, base_dir)?;
+    dynamic_errors(resolver)?;
     if body.is_some() && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
         if let Some(ct) = default_content_type(req.body.mode) {
             headers.push(("Content-Type".into(), ct.into()));

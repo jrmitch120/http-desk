@@ -478,16 +478,37 @@ fn parse_basic_credentials(creds: &str) -> Option<(String, String)> {
     Some((u.to_string(), p.to_string()))
 }
 
+/// A body file reference parsed from one line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileReference<'a> {
+    /// `<@ path`: substitute variables in the file's content.
+    pub substitute: bool,
+    pub path: &'a str,
+}
+
+/// Reads `< path` or `<@ path` (the space is optional) from a single line. The
+/// editor and the sender both use this rule. `<tag>`, `<?xml` and `<<` are content.
+pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
+    let t = line.trim();
+    if t.contains('\n') || t.starts_with("<?") {
+        return None;
+    }
+    let rest = t.strip_prefix('<')?;
+    let (substitute, path) = match rest.strip_prefix('@') {
+        Some(p) => (true, p),
+        None => (false, rest),
+    };
+    let path = path.trim();
+    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(FileReference { substitute, path })
+}
+
 pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return BodyMode::None;
     }
-    if !trimmed.contains('\n') && trimmed.starts_with('<') && !trimmed.starts_with("<?") {
-        let path = trimmed.trim_start_matches('<').trim_start_matches('@').trim();
-        if !path.starts_with('<') && !path.contains('>') {
-            return BodyMode::File;
-        }
+    if file_reference(trimmed).is_some() {
+        return BodyMode::File;
     }
     let ct = content_type.unwrap_or("").to_ascii_lowercase();
     if ct.contains("json") {
