@@ -170,6 +170,37 @@ export interface HttpResponse {
   warnings: string[];
 }
 
+/** Why a send failed; mirrors the core's `ExecError` kinds. */
+export type SendErrorKind =
+  | "dns"
+  | "refused"
+  | "reset"
+  | "tls"
+  | "timeoutIdle"
+  | "timeoutConnect"
+  | "invalidUrl"
+  | "unresolvedVariable"
+  | "file"
+  | "other";
+
+export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
+
+/** A failed send as `send_request` rejects with it. `details` depends on `kind`. */
+export interface SendError {
+  kind: SendErrorKind;
+  /** The core's explanation (for transport errors, the full error chain). */
+  message: string;
+  details:
+    | { host: string } // dns
+    | { host: string; port: number } // refused, reset
+    | { reason: TlsReason } // tls
+    | { timeoutMs: number } // timeoutIdle, timeoutConnect
+    | { url: string; reason: string } // invalidUrl
+    | { names: string[] } // unresolvedVariable
+    | { path: string; reason: string } // file
+    | null; // other
+}
+
 export interface ExecSettings {
   timeoutMs: number;
   connectTimeoutMs: number;

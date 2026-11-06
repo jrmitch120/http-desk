@@ -5,7 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import { legacyPaneSizes } from "./panes";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
+import { toSendError } from "./sendError";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -32,7 +33,8 @@ export interface RunState {
   loading: boolean;
   startedAt: number;
   response?: HttpResponse;
-  error?: string;
+  /** Why the last send failed (Retry is `send` again). */
+  error?: SendError;
   /** The last send was cancelled; `response` is still the one before it. */
   cancelled?: boolean;
 }
@@ -832,7 +834,7 @@ class AppStore {
       if (this.runs[tabId]?.runId !== runId) return;
       this.runs[tabId] = this.cancelled.delete(runId)
         ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
-        : { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+        : { runId, loading: false, startedAt: 0, error: toSendError(e) };
     } finally {
       this.cancelled.delete(runId);
     }

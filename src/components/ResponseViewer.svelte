@@ -16,6 +16,7 @@
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import SendErrorPanel from "./SendErrorPanel.svelte";
   import HeadersPanel from "./HeadersPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -195,10 +196,7 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <Banner severity="error" inline heading="Could not send request" class="send-error">
-        <div class="err-msg selectable mono">{run.error}</div>
-        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
-      </Banner>
+      <SendErrorPanel error={run.error} onretry={() => app.send(tab.id)} />
     {:else if res}
       {#if res.warnings.length || res.truncated}
         <Banner severity="warning">
@@ -324,11 +322,6 @@
   }
   .viewer :global(.send-error) {
     margin: 18px;
-  }
-  .err-msg {
-    color: var(--text);
-    margin: 4px 0 6px;
-    word-break: break-word;
   }
   .tabs {
     display: flex;

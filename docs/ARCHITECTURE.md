@@ -32,8 +32,9 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   query.rs              query param escaping, unescaping and send-time encoding (ADR-0001)
   env.rs                http-client.env.json / http-client.private.env.json, gitignore check
   vars.rs               {{variable}} + dynamic variable resolution
-  exec.rs               request execution via reqwest
+  exec.rs               request execution via reqwest, send error classification
   exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
+  tls_probe.rs          why a server's certificate was rejected (self-signed, expired)
   openapi/              OpenAPI 3.0/3.1 loading, validation, generation
   workspace.rs          tree listing, search, ignore rule, atomic writes
 src-tauri/              thin Tauri shell: commands, app state
@@ -551,6 +552,20 @@ Decisions made during implementation, beyond the plan above:
   at prepare time, so the Request tab shows it. A user-set `Accept-Encoding` is sent
   unchanged. A response in an encoding we can't decode is shown as received (binary),
   with a warning. A body that fails to decode is a send error.
+* **Send errors are classified.** `send_request` rejects with `{ kind, message,
+  details }` (the core's `ExecError`), unlike other commands, whose errors are strings.
+  Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
+  `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
+  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
+  reason), and `other` (no details). The core owns `message` (the error chain for
+  transport errors); the response viewer picks the heading and hint by kind
+  (`src/lib/sendError.ts`) and always offers Retry. DNS errors are recognised by the
+  text of hyper-util's and reqwest's private resolver errors. The platform certificate
+  verifiers don't agree on reasons (macOS reports a self-signed or expired certificate
+  as an opaque code), so after a certificate rejection the core fetches the certificate
+  once more with a handshake that records it and aborts, and checks it itself
+  (`tls_probe.rs`). That probe connects directly, so behind a proxy it may find nothing
+  and the reason stays the verifier's.
 * **Auto Content-Type:** choosing a body mode sets the `Content-Type` header (an
   ordinary, visible header). It replaces a type HttpDesk itself sets for some mode but
   keeps a custom one, except that multipart always sets `multipart/form-data;
@@ -597,11 +612,11 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors, custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported) and transferred size |
+| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported) and transferred size |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Env, vars, workspace | Unit tests in each module |
 | IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, environments, OpenAPI generation, confinement, deleting, Windows paths, and the file watcher (including self-write suppression) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings and hints by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

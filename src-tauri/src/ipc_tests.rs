@@ -281,6 +281,33 @@ fn errors_are_strings() {
 }
 
 #[test]
+fn send_errors_arrive_classified() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    std::fs::write(root.join("a.http"), format!("GET http://127.0.0.1:{port}/x\n\n###\nGET {{{{baseUrl}}}}/x\n"))
+        .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let file = h.ok("read_http_file", json!({ "path": root.join("a.http") }));
+    let send = |i: usize| {
+        h.call(
+            "send_request",
+            json!({ "runId": "r1", "request": file["requests"][i], "filePath": root.join("a.http"), "fileVariables": [], "environment": null }),
+        )
+        .unwrap_err()
+    };
+
+    let err = send(0);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("refused"), &json!({ "host": "127.0.0.1", "port": port })));
+    assert!(err["message"].as_str().unwrap().contains("Connection refused"), "{err}");
+
+    // Errors found before sending are classified too.
+    let err = send(1);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("unresolvedVariable"), &json!({ "names": ["baseUrl"] })));
+}
+
+#[test]
 fn watcher_reports_external_changes_but_not_our_own_writes() {
     use tauri::Listener;
     let h = Harness::new();
