@@ -2,19 +2,21 @@
 //! frame is in the right colours (the page CSS defaults to dark).
 
 use tauri::window::Color;
-use tauri::Theme;
+use tauri::{Manager, Theme};
 
-/// Creates the "main" window from tauri.conf.json (which has `"create": false`)
-/// in the theme `choice` (the `theme` setting). The page's `applyTheme()` takes
-/// over once settings arrive over IPC, setting the same theme again.
-pub fn create_main_window<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M, choice: &str) -> tauri::Result<()> {
+/// Creates the app's only window, "main" from tauri.conf.json (which has
+/// `"create": false`), in the saved `theme` setting; runs at setup once settings
+/// are loaded (the IPC tests make their own window). The page's `applyTheme()`
+/// takes over once settings arrive over IPC, setting the same theme again.
+pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+    let choice = app.state::<crate::AppState>().settings.lock().unwrap().theme.clone();
     let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or(tauri::Error::WindowNotFound)?;
-    let fixed = window_theme(choice);
+    let fixed = window_theme(&choice);
     let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
         .theme(fixed)
         // Main frame only (Windows also runs it in subframes, so the script checks):
         // response previews are iframes with their own styles.
-        .initialization_script(page_script(choice));
+        .initialization_script(page_script(&choice));
     if let Some(theme) = fixed {
         builder = builder.background_color(background(theme));
     }
