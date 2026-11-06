@@ -5,6 +5,7 @@ import type {
   BodyKind,
   FilterResult,
   FormatMode,
+  JsonShape,
   EnvironmentSet,
   GenerateOptions,
   GenerateReport,
@@ -57,6 +58,8 @@ export const api = {
    * core. Rejects with a message for an invalid expression or a non-JSON body.
    */
   filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
+  /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
+  responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

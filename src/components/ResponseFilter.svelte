@@ -1,9 +1,13 @@
 <script lang="ts">
   // The response body's JSONPath filter bar: the expression, how many nodes it
   // matched, a clear button, and an invalid expression's error. The owner runs
-  // the filter (in the core) and passes back the outcome.
+  // the filter (in the core) and passes back the outcome. Keys complete from the
+  // body's shape summary, which the owner loads when asked (`needshape`).
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { suggestions } from "../lib/popup/suggestions.svelte";
+  import { keyCompletion } from "../lib/jsonpath";
+  import type { JsonShape } from "../lib/types";
 
   interface Props {
     value: string;
@@ -12,9 +16,13 @@
     matches: number | null;
     /** Why the expression couldn't run; the full body stays visible. */
     error: string | null;
+    /** The body's keys for completion, or null until loaded. */
+    shape: JsonShape | null;
+    /** Asked on focus and on typing; the owner loads the shape once per response. */
+    needshape?: () => void;
   }
 
-  let { value, onchange, matches, error }: Props = $props();
+  let { value, onchange, matches, error, shape, needshape }: Props = $props();
   const id = $props.id();
 </script>
 
@@ -31,7 +39,12 @@
       aria-invalid={error ? "true" : undefined}
       aria-describedby={error ? `${id}-error` : undefined}
       {value}
-      oninput={(e) => onchange(e.currentTarget.value)}
+      use:suggestions={{ label: "Key suggestions", source: shape ? (text, caret) => keyCompletion(text, caret, shape) : () => null }}
+      onfocus={() => needshape?.()}
+      oninput={(e) => {
+        needshape?.();
+        onchange(e.currentTarget.value);
+      }}
       onkeydown={(e) => {
         if (e.key === "Escape" && value) {
           e.preventDefault();

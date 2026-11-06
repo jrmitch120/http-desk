@@ -11,7 +11,7 @@ async function send(page: Page): Promise<void> {
   await expect(page.locator(".statusbar .metric").first()).toBeVisible();
 }
 
-const filterBox = (page: Page) => page.getByRole("textbox", { name: "Filter with JSONPath" });
+const filterBox = (page: Page) => page.getByRole("combobox", { name: "Filter with JSONPath" });
 const bodyLines = (page: Page) => page.locator(".body .cm-content .cm-line");
 const prettyRadio = (page: Page) => page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Pretty" });
 

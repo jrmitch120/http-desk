@@ -354,6 +354,34 @@ fn a_sent_response_is_filtered_by_id_with_numbers_as_the_server_sent_them() {
 }
 
 #[test]
+fn a_sent_response_has_a_shape_summary_for_key_completion() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let (server, _received) = json_server(r#"{"items":[{"id":1,"name":"Rex"},{"id":2,"tags":["a"]}],"total":2}"#);
+    let file_path = root.join("api.http");
+    std::fs::write(&file_path, format!("GET {server}/items\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+
+    let shape = h.ok("response_shape", json!({ "responseId": resp["id"] }));
+    assert_eq!(
+        shape,
+        json!({ "keys": [
+            ["items", { "items": { "keys": [["id", {}], ["name", {}], ["tags", { "items": {} }]] } }],
+            ["total", {}],
+        ] })
+    );
+    let err = h.call("response_shape", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+#[test]
 fn errors_are_strings() {
     let h = Harness::new();
     let err = h.call("get_tree", json!({})).unwrap_err();

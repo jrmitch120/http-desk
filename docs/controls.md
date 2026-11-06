@@ -108,6 +108,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 - Variants:
   - Context menu: call `menu.show(e, items)` from `oncontextmenu`; it opens at the
     pointer, or under the element when opened from the keyboard (Shift+F10).
+    Editors keep the webview's own menu, except the response body editor for JSON
+    bodies (Copy, Select all, Copy path). It uses the Editor's `caretForMenu(e)`, and
+    Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`).
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
@@ -170,6 +173,12 @@ spinners.
 - Keyboard: typing opens it; Up/Down move; Enter or Tab accept (Tab still moves focus on);
   Escape dismisses; Ctrl+Space opens it on demand. Accepting fires an `input` event, so
   the owner sees it as typing.
+- For text with structure, pass `source(value, caret)` instead of `options`. It returns
+  `{ from, matches }` (or null), each match `{ value, from, to, insert }`; accepting one
+  replaces the text from `from` up to the caret with its `insert`. The filter bar's key
+  completion uses it (`keyCompletion` in `src/lib/jsonpath.ts`). With a source, the
+  input is always a combobox; when a new source arrives while the input is focused, the
+  list opens for what's already typed.
 - Suggestions are free text: the user can type anything. If only listed values are
   allowed, use a Select.
 

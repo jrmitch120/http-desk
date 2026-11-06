@@ -199,6 +199,16 @@ export interface FilterResult {
   text: string;
 }
 
+/**
+ * The keys reachable at each place in a JSON body (core `json_filter::Shape`),
+ * for filter key completion. `keys` are `[name, shape]` pairs in document
+ * order; `items` is the merged shape of array elements (present for any array).
+ */
+export interface JsonShape {
+  keys?: [string, JsonShape][];
+  items?: JsonShape;
+}
+
 /** Why a send failed; mirrors the core's `ExecError` kinds. */
 export type SendErrorKind =
   | "dns"

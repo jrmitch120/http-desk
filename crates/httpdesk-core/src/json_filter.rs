@@ -14,9 +14,12 @@
 //!
 //! A body is parsed once into a [`JsonDocument`] and then queried for every
 //! expression the user types; the shell keeps recent documents by response id.
+//! The document also carries the body's [`Shape`] (the keys reachable at each
+//! place), which the filter bar completes keys from.
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -44,6 +47,8 @@ pub struct FilterResult {
 pub struct JsonDocument {
     text: String,
     root: Value,
+    /// Built on first use, then kept with the document (one per response).
+    shape: OnceLock<Shape>,
 }
 
 impl JsonDocument {
@@ -52,12 +57,18 @@ impl JsonDocument {
     pub fn parse(text: &str) -> Result<Self, FilterError> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let root = serde_json::from_str(text).map_err(|e| FilterError(format!("The body isn't valid JSON: {e}")))?;
-        Ok(JsonDocument { text: text.to_owned(), root })
+        Ok(JsonDocument { text: text.to_owned(), root, shape: OnceLock::new() })
     }
 
     /// The parsed body, for summaries built on top of the document.
     pub fn value(&self) -> &Value {
         &self.root
+    }
+
+    /// The keys reachable at each place in the body, for key completion.
+    /// Computed the first time it's asked for, then reused.
+    pub fn shape(&self) -> &Shape {
+        self.shape.get_or_init(|| Shape::of(&self.root))
     }
 
     /// Evaluates the JSONPath `expression` against the document.
@@ -77,6 +88,82 @@ impl JsonDocument {
         }
         text.push_str(if located.is_empty() { "]" } else { "\n]" });
         Ok(FilterResult { matches: located.len(), text })
+    }
+}
+
+/// At most this many keys are kept per place in a [`Shape`]. Objects used as
+/// maps (keyed by id) can have far more, and nobody picks from thousands.
+pub const MAX_SHAPE_KEYS: usize = 1000;
+
+/// A summary of a JSON body's structure for key completion: the member names
+/// seen at a place, and what the elements of arrays there look like. Arrays
+/// are summarised by merging all their elements, so `$.items[*]` offers every
+/// key any item has. A place that holds objects in one item and arrays in
+/// another has both. Scalars have neither.
+///
+/// Serialised as `{"keys": [[name, Shape], ...], "items": Shape}` (both
+/// optional). Keys are pairs in document order rather than an object, because
+/// a JS object would move integer-like keys to the front.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Shape {
+    /// Member names in first-seen order (at most [`MAX_SHAPE_KEYS`]), each
+    /// with the merged shape of its values.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<(String, Shape)>,
+    /// The merged shape of array elements here; `Some` for any array, even empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<Shape>>,
+}
+
+impl Shape {
+    fn of(value: &Value) -> Shape {
+        let mut builder = ShapeBuilder::default();
+        builder.add(value);
+        builder.finish()
+    }
+}
+
+/// A [`Shape`] under construction, with an index for merging keys quickly.
+#[derive(Default)]
+struct ShapeBuilder {
+    keys: Vec<(String, ShapeBuilder)>,
+    index: HashMap<String, usize>,
+    items: Option<Box<ShapeBuilder>>,
+}
+
+impl ShapeBuilder {
+    /// Merges `value` in. Recursion is bounded by the parser's nesting limit.
+    fn add(&mut self, value: &Value) {
+        match value {
+            Value::Object(members) => {
+                for (key, v) in members {
+                    let at = match self.index.get(key) {
+                        Some(&at) => at,
+                        None if self.keys.len() < MAX_SHAPE_KEYS => {
+                            self.index.insert(key.clone(), self.keys.len());
+                            self.keys.push((key.clone(), ShapeBuilder::default()));
+                            self.keys.len() - 1
+                        }
+                        None => continue,
+                    };
+                    self.keys[at].1.add(v);
+                }
+            }
+            Value::Array(elements) => {
+                let items = self.items.get_or_insert_with(Default::default);
+                for v in elements {
+                    items.add(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn finish(self) -> Shape {
+        Shape {
+            keys: self.keys.into_iter().map(|(k, b)| (k, b.finish())).collect(),
+            items: self.items.map(|b| Box::new(b.finish())),
+        }
     }
 }
 

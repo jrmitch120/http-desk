@@ -6,6 +6,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
+import type { JsonShape } from "../lib/types";
 
 const ROOT = "/demo";
 const files: Record<string, unknown> = {
@@ -81,6 +82,8 @@ const sent: unknown[] = [];
 const bodies: Record<string, string> = {};
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
+/** The response ids `response_shape` was asked for, in order (fetched once per response). */
+const shapeRequests: string[] = [];
 let settingsServed = false;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
@@ -99,6 +102,9 @@ let settingsServed = false;
   },
   get savedBodies() {
     return clone(savedBodies);
+  },
+  get shapeRequests() {
+    return [...shapeRequests];
   },
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
@@ -179,6 +185,7 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=store`: items with a `status` and 19-digit IDs, a new response id
 //   per send, and item 2 becomes "sold" from the second send on (filter tests).
 // `?response=html`: an HTML page. `?response=truncated`: a JSON body cut off at the size limit.
+// `?response=nested`: `{"a":{"odd key":[{"b":1}]}}` (Copy path tests).
 const responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
 // events (bytes so far) every 100 ms, like the shell emits for a slow download.
@@ -289,6 +296,22 @@ function mockFilter(body: string, expression: string): { matches: number; text: 
     } else fail("unexpected character");
   }
   return { matches: nodes.length, text: formatJson(JSON.stringify(nodes), "pretty") };
+}
+
+/** Stand-in for the core's `json_filter::Shape`: keys in first-seen order, array items merged. */
+function mockShape(values: unknown, into: JsonShape = {}): JsonShape {
+  if (Array.isArray(values)) {
+    into.items ??= {};
+    for (const v of values) mockShape(v, into.items);
+  } else if (values !== null && typeof values === "object") {
+    into.keys ??= [];
+    for (const [k, v] of Object.entries(values)) {
+      let entry = into.keys.find(([name]) => name === k);
+      if (!entry) into.keys.push((entry = [k, {}]));
+      mockShape(v, entry[1]);
+    }
+  }
+  return into;
 }
 
 /**
@@ -424,7 +447,9 @@ mockIPC(
                   ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
                   : responseKind === "truncated"
                     ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
-                    : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+                    : responseKind === "nested"
+                      ? `{"a":{"odd key":[{"b":1}]}}`
+                      : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
         const gzip = responseKind === "gzip";
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
@@ -460,6 +485,12 @@ mockIPC(
           throw `The body isn't valid JSON: ${e instanceof Error ? e.message : e}`;
         }
         return mockFilter(body, args.expression);
+      }
+      case "response_shape": {
+        shapeRequests.push(args.responseId);
+        const body = bodies[args.responseId];
+        if (body === undefined) throw "Response is no longer available";
+        return mockShape(JSON.parse(body));
       }
       case "plugin:dialog|save":
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
