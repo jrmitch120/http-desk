@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
-  import type { Request, BodyMode } from "../lib/types";
+  import type { Request, BodyMode, FormatMode } from "../lib/types";
   import type { VarProvider } from "../lib/codemirror/setup";
   import { bodySyntaxHighlight } from "../lib/codemirror/setup";
   import {
@@ -14,7 +14,6 @@
     parseFileRef,
     parseForm,
     parseMultipart,
-    prettyXml,
     relativePath,
     setBodyMode,
     setHeader,
@@ -84,20 +83,20 @@
     body.text = `<${substitute ? "@" : ""} ${path}`;
   }
 
-  async function beautify() {
-    if (body.mode === "json") {
-      // Formatted in the core so numbers stay as written. Invalid JSON (or a
-      // `{{var}}` in a value position) leaves the body as it is.
-      const target = body;
-      const text = target.text;
-      try {
-        const pretty = await api.formatBody(text, "json", "pretty");
-        if (target.text === text) target.text = pretty; // unless edited meanwhile
-      } catch {
-        // not valid JSON: nothing to do
-      }
-    } else if (body.mode === "xml") {
-      body.text = prettyXml(body.text);
+  /**
+   * Beautify (`pretty`) and Minify, formatted in the core so numbers and text
+   * stay as written. A body that doesn't parse (or has a `{{var}}` in a value
+   * position) is left as it is.
+   */
+  async function reformat(mode: FormatMode) {
+    if (body.mode !== "json" && body.mode !== "xml") return;
+    const target = body;
+    const text = target.text;
+    try {
+      const formatted = await api.formatBody(text, body.mode, mode);
+      if (target.text === text) target.text = formatted; // unless edited meanwhile
+    } catch {
+      // not valid JSON/XML: nothing to do
     }
   }
 
@@ -127,8 +126,11 @@
 {/snippet}
 
 <SectionBar title="Body" enabled={body.enabled} onchange={(v) => (body.enabled = v)} showToggle={body.mode !== "none"}>
+  {#if body.mode === "json"}
+    <button class="link small-link" onclick={() => reformat("minify")}>Minify</button>
+  {/if}
   {#if body.mode === "json" || body.mode === "xml"}
-    <button class="link small-link" onclick={beautify}>Beautify</button>
+    <button class="link small-link" onclick={() => reformat("pretty")}>Beautify</button>
   {/if}
 </SectionBar>
 

@@ -10,7 +10,7 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration, prettyXml } from "../lib/http";
+  import { formatBytes, formatDuration } from "../lib/http";
   import { explainStatus } from "../lib/status";
   import { formatPhase, redirectNote, timingPhases } from "../lib/timing";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -76,44 +76,35 @@
 
   const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
 
-  // Pretty JSON comes from the core (lossless: numbers stay as the server sent
-  // them), once per response. Raw text shows until it arrives, and stays if
-  // the body isn't valid JSON.
-  let formatted = $state<{ id: string; text: string } | null>(null);
+  // Text the core renders for the editor: Pretty JSON/XML from its lossless
+  // formatter (numbers and text stay as the server sent them), or the Hex view
+  // of a binary body, dumped from the body the shell stored. Asked for once
+  // per response and rendering; raw text shows until it arrives, and stays if
+  // the body doesn't parse.
+  const dataUrl = $derived(res?.bodyBase64 ? `data:${res.contentType ?? "application/octet-stream"};base64,${res.bodyBase64}` : null);
+  const rendering = $derived.by(() => {
+    if (!res) return null;
+    if (res.bodyText === null) return effectiveMode === "preview" && dataUrl ? null : `hex:${res.id}`;
+    if (effectiveMode === "pretty" && (kind === "json" || kind === "xml")) return `${kind}:${res.id}`;
+    return null;
+  });
+  let rendered = $state<{ key: string; text: string } | null>(null);
   $effect(() => {
-    if (!res || res.bodyText === null || kind !== "json" || effectiveMode !== "pretty") return;
+    const key = rendering;
+    if (!key || !res || untrack(() => rendered?.key) === key) return;
     const { id, bodyText: raw } = res;
-    if (untrack(() => formatted?.id) === id) return;
     const keep = (text: string) => {
-      if (res?.id === id) formatted = { id, text }; // a newer response may have arrived
+      if (res?.id === id) rendered = { key, text }; // a newer response may have arrived
     };
-    api.formatBody(raw, "json", "pretty").then(keep, () => keep(raw));
+    if (raw === null) api.hexdump(id).then(keep, (e) => keep(`(${errorMessage(e)})`));
+    else api.formatBody(raw, kind === "xml" ? "xml" : "json", "pretty").then(keep, () => keep(raw));
   });
 
   const bodyText = $derived.by(() => {
     if (!res) return "";
-    if (res.bodyText === null) return hexdump(res.bodyBase64);
-    if (effectiveMode !== "pretty") return res.bodyText;
-    if (kind === "json") return formatted?.id === res.id ? formatted.text : res.bodyText;
-    if (kind === "xml" && res.bodyText.length < 5_000_000) return prettyXml(res.bodyText);
-    return res.bodyText;
+    if (rendering && rendered?.key === rendering) return rendered.text;
+    return res.bodyText ?? "";
   });
-
-  const dataUrl = $derived(res?.bodyBase64 ? `data:${res.contentType ?? "application/octet-stream"};base64,${res.bodyBase64}` : null);
-
-  function hexdump(b64: string | null): string {
-    if (!b64) return "(binary content too large to preview — use Save to write it to a file)";
-    const bin = atob(b64.slice(0, 87384)); // ~64 KB
-    const lines: string[] = [];
-    for (let off = 0; off < bin.length; off += 16) {
-      const chunk = bin.slice(off, off + 16);
-      const hex = [...chunk].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
-      const ascii = [...chunk].map((c) => (c.charCodeAt(0) >= 32 && c.charCodeAt(0) < 127 ? c : ".")).join("");
-      lines.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
-    }
-    if (b64.length > 87384) lines.push("… (truncated preview)");
-    return lines.join("\n");
-  }
 
   async function copyBody() {
     if (!res) return;

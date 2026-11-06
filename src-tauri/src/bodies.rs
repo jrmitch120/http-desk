@@ -1,5 +1,6 @@
 //! Recent response bodies, kept so "save to file" can write the bytes the
-//! UI only shows as text. Memory is capped by count and by total bytes.
+//! UI only shows as text, and the Hex view can dump them. Memory is capped by
+//! count and by total bytes.
 
 use std::collections::VecDeque;
 use std::sync::Arc;

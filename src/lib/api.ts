@@ -51,6 +51,11 @@ export const api = {
    * strings stay exactly as written). Rejects with a message for invalid input.
    */
   formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
+  /**
+   * The Hex view of a binary response: a dump of the first 64 KB of the body
+   * the shell stored for it. Rejects once the body has been evicted.
+   */
+  hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

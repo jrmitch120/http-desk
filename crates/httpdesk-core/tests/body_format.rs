@@ -54,6 +54,15 @@ fn minify_removes_every_whitespace_outside_strings() {
 }
 
 #[test]
+fn minify_keeps_numbers_byte_for_byte_and_beautify_after_minify_restores_the_pretty_form() {
+    let pretty_form =
+        "{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3,\n  \"tags\": [\n    \"a b\"\n  ]\n}";
+    let minified = format_json(pretty_form, FormatMode::Minify).unwrap();
+    assert_eq!(minified, r#"{"id":9007199254740993,"price":10.50,"e":1e3,"tags":["a b"]}"#);
+    assert_eq!(pretty(&minified), pretty_form);
+}
+
+#[test]
 fn invalid_json_is_an_error_naming_where() {
     for bad in [
         "",
