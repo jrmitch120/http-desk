@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use httpdesk_core::env::SslConfig;
-use httpdesk_core::exec::{execute, execute_on, prepare, ExecClient, ExecError, ExecSettings};
+use httpdesk_core::exec::{execute, execute_on, prepare, ClientPool, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::{method, path};
@@ -655,17 +655,51 @@ async fn the_body_size_limit_applies_to_decoded_bytes() {
 }
 
 #[tokio::test]
-async fn a_body_that_does_not_decode_fails_naming_the_encoding() {
-    let mut wire = encode("gzip", &compressible_json());
-    wire.truncate(wire.len() / 2);
-    let server = encoded_server("gzip", wire).await;
-    let vars = env(&[("base", &server.uri())]);
+async fn a_body_that_does_not_decode_is_shown_as_received_with_a_warning() {
+    let mut cut_short = encode("gzip", &compressible_json());
+    cut_short.truncate(cut_short.len() / 2);
+    for wire in [cut_short, b"not gzip at all".to_vec()] {
+        let server = MockServer::start().await;
+        Mock::given(path("/data"))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .insert_header("Content-Encoding", "gzip")
+                    .insert_header("set-cookie", "s=1")
+                    .set_body_raw(wire.clone(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        let vars = env(&[("base", &server.uri())]);
 
-    let err = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap_err();
+        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
 
-    assert!(matches!(err, ExecError::Other(_)), "{err}");
-    assert_eq!(err.kind(), "other");
-    assert!(err.to_string().contains("Could not decode the gzip response body"), "{err}");
+        assert_eq!(resp.status, 201, "status, headers and cookies survive");
+        assert!(resp.headers.iter().any(|(n, v)| n == "content-encoding" && v == "gzip"));
+        assert_eq!(resp.cookies.len(), 1);
+        assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
+        assert!(resp.body_text.is_none(), "still-encoded bytes are binary");
+        let raw =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
+        assert_eq!(raw, wire);
+        assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
+        let warning = &resp.warnings[0];
+        assert!(warning.starts_with("Couldn't decode the gzip body ("), "{warning}");
+        assert!(warning.ends_with("); showing the bytes as received"), "{warning}");
+    }
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_keeps_the_bytes_as_received_up_to_the_limit() {
+    let wire = b"not gzip, and longer than the limit".to_vec();
+    let server = encoded_server("gzip", wire.clone()).await;
+    let settings = ExecSettings { max_body_bytes: 10, ..ExecSettings::default() };
+    let req = parse(&format!("GET {}/data\n", server.uri())).requests.remove(0);
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+
+    let out = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+
+    assert!(out.response.truncated);
+    assert_eq!(out.body, wire[..10]);
 }
 
 // ---------------------------------------------------------------- classified send errors
@@ -764,11 +798,8 @@ async fn send_with_progress(req: &Request) -> (exec::HttpResponse, Vec<(std::tim
     let settings = ExecSettings::default();
     let prepared = prepare(req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let mut reports = Vec::new();
-    let out = exec::execute_with_progress(prepared, &settings, &SslConfig::default(), |n| {
-        reports.push((std::time::Instant::now(), n))
-    })
-    .await
-    .unwrap();
+    let client = ExecClient::new(&prepared, &settings, &SslConfig::default()).unwrap();
+    let out = execute_on(&client, prepared, &settings, |n| reports.push((std::time::Instant::now(), n))).await.unwrap();
     (out.response, reports)
 }
 
@@ -843,10 +874,10 @@ async fn a_second_request_on_the_same_client_reuses_the_connection_and_skips_dns
     let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
     let client = ExecClient::new(&prepared(), &settings, &SslConfig::default()).unwrap();
 
-    let first = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
     assert!(!first.reused && first.dns.is_some() && first.connect.is_some(), "{first:?}");
 
-    let second = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
     assert!(second.reused, "{second:?}");
     assert_eq!((second.dns, second.connect), (None, None));
     assert!(second.ttfb > 0.0, "{second:?}");
@@ -957,12 +988,13 @@ async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
             .mount(&server)
             .await;
     }
+    // Sets a cookie, then redirects to a port nothing listens on.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     Mock::given(path("/broken"))
         .respond_with(
-            ResponseTemplate::new(200)
+            ResponseTemplate::new(302)
                 .insert_header("set-cookie", "c=3")
-                .insert_header("content-encoding", "gzip")
-                .set_body_string("not gzip"),
+                .insert_header("location", format!("http://127.0.0.1:{closed}/gone").as_str()),
         )
         .mount(&server)
         .await;
@@ -972,21 +1004,182 @@ async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
     let client = ExecClient::new(&prepared("GET {{base}}/one\n"), &settings, &SslConfig::default()).unwrap();
 
     let names = |r: &exec::HttpResponse| r.cookies.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
-    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
     assert_eq!(names(&first), ["a"]);
-    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
     assert_eq!(names(&second), ["b"], "the first request's cookie leaked into the second");
-    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
     assert_eq!(names(&again), ["a"]);
 
-    // A request that fails after its headers arrive never takes its cookies;
+    // A request that fails after a hop set a cookie never takes its cookies;
     // the next one on the client must not inherit them.
-    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings).await;
-    assert!(matches!(failed, Err(ExecError::Other(_))), "a bad gzip body fails the send");
-    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings, |_| {}).await;
+    assert!(matches!(failed, Err(ExecError::Refused { .. })), "the redirect target is closed");
+    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
     assert_eq!(names(&after), ["b"], "the failed request's cookie leaked into the next");
 
     let sent = server.received_requests().await.unwrap();
     assert_eq!(sent.len(), 5);
     assert!(sent.iter().all(|r| r.headers.get("cookie").is_none()), "a reused client sent a cookie back");
+}
+
+// ---------------------------------------------------------------- the final request after redirects
+
+/// The header `name` as the Request tab shows it.
+fn shown<'a>(r: &'a exec::SentRequest, name: &str) -> Option<&'a str> {
+    r.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+}
+
+#[tokio::test]
+async fn after_a_cross_origin_303_the_request_tab_shows_the_get_that_reached_the_other_server() {
+    let target = MockServer::start().await;
+    Mock::given(path("/end")).respond_with(ResponseTemplate::new(200)).mount(&target).await;
+    let origin = MockServer::start().await;
+    Mock::given(path("/start"))
+        .respond_with(ResponseTemplate::new(303).insert_header("location", format!("{}/end", target.uri()).as_str()))
+        .mount(&origin)
+        .await;
+    let text = "POST {{base}}/start\nAuthorization: Bearer secret\nCookie: mine=1\nProxy-Authorization: Basic eA==\n\
+                X-Trace: 7\nContent-Type: application/json\n\n{\"a\": 1}\n";
+    let req = parse(text).requests.remove(0);
+
+    let resp = send(&req, env(&[("base", &origin.uri())]), Path::new(".")).await.unwrap();
+
+    let sent = &resp.request;
+    assert_eq!(sent.method, "GET");
+    assert_eq!(sent.url, format!("{}/end", target.uri()));
+    assert_eq!((sent.body_size, sent.body_preview.as_deref()), (0, None), "303 drops the body");
+    for gone in ["authorization", "cookie", "proxy-authorization", "content-type"] {
+        assert_eq!(shown(sent, gone), None, "{gone} isn't sent across origins / without a body");
+    }
+    assert_eq!(shown(sent, "x-trace"), Some("7"));
+    assert_eq!(shown(sent, "referer"), Some(format!("{}/start", origin.uri()).as_str()));
+
+    // And that is what the other server got.
+    let received = last_request(&target).await;
+    assert_eq!(received.method.as_str(), "GET");
+    assert!(received.body.is_empty());
+    for (name, value) in &sent.headers {
+        assert_eq!(header(&received, name), Some(value.as_str()), "{name} as shown was sent");
+    }
+    for gone in ["authorization", "cookie", "proxy-authorization", "content-type"] {
+        assert_eq!(header(&received, gone), None, "{gone}");
+    }
+}
+
+#[tokio::test]
+async fn a_same_origin_307_keeps_the_method_body_and_credentials() {
+    let server = MockServer::start().await;
+    Mock::given(path("/old"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/new"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/new")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let text = "PUT {{base}}/old\nAuthorization: Bearer secret\nContent-Type: text/plain\n\nhello\n";
+    let req = parse(text).requests.remove(0);
+
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+
+    let sent = &resp.request;
+    assert_eq!((sent.method.as_str(), sent.url.clone()), ("PUT", format!("{}/new", server.uri())));
+    assert_eq!((sent.body_size, sent.body_preview.as_deref()), (5, Some("hello")));
+    assert_eq!(shown(sent, "authorization"), Some("Bearer secret"));
+    assert_eq!(shown(sent, "content-type"), Some("text/plain"));
+    let received = last_request(&server).await;
+    assert_eq!((received.method.as_str(), received.body.as_slice()), ("PUT", &b"hello"[..]));
+}
+
+#[tokio::test]
+async fn a_302_turns_a_post_into_a_get_but_keeps_other_methods() {
+    let server = MockServer::start().await;
+    Mock::given(path("/old"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/new"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/new")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let post = parse("POST {{base}}/old\nContent-Type: text/plain\n\nhello\n").requests.remove(0);
+    let sent = send(&post, vars.clone(), Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("GET", 0));
+    assert_eq!(shown(&sent, "content-type"), None);
+
+    let put = parse("PUT {{base}}/old\nContent-Type: text/plain\n\nhello\n").requests.remove(0);
+    let sent = send(&put, vars, Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("PUT", 5));
+    assert_eq!(shown(&sent, "content-type"), Some("text/plain"));
+    assert_eq!(last_request(&server).await.method.as_str(), "PUT");
+}
+
+#[tokio::test]
+async fn without_redirects_the_request_tab_shows_the_prepared_request() {
+    let server = echo_server().await;
+    let req = parse("POST {{base}}/echo\nAuthorization: Bearer secret\n\nhi\n").requests.remove(0);
+    let sent = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("POST", 2));
+    assert_eq!(shown(&sent, "authorization"), Some("Bearer secret"));
+    assert_eq!(shown(&sent, "referer"), None);
+}
+
+// ---------------------------------------------------------------- client pool
+
+#[tokio::test]
+async fn a_second_send_through_the_pool_reuses_the_connection() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+
+    let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    drop(client);
+    let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+
+    assert!(!first.reused, "{first:?}");
+    assert!(second.reused, "{second:?}");
+}
+
+#[tokio::test]
+async fn a_client_in_use_is_never_handed_out_twice() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+
+    let warm = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    execute_on(&warm, prepared(), &settings, |_| {}).await.unwrap();
+    // `warm` is still checked out (a send in flight), so this gets a new client.
+    let other = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let timings = execute_on(&other, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    assert!(!timings.reused, "{timings:?}");
+}
+
+#[tokio::test]
+async fn sends_with_different_client_settings_get_different_clients() {
+    let server = echo_server().await;
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+    let send = |text: &'static str, settings: ExecSettings| {
+        let (pool, resolver, ssl) = (&pool, &resolver, &ssl);
+        async move {
+            let p = prepare(&parse(text).requests.remove(0), resolver, Path::new("."), &settings).unwrap();
+            let client = pool.checkout(&p, &settings, ssl).unwrap();
+            execute_on(&client, p, &settings, |_| {}).await.unwrap().response.timings.reused
+        }
+    };
+
+    assert!(!send("GET {{base}}/echo\n", ExecSettings::default()).await);
+    assert!(!send("# @timeout 7\nGET {{base}}/echo\n", ExecSettings::default()).await, "a timeout directive");
+    assert!(!send("# @no-redirect\nGET {{base}}/echo\n", ExecSettings::default()).await, "redirects off");
+    let lax = ExecSettings { verify_tls: false, ..ExecSettings::default() };
+    assert!(!send("GET {{base}}/echo\n", lax).await, "TLS verification off");
+    assert!(send("GET {{base}}/echo\n", ExecSettings::default()).await, "the first client, still warm");
 }

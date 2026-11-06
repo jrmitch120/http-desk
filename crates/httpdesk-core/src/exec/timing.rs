@@ -4,7 +4,9 @@
 //! redirect policy wrapper marks where each hop starts, so the phases describe
 //! the final request after redirects. Everything is recorded with [`Instant`]s
 //! into a [`Recorder`] shared by the hooks, then turned into [`Timings`] once
-//! the body has arrived.
+//! the body has arrived. The redirect marks also keep each hop's status and
+//! URLs ([`Hop`]), which the Request tab's reconstruction of the final request
+//! is built from.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -40,11 +42,20 @@ pub struct Timings {
     pub redirects: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Event {
     Dns(Instant, Instant),
     Connect(Instant, Instant),
-    Redirect(Instant),
+    Redirect(Instant, Hop),
+}
+
+/// One redirect that was followed: the status that asked for it, the URL
+/// that answered with it, and the URL it led to.
+#[derive(Debug, Clone)]
+pub(crate) struct Hop {
+    pub status: u16,
+    pub from: url::Url,
+    pub to: url::Url,
 }
 
 /// The events of the request in flight, written by the client's hooks. A
@@ -79,9 +90,24 @@ impl Recorder {
         reqwest::redirect::Policy::custom(move |attempt| {
             // Marked before the policy decides; if it refuses, the send fails
             // and nothing reads the mark.
-            rec.push(Event::Redirect(Instant::now()));
+            if let Some(from) = attempt.previous().last() {
+                let hop = Hop { status: attempt.status().as_u16(), from: from.clone(), to: attempt.url().clone() };
+                rec.push(Event::Redirect(Instant::now(), hop));
+            }
             policy.redirect(attempt)
         })
+    }
+
+    /// The redirects the request in flight followed, in order.
+    pub(crate) fn hops(&self) -> Vec<Hop> {
+        let events = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Redirect(_, hop) => Some(hop.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The phases of the final hop. `start` is when the send began, `headers`
@@ -89,12 +115,12 @@ impl Recorder {
     pub(crate) fn timings(&self, start: Instant, headers: Instant, end: Instant) -> Timings {
         let events = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-        let redirects = events.iter().filter(|e| matches!(e, Event::Redirect(_))).count();
+        let redirects = events.iter().filter(|e| matches!(e, Event::Redirect(..))).count();
         let hop_start = events
             .iter()
             .rev()
             .find_map(|e| match e {
-                Event::Redirect(at) => Some(*at),
+                Event::Redirect(at, _) => Some(*at),
                 _ => None,
             })
             .unwrap_or(start);

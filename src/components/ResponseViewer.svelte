@@ -391,7 +391,7 @@
           </div>
           <p class="muted small">
             A reconstruction of the final request from what HttpDesk prepared, not the bytes on the wire. Disabled components and unresolved sections are not included.
-            {#if res.timings.redirects}It ended at {res.url}; later hops may differ in method and headers.{/if}
+            {#if res.timings.redirects}After redirects it shows the last hop: its URL, its method and body after 301, 302 or 303, and without credentials a cross-origin hop drops.{/if}
           </p>
         </div>
       {/if}

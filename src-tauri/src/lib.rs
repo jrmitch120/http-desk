@@ -104,6 +104,8 @@ struct AppState {
     self_writes: SelfWrites,
     trash: Trash,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
+    clients: exec::ClientPool,
     /// Recent response bodies by response id (for "save to file").
     bodies: Mutex<RecentBodies>,
     /// Recent bodies parsed as JSON, by response id (for the filter bar).
@@ -367,7 +369,9 @@ async fn send_request<R: tauri::Runtime>(
     let on_progress = move |received| {
         let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    let task = tokio::spawn(async move { exec::execute_with_progress(prepared, &settings, &ssl, on_progress).await });
+    // Each send gets a client no other send is using (see ClientPool).
+    let client = state.clients.checkout(&prepared, &settings, &ssl)?;
+    let task = tokio::spawn(async move { exec::execute_on(&client, prepared, &settings, on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);

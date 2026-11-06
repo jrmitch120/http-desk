@@ -802,3 +802,38 @@ fn a_downloading_body_emits_growing_progress_for_its_run_until_the_send_returns(
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(rx.try_iter().count(), 0, "progress was emitted after the send returned");
 }
+
+/// Serves `count` responses over one kept-alive connection; returns the URL.
+/// A second connection is never accepted.
+fn keep_alive_server(count: usize) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        for _ in 0..count {
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => buf.push(byte[0]),
+                }
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\n\r\nok");
+        }
+    });
+    url
+}
+
+#[test]
+fn a_second_send_reuses_the_connection_the_first_left_open() {
+    let h = Harness::new();
+    let url = keep_alive_server(2);
+
+    let first = send_get(&h, &url);
+    let second = send_get(&h, &url);
+
+    assert_eq!(first["timings"]["reused"], false, "{}", first["timings"]);
+    assert_eq!(second["timings"]["reused"], true, "{}", second["timings"]);
+    assert_eq!(second["bodyText"], "ok");
+}

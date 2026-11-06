@@ -56,11 +56,13 @@ impl Stage {
 
 /// What [`BodyReader::finish`] hands back.
 pub(super) struct ReceivedBody {
-    /// Decoded bytes (or the raw bytes when the encoding couldn't be decoded), cut at the limit.
+    /// Decoded bytes (or the raw bytes when the body couldn't be decoded), cut at the limit.
     pub bytes: Vec<u8>,
     /// Raw body bytes received on the wire.
     pub transferred: usize,
     pub truncated: bool,
+    /// Why the body couldn't be decoded, as a warning; `bytes` are then as received.
+    pub decode_failure: Option<String>,
 }
 
 /// Accumulates a response body chunk by chunk as it arrives.
@@ -71,8 +73,13 @@ pub(super) struct BodyReader {
     names: Vec<String>,
     transferred: usize,
     body: Vec<u8>,
+    /// The raw bytes up to the limit, kept while decoding so a body that turns
+    /// out not to decode can still be shown as received.
+    raw: Vec<u8>,
+    raw_truncated: bool,
     limit: usize,
     truncated: bool,
+    decode_failure: Option<String>,
 }
 
 impl BodyReader {
@@ -85,8 +92,11 @@ impl BodyReader {
             names: Vec::new(),
             transferred: 0,
             body: Vec::new(),
+            raw: Vec::new(),
+            raw_truncated: false,
             limit,
             truncated: false,
+            decode_failure: None,
         };
         let tokens: Vec<String> = content_encoding
             .unwrap_or("")
@@ -114,14 +124,25 @@ impl BodyReader {
     }
 
     /// Takes one chunk as it came off the wire. Returns `false` once the
-    /// decoded body has hit the limit and the rest needn't be read.
-    pub fn push(&mut self, raw: &[u8]) -> Result<bool, String> {
+    /// body has hit the limit and the rest needn't be read.
+    pub fn push(&mut self, raw: &[u8]) -> bool {
         self.transferred += raw.len();
+        if self.stages.is_empty() {
+            return self.append(raw);
+        }
+        if !self.raw_truncated {
+            let room = self.limit - self.raw.len();
+            self.raw.extend_from_slice(&raw[..raw.len().min(room)]);
+            self.raw_truncated = raw.len() > room;
+        }
         let mut data = raw.to_vec();
         for i in 0..self.stages.len() {
-            data = self.stages[i].write(&data).map_err(|e| self.decode_error(i, &e))?;
+            match self.stages[i].write(&data) {
+                Ok(out) => data = out,
+                Err(e) => return self.fail(i, &e),
+            }
         }
-        Ok(self.append(&data))
+        self.append(&data)
     }
 
     /// Raw body bytes received on the wire so far (what progress reports).
@@ -130,15 +151,27 @@ impl BodyReader {
     }
 
     /// Ends the body, flushing the decoders.
-    pub fn finish(mut self) -> Result<ReceivedBody, String> {
+    pub fn finish(mut self) -> ReceivedBody {
         // A cut-off body would fail to finish; and an empty one (HEAD, 204) has nothing to decode.
         if !self.truncated && self.transferred > 0 {
             let mut stages = std::mem::take(&mut self.stages);
             let mut i = 0;
-            while !stages.is_empty() {
-                let mut data = stages.remove(0).finish().map_err(|e| self.decode_error(i, &e))?;
+            'stages: while !stages.is_empty() {
+                let mut data = match stages.remove(0).finish() {
+                    Ok(data) => data,
+                    Err(e) => {
+                        self.fail(i, &e);
+                        break;
+                    }
+                };
                 for (j, next) in stages.iter_mut().enumerate() {
-                    data = next.write(&data).map_err(|e| self.decode_error(i + 1 + j, &e))?;
+                    match next.write(&data) {
+                        Ok(out) => data = out,
+                        Err(e) => {
+                            self.fail(i + 1 + j, &e);
+                            break 'stages;
+                        }
+                    }
                 }
                 if !self.append(&data) {
                     break;
@@ -146,7 +179,12 @@ impl BodyReader {
                 i += 1;
             }
         }
-        Ok(ReceivedBody { bytes: self.body, transferred: self.transferred, truncated: self.truncated })
+        ReceivedBody {
+            bytes: self.body,
+            transferred: self.transferred,
+            truncated: self.truncated,
+            decode_failure: self.decode_failure,
+        }
     }
 
     /// Adds decoded bytes up to the limit; `false` once the limit is reached.
@@ -161,7 +199,15 @@ impl BodyReader {
         true
     }
 
-    fn decode_error(&self, stage: usize, e: &io::Error) -> String {
-        format!("Could not decode the {} response body: {e}", self.names[stage])
+    /// Gives up decoding: the body becomes the raw bytes received so far
+    /// (later chunks are appended as they come), with a warning saying why.
+    /// Returns whether to keep reading, as [`Self::push`] does.
+    fn fail(&mut self, stage: usize, e: &io::Error) -> bool {
+        self.decode_failure =
+            Some(format!("Couldn't decode the {} body ({e}); showing the bytes as received", self.names[stage]));
+        self.stages.clear();
+        self.body = std::mem::take(&mut self.raw);
+        self.truncated = self.raw_truncated;
+        !self.truncated
     }
 }
