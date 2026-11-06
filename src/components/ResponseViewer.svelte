@@ -1,6 +1,8 @@
 <script module lang="ts">
   type BodyView = "pretty" | "raw" | "preview";
-  const viewByTab = new Map<string, { tab: string; mode: BodyView }>();
+  const viewByTab = new Map<string, { tab: string; mode: BodyView; wrap: boolean }>();
+  /** Above this many body bytes, copying a binary body as base64 asks first. */
+  const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
 
 <script lang="ts">
@@ -9,6 +11,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
   import { formatBytes, formatDuration, prettyXml } from "../lib/http";
+  import { explainStatus } from "../lib/status";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
@@ -25,10 +28,10 @@
   const saved = untrack(() => viewByTab.get(tab.id));
   let view = $state(saved?.tab ?? "body");
   let mode = $state<BodyView>(saved?.mode ?? "pretty");
-  let wrap = $state(false);
+  let wrap = $state(saved?.wrap ?? false);
   let editor: Editor | undefined = $state();
   $effect(() => {
-    viewByTab.set(tab.id, { tab: view, mode });
+    viewByTab.set(tab.id, { tab: view, mode, wrap });
   });
 
   // Elapsed time while loading.
@@ -109,8 +112,30 @@
 
   async function copyBody() {
     if (!res) return;
-    await navigator.clipboard.writeText(res.bodyText ?? "");
-    app.toast("success", "Response body copied");
+    if (res.bodyText !== null) {
+      await navigator.clipboard.writeText(res.bodyText);
+      app.toast("success", "Response body copied");
+      return;
+    }
+    const b64 = res.bodyBase64;
+    if (!b64) return;
+    const bytes = base64Bytes(b64);
+    if (bytes > BASE64_COPY_CONFIRM_BYTES) {
+      const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
+      const r = await app.choose("Copy as base64?", message, [
+        { label: "Cancel", value: "cancel" },
+        { label: "Copy", value: "copy", primary: true },
+      ]);
+      if (r.button !== "copy") return;
+    }
+    await navigator.clipboard.writeText(b64);
+    app.toast("success", "Response body copied as base64");
+  }
+
+  /** How many bytes a base64 string decodes to, without decoding it. */
+  function base64Bytes(b64: string): number {
+    const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+    return Math.floor((b64.length * 3) / 4) - pad;
   }
 
   async function saveBody() {
@@ -126,7 +151,7 @@
     }
   }
 
-  const statusTitle = $derived(res ? `${res.httpVersion} · final URL ${res.url}` : "");
+  const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
   const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
@@ -157,7 +182,7 @@
         <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
-        <button class="icon-btn" aria-label="Copy body" use:tooltip disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
+        <button class="icon-btn" aria-label="Copy body" use:tooltip={isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>

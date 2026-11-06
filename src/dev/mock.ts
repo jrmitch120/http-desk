@@ -137,6 +137,12 @@ const trashUnavailable = new URLSearchParams(location.search).get("trash") === "
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 // `?sendError=1`: every send fails as if the server were unreachable.
 const sendError = new URLSearchParams(location.search).get("sendError") === "1";
+// `?status=422`: the JSON response comes back with this status code instead.
+const statusParam = Number(new URLSearchParams(location.search).get("status")) || null;
+const reasonPhrases: Record<number, string> = { 200: "OK", 201: "Created", 404: "Not Found", 422: "Unprocessable Content", 500: "Internal Server Error" };
+// `?bigBinary=1`: the image response is a 2 MB binary body instead of a small PNG.
+const bigBinary = new URLSearchParams(location.search).get("bigBinary") === "1";
+const BIG_BINARY_BYTES = 2 * 1024 * 1024;
 // `?settingsDelay=<ms>`: settings arrive late, as on a slow start.
 // `?settingsDelay=hold`: settings wait until a test calls `__mock.releaseSettings()`.
 const settingsDelayParam = new URLSearchParams(location.search).get("settingsDelay");
@@ -246,6 +252,15 @@ mockIPC(
         await delay(450);
         if (sendError) throw "Connection refused (os error 61)";
         const r = args.request;
+        if (r.url.includes("png") && bigBinary) {
+          return {
+            id: "r3", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+            headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
+            bodySize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyText: null,
+            bodyBase64: "AAAA".repeat(Math.floor(BIG_BINARY_BYTES / 3)) + "AAA=", // 2 MB of zero bytes (2 MB = 3n + 2)
+            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [],
+          };
+        }
         if (r.url.includes("png")) {
           return {
             id: "r2", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
@@ -260,9 +275,10 @@ mockIPC(
             ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
             : responseKind === "invalidJson"
               ? `{"id": 9007199254740993, oops}`
-              :JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+              : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+        const status = statusParam ?? (r.method === "POST" ? 201 : 200);
         return {
-          id: "r1", status: r.method === "POST" ? 201 : 200, statusText: r.method === "POST" ? "Created" : "OK", httpVersion: "HTTP/1.1",
+          id: "r1", status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", "application/json"], ["content-length", String(body.length)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"]],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, headersSize: 120, contentType: "application/json", bodyText: body, bodyBase64: null, truncated: false,
