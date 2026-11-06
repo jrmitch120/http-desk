@@ -87,6 +87,15 @@ class AppStore {
   envSet = $state<EnvironmentSet | null>(null);
   envName = $state<string | null>(null);
   settings = $state<AppSettings | null>(null);
+  /** Whether the OS appearance is dark, which is what the System theme follows. */
+  private systemDark = $state(true);
+  private stopWatchingSystem: (() => void) | null = null;
+  /** The theme chosen in settings (System for new installs). */
+  themeChoice = $derived<AppSettings["theme"]>(this.settings?.theme ?? "system");
+  /** The theme in effect, with System resolved through the OS appearance. */
+  effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
+  /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
+  private windowTheme: "light" | "dark" | null | undefined = undefined;
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
@@ -126,6 +135,8 @@ class AppStore {
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
+    this.watchSystemTheme();
+    this.windowTheme = undefined;
     this.applyTheme();
     await this.migratePaneSizes();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
@@ -160,8 +171,30 @@ class AppStore {
     if (!Object.keys(legacy.patch).length || (await this.updateSettings(legacy.patch))) legacy.remove();
   }
 
+  /** Tracks the OS appearance, re-applying the theme when it changes while System is chosen. */
+  private watchSystemTheme() {
+    this.stopWatchingSystem?.();
+    const query = globalThis.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!query) return;
+    this.systemDark = query.matches;
+    const onChange = (e: { matches: boolean }) => {
+      this.systemDark = e.matches;
+      if (this.themeChoice === "system") this.applyTheme();
+    };
+    query.addEventListener("change", onChange);
+    this.stopWatchingSystem = () => query.removeEventListener("change", onChange);
+  }
+
+  /** Applies the theme to the page and to the native window (title bar, scrollbars). */
   applyTheme() {
-    document.documentElement.dataset.theme = this.settings?.theme ?? "dark";
+    document.documentElement.dataset.theme = this.effectiveTheme;
+    // A fixed theme pins the window; System lets it (and so prefers-color-scheme) follow the OS.
+    const windowTheme = this.themeChoice === "system" ? null : this.themeChoice;
+    if (windowTheme === this.windowTheme) return;
+    this.windowTheme = windowTheme;
+    getCurrentWindow()
+      .setTheme(windowTheme)
+      .catch(() => {});
   }
 
   /** Applies and saves settings; a failed save shows an error toast and returns false. */
