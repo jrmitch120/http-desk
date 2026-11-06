@@ -5,9 +5,6 @@ import { parse } from "svelte/compiler";
 export const WIDGET_KINDS = ["select", "checkbox", "radio", "number", "datalist", "title"] as const;
 export type WidgetKind = (typeof WIDGET_KINDS)[number];
 
-/** Files still allowed to contain each widget kind (repo-relative paths). */
-export type Allowlist = Record<WidgetKind, readonly string[]>;
-
 export interface SourceFile {
   /** Repo-relative path, e.g. `src/components/TopBar.svelte`. */
   path: string;
@@ -27,10 +24,6 @@ const LABEL: Record<WidgetKind, string> = {
   datalist: "native <datalist>",
   title: "native title= tooltip",
 };
-
-export function emptyAllowlist(): Allowlist {
-  return { select: [], checkbox: [], radio: [], number: [], datalist: [], title: [] };
-}
 
 /** Every native widget in one file (`.svelte` markup or `.ts` DOM code), in source order. */
 export function findNativeWidgets(file: SourceFile): Finding[] {
@@ -101,26 +94,11 @@ function staticValue(attr: Node): string | undefined {
 }
 
 /**
- * Problems to fail the guardrail with: native widgets in files not allowlisted
- * for that kind (each message names the file, line and widget), and allowlist
- * entries whose file no longer has that widget, so the list only shrinks.
+ * Problems to fail the guardrail with: every native widget in the given files,
+ * each message naming the file, line and widget. Nothing is exempt.
  */
-export function checkSources(files: SourceFile[], allowlist: Allowlist): string[] {
-  const problems: string[] = [];
-  const seen = new Set<string>();
-  for (const file of files) {
-    for (const f of findNativeWidgets(file)) {
-      seen.add(`${f.kind} ${file.path}`);
-      if (allowlist[f.kind].includes(file.path)) continue;
-      problems.push(`${file.path}:${f.line} uses a ${LABEL[f.kind]}`);
-    }
-  }
-  for (const kind of WIDGET_KINDS) {
-    for (const path of allowlist[kind]) {
-      if (!seen.has(`${kind} ${path}`)) problems.push(`${path} has no ${LABEL[kind]} any more: remove it from the "${kind}" allowlist`);
-    }
-  }
-  return problems;
+export function checkSources(files: SourceFile[]): string[] {
+  return files.flatMap((file) => findNativeWidgets(file).map((f) => `${file.path}:${f.line} uses a ${LABEL[f.kind]}`));
 }
 
 type Node = { type: string; name?: string; start: number; [key: string]: unknown };
