@@ -133,6 +133,11 @@ const trashUnavailable = new URLSearchParams(location.search).get("trash") === "
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 // `?sendError=1`: every send fails as if the server were unreachable.
 const sendError = new URLSearchParams(location.search).get("sendError") === "1";
+// `?manyHeaders=1`: the JSON response also carries caching, CORS and rate-limit headers.
+const manyHeaders = new URLSearchParams(location.search).get("manyHeaders") === "1";
+const extraHeaders: [string, string][] = manyHeaders
+  ? [["cache-control", "public, max-age=60"], ["etag", '"pets-v1"'], ["x-cache", "HIT"], ["access-control-allow-origin", "*"], ["ratelimit-remaining", "42"]]
+  : [];
 // `?settingsDelay=<ms>`: settings arrive late, as on a slow start.
 // `?settingsDelay=hold`: settings wait until a test calls `__mock.releaseSettings()`.
 const settingsDelayParam = new URLSearchParams(location.search).get("settingsDelay");
@@ -227,7 +232,7 @@ mockIPC(
         return {
           id: "r1", status: r.method === "POST" ? 201 : 200, statusText: r.method === "POST" ? "Created" : "OK", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
-          headers: [["content-type", "application/json"], ["content-length", String(body.length)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"]],
+          headers: [["content-type", "application/json"], ["content-length", String(body.length)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, headersSize: 120, contentType: "application/json", bodyText: body, bodyBase64: null, truncated: false,
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
