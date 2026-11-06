@@ -523,7 +523,7 @@ fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
 }
 
 /// Runs at setup once settings are loaded.
-type AfterSetup<R> = fn(&mut tauri::App<R>) -> tauri::Result<()>;
+type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
 
 /// Registers state and commands and loads settings at setup, then runs
 /// `after_setup` (shared by the app and the IPC tests).
@@ -560,12 +560,6 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
         ])
 }
 
-/// The app's only window, in the saved theme (the IPC tests make their own).
-fn create_main_window<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
-    let choice = app.state::<AppState>().settings.lock().unwrap().theme.clone();
-    theme::create_main_window(app, &choice)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     with_commands(
@@ -574,7 +568,7 @@ pub fn run() {
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init()),
-        create_main_window,
+        theme::create_main_window,
     )
     .build(tauri::generate_context!())
     .expect("error while building HttpDesk")

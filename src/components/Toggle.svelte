@@ -46,7 +46,7 @@
   }
   .track {
     width: 28px;
-    height: 16px;
+    height: var(--space-4);
     border-radius: 8px;
     background: var(--panel-3);
     border: 1px solid var(--border-strong);

@@ -29,10 +29,11 @@ test("a modal's Tab wrap skips elements that aren't Tab stops", async ({ page })
   await page.keyboard.press("ControlOrMeta+Comma");
   const settings = dialog(page, "Settings");
   // Roving widgets (a SegmentedControl's unchecked radios) put tabindex=-1
-  // buttons in a modal; here one sits first and one last.
+  // buttons in a modal; here one sits first, and a tabindex=-1 element that
+  // isn't otherwise focusable sits last.
   await settings.evaluate((box) => {
-    for (const [where, name] of [["afterbegin", "First"], ["beforeend", "Last"]] as const) {
-      const b = document.createElement("button");
+    for (const [where, name, tag] of [["afterbegin", "First", "button"], ["beforeend", "Last", "div"]] as const) {
+      const b = document.createElement(tag);
       b.tabIndex = -1;
       b.textContent = name;
       box.insertAdjacentElement(where, b);

@@ -262,6 +262,7 @@
     white-space: nowrap;
   }
   .sm .option {
+    /* Literal 2px: the compact list is tighter than the scale's smallest step (--space-1). */
     padding: 2px var(--space-2) 2px var(--space-1);
   }
   .option.active {

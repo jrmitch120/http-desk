@@ -106,7 +106,7 @@
   const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
   /** Rows have an enable checkbox (and bulk text a `//` prefix). */
   const hasEnable = $derived(hasColumn("enable"));
-  const showDesc = $derived(hasColumn("description") && showDescriptions);
+  const descriptionColumnShown = $derived(hasColumn("description") && showDescriptions);
   const template = $derived(tracks.map((t) => t.width).join(" "));
   /** Where the description and error lines start: under the first column after the checkbox. */
   const subStart = $derived(hasEnable ? 2 : 1);
@@ -284,7 +284,7 @@
             </span>
           {/if}
         {/each}
-        {#if showDesc && !isGhost}
+        {#if descriptionColumnShown && !isGhost}
           {#if editing === row}
             <textarea
               class="desc desc-edit"
@@ -353,7 +353,7 @@
   .kv-row > .c-check {
     grid-row: 1 / span 2;
     align-items: flex-start;
-    padding-top: 8px;
+    padding-top: var(--space-2);
   }
   .kv-row > .c-name,
   .kv-row > .c-value,
@@ -471,13 +471,16 @@
     outline: none;
     font-family: var(--mono);
     font-size: 12.5px;
-    padding: 0 8px 0 10px;
+    padding: 0 var(--space-2) 0 10px;
   }
   .kv .divider {
     border-right: 1px solid var(--border);
   }
   .kv :global(.cell:focus) {
     background: var(--panel-2);
+  }
+  /* Text cells match :focus-visible on a click too, so they keep the ring then. */
+  .kv :global(.cell:focus-visible) {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

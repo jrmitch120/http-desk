@@ -32,7 +32,7 @@
     onclose();
   }
 
-  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]';
 
   /** Keeps Tab / Shift+Tab cycling inside the topmost modal. */
   function trapTab(e: KeyboardEvent) {
@@ -119,8 +119,8 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    gap: 8px;
-    padding: 12px 16px;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border);
     flex: none;
   }

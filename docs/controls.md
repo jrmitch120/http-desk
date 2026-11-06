@@ -255,7 +255,10 @@ and only the colour changes.
   `class?`.
 - `sm` sits in lists and tabs (method badges, OFF on a section tab); `md` sits in headers
   (response status, Cancelled, spec version). Method badges are six letters wide, and
-  Badge cuts longer methods to six, so lists line up.
+  Badge cuts longer methods to six, so lists line up. To show a method in full, pass it
+  as children too (`<Badge method={m}>{m}</Badge>`): the colour still comes from
+  `method`, the text is not cut, and the badge grows past six letters. The OpenAPI
+  importer does this, since a spec can hold any method name.
 - Badge takes no tooltip. To explain one, wrap it in a `<span use:tooltip={text}>`.
 
 ### Banner
@@ -312,9 +315,13 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 
 New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `--control-h` (30px), `--control-h-sm` (24px) and `--control-h-icon` (26px) for heights;
-`--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing; `--radius` and `--radius-sm`;
+`--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
+also for the size of small fixed elements that are not controls (a badge's height, a
+Toggle's track); `--radius` and `--radius-sm`;
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
-`:focus-visible` for focus; and the `--popup-*` tokens for floating surfaces. Colours
+`:focus-visible` for focus (a control flush against an edge that clips, such as a tab
+in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of
+the ring is cut off); and the `--popup-*` tokens for floating surfaces. Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
 so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control
 works in the light and dark themes without its own rules.

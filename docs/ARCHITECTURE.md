@@ -43,6 +43,7 @@ src-tauri/              thin Tauri shell: commands, app state
   bodies.rs             recent response bodies kept for "save to file"
   quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
   theme.rs              creates the main window in the saved theme (no dark flash at start-up)
+  theme-boot.js         the window's initialization script: sets data-theme before first paint
 src/                    Svelte 5 frontend
 ```
 

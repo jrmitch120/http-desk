@@ -46,7 +46,8 @@ test("owned controls use the same focus ring", async ({ page }) => {
   // In document order: sidebar separator, tabs, method Select, the Params
   // section's Toggle, a row Checkbox, the request/response separator.
   expect(await tabTo(page, '[role="separator"]')).toEqual(ring);
-  expect(await tabTo(page, '[role="tab"]')).toEqual(ring);
+  // The tab strip scrolls, so it clips: tabs inset the ring to keep all of it.
+  expect(await tabTo(page, '[role="tab"]')).toEqual({ ...ring, offset: "-2px" });
   expect(await tabTo(page, 'button[role="combobox"]')).toEqual(ring);
   expect(await tabTo(page, '[role="switch"]', ".track")).toEqual(ring);
   expect(await tabTo(page, '[role="checkbox"]', ".box")).toEqual(ring);
@@ -55,4 +56,16 @@ test("owned controls use the same focus ring", async ({ page }) => {
 
   await page.locator(".subtab", { hasText: "Body" }).click();
   expect(await tabTo(page, '[role="radio"]')).toEqual(ring);
+});
+
+test("a grid's text cell shows the ring when clicked, as text fields do", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const cell = page.locator(".kv input.cell").first();
+  await cell.click();
+  const outline = await cell.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { style: s.outlineStyle, width: s.outlineWidth, color: s.outlineColor, offset: s.outlineOffset };
+  });
+  expect(outline).toEqual(ring);
 });
