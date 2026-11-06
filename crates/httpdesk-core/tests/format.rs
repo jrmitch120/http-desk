@@ -606,6 +606,27 @@ fn multi_line_descriptions_save_as_one_comment_line_per_line() {
 }
 
 #[test]
+fn description_lines_starting_with_at_reload_as_description() {
+    let mut f = parse("### A\n# @name a\nGET https://x\n");
+    f.requests[0].comments = vec!["Uses:".into(), "@timeout 1".into(), "  @no-redirect".into(), "@ already safe".into(), "@".into()];
+    let out = try_serialize(&f).unwrap();
+    // The same `@ ` spacing the OpenAPI generator uses.
+    assert_eq!(out, "### A\n# Uses:\n# @ timeout 1\n#   @ no-redirect\n# @ already safe\n# @\n# @name a\nGET https://x\n");
+    let back = &parse(&out).requests[0];
+    assert_eq!(back.comments, ["Uses:", "@ timeout 1", "  @ no-redirect", "@ already safe", "@"]);
+    let directives: Vec<_> = back.directives.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(directives, ["name"], "{out}");
+}
+
+#[test]
+fn indented_description_lines_are_never_directives() {
+    let req = &parse("#   @timeout 5\n//  @no-redirect\n#\t@no-log\n# @name a\n#@no-cookie-jar\nGET https://x\n").requests[0];
+    assert_eq!(req.comments, ["  @timeout 5", " @no-redirect", "\t@no-log"]);
+    let directives: Vec<_> = req.directives.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(directives, ["name", "no-cookie-jar"]);
+}
+
+#[test]
 fn only_column_zero_handler_lines_end_the_body() {
     // JetBrains reads `>` / `>>` as a handler only at the start of a line.
     let text = "POST https://x\n\nquote:\n  > {% not a script %}\n  >> not.txt\n\n> {% client.log(1) %}\n";

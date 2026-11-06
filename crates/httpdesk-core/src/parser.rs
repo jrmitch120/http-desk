@@ -222,7 +222,9 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
             continue;
         }
         if let Some(c) = comment_body(t) {
-            match parse_directive(c) {
+            // `# @name` or `#@name`. An indented `#   @x` is description text.
+            let directive = if strip_one_space(c).starts_with('@') { parse_directive(c) } else { None };
+            match directive {
                 Some(d) if d.name == SECTION_DIRECTIVE => {
                     let mut unknown = Vec::new();
                     for s in d.value.split(|c: char| c == ',' || c.is_whitespace()) {

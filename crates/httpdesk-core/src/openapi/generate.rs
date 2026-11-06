@@ -406,12 +406,8 @@ fn build_request<'a>(
         let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
         let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |e| e + 1);
         for l in lines[start..end].iter().take(MAX_COMMENT_LINES) {
-            // A leading `@`, even after indentation, would be read back as a directive.
-            let body = l.trim_start();
-            req.comments.push(match body.strip_prefix('@') {
-                Some(rest) => format!("{}@ {rest}", &l[..l.len() - body.len()]),
-                None => l.to_string(),
-            });
+            // A leading `@`, even after indentation, would read as a directive in other clients.
+            req.comments.push(crate::serializer::description_line(l).into_owned());
         }
     }
     let id = info.operation_id.as_deref().map(sanitize_ident).unwrap_or_else(|| derived_operation_id(&info.method, &info.path));

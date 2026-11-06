@@ -144,6 +144,21 @@ fn split_lines(s: &str) -> impl Iterator<Item = &str> {
     s.split('\n').flat_map(|l| l.strip_suffix('\r').unwrap_or(l).split('\r'))
 }
 
+/// A description line as it must be written so it reads back as description:
+/// when its first non-space character is `@` followed by a directive name, a
+/// space goes after the `@` (`@timeout 1` becomes `@ timeout 1`), so neither
+/// HttpDesk nor other clients read it as a directive. The OpenAPI generator
+/// uses the same rule. Other lines are returned as they are.
+pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let body = line.trim_start();
+    match body.strip_prefix('@') {
+        Some(rest) if rest.starts_with(|c: char| !c.is_whitespace() && c != '=') => {
+            format!("{}@ {rest}", &line[..line.len() - body.len()]).into()
+        }
+        _ => line.into(),
+    }
+}
+
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
@@ -339,7 +354,7 @@ pub fn render_request(req: &Request) -> String {
 
     // A multi-line description entry becomes one `#` line per line.
     for c in req.comments.iter().flat_map(|c| split_lines(c)) {
-        lines.push(if c.is_empty() { "#".into() } else { format!("# {c}") });
+        lines.push(if c.is_empty() { "#".into() } else { format!("# {}", description_line(c)) });
     }
     // Section names this version doesn't know, written back on the section line below.
     let mut off: Vec<&str> = Vec::new();
