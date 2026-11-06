@@ -459,7 +459,9 @@
     width: 24px;
     height: 24px;
   }
-  .kv-row:hover .c-del .icon-btn {
+  /* Shown on hover, and while the row has focus so keyboard users can see it. */
+  .kv-row:hover .c-del .icon-btn,
+  .kv-row:focus-within .c-del .icon-btn {
     opacity: 1;
   }
 

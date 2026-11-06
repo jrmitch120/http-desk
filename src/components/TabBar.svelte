@@ -137,6 +137,13 @@
     height: 2px;
     background: var(--accent);
   }
+  /* The bar is positioned, so it paints over the tab's own outline: move it
+     inside the ring while the tab has keyboard focus. */
+  .tab.active:focus-visible::before {
+    top: var(--focus-ring-width);
+    left: var(--focus-ring-width);
+    right: var(--focus-ring-width);
+  }
   .tab.active::after {
     content: "";
     position: absolute;

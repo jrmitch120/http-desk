@@ -69,3 +69,27 @@ test("a grid's text cell shows the ring when clicked, as text fields do", async 
   });
   expect(outline).toEqual(ring);
 });
+
+test("the active tab's accent bar sits inside its focus ring instead of covering it", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await tabTo(page, '[role="tab"][aria-selected="true"]');
+  // The bar is absolutely positioned, so it paints over the tab's own outline
+  // unless it moves in by the ring's width.
+  const bar = await page.evaluate(() => {
+    const s = getComputedStyle(document.activeElement!, "::before");
+    return { top: s.top, left: s.left, right: s.right };
+  });
+  expect(bar).toEqual({ top: "2px", left: "2px", right: "2px" });
+});
+
+test("a grid row's delete button shows while it has keyboard focus", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const del = page.locator(".kv-row").first().getByRole("button", { name: "Delete" });
+  await page.keyboard.press("Shift");
+  await del.focus();
+  await expect(del).toHaveCSS("opacity", "1");
+  expect(await tabTo(page, ".kv .c-del .icon-btn")).toEqual(ring);
+  await expect(page.locator(":focus")).toHaveCSS("opacity", "1");
+});
