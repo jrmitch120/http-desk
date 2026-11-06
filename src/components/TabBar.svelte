@@ -118,8 +118,8 @@
     color: var(--text-2);
   }
   .tab:focus-visible {
-    outline: 2px solid var(--focus);
-    outline-offset: -2px;
+    outline: var(--focus-ring);
+    outline-offset: -2px; /* tabs are flush with their neighbours */
   }
   .tab.active {
     background: var(--bg);
