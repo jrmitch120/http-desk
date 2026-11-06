@@ -1,25 +1,29 @@
 // Store behaviour that depends on async ordering (concurrent loads of the same
-// file, refreshing documents the app itself rewrote) and Orphaned tabs.
+// file, refreshing documents the app itself rewrote), Orphaned tabs and search.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, openWorkspace, getTree } = vi.hoisted(() => ({
-  readHttpFile: vi.fn(),
-  saveHttpFile: vi.fn(),
-  createFile: vi.fn(),
-  createDir: vi.fn(),
-  renamePath: vi.fn(),
-  pathExists: vi.fn(),
-  openWorkspace: vi.fn(),
-  getTree: vi.fn(),
-}));
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments, getTree } =
+  vi.hoisted(() => ({
+    readHttpFile: vi.fn(),
+    saveHttpFile: vi.fn(),
+    createFile: vi.fn(),
+    createDir: vi.fn(),
+    renamePath: vi.fn(),
+    pathExists: vi.fn(),
+    searchRequests: vi.fn(),
+    openWorkspace: vi.fn(),
+    getSettings: vi.fn(),
+    loadEnvironments: vi.fn(),
+    getTree: vi.fn(),
+  }));
 vi.mock("./api", () => ({
-  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, openWorkspace, getTree },
+  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments, getTree },
   errorMessage: (e: unknown) => String(e),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTitle: async () => {} }) }));
 
 import { app } from "./store.svelte";
 
@@ -50,11 +54,12 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, openWorkspace, getTree]) fn.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, searchRequests, openWorkspace, getTree]) fn.mockReset();
   renamePath.mockReset().mockResolvedValue(undefined);
   pathExists.mockReset().mockResolvedValue(true);
   app.dialog = null;
   app.toasts = [];
+  app.tree = null;
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
@@ -357,5 +362,152 @@ describe("watcher resilience", () => {
     expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([
       ["error", "Watching the workspace for changes failed: inotify watch limit reached. Changes made outside HttpDesk may not show up."],
     ]);
+  });
+});
+
+describe("opening a workspace", () => {
+  const tree = { name: "ws", path: "/ws", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    app.toasts = [];
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+  });
+
+  it("tells the user when it added the private env file to .gitignore", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: true });
+    await app.openWorkspace("/ws");
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["info", "Added http-client.private.env.json to .gitignore"]]);
+  });
+
+  it("stays quiet when .gitignore was left alone", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: false });
+    await app.openWorkspace("/ws");
+    expect(app.toasts).toEqual([]);
+  });
+});
+
+describe("search", () => {
+  it("finds a request that was added but not saved, by its name", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2"; // unsaved, so adding doesn't save
+    await app.addRequest(PATH, { ...newRequest("Archive"), method: "POST", url: "https://x/archive" });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    searchRequests.mockResolvedValue([]); // the file on disk has no such request
+
+    const hits = await app.searchRequests("archive");
+
+    expect(hits).toEqual([{ path: PATH, index: 1, name: "Archive", method: "POST", url: "https://x/archive" }]);
+  });
+
+  it("opens the request that was clicked even after unsaved edits moved it from its disk position", async () => {
+    const onDisk = fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]);
+    searchRequests.mockResolvedValue([{ path: PATH, index: 1, name: "Get", method: "GET", url: "https://x/books/1" }]);
+    const [hit] = await app.searchRequests("get"); // file not open yet: found on disk
+
+    // Before clicking, the user opens the file and inserts a request above "Get" without saving.
+    const [list] = await openAll(onDisk);
+    app.requestFor(list)!.url = "https://x/books?page=2";
+    await app.duplicateRequest(PATH, list.key);
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "List copy", "Get"]);
+
+    await app.openSearchHit(hit);
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("Get");
+  });
+
+  it("lists results in workspace file order whether or not a file is open", async () => {
+    const OTHER = "/ws/zoo.http";
+    app.tree = {
+      name: "ws",
+      path: "/ws",
+      kind: "dir",
+      children: [
+        { name: "api", path: "/ws/api", kind: "dir", children: [{ name: "books.http", path: PATH, kind: "file" }] },
+        { name: "zoo.http", path: OTHER, kind: "file" },
+      ],
+    };
+    await openAll(fileOf(["GET", "List", "https://x/books"]));
+    searchRequests.mockResolvedValue([
+      { path: PATH, index: 0, name: "List", method: "GET", url: "https://x/books" },
+      { path: OTHER, index: 0, name: "List animals", method: "GET", url: "https://x/zoo" },
+    ]);
+
+    const hits = await app.searchRequests("list");
+
+    expect(hits.map((h) => h.path)).toEqual([PATH, OTHER]);
+  });
+
+  it("matches a result to its request by name + method + URL", async () => {
+    const [, , post] = await openAll(
+      fileOf(["GET", "Item", "https://x/items"], ["GET", "Item", "https://x/items/1"], ["POST", "Item", "https://x/items"]),
+    );
+    app.activeTabId = null;
+
+    await app.openSearchHit({ path: PATH, index: 0, name: "Item", method: "POST", url: "https://x/items" });
+
+    expect(app.activeTabId).toBe(post.id);
+  });
+});
+
+describe("dialog queue", () => {
+  it("shows one dialog at a time and resolves each with the user's own answer", async () => {
+    const del = app.choose("Delete request", 'Delete "List"?', [
+      { label: "Cancel", value: "cancel" },
+      { label: "Delete", value: "delete", danger: true },
+    ]);
+    const name = app.prompt("Rename request", "List");
+
+    // The prompt waits until the confirm is answered.
+    expect(app.dialog?.title).toBe("Delete request");
+    app.closeDialog("delete");
+    expect(app.dialog?.title).toBe("Rename request");
+    expect(app.dialog?.input?.value).toBe("List");
+    app.closeDialog("ok", "List books");
+
+    expect(await del).toEqual({ button: "delete", value: "" });
+    expect(await name).toBe("List books");
+    expect(app.dialog).toBeNull();
+  });
+});
+
+/** Waits for a dialog to be on screen, answers it, and returns its title. */
+async function answer(button: string, value = ""): Promise<string> {
+  await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+  const title = app.dialog!.title;
+  app.closeDialog(button, value);
+  return title;
+}
+
+describe("closing several tabs", () => {
+  async function openEdited() {
+    const tabs = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    for (const t of tabs) app.requestFor(t)!.url += "?edited";
+    return tabs;
+  }
+
+  it("Close all asks about each unsaved tab in turn; Don't save on each closes them all", async () => {
+    await openEdited();
+
+    const closing = app.closeTabs(app.tabs.map((t) => t.id));
+    const titles = [await answer("discard"), await answer("discard"), await answer("discard")];
+    await closing;
+
+    expect(titles).toEqual(['Save changes to "List"?', 'Save changes to "Create"?', 'Save changes to "Get"?']);
+    expect(app.tabs).toEqual([]);
+    expect(app.dialog).toBeNull();
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("Cancel stops the remaining closes and leaves those tabs open", async () => {
+    const [list, create, get] = await openEdited();
+
+    const closing = app.closeTabs([list.id, create.id, get.id]);
+    await answer("discard");
+    await answer("cancel");
+    await closing;
+
+    expect(app.tabs.map((t) => t.id)).toEqual([create.id, get.id]);
+    expect(app.dialog).toBeNull();
+    expect(app.isRequestDirty(PATH, create.key)).toBe(true);
   });
 });

@@ -313,7 +313,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Huge OpenAPI specs (thousands of operations) | Generation is linear; the operation picker list is virtualized by grouping and collapsed groups. |
 | External `$ref` to remote URLs | Not resolved in v1 (warning); local relative-file refs are. |
 | Linux WebKitGTK rendering differences | Conservative CSS; test on all three in CI. |
-| Secrets in env files | Secret variables are written to `http-client.private.env.json`, and HttpDesk adds that file to `.gitignore` when it creates it. |
+| Secrets in env files | **Secrets** are written only to `http-client.private.env.json`; the shared file keeps at most an empty placeholder. If the workspace is inside a git repository (the nearest `.git` above it) and no `.gitignore` from the repo root down ignores the private file, HttpDesk appends it to the workspace's `.gitignore` on open and on save. The Environments editor warns when it is still not ignored. Env values keep their JSON type (number, boolean, null) on save. |
 
 ---
 
