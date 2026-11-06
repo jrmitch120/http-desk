@@ -25,7 +25,7 @@
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
 
-  let { req, filePath, variables }: { req: Request; filePath: string; variables: VarProvider | null } = $props();
+  let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
   const modes: { value: BodyMode; label: string }[] = [
     { value: "none", label: "none" },
@@ -178,7 +178,7 @@
       </label>
     {/if}
     <div class="code">
-      <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} placeholder="Request body" extensions={bodySyntaxHighlight} />
+      <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} {onsend} placeholder="Request body" extensions={bodySyntaxHighlight} />
     </div>
   {/if}
   {#if syntaxWarnings.length}

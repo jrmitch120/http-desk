@@ -14,6 +14,7 @@
   import SettingsModal from "./components/SettingsModal.svelte";
   import Icon from "./components/Icon.svelte";
   import { updates } from "./lib/updates.svelte";
+  import { modalOpen } from "./lib/modal";
 
   let sidebarWidth = $state(Number(localStorage.getItem("sidebarWidth")) || 280);
 
@@ -25,30 +26,27 @@
   });
 
   function onKey(e: KeyboardEvent) {
-    const mod = e.metaKey || e.ctrlKey;
-    if (!mod) return;
+    // Already handled by an editor's keymap (CodeMirror prevents default).
+    if (e.defaultPrevented) return;
+    const action = shortcut(e);
+    if (!action) return;
+    e.preventDefault();
+    // Under a modal or dialog only Escape acts, and Modal.svelte handles it.
+    if (!modalOpen()) action();
+  }
+
+  /** The global shortcut `e` triggers, if any. */
+  function shortcut(e: KeyboardEvent): (() => void) | null {
+    if (!(e.metaKey || e.ctrlKey)) return null;
     const k = e.key.toLowerCase();
-    if (k === "s") {
-      e.preventDefault();
-      if (e.shiftKey) app.saveAll();
-      else app.saveActive();
-    } else if (k === "enter" && app.activeTabId) {
-      e.preventDefault();
-      app.send(app.activeTabId);
-    } else if ((k === "p" || k === "k") && app.root) {
-      e.preventDefault();
-      app.focusSearch++;
-    } else if (k === "t" && app.root) {
-      e.preventDefault();
-      if (app.activeTab) app.addRequest(app.activeTab.path);
-      else app.createFile(app.root);
-    } else if (k === "e" && app.root) {
-      e.preventDefault();
-      app.modal = "env";
-    } else if (k === ",") {
-      e.preventDefault();
-      app.modal = "settings";
-    }
+    const root = app.root;
+    if (k === "s") return () => (e.shiftKey ? app.saveAll() : app.saveActive());
+    if (k === "enter" && app.activeTabId) return () => app.activeTabId && app.send(app.activeTabId);
+    if ((k === "p" || k === "k") && root) return () => app.focusSearch++;
+    if (k === "t" && root) return () => (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(root));
+    if (k === "e" && root) return () => (app.modal = "env");
+    if (k === ",") return () => (app.modal = "settings");
+    return null;
   }
 
   function startResize(e: PointerEvent) {
@@ -102,7 +100,7 @@
       </section>
     </div>
   </div>
-{:else}
+{:else if !app.starting}
   <Welcome />
 {/if}
 

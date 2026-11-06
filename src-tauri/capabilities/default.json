@@ -10,7 +10,6 @@
     "core:window:allow-set-title",
     "core:window:allow-destroy",
     "dialog:default",
-    "opener:default",
     "opener:allow-reveal-item-in-dir",
     "updater:default",
     "process:allow-restart"

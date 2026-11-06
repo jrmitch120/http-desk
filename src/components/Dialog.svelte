@@ -1,18 +1,19 @@
 <script lang="ts">
-  // Confirm / prompt dialog driven by app.dialog.
+  // Confirm / prompt dialog driven by app.dialog (remounted for each dialog).
+  import { onMount } from "svelte";
   import { app } from "../lib/store.svelte";
   import Modal from "./Modal.svelte";
 
   let value = $state(app.dialog?.input?.value ?? "");
   let input: HTMLInputElement | undefined = $state();
 
-  $effect(() => {
-    if (input && app.dialog?.input) {
-      input.focus();
-      const dot = value.lastIndexOf(".");
-      if (app.dialog.input.selectStem && dot > 0) input.setSelectionRange(0, dot);
-      else input.select();
-    }
+  // Once per dialog: re-selecting on every keystroke would replace what was typed.
+  onMount(() => {
+    if (!input || !app.dialog?.input) return;
+    input.focus();
+    const dot = value.lastIndexOf(".");
+    if (app.dialog.input.selectStem && dot > 0) input.setSelectionRange(0, dot);
+    else input.select();
   });
 
   const d = $derived(app.dialog!);

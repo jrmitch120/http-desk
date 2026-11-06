@@ -68,10 +68,12 @@ Requests you don't edit are saved byte-for-byte as they were.
 |---|---|
 | Open a workspace | Welcome screen → *Open folder…* (the last workspace reopens on start) |
 | New file / folder / request | Explorer toolbar, right-click menus, or `+` next to a file |
+| New request | `⌘/Ctrl T` (in the current tab's file; a new file if no tab is open) |
 | Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
 | Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
-| Search requests | `⌘/Ctrl P` |
+| Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
 | Environments | Top-right selector; `⌘/Ctrl E` to edit |
+| Settings | Gear icon in the top bar, or `⌘/Ctrl ,` |
 | Import OpenAPI | Top bar → *Import OpenAPI* |
 | See the `.http` text | `.http` button above the URL bar |
 | Move files | Drag and drop in the explorer |
@@ -79,12 +81,14 @@ Requests you don't edit are saved byte-for-byte as they were.
 If a file changes on disk, HttpDesk reloads it. If you have unsaved edits to that
 file, it asks whether to reload or keep your version.
 
-Try it with `examples/demo`, which includes `httpbin.org` requests. To try the
-importer, use `examples/petstore-openapi.yaml`.
+Try it with `examples/demo`: open the folder, pick the `petstore` environment
+(top right), and send. Its requests go to the public
+[Swagger Petstore](https://petstore3.swagger.io) and `httpbin.org`, so no account
+or token is needed. To try the importer, use `examples/petstore-openapi.yaml`.
 
 ## Development
 
-Prerequisites: Rust (stable), Node 20+, pnpm, and the
+Prerequisites: Rust (stable), Node 22.12+, pnpm, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) (on Linux:
 `libwebkit2gtk-4.1-dev librsvg2-dev patchelf`).
 
@@ -127,10 +131,18 @@ docs/ARCHITECTURE.md    design and decisions
 
 ### Releases
 
-1. Bump `version` in `package.json` and `src-tauri/tauri.conf.json`.
-2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
-3. `.github/workflows/release.yml` builds installers for all three platforms and
+1. Bump the version (e.g. to `0.2.0`) in all four places:
+   - `version` in `package.json`
+   - `version` in `src-tauri/tauri.conf.json`
+   - `version` under `[workspace.package]` in `Cargo.toml`
+   - `Cargo.lock`: run `cargo update --workspace` so the lockfile picks up the
+     new version of the `httpdesk` and `httpdesk-core` crates
+2. Check that they agree: `node scripts/check-release-version.mjs v0.2.0`.
+3. Commit the bump, merge it to `main`, then tag and push:
+   `git tag v0.2.0 && git push origin v0.2.0`.
+4. `.github/workflows/release.yml` builds installers for all three platforms and
    attaches them to a **draft** GitHub release. Publish the draft to ship it.
+   The workflow fails before building if the tag doesn't match all four versions.
 
 Installed apps check `releases/latest/download/latest.json` on startup (and from
 Settings → Updates) and offer to install newer versions. Updates are signed with

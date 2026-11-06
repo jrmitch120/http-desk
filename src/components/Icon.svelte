@@ -37,6 +37,7 @@
     api: "M4 6h16M4 12h16M4 18h10",
     crosshair: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM22 12h-4M6 12H2M12 6V2M12 22v-4",
     fold: "M7 20l5-5 5 5M7 4l5 5 5-5",
+    unfold: "M7 15l5 5 5-5M7 9l5-5 5 5",
     reveal: "M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
   };
   let { name, size = 15, stroke = 1.8 }: { name: string; size?: number; stroke?: number } = $props();

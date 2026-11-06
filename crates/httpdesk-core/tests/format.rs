@@ -540,6 +540,53 @@ fn file_header_layout_survives_variable_edits() {
     );
 }
 
+// ---------------------------------------------------------------- query escaping (ADR-0001)
+
+fn with_query(items: Vec<KeyValue>) -> Request {
+    Request { method: "GET".into(), url: "https://x/s".into(), query: KvSection { enabled: true, items }, ..Default::default() }
+}
+
+#[test]
+fn query_values_with_structure_characters_round_trip_as_one_param() {
+    let r = with_query(vec![KeyValue::new("q", "a&b=c"), KeyValue::disabled("off", "x&y")]);
+    let (text, back) = round_trip(&r);
+    assert!(text.contains("GET https://x/s?q=a%26b=c\n"), "only `&` is escaped in a value: {text}");
+    assert!(text.contains("\n#~ &off=x%26y\n"), "{text}");
+    assert_eq!(back.query.items, r.query.items);
+}
+
+#[test]
+fn query_values_with_spaces_hash_and_percent_round_trip_exactly() {
+    let r = with_query(vec![
+        KeyValue::new("q", "two  spaces "),
+        KeyValue::new("tag", "#1"),
+        KeyValue::new("pct", "100% of %20 and %zz"),
+        KeyValue::new("a=b&c d", "{{ term }}"),
+        KeyValue::new("nb", "a\u{a0}b\tc"),
+    ]);
+    let (text, back) = round_trip(&r);
+    assert!(
+        text.contains("GET https://x/s?q=two%20%20spaces%20&tag=%231&pct=100%25%20of%20%2520%20and%20%zz&a%3Db%26c%20d={{ term }}&nb=a%C2%A0b%09c\n"),
+        "{text}"
+    );
+    assert_eq!(back.query.items, r.query.items);
+}
+
+#[test]
+fn hand_written_query_escapes_are_kept_on_resave() {
+    let out = resave("GET https://x/s?email=a%40b.c&path=%2Fhome&q=a%20b\n");
+    assert_eq!(out, "###\nPUT https://x/s?email=a%40b.c&path=%2Fhome&q=a%20b\n");
+    let req = parse(&out).requests.remove(0);
+    assert_eq!(req.query.items[0].value, "a%40b.c", "escapes that don't affect structure are shown as written");
+    assert_eq!(req.query.items[2].value, "a b");
+}
+
+#[test]
+fn an_empty_value_keeps_its_equals_sign() {
+    let out = resave("GET https://x/s?flag=&bare\n#~ &off=\n");
+    assert_eq!(out, "###\nPUT https://x/s?flag=&bare\n#~ &off=\n");
+}
+
 // ---------------------------------------------------------------- field safety
 
 #[test]

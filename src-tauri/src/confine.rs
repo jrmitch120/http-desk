@@ -44,7 +44,7 @@ fn resolve(path: &Path) -> CmdResult<PathBuf> {
     let comps: Vec<Component> = path.components().collect();
     for i in (1..=comps.len()).rev() {
         let prefix: PathBuf = comps[..i].iter().collect();
-        match prefix.canonicalize() {
+        match crate::paths::canonicalize(&prefix) {
             Ok(mut out) => {
                 for c in &comps[i..] {
                     match c {

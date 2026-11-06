@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
-  import { api, errorMessage } from "../lib/api";
+  import { errorMessage } from "../lib/api";
   import { basename, joinPath, methodClass } from "../lib/http";
   import type { SearchHit } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
@@ -8,9 +8,12 @@
 
   let query = $state("");
   let hits = $state<SearchHit[]>([]);
+  /** Index of the result Enter opens; Up/Down move it. */
+  let selected = $state(0);
   let searching = $state(false);
   let searchInput: HTMLInputElement | undefined = $state();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let seq = 0;
 
   $effect(() => {
     if (app.focusSearch) searchInput?.focus();
@@ -19,20 +22,29 @@
   $effect(() => {
     const q = query.trim();
     clearTimeout(timer);
+    const run = ++seq;
     if (!q) {
       hits = [];
+      searching = false;
       return;
     }
     searching = true;
     timer = setTimeout(async () => {
       try {
-        hits = await api.searchRequests(q);
+        const found = await app.searchRequests(q);
+        if (run !== seq) return; // a newer query is on its way
+        hits = found;
+        selected = 0;
       } catch (e) {
         app.toast("error", errorMessage(e));
       } finally {
-        searching = false;
+        if (run === seq) searching = false;
       }
     }, 150);
+  });
+
+  $effect(() => {
+    if (hits.length) document.getElementById(`search-hit-${selected}`)?.scrollIntoView({ block: "nearest" });
   });
 
   function collapseAll() {
@@ -41,7 +53,10 @@
 
   function onSearchKey(e: KeyboardEvent) {
     if (e.key === "Escape") query = "";
-    if (e.key === "Enter" && hits[0]) app.openRequest(hits[0].path, { index: hits[0].index });
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (hits.length) selected = Math.max(0, Math.min(hits.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
+    } else if (e.key === "Enter" && hits[selected]) app.openSearchHit(hits[selected]);
   }
 
   let rootDrop = $state(false);
@@ -60,7 +75,17 @@
 
   <div class="search">
     <Icon name="search" size={13} />
-    <input bind:this={searchInput} bind:value={query} placeholder="Search requests" onkeydown={onSearchKey} spellcheck="false" />
+    <input
+      bind:this={searchInput}
+      bind:value={query}
+      placeholder="Search requests"
+      onkeydown={onSearchKey}
+      spellcheck="false"
+      role="combobox"
+      aria-expanded={!!query.trim() && hits.length > 0}
+      aria-controls="search-results"
+      aria-activedescendant={hits.length ? `search-hit-${selected}` : undefined}
+    />
     {#if query}<button class="icon-btn" onclick={() => (query = "")}><Icon name="x" size={12} /></button>{/if}
   </div>
 
@@ -69,15 +94,25 @@
       {#if !hits.length && !searching}
         <div class="none muted">No requests match “{query}”.</div>
       {/if}
-      {#each hits as h (h.path + h.index)}
-        <button class="hit" onclick={() => app.openRequest(h.path, { index: h.index })}>
-          <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
-          <span class="hit-text">
-            <span class="ellipsis">{h.name}</span>
-            <span class="file ellipsis">{basename(h.path)} · {h.url}</span>
-          </span>
-        </button>
-      {/each}
+      <div id="search-results" role="listbox" aria-label="Search results">
+        {#each hits as h, i (h.path + h.index)}
+          <button
+            id="search-hit-{i}"
+            class="hit"
+            class:selected={i === selected}
+            role="option"
+            aria-selected={i === selected}
+            tabindex="-1"
+            onclick={() => app.openSearchHit(h)}
+          >
+            <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
+            <span class="hit-text">
+              <span class="ellipsis">{h.name}</span>
+              <span class="file ellipsis">{basename(h.path)} · {h.url}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
     {:else if app.tree}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -187,6 +222,9 @@
   }
   .hit:hover {
     background: var(--hover);
+  }
+  .hit.selected {
+    background: var(--accent-soft);
   }
   .hit-text {
     display: flex;
