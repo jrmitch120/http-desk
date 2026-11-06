@@ -217,15 +217,13 @@ fn origin(url: &str) -> &str {
 
 /// Names of the `{{name}}` references left in `text`, in order of appearance.
 fn variable_names(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("{{") {
-        let Some(len) = rest[start + 2..].find("}}") else { break };
-        let name = rest[start + 2..start + 2 + len].trim().to_string();
-        if !names.contains(&name) {
-            names.push(name);
+    let mut names: Vec<String> = Vec::new();
+    for segment in crate::vars::segments(text) {
+        if let crate::vars::Segment::Reference { name, .. } = segment {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
         }
-        rest = &rest[start + 4 + len..];
     }
     names
 }

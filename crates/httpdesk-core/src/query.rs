@@ -5,6 +5,8 @@
 //! [`encode`] percent-encodes the rest at send time without touching `%XX`.
 //! `{{variable}}` references are never escaped.
 
+use crate::vars::{segments, Segment};
+
 /// Which side of `name=value` a piece of text is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Part {
@@ -49,20 +51,6 @@ fn escaped_char(s: &str) -> Option<(char, usize)> {
     Some((c, len * 3))
 }
 
-/// Splits `text` into plain runs and `{{…}}` references, as the resolver finds them.
-fn segments(text: &str) -> Vec<(bool, &str)> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("{{") {
-        let Some(len) = rest[start + 2..].find("}}") else { break };
-        out.push((false, &rest[..start]));
-        out.push((true, &rest[start..start + 4 + len]));
-        rest = &rest[start + 4 + len..];
-    }
-    out.push((false, rest));
-    out
-}
-
 fn push_encoded(out: &mut String, c: char) {
     let mut buf = [0; 4];
     for b in c.encode_utf8(&mut buf).bytes() {
@@ -73,11 +61,14 @@ fn push_encoded(out: &mut String, c: char) {
 /// Writes a decoded name or value for the file.
 pub(crate) fn escape(text: &str, part: Part) -> String {
     let mut out = String::with_capacity(text.len());
-    for (reference, s) in segments(text) {
-        if reference {
-            out.push_str(s);
-            continue;
-        }
+    for segment in segments(text) {
+        let s = match segment {
+            Segment::Reference { whole, .. } => {
+                out.push_str(whole);
+                continue;
+            }
+            Segment::Text(s) => s,
+        };
         for (i, c) in s.char_indices() {
             if c == '%' {
                 // A `%` is only escaped where it would otherwise be read back as an
@@ -101,11 +92,10 @@ pub(crate) fn escape(text: &str, part: Part) -> String {
 /// to most servers); one that comes from a variable is encoded, so it arrives as `+`.
 pub(crate) fn encode(text: &str, part: Part, resolve: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(text.len());
-    for (reference, s) in segments(text) {
-        if reference {
-            push_wire(&mut out, &resolve(s), part, false);
-        } else {
-            push_wire(&mut out, s, part, true);
+    for segment in segments(text) {
+        match segment {
+            Segment::Reference { whole, .. } => push_wire(&mut out, &resolve(whole), part, false),
+            Segment::Text(s) => push_wire(&mut out, s, part, true),
         }
     }
     out
@@ -129,11 +119,14 @@ fn push_wire(out: &mut String, text: &str, part: Part, keep_plus: bool) {
 /// Reads a name or value written by [`escape`] (or by hand) back to its decoded form.
 pub(crate) fn unescape(text: &str, part: Part) -> String {
     let mut out = String::with_capacity(text.len());
-    for (reference, s) in segments(text) {
-        if reference {
-            out.push_str(s);
-            continue;
-        }
+    for segment in segments(text) {
+        let s = match segment {
+            Segment::Reference { whole, .. } => {
+                out.push_str(whole);
+                continue;
+            }
+            Segment::Text(s) => s,
+        };
         let mut i = 0;
         while let Some(c) = s[i..].chars().next() {
             match escaped_char(&s[i..]).filter(|(d, _)| structural(*d, part)) {

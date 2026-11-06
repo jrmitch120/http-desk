@@ -255,7 +255,7 @@ async fn delete_permanently<R: tauri::Runtime>(app: AppHandle<R>, path: PathBuf)
     off_main(app, move |state| {
         let path = state.confine_entry(&path)?;
         state.self_writes.removing(&path);
-        deleting::permanently(&path)
+        deleting::delete_permanently(&path)
     })
     .await
 }
@@ -412,17 +412,25 @@ async fn openapi_generate<R: tauri::Runtime>(
     overwrite: bool,
     dry_run: bool,
 ) -> CmdResult<GenerateReport> {
-    off_main(app, move |state| openapi_generate_blocking(state, &source, &options, &output_dir, overwrite, dry_run)).await
+    let request = GenerateRequest { source, options, output_dir, overwrite, dry_run };
+    off_main(app, move |state| openapi_generate_blocking(state, &request)).await
 }
 
-fn openapi_generate_blocking(
-    state: &AppState,
-    source: &str,
-    options: &GenerateOptions,
-    output_dir: &Path,
+/// The arguments of `openapi_generate`.
+struct GenerateRequest {
+    /// The loaded specification (as passed to `openapi_load`).
+    source: String,
+    options: GenerateOptions,
+    output_dir: PathBuf,
+    /// Replace files that already exist; otherwise they are only reported.
     overwrite: bool,
+    /// Report what would be written without writing anything.
     dry_run: bool,
-) -> CmdResult<GenerateReport> {
+}
+
+fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> CmdResult<GenerateReport> {
+    let GenerateRequest { source, options, output_dir, overwrite, dry_run } = request;
+    let (overwrite, dry_run) = (*overwrite, *dry_run);
     let output = {
         let specs = state.specs.lock().unwrap();
         let doc = specs.get(source.trim()).ok_or("Load the specification first")?;

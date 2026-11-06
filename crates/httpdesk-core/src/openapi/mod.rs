@@ -159,7 +159,7 @@ impl OpenApiDoc {
         let text = std::fs::read_to_string(path)
             .map_err(|e| OpenApiError::Io(format!("{}: {e}", path.display())))?;
         let dir: PathBuf = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let json = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+        let json = has_json_extension(path);
         Self::parse_as(&text, Some(&dir), json)
     }
 
@@ -260,6 +260,11 @@ impl OpenApiDoc {
     pub fn generate(&self, opts: &GenerateOptions) -> GenerationOutput {
         generate::generate(self, opts)
     }
+}
+
+/// Whether a spec file is named as JSON (`.json`, any case), so [`parse_value`] expects JSON.
+fn has_json_extension(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
 }
 
 /// Parses JSON or YAML into a JSON value (YAML keys are stringified).

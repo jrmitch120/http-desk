@@ -60,7 +60,7 @@ impl Bundler {
         }
         let loaded = std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
-            .and_then(|t| super::parse_value(&t, path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))));
+            .and_then(|t| super::parse_value(&t, super::has_json_extension(path)));
         let value = match loaded {
             Ok(v) => Some(v),
             Err(e) => {

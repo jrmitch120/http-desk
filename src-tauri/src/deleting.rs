@@ -54,7 +54,7 @@ pub fn to_trash(trash: &TrashFn, path: &Path) -> Result<DeleteOutcome, String> {
 }
 
 /// Unlinks `path` for good. A symlink is removed itself, never what it points to.
-pub fn permanently(path: &Path) -> Result<(), String> {
+pub fn delete_permanently(path: &Path) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("Could not delete {}: {e}", path.display());
     if std::fs::symlink_metadata(path).map_err(fail)?.is_dir() {
         std::fs::remove_dir_all(path).map_err(fail)
