@@ -64,6 +64,24 @@ describe("URL ⇄ query params", () => {
     ]);
   });
 
+  it("shows the file's escaping in the URL bar and decoded values in the table (ADR-0001)", () => {
+    const r = newRequest();
+    r.url = "https://x/s";
+    r.query.items = [
+      { enabled: true, name: "q", value: "a&b=c" },
+      { enabled: true, name: "a=b c", value: "100% of #1 and %20" },
+      { enabled: true, name: "t", value: "{{ term }}" },
+      { enabled: true, name: "email", value: "a%40b.c" },
+      { enabled: true, name: "flag", value: "", equals: true },
+      { enabled: true, name: "bare", value: "" },
+    ];
+    const url = composeUrl(r);
+    expect(url).toBe("https://x/s?q=a%26b=c&a%3Db%20c=100%25%20of%20%231%20and%20%2520&t={{ term }}&email=a%40b.c&flag=&bare");
+    const items = r.query.items.map((i) => ({ ...i }));
+    applyUrlText(r, url);
+    expect(r.query.items).toEqual(items.map((i) => (i.equals ? i : { enabled: true, name: i.name, value: i.value })));
+  });
+
   it("typing params re-enables a disabled section", () => {
     const r = newRequest();
     r.query.enabled = false;
