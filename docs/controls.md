@@ -184,6 +184,10 @@ Global classes in `src/app.css`, not components:
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
 - `.link`: a button that reads as a link.
+- `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
+  toast and a `use:tooltip={"Click to copy"}` (response header values). Its accessible
+  name is the value. The text stays selectable; the click handler skips the copy when
+  the click ended a drag that selected part of it.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
   Focus shows `--focus-ring`.
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.

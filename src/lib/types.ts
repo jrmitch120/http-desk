@@ -155,9 +155,14 @@ export interface HttpResponse {
   headers: [string, string][];
   timeMs: number;
   ttfbMs: number;
+  /** Decoded body size. */
   bodySize: number;
+  /** Body bytes as received on the wire, before Content-Encoding is undone. */
+  transferredSize: number;
   headersSize: number;
   contentType: string | null;
+  /** The response's Content-Encoding header, if any. */
+  contentEncoding: string | null;
   bodyText: string | null;
   bodyBase64: string | null;
   truncated: boolean;
@@ -176,6 +181,37 @@ export interface FilterResult {
   matches: number;
   /** The matches as a pretty-printed JSON array, numbers as the server sent them. */
   text: string;
+}
+
+/** Why a send failed; mirrors the core's `ExecError` kinds. */
+export type SendErrorKind =
+  | "dns"
+  | "refused"
+  | "reset"
+  | "tls"
+  | "timeoutIdle"
+  | "timeoutConnect"
+  | "invalidUrl"
+  | "unresolvedVariable"
+  | "file"
+  | "other";
+
+export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
+
+/** A failed send as `send_request` rejects with it. `details` depends on `kind`. */
+export interface SendError {
+  kind: SendErrorKind;
+  /** The core's explanation (for transport errors, the full error chain). */
+  message: string;
+  details:
+    | { host: string } // dns
+    | { host: string; port: number } // refused, reset
+    | { reason: TlsReason } // tls
+    | { timeoutMs: number } // timeoutIdle, timeoutConnect
+    | { url: string; reason: string } // invalidUrl
+    | { names: string[] } // unresolvedVariable
+    | { path: string; reason: string } // file
+    | null; // other
 }
 
 export interface ExecSettings {

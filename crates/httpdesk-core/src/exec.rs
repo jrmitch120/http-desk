@@ -14,6 +14,8 @@ use crate::parser::DISABLED_MARKER;
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
+mod body;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
     #[error("Invalid URL \"{url}\": {reason}")]
@@ -32,8 +34,21 @@ pub enum ExecError {
     /// Connecting (TCP and TLS) took longer than this many ms (`@connection-timeout`).
     #[error("Connection timeout: couldn't connect within {}. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.", human_ms(*.0))]
     ConnectTimeout(u64),
+    /// The host name didn't resolve. `chain` is the full error chain.
+    #[error("{chain}")]
+    Dns { host: String, chain: String },
+    /// The server's certificate was rejected, or the TLS handshake failed.
+    #[error("{chain}")]
+    TlsHandshake { reason: TlsReason, chain: String },
+    /// Nothing accepted the TCP connection. `chain` is the full error chain.
+    #[error("{chain}")]
+    Refused { host: String, port: u16, chain: String },
+    /// The server closed or reset the connection before answering.
+    #[error("{chain}")]
+    Reset { host: String, port: u16, chain: String },
+    /// Any other failure, as its error chain.
     #[error("{0}")]
-    Http(String),
+    Other(String),
     /// Unresolved variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
@@ -49,9 +64,67 @@ fn human_ms(ms: u64) -> String {
     }
 }
 
+impl ExecError {
+    /// The class of failure the UI picks a heading, hint and fix-it buttons by.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ExecError::Dns { .. } => "dns",
+            ExecError::Refused { .. } => "refused",
+            ExecError::Reset { .. } => "reset",
+            ExecError::ReadTimeout(_) => "timeoutIdle",
+            ExecError::ConnectTimeout(_) => "timeoutConnect",
+            ExecError::InvalidUrl { .. } => "invalidUrl",
+            ExecError::UnresolvedHost(_) => "unresolvedVariable",
+            ExecError::File { .. } => "file",
+            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => "tls",
+            ExecError::InvalidMethod(_)
+            | ExecError::InvalidHeader(_)
+            | ExecError::DynamicVariable(_)
+            | ExecError::Other(_) => "other",
+        }
+    }
+
+    /// The structured facts behind [`Self::kind`], for the UI's hint. `null` when there are none.
+    fn details(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            ExecError::Dns { host, .. } => json!({ "host": host }),
+            ExecError::Refused { host, port, .. } | ExecError::Reset { host, port, .. } => {
+                json!({ "host": host, "port": port })
+            }
+            ExecError::TlsHandshake { reason, .. } => json!({ "reason": reason }),
+            ExecError::Tls(_) => json!({ "reason": TlsReason::Other }),
+            ExecError::ReadTimeout(ms) | ExecError::ConnectTimeout(ms) => json!({ "timeoutMs": ms }),
+            ExecError::InvalidUrl { url, reason } => json!({ "url": url, "reason": reason }),
+            ExecError::UnresolvedHost(names) => json!({ "names": names }),
+            ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
+            _ => serde_json::Value::Null,
+        }
+    }
+}
+
+/// Why a TLS connection failed, as far as it can be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsReason {
+    SelfSigned,
+    Expired,
+    WrongHost,
+    UnknownIssuer,
+    /// Anything else, including TLS configuration errors (unreadable CA or client certificate).
+    Other,
+}
+
+/// Send errors reach the UI as `{ kind, message, details }`: the core owns the
+/// message, the UI chooses the hint and buttons by kind.
 impl Serialize for ExecError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&self.to_string())
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ExecError", 3)?;
+        st.serialize_field("kind", self.kind())?;
+        st.serialize_field("message", &self.to_string())?;
+        st.serialize_field("details", &self.details())?;
+        st.end()
     }
 }
 
@@ -258,6 +331,9 @@ fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
     }
 }
 
+/// Sent when the request sets no `Accept-Encoding`: every encoding `body` can decode.
+const DEFAULT_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
+
 /// Resolves variables and applies enablement. Disabled components are never included.
 pub fn prepare(
     req: &Request,
@@ -335,6 +411,10 @@ pub fn prepare(
     if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("user-agent")) {
         headers.push(("User-Agent".into(), concat!("HttpDesk/", env!("CARGO_PKG_VERSION")).into()));
     }
+    // Added here rather than by reqwest so the Request tab shows it.
+    if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-encoding")) {
+        headers.push(("Accept-Encoding".into(), DEFAULT_ACCEPT_ENCODING.into()));
+    }
 
     let mut warnings = Vec::new();
     let unresolved = resolver.unresolved();
@@ -379,9 +459,14 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
     pub time_ms: f64,
     pub ttfb_ms: f64,
+    /// Decoded body size (what the viewer shows and the size limit applies to).
     pub body_size: usize,
+    /// Body bytes as received on the wire, before `Content-Encoding` is undone.
+    pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
+    /// The response's `Content-Encoding` header, as sent by the server.
+    pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
     pub body_text: Option<String>,
     /// Base64 for binary content (only below the preview limit).
@@ -413,8 +498,81 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
+/// Every error in `e`'s source chain, including the ones `std::io::Error` wraps
+/// (its `source()` skips the wrapped error itself, which is where rustls and
+/// OS errors live).
+fn causes<'a>(e: &'a (dyn std::error::Error + 'static)) -> Vec<&'a (dyn std::error::Error + 'static)> {
+    let mut out = Vec::new();
+    let mut next = Some(e);
+    while let Some(err) = next {
+        out.push(err);
+        next = match err.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()) {
+            Some(wrapped) => Some(wrapped),
+            None => err.source(),
+        };
+    }
+    out
+}
+
+/// Turns a transport failure into the error kind the UI explains. Async because
+/// a rejected certificate may be fetched again to tell why (see [`crate::tls_probe`]).
+async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
+    match (e.is_timeout(), e.is_connect()) {
+        (true, true) if p.connect_timeout_ms > 0 => return ExecError::ConnectTimeout(p.connect_timeout_ms),
+        (true, false) if p.timeout_ms > 0 => return ExecError::ReadTimeout(p.timeout_ms),
+        _ => {}
+    }
+    let chain = error_chain(&e);
+    let url = e.url().cloned().or_else(|| url::Url::parse(&p.url).ok());
+    let host = url.as_ref().and_then(|u| u.host_str()).unwrap_or_default().trim_matches(['[', ']']).to_string();
+    let port = url.as_ref().and_then(url::Url::port_or_known_default).unwrap_or_default();
+    use std::io::ErrorKind as K;
+    let io_kind = |kinds: &[K]| {
+        causes(&e).iter().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| kinds.contains(&io.kind())))
+    };
+    // hyper-util's and reqwest's resolver errors are private types, so they're known by their text.
+    if causes(&e).iter().any(|c| matches!(c.to_string().as_str(), "dns error" | "error resolving DNS")) {
+        return ExecError::Dns { host, chain };
+    }
+    let tls = causes(&e).into_iter().find_map(|c| c.downcast_ref::<rustls::Error>().cloned());
+    if let Some(tls) = tls {
+        use rustls::CertificateError as C;
+        let reason = match tls {
+            rustls::Error::InvalidCertificate(C::Expired | C::ExpiredContext { .. }) => TlsReason::Expired,
+            rustls::Error::InvalidCertificate(C::NotValidForName | C::NotValidForNameContext { .. }) => {
+                TlsReason::WrongHost
+            }
+            rustls::Error::InvalidCertificate(cert) => {
+                let timeout = Duration::from_millis(match p.connect_timeout_ms {
+                    0 => 5_000,
+                    ms => ms.min(5_000),
+                });
+                let found = crate::tls_probe::certificate_reason(&host, port, timeout).await;
+                found.unwrap_or(if cert == C::UnknownIssuer { TlsReason::UnknownIssuer } else { TlsReason::Other })
+            }
+            _ => TlsReason::Other,
+        };
+        return ExecError::TlsHandshake { reason, chain };
+    }
+    if io_kind(&[K::ConnectionRefused]) {
+        return ExecError::Refused { host, port, chain };
+    }
+    let hung_up =
+        causes(&e).iter().any(|c| c.downcast_ref::<hyper::Error>().is_some_and(hyper::Error::is_incomplete_message));
+    if hung_up || io_kind(&[K::ConnectionReset, K::ConnectionAborted, K::BrokenPipe, K::UnexpectedEof]) {
+        return ExecError::Reset { host, port, chain };
+    }
+    ExecError::Other(chain)
+}
+
 fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<reqwest::Client, ExecError> {
+    // Decoding happens in `body` so the raw bytes can be counted. These also
+    // guard against another crate enabling reqwest's decompression features.
     let mut b = reqwest::Client::builder()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
         .redirect(if p.follow_redirects {
             reqwest::redirect::Policy::limited(settings.max_redirects)
         } else {
@@ -471,6 +629,23 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
 }
 
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
+    execute_with_progress(p, settings, ssl, |_| {}).await
+}
+
+/// The shortest gap between two progress reports, so a body arriving in many
+/// small chunks doesn't flood the UI (at most ~10 reports a second).
+pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// [`execute`], calling `on_progress` with the body bytes received on the wire
+/// so far while the body downloads. Reports come at most once per
+/// [`PROGRESS_INTERVAL`], each larger than the last, and none after the
+/// function returns.
+pub async fn execute_with_progress(
+    p: PreparedRequest,
+    settings: &ExecSettings,
+    ssl: &SslConfig,
+    mut on_progress: impl FnMut(usize) + Send,
+) -> Result<ExecOutcome, ExecError> {
     let client = build_client(&p, settings, ssl)?;
     let method =
         reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
@@ -486,14 +661,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         builder = builder.body(body.clone());
     }
 
-    let map_err = |e: reqwest::Error| match (e.is_timeout(), e.is_connect()) {
-        (true, true) if p.connect_timeout_ms > 0 => ExecError::ConnectTimeout(p.connect_timeout_ms),
-        (true, false) if p.timeout_ms > 0 => ExecError::ReadTimeout(p.timeout_ms),
-        _ => ExecError::Http(error_chain(&e)),
-    };
-
     let start = Instant::now();
-    let mut resp = builder.send().await.map_err(map_err)?;
+    let mut resp = match builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => return Err(classify(e, &p).await),
+    };
     let ttfb = start.elapsed();
 
     let status = resp.status();
@@ -508,19 +680,38 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
     let content_type =
         resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
 
-    let mut body = Vec::new();
-    let mut truncated = false;
-    while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
-        if body.len() + chunk.len() > settings.max_body_bytes {
-            body.extend_from_slice(&chunk[..settings.max_body_bytes - body.len()]);
-            truncated = true;
+    let content_encoding = resp
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string());
+
+    // A body that fails to decode is classified `other`, with body.rs's message.
+    let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
+    let as_received = unsupported.is_some();
+    let mut last_report: Option<Instant> = None;
+    loop {
+        let chunk = match resp.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => return Err(classify(e, &p).await),
+        };
+        if !reader.push(&chunk).map_err(ExecError::Other)? {
             break;
         }
-        body.extend_from_slice(&chunk);
+        // The first chunk reports at once; after that, once per interval.
+        if last_report.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) && !chunk.is_empty() {
+            last_report = Some(Instant::now());
+            on_progress(reader.transferred());
+        }
     }
+    let body::ReceivedBody { bytes: body, transferred, truncated } = reader.finish().map_err(ExecError::Other)?;
     let elapsed = start.elapsed();
+    let mut warnings = p.warnings;
+    warnings.extend(unsupported);
 
-    let body_text = decode_text(&body, content_type.as_deref());
+    // Still-encoded bytes are binary whatever the content type says.
+    let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };
     let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
         .then(|| base64::engine::general_purpose::STANDARD.encode(&body));
 
@@ -550,13 +741,15 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
             time_ms: elapsed.as_secs_f64() * 1000.0,
             ttfb_ms: ttfb.as_secs_f64() * 1000.0,
             body_size: body.len(),
+            transferred_size: transferred,
             headers_size,
             content_type,
+            content_encoding,
             body_text,
             body_base64,
             truncated,
             request,
-            warnings: p.warnings,
+            warnings,
         },
         body,
     })

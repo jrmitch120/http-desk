@@ -19,6 +19,8 @@
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import SendErrorPanel from "./SendErrorPanel.svelte";
+  import HeadersPanel from "./HeadersPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -204,7 +206,12 @@
   const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
 
   const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
-  const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
+  const sizeTitle = $derived.by(() => {
+    if (!res) return "";
+    const headers = `Headers ${formatBytes(res.headersSize)}`;
+    if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
+    return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
+  });
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
@@ -223,7 +230,10 @@
     <div class="statusbar">
       <span class="title">Response</span>
       {#if run.loading}
-        <span class="loading"><span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}</span>
+        <span class="loading">
+          <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
+          {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
+        </span>
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
@@ -244,10 +254,7 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <Banner severity="error" inline heading="Could not send request" class="send-error">
-        <div class="err-msg selectable mono">{run.error}</div>
-        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
-      </Banner>
+      <SendErrorPanel error={run.error} onretry={() => app.send(tab.id)} />
     {:else if res}
       {#if res.warnings.length || res.truncated}
         <Banner severity="warning">
@@ -302,15 +309,7 @@
           {/if}
         </div>
       {:else if current === "headers"}
-        <div class="table-wrap">
-          <table>
-            <tbody>
-              {#each res.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <HeadersPanel headers={res.headers} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
@@ -374,6 +373,9 @@
     color: var(--muted);
     font-size: 12px;
   }
+  .received {
+    font-family: var(--mono);
+  }
   .spinner {
     width: 13px;
     height: 13px;
@@ -389,11 +391,6 @@
   }
   .viewer :global(.send-error) {
     margin: 18px;
-  }
-  .err-msg {
-    color: var(--text);
-    margin: 4px 0 6px;
-    word-break: break-word;
   }
   .tabs {
     display: flex;
