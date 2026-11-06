@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
+  BodyKind,
+  FormatMode,
   EnvironmentSet,
   GenerateOptions,
   GenerateReport,
@@ -44,6 +46,11 @@ export const api = {
   }) => invoke<HttpResponse>("send_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
+  /**
+   * Re-lays out a body in the core without changing any token (numbers and
+   * strings stay exactly as written). Rejects with a message for invalid input.
+   */
+  formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

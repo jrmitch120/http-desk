@@ -88,6 +88,10 @@ let settingsServed = false;
   get settings() {
     return clone(settings);
   },
+  /** The `.http` file models as last saved, by path (the mock has no serializer). */
+  get files() {
+    return clone(files);
+  },
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
     return clone(envFiles);
@@ -140,6 +144,34 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
+
+// `?response=bigint`: the JSON response carries an ID above 2^53 and a `10.50`.
+// `?response=invalidJson`: a JSON content type with a body that doesn't parse.
+const responseKind = new URLSearchParams(location.search).get("response");
+
+/**
+ * Stand-in for the core's lossless `format_body` (JSON only): JSON.parse only
+ * checks validity, and the output is the input's own tokens re-indented, so
+ * numbers stay as written, like the real formatter.
+ */
+function formatJson(text: string, mode: "pretty" | "minify"): string {
+  JSON.parse(text); // throws for invalid JSON
+  const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^\s{}[\],:"]+/g) ?? [];
+  const nl = (depth: number) => (mode === "pretty" ? "\n" + "  ".repeat(depth) : "");
+  let out = "";
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if ((t === "{" || t === "[") && (tokens[i + 1] === "}" || tokens[i + 1] === "]")) {
+      out += t + tokens[++i];
+    } else if (t === "{" || t === "[") out += t + nl(++depth);
+    else if (t === "}" || t === "]") out += nl(--depth) + t;
+    else if (t === ",") out += t + nl(depth);
+    else if (t === ":") out += mode === "pretty" ? ": " : ":";
+    else out += t;
+  }
+  return out;
+}
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -223,7 +255,12 @@ mockIPC(
             truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [],
           };
         }
-        const body = JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+        const body =
+          responseKind === "bigint"
+            ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
+            : responseKind === "invalidJson"
+              ? `{"id": 9007199254740993, oops}`
+              :JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
         return {
           id: "r1", status: r.method === "POST" ? 201 : 200, statusText: r.method === "POST" ? "Created" : "OK", httpVersion: "HTTP/1.1",
           url: "http://127.0.0.1:8765/pets?limit=20",
@@ -236,6 +273,12 @@ mockIPC(
           warnings: [],
         };
       }
+      case "format_body":
+        try {
+          return formatJson(args.text, args.mode);
+        } catch (e) {
+          throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+        }
       case "openapi_load":
         await delay(300);
         return {
