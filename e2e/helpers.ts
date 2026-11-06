@@ -45,9 +45,19 @@ export function searchResults(page: Page): Locator {
   return page.getByRole("listbox", { name: "Search results" }).getByRole("option");
 }
 
-/** The active tab in the tab bar. */
+/** The active request's tab in the tab strip. It contains a `.dot` while unsaved. */
 export function activeTab(page: Page): Locator {
   return page.locator(".tabbar .tab.active");
+}
+
+/** The active request's body editor (a CodeMirror editor; open the Body section first). */
+export function bodyEditor(page: Page): Locator {
+  return page.locator(".panel .cm-content");
+}
+
+/** The requests the mocked `send_request` has received so far, in order. */
+export function sentRequests(page: Page): Promise<{ method: string; url: string }[]> {
+  return page.evaluate(() => (window as unknown as { __mock: { sent: { method: string; url: string }[] } }).__mock.sent);
 }
 
 function escape(s: string): string {

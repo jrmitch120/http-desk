@@ -38,6 +38,10 @@ let settings = {
   showDescriptions: true,
 };
 
+/** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
+const sent: unknown[] = [];
+(window as unknown as { __mock: unknown }).__mock = { sent };
+
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,6 +86,7 @@ mockIPC(
         );
       }
       case "send_request": {
+        sent.push(clone(args.request));
         await delay(450);
         const r = args.request;
         if (r.url.includes("png")) {
