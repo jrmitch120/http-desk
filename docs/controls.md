@@ -302,6 +302,8 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 - `<button class="icon-btn" aria-label="Refresh" use:tooltip>`: the text is the
   aria-label.
 - `<span use:tooltip={text}>`: explicit text, linked as the element's description.
+  A `\n` in the text starts a new line (e.g. the status pill: explanation, then version
+  and final URL).
 - `use:tooltip={null}` or `""`: none. A component forwarding an optional tooltip prop
   passes `prop ?? null`, because `undefined` means "use the aria-label".
 - Components can't take `use:`, so owned controls that wrap a button expose a prop
