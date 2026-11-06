@@ -491,6 +491,33 @@ fn unknown_httpdesk_directive_values_survive_a_resave() {
 }
 
 #[test]
+fn section_directive_keeps_its_order_on_resave() {
+    let out = resave("# @httpdesk-disabled headers, query\nGET https://x\n#~ &a=1\n#~ A: 1\n");
+    assert!(out.starts_with("###\n# @httpdesk-disabled headers, query\nPUT "), "{out}");
+
+    let out = resave("# @httpdesk-disabled cookies, headers\nGET https://x\n#~ A: 1\n");
+    assert!(out.starts_with("###\n# @httpdesk-disabled cookies, headers\nPUT "), "{out}");
+
+    // Sections turned off by the edit go after the ones already listed; ones turned on are dropped.
+    let mut f = parse("# @httpdesk-disabled cookies, headers\nGET https://x?a=1\n#~ A: 1\n");
+    f.requests[0].headers.enabled = true;
+    f.requests[0].query.enabled = false;
+    let out = serialize(&f);
+    assert!(out.starts_with("###\n# @httpdesk-disabled cookies, query\nGET "), "{out}");
+
+    // An unedited request with a non-canonical order is still written byte for byte.
+    let text = "### A\n# @httpdesk-disabled headers, query\nGET https://x\n#~ &a=1\n#~ A: 1\n";
+    assert_eq!(serialize(&parse(text)), text);
+}
+
+#[test]
+fn a_header_of_only_blank_lines_is_kept() {
+    let text = "\n\n### A\nGET https://x\n";
+    assert_eq!(serialize(&parse(text)), text);
+    assert_eq!(resave(text), "\n\n### A\nPUT https://x\n");
+}
+
+#[test]
 fn header_area_comments_keep_their_position_on_resave() {
     let text = "GET https://x?a=1\n\
 # about b\n\

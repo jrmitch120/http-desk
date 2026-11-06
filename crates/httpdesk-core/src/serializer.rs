@@ -180,10 +180,11 @@ pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
 
-    let in_place = file.header.raw.as_deref().and_then(|raw| render_header_in_place(&file.header, raw));
+    let in_place = file.header.raw.as_deref().and_then(|raw| Some((render_header_in_place(&file.header, raw)?, raw)));
     match in_place {
-        Some(text) => {
-            if !text.trim().is_empty() {
+        Some((text, raw)) => {
+            // Blank lines are dropped once nothing else is left, unless that's how the file was.
+            if !text.trim().is_empty() || text == raw {
                 out.push_str(&text);
             }
         }
@@ -199,10 +200,11 @@ pub fn serialize(file: &HttpFile) -> String {
             prev_rendered = false;
         }
         let rendered = render_request(req);
-        let raw = req
-            .raw
-            .as_ref()
-            .filter(|raw| parser::parse_block(raw).map(|p| render_request(&p)).as_deref() == Some(rendered.as_str()));
+        // Rendered with its raw text too, so both sides use the same section order.
+        let raw = req.raw.as_ref().filter(|raw| {
+            parser::parse_block(raw).map(|p| render_request(&Request { raw: Some(raw.to_string()), ..p })).as_deref()
+                == Some(rendered.as_str())
+        });
         match raw {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
@@ -364,6 +366,33 @@ fn render_basic(auth: &Auth) -> String {
     v
 }
 
+/// The `# @httpdesk-disabled` line, if any section is off. Sections keep the
+/// order (and spelling) of the line in the request's original text; sections
+/// turned off since then follow, in canonical order (query, headers, unknown).
+fn section_line(req: &Request, unknown: &[&str]) -> Option<String> {
+    let mut rest: Vec<&str> = Vec::new();
+    if !req.query.enabled {
+        rest.push("query");
+    }
+    if !req.headers.enabled {
+        rest.push("headers");
+    }
+    rest.extend(unknown);
+    if rest.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    for t in req.raw.as_deref().map(parser::section_tokens).unwrap_or_default() {
+        let name = if t == "params" { "query" } else { t.as_str() };
+        if let Some(i) = rest.iter().position(|r| *r == name) {
+            rest.remove(i);
+            names.push(t);
+        }
+    }
+    names.extend(rest.into_iter().map(str::to_string));
+    Some(format!("# @{} {}", SECTION_DIRECTIVE, names.join(", ")))
+}
+
 /// Canonical rendering of a single request block (always starts with `###`).
 pub fn render_request(req: &Request) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -374,10 +403,10 @@ pub fn render_request(req: &Request) -> String {
         lines.push(if c.is_empty() { "#".into() } else { format!("# {}", description_line(c)) });
     }
     // Section names this version doesn't know, written back on the section line below.
-    let mut off: Vec<&str> = Vec::new();
+    let mut unknown: Vec<&str> = Vec::new();
     for d in &req.directives {
         if d.name == SECTION_DIRECTIVE {
-            off.push(&d.value);
+            unknown.extend(parser::section_names(&d.value));
             continue;
         }
         lines.push(if d.value.is_empty() { format!("# @{}", d.name) } else { format!("# @{} {}", d.name, d.value) });
@@ -390,15 +419,7 @@ pub fn render_request(req: &Request) -> String {
             }
         }
     }
-    if !req.headers.enabled {
-        off.insert(0, "headers");
-    }
-    if !req.query.enabled {
-        off.insert(0, "query");
-    }
-    if !off.is_empty() {
-        lines.push(format!("# @{} {}", SECTION_DIRECTIVE, off.join(", ")));
-    }
+    lines.extend(section_line(req, &unknown));
     let auth = &req.auth;
     if auth.kind == AuthKind::ApiKey {
         let loc = match auth.key_location {
