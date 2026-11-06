@@ -5,3 +5,5 @@ src-tauri/gen/schemas/
 .DS_Store
 *.httpdesk-tmp
 http-client.private.env.json
+test-results/
+playwright-report/
