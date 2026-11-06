@@ -41,7 +41,12 @@ let settings = {
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-(window as unknown as { __mock: unknown }).__mock = { sent };
+(window as unknown as { __mock: unknown }).__mock = {
+  sent,
+  get settings() {
+    return clone(settings);
+  },
+};
 
 type Node = { name: string; path: string; kind: string; children?: Node[] };
 const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
