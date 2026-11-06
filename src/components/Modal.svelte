@@ -39,7 +39,8 @@
     if (e.key !== "Tab" || e.defaultPrevented || !box) return;
     const modals = document.querySelectorAll('[aria-modal="true"]');
     if (modals[modals.length - 1] !== box) return;
-    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+    // Tab stops only: roving widgets (SegmentedControl, grids) hold tabindex=-1 buttons.
+    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
