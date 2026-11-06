@@ -17,6 +17,7 @@
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import HeadersPanel from "./HeadersPanel.svelte";
+  import CookiesPanel from "./CookiesPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -144,6 +145,8 @@
   const tabs = $derived<SegmentedOption[]>([
     { value: "body", label: "Body" },
     { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    // Only when the response set any: an empty Cookies tab would be noise on most responses.
+    ...(res?.cookies.length ? [{ value: "cookies", label: "Cookies", count: res.cookies.length }] : []),
     { value: "request", label: "Request" },
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
@@ -246,6 +249,8 @@
         </div>
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />
+      {:else if current === "cookies"}
+        <CookiesPanel cookies={res.cookies} url={res.url} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
