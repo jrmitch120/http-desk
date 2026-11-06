@@ -1,6 +1,11 @@
 //! Request execution. [`prepare`] turns a model [`Request`] into the exact bytes
 //! to send (applying variables and dropping disabled components). [`execute`]
-//! sends it with reqwest.
+//! sends it with reqwest, on a fresh [`ExecClient`] (or a given one with
+//! [`execute_on`]).
+
+mod timing;
+
+pub use timing::Timings;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -389,6 +394,9 @@ pub struct HttpResponse {
     pub truncated: bool,
     pub request: SentRequest,
     pub warnings: Vec<String>,
+    /// Phase timing of the final request (`time_ms` covers every hop).
+    #[serde(default)]
+    pub timings: Timings,
 }
 
 pub struct ExecOutcome {
@@ -413,13 +421,43 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
-fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<reqwest::Client, ExecError> {
+/// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
+/// with the hooks that time its phases. [`execute`] builds one per send, so
+/// settings can differ per request; [`execute_on`] reuses one, which lets a
+/// later request go over a connection that is still open.
+///
+/// It times one request at a time: concurrent sends on one client would mix
+/// their phases.
+pub struct ExecClient {
+    http: reqwest::Client,
+    timing: timing::Recorder,
+}
+
+impl ExecClient {
+    /// Builds a client with `p`'s redirect and timeout settings plus the TLS
+    /// settings. Fails with [`ExecError::Tls`] if a certificate can't be read.
+    pub fn new(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<Self, ExecError> {
+        let timing = timing::Recorder::default();
+        let http = build_client(p, settings, ssl, &timing)?;
+        Ok(Self { http, timing })
+    }
+}
+
+fn build_client(
+    p: &PreparedRequest,
+    settings: &ExecSettings,
+    ssl: &SslConfig,
+    timing: &timing::Recorder,
+) -> Result<reqwest::Client, ExecError> {
+    let redirect = if p.follow_redirects {
+        timing.redirects(reqwest::redirect::Policy::limited(settings.max_redirects))
+    } else {
+        reqwest::redirect::Policy::none()
+    };
     let mut b = reqwest::Client::builder()
-        .redirect(if p.follow_redirects {
-            reqwest::redirect::Policy::limited(settings.max_redirects)
-        } else {
-            reqwest::redirect::Policy::none()
-        })
+        .redirect(redirect)
+        .dns_resolver(timing.resolver())
+        .connector_layer(timing.layer())
         .danger_accept_invalid_certs(!settings.verify_tls || ssl.verify_host_certificate == Some(false));
     if p.timeout_ms > 0 {
         b = b.read_timeout(Duration::from_millis(p.timeout_ms));
@@ -470,11 +508,22 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     }
 }
 
+/// Sends `p` on a new [`ExecClient`] built for it.
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
-    let client = build_client(&p, settings, ssl)?;
+    let client = ExecClient::new(&p, settings, ssl)?;
+    execute_on(&client, p, settings).await
+}
+
+/// Sends `p` on `client`, which keeps the redirect, timeout and TLS settings
+/// it was built with; `settings` supplies the body size limit.
+pub async fn execute_on(
+    client: &ExecClient,
+    p: PreparedRequest,
+    settings: &ExecSettings,
+) -> Result<ExecOutcome, ExecError> {
     let method =
         reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
-    let mut builder = client.request(method, &p.url);
+    let mut builder = client.http.request(method, &p.url);
     for (n, v) in &p.headers {
         let name =
             reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
@@ -492,9 +541,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         _ => ExecError::Http(error_chain(&e)),
     };
 
+    client.timing.reset();
     let start = Instant::now();
     let mut resp = builder.send().await.map_err(map_err)?;
-    let ttfb = start.elapsed();
+    let headers_at = Instant::now();
+    let ttfb = headers_at - start;
 
     let status = resp.status();
     let http_version = format!("{:?}", resp.version());
@@ -518,7 +569,9 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         }
         body.extend_from_slice(&chunk);
     }
-    let elapsed = start.elapsed();
+    let end = Instant::now();
+    let elapsed = end - start;
+    let timings = client.timing.timings(start, headers_at, end);
 
     let body_text = decode_text(&body, content_type.as_deref());
     let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
@@ -557,6 +610,7 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
             truncated,
             request,
             warnings: p.warnings,
+            timings,
         },
         body,
     })

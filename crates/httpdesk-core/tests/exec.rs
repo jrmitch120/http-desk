@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use httpdesk_core::env::SslConfig;
-use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
+use httpdesk_core::exec::{execute, execute_on, prepare, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::{method, path};
@@ -529,4 +529,100 @@ async fn an_api_key_query_param_is_resolved_and_encoded() {
     let text = "# @httpdesk-auth apikey query {{keyName}}\nGET {{base}}/echo?n=1&{{keyName}}={{key}}\n";
     let (_, got) = sent_query(text, &[("keyName", "api key"), ("key", "s3cr&t=/+")]).await;
     assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
+}
+
+// Timing. wiremock listens on 127.0.0.1; asking for `localhost` instead makes
+// the request look the host up, so the DNS phase is measured.
+fn by_name(server: &MockServer) -> String {
+    server.uri().replace("127.0.0.1", "localhost")
+}
+
+#[tokio::test]
+async fn a_fresh_request_times_each_phase_within_the_total() {
+    let server = MockServer::start().await;
+    Mock::given(path("/t"))
+        .respond_with(
+            ResponseTemplate::new(200).set_delay(Duration::from_millis(40)).set_body_string("x".repeat(200_000)),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/t\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&server))]), Path::new(".")).await.unwrap();
+
+    let t = &resp.timings;
+    let dns = t.dns.expect("a lookup of localhost is timed");
+    let connect = t.connect.expect("a new connection is timed");
+    assert!(!t.reused);
+    assert_eq!(t.redirects, 0);
+    assert!(dns >= 0.0 && connect > 0.0 && t.download >= 0.0, "{t:?}");
+    assert!(t.ttfb >= 40.0, "waiting covers the server's delay: {t:?}");
+    assert!(dns + connect + t.ttfb + t.download <= resp.time_ms, "{t:?} within {}", resp.time_ms);
+}
+
+#[tokio::test]
+async fn a_second_request_on_the_same_client_reuses_the_connection_and_skips_dns_and_connect() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &by_name(&server))]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared(), &settings, &SslConfig::default()).unwrap();
+
+    let first = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    assert!(!first.reused && first.dns.is_some() && first.connect.is_some(), "{first:?}");
+
+    let second = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    assert!(second.reused, "{second:?}");
+    assert_eq!((second.dns, second.connect), (None, None));
+    assert!(second.ttfb > 0.0, "{second:?}");
+}
+
+#[tokio::test]
+async fn a_redirect_chain_reports_its_length_and_times_the_final_hop() {
+    let server = MockServer::start().await;
+    for (from, to) in [("/a", "/b"), ("/b", "/c")] {
+        Mock::given(path(from))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", to))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/c")).respond_with(ResponseTemplate::new(200).set_body_string("c")).mount(&server).await;
+    let vars = env(&[("base", &by_name(&server))]);
+
+    let resp = send(&parse("GET {{base}}/a\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(resp.timings.redirects, 2);
+    // The first hop opened the connection; the final one went over it.
+    assert!(resp.timings.reused, "{:?}", resp.timings);
+    assert_eq!((resp.timings.dns, resp.timings.connect), (None, None));
+
+    let direct = send(&parse("GET {{base}}/c\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(direct.timings.redirects, 0);
+    let unfollowed = parse("# @no-redirect\nGET {{base}}/a\n").requests.remove(0);
+    assert_eq!(send(&unfollowed, vars, Path::new(".")).await.unwrap().timings.redirects, 0);
+}
+
+#[tokio::test]
+async fn a_redirect_to_another_server_times_the_final_hops_new_connection() {
+    let target = MockServer::start().await;
+    Mock::given(path("/end"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(40)))
+        .mount(&target)
+        .await;
+    let origin = MockServer::start().await;
+    Mock::given(path("/go"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .set_delay(Duration::from_millis(60))
+                .insert_header("location", format!("{}/end", by_name(&target)).as_str()),
+        )
+        .mount(&origin)
+        .await;
+
+    let req = parse("GET {{base}}/go\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&origin))]), Path::new(".")).await.unwrap();
+    let t = &resp.timings;
+    assert_eq!(t.redirects, 1);
+    assert!(!t.reused && t.dns.is_some() && t.connect.is_some(), "{t:?}");
+    assert!(t.ttfb >= 40.0 && t.ttfb < 100.0, "waiting is the final hop's, not the first: {t:?}");
+    assert!(resp.time_ms >= 100.0, "the total covers both hops: {}", resp.time_ms);
 }

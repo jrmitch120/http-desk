@@ -12,6 +12,8 @@
   import { api, errorMessage } from "../lib/api";
   import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
   import { explainStatus } from "../lib/status";
+  import { formatPhase, redirectNote, timingPhases } from "../lib/timing";
+  import TimingPanel from "./TimingPanel.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
@@ -143,6 +145,7 @@
   const tabs = $derived<SegmentedOption[]>([
     { value: "body", label: "Body" },
     { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
@@ -248,6 +251,8 @@
             </tbody>
           </table>
         </div>
+      {:else if current === "timing"}
+        <TimingPanel {res} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
@@ -262,7 +267,14 @@
             <div class="sent-body-title muted">Body · {formatBytes(res.request.bodySize)}</div>
             <pre class="sent-body selectable mono">{res.request.bodyPreview}</pre>
           {/if}
-          <p class="muted small">This is exactly what was sent: disabled components and unresolved sections are not included.</p>
+          <div class="sent-body-title muted">Timing · {formatDuration(res.timeMs)} total{res.timings.redirects ? `, ${redirectNote(res.timings.redirects)}` : ""}</div>
+          <div class="sent-timing selectable mono">
+            {timingPhases(res).map((p) => `${p.label} ${formatPhase(p.ms)}`).join(" · ")}{res.timings.reused ? " · reused connection" : ""}
+          </div>
+          <p class="muted small">
+            A reconstruction of the final request from what HttpDesk prepared, not the bytes on the wire. Disabled components and unresolved sections are not included.
+            {#if res.timings.redirects}It ended at {res.url}; later hops may differ in method and headers.{/if}
+          </p>
         </div>
       {/if}
     {/if}
@@ -413,6 +425,10 @@
   }
   .sent-body-title {
     margin: 14px 8px 6px;
+    font-size: 12px;
+  }
+  .sent-timing {
+    padding: 0 8px;
     font-size: 12px;
   }
   .sent-body {
