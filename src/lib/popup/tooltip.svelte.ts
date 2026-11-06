@@ -40,12 +40,17 @@ function describe(el: HTMLElement, on: boolean) {
   else el.removeAttribute("aria-describedby");
 }
 
+/** Sets the text for `el` (the anchor), describing it when the text isn't its name. */
+function setText(el: HTMLElement, text: string) {
+  tip.text = text;
+  describe(el, text !== el.getAttribute("aria-label"));
+}
+
 function show(el: HTMLElement, text: string) {
   if (tip.anchor && tip.anchor !== el) hideTooltip();
   clearTimeout(timer);
   tip.anchor = el;
-  tip.text = text;
-  if (text !== el.getAttribute("aria-label")) describe(el, true);
+  setText(el, text);
   if (tip.visible) return;
   const reveal = () => (tip.visible = true);
   if (performance.now() - hiddenAt < WARM_FOR) reveal();
@@ -106,7 +111,7 @@ export function tooltip(node: HTMLElement, text?: string | null) {
       current = next;
       if (tip.anchor !== node) return;
       const t = textNow();
-      if (t) tip.text = t;
+      if (t) setText(node, t);
       else stop();
     },
     destroy() {
