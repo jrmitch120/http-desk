@@ -2,7 +2,9 @@
 //! components are never sent.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
@@ -135,11 +137,19 @@ async fn bodies_json_form_multipart_and_files() {
     let cases = [
         ("Content-Type: application/json\n\n{\"a\": {{v}}}", b"{\"a\": 42}".to_vec()),
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\n&v={{v}}", b"name=foo&v=42".to_vec()),
+        ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\nv={{v}}\nlast=1", b"name=foo&v=42&last=1".to_vec()),
+        ("Content-Type: application/x-www-form-urlencoded\n\nname=foo&\nv={{v}}", b"name=foo&v=42".to_vec()),
         ("Content-Type: application/json\n\n< ./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
         ("Content-Type: application/json\n\n<@ ./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // No space after the marker: the editor shows it as a file body, so it is sent as one.
+        ("Content-Type: application/json\n\n<./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
+        ("Content-Type: application/json\n\n<@./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        ("Content-Type: application/xml\n\n<tag/>", b"<tag/>".to_vec()),
     ];
     for (rest, expected) in cases {
         let req = parse(&format!("POST {{{{base}}}}/echo\n{rest}\n")).requests.remove(0);
+        let is_file = rest.contains("payload.json");
+        assert_eq!(req.body.mode == BodyMode::File, is_file, "editor body mode for {rest}");
         send(&req, vars.clone(), dir.path()).await.unwrap();
         assert_eq!(last_request(&server).await.body, expected, "{rest}");
     }
@@ -189,10 +199,103 @@ async fn redirects_timeouts_and_methods() {
 
     let slow = parse("# @timeout 200 ms\nGET {{base}}/slow\n").requests.remove(0);
     let err = send(&slow, vars.clone(), Path::new(".")).await.unwrap_err();
-    assert!(matches!(err, ExecError::Timeout(_)), "{err}");
+    assert!(matches!(err, ExecError::ReadTimeout(_)), "{err}");
 
     let purge = parse("PURGE {{base}}/cache\n").requests.remove(0);
     assert_eq!(send(&purge, vars, Path::new(".")).await.unwrap().status, 204);
+}
+
+/// A one-shot HTTP server that writes `parts` with `gap` between them, for
+/// timings wiremock can't express (a body that trickles in or stalls).
+fn trickle_server(parts: Vec<Vec<u8>>, gap: Duration) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (mut head, mut buf) = (Vec::new(), [0u8; 4096]);
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => head.extend_from_slice(&buf[..n]),
+            }
+        }
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                std::thread::sleep(gap);
+            }
+            if stream.write_all(part).and_then(|_| stream.flush()).is_err() {
+                return;
+            }
+        }
+    });
+    format!("http://{addr}")
+}
+
+fn response_head(content_length: usize) -> Vec<u8> {
+    format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n").into_bytes()
+}
+
+#[test]
+fn timeout_directives_accept_jetbrains_units() {
+    let r = Resolver::new(HashMap::new());
+    let s = ExecSettings::default();
+    let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &r, Path::new("."), &s).unwrap();
+
+    let p = prepared("# @connection-timeout 2 m\n# @timeout 100 ms\nGET https://x\n");
+    assert_eq!((p.connect_timeout_ms, p.timeout_ms), (120_000, 100));
+
+    let p = prepared("# @timeout 45\n# @connection-timeout 3\nGET https://x\n");
+    assert_eq!((p.connect_timeout_ms, p.timeout_ms), (3_000, 45_000), "bare numbers are seconds");
+
+    let p = prepared("# @timeout 2m\n# @connection-timeout 500ms\nGET https://x\n");
+    assert_eq!((p.connect_timeout_ms, p.timeout_ms), (500, 120_000), "suffix without a space");
+
+    let p = prepared("GET https://x\n");
+    assert_eq!((p.connect_timeout_ms, p.timeout_ms), (s.connect_timeout_ms, s.timeout_ms), "app defaults");
+}
+
+#[tokio::test]
+async fn a_body_that_keeps_streaming_outlives_the_idle_timeout() {
+    // 8 one-byte chunks 100 ms apart: ~700 ms in total, never idle for 400 ms.
+    let mut parts = vec![response_head(8)];
+    parts.extend(b"abcdefgh".iter().map(|b| vec![*b]));
+    let base = trickle_server(parts, Duration::from_millis(100));
+    let req = parse(&format!("# @timeout 400 ms\nGET {base}/download\n")).requests.remove(0);
+
+    let resp = send(&req, HashMap::new(), Path::new(".")).await.unwrap();
+    assert_eq!(resp.body_text.as_deref(), Some("abcdefgh"));
+    assert!(resp.time_ms > 400.0, "took {} ms", resp.time_ms);
+}
+
+#[tokio::test]
+async fn a_body_that_stalls_fails_with_a_read_timeout_naming_the_value() {
+    let mut first = response_head(8);
+    first.extend(b"abcd");
+    let base = trickle_server(vec![first, b"efgh".to_vec()], Duration::from_secs(3));
+    let req = parse(&format!("# @timeout 200 ms\nGET {base}/download\n")).requests.remove(0);
+
+    let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
+    assert!(matches!(err, ExecError::ReadTimeout(200)), "{err:?}");
+    let msg = err.to_string();
+    assert!(msg.contains("Read timeout") && msg.contains("200 ms") && msg.contains("@timeout"), "{msg}");
+}
+
+#[tokio::test]
+async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
+    // Accepts TCP but never answers the TLS handshake, so connecting never finishes.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = silent.local_addr().unwrap();
+    let req = parse(&format!("# @connection-timeout 300 ms\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
+
+    let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
+    assert!(matches!(err, ExecError::ConnectTimeout(300)), "{err:?}");
+    let msg = err.to_string();
+    assert!(msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"), "{msg}");
+
+    let req = parse(&format!("# @connection-timeout 1\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
+    let msg = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err().to_string();
+    assert!(msg.contains("1 s"), "whole seconds are shown in seconds: {msg}");
+    drop(silent);
 }
 
 #[tokio::test]
@@ -221,6 +324,9 @@ fn prepare_rules() {
     let req = parse("example.com/a\nHost: ignored\n").requests.remove(0);
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/a");
 
+    let req = parse("GET example.com/login?next=http://foo\n").requests.remove(0);
+    assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/login?next=http://foo", "scheme is looked for before `?` only");
+
     let req = parse("GET /path\nHost: api.local:8080\n").requests.remove(0);
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://api.local:8080/path");
 
@@ -234,4 +340,34 @@ fn prepare_rules() {
 
     let req = parse("GET http://[bad\n").requests.remove(0);
     assert!(matches!(prepare(&req, &r, Path::new("."), &s), Err(ExecError::InvalidUrl { .. })));
+}
+
+#[test]
+fn dynamic_variable_errors_stop_the_send() {
+    let s = ExecSettings::default();
+    let req = parse("POST https://x/a?n={{$randomInt 10 5}}\nX-Ts: {{$timestamp 1 fortnight}}\n").requests.remove(0);
+    let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(matches!(err, ExecError::DynamicVariable(_)), "{msg}");
+    assert!(msg.contains("{{$randomInt 10 5}}") && msg.contains("fortnight"), "every failure is reported: {msg}");
+}
+
+#[test]
+fn unresolved_host_names_the_variables_and_suggests_an_environment() {
+    let s = ExecSettings::default();
+    let req = parse("GET {{baseUrl}}/users?id={{id}}\n").requests.remove(0);
+    let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["baseUrl"]), "only host variables are named: {msg}");
+    assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
+
+    // A variable that resolves to a URL whose own host is unresolved names that inner variable.
+    let r = Resolver::new(env(&[("baseUrl", "https://{{host}}:{{port}}/api")]));
+    let msg = prepare(&req, &r, Path::new("."), &s).unwrap_err().to_string();
+    assert!(msg.contains("host, port") && !msg.contains("baseUrl"), "{msg}");
+
+    // A relative URL whose Host header is unresolved.
+    let req = parse("GET /users\nHost: {{apiHost}}\n").requests.remove(0);
+    let msg = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err().to_string();
+    assert!(msg.contains("apiHost"), "{msg}");
 }
