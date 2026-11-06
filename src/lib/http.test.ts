@@ -20,6 +20,7 @@ import {
   basicUsernameError,
   variableNameError,
   bodySyntaxWarnings,
+  customMethod,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -317,5 +318,17 @@ describe("field safety", () => {
       { line: 6, message: "Line 6 starts with >, so it and the lines after it will be read as a response handler." },
     ]);
     expect(bodySyntaxWarnings('{\n  "a": 1\n}')).toEqual([]);
+  });
+});
+
+describe("custom methods", () => {
+  it("uppercases a typed method token", () => {
+    expect(customMethod("purge")).toBe("PURGE");
+    expect(customMethod("  Report ")).toBe("REPORT");
+    expect(customMethod("x-sync_2")).toBe("X-SYNC_2");
+  });
+
+  it("rejects text the .http parser wouldn't read back as a method", () => {
+    for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
   });
 });
