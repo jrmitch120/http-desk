@@ -83,6 +83,8 @@ let settingsServed = false;
   get settingsServed() {
     return settingsServed;
   },
+  /** Lets held settings through (`?settingsDelay=hold`). */
+  releaseSettings: () => releaseSettings(),
   get settings() {
     return clone(settings);
   },
@@ -132,7 +134,12 @@ const openapiConflicts = new URLSearchParams(location.search).get("openapiConfli
 // `?sendError=1`: every send fails as if the server were unreachable.
 const sendError = new URLSearchParams(location.search).get("sendError") === "1";
 // `?settingsDelay=<ms>`: settings arrive late, as on a slow start.
-const settingsDelay = Number(new URLSearchParams(location.search).get("settingsDelay") ?? 0);
+// `?settingsDelay=hold`: settings wait until a test calls `__mock.releaseSettings()`.
+const settingsDelayParam = new URLSearchParams(location.search).get("settingsDelay");
+const settingsHeld = settingsDelayParam === "hold";
+const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
+let releaseSettings: () => void = () => {};
+const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -143,6 +150,7 @@ mockIPC(
     switch (cmd) {
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);
+        await settingsReleased;
         settingsServed = true;
         return clone(settings);
       case "save_settings":
