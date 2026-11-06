@@ -151,6 +151,7 @@ class AppStore {
     }
     try {
       const info = await api.openWorkspace(path);
+      if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
