@@ -87,6 +87,11 @@ impl Harness {
 
 /// One-shot HTTP server on a background thread; returns (url, received raw request).
 fn capture_server() -> (String, mpsc::Receiver<String>) {
+    json_server(r#"{"ok":true}"#)
+}
+
+/// Like [`capture_server`], answering with `body` as JSON.
+fn json_server(body: &'static str) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
@@ -104,7 +109,7 @@ fn capture_server() -> (String, mpsc::Receiver<String>) {
                 break;
             }
         }
-        let body = br#"{"ok":true}"#;
+        let body = body.as_bytes();
         let _ = write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
@@ -313,6 +318,39 @@ fn a_beautified_body_is_saved_to_the_http_file_with_its_numbers_as_written() {
         saved.ends_with("\n{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3\n}\n"),
         "numbers saved as written: {saved}"
     );
+}
+
+#[test]
+fn a_sent_response_is_filtered_by_id_with_numbers_as_the_server_sent_them() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let (server, _received) = json_server(
+        r#"{"items":[{"id":1234567890123456789,"status":"sold","price":1e3},{"id":2,"status":"available"}]}"#,
+    );
+    let file_path = root.join("api.http");
+    std::fs::write(&file_path, format!("GET {server}/items\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+    let id = resp["id"].clone();
+
+    let result = h.ok("filter_response", json!({ "responseId": id, "expression": r#"$.items[?(@.status=="sold")]"# }));
+    assert_eq!(
+        result,
+        json!({ "matches": 1, "text": "[\n  {\n    \"id\": 1234567890123456789,\n    \"status\": \"sold\",\n    \"price\": 1e3\n  }\n]" })
+    );
+    // Typing on re-uses the parsed body.
+    assert_eq!(h.ok("filter_response", json!({ "responseId": id, "expression": "$.items[*].id" }))["matches"], 2);
+
+    let err = h.call("filter_response", json!({ "responseId": id, "expression": "$.items[" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSONPath at position "), "{err}");
+    let err = h.call("filter_response", json!({ "responseId": "gone", "expression": "$" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
 }
 
 #[test]
