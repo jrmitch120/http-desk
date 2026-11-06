@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
@@ -18,6 +19,7 @@ mod bodies;
 mod confine;
 mod deleting;
 mod paths;
+mod quit;
 mod self_writes;
 mod watcher;
 use bodies::RecentBodies;
@@ -80,6 +82,9 @@ struct AppState {
     bodies: Mutex<RecentBodies>,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
+    /// Whether an open file has unsaved edits (reported by the frontend), so a
+    /// quit asks first. See quit.rs.
+    unsaved: AtomicBool,
 }
 
 impl AppState {
@@ -357,6 +362,11 @@ fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState
     *state.settings.lock().unwrap() = settings;
 }
 
+#[tauri::command]
+fn set_unsaved(state: State<'_, AppState>, unsaved: bool) {
+    state.unsaved.store(unsaved, Ordering::Relaxed);
+}
+
 // ------------------------------------------------------------------ OpenAPI
 
 fn is_url(s: &str) -> bool {
@@ -484,6 +494,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
             save_response_body,
             get_settings,
             save_settings,
+            set_unsaved,
             openapi_load,
             openapi_generate,
         ])
@@ -498,8 +509,15 @@ pub fn run() {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init()),
     )
-        .run(tauri::generate_context!())
-        .expect("error while running HttpDesk");
+    .build(tauri::generate_context!())
+    .expect("error while building HttpDesk")
+    .run(|_app, _event| {
+        // After setup, on the main thread, with tao's app delegate in place.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Ready = _event {
+            quit::install(_app);
+        }
+    });
 }
 
 #[cfg(test)]

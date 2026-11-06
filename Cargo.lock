@@ -1770,6 +1770,7 @@ dependencies = [
  "dunce",
  "httpdesk-core",
  "notify-debouncer-mini",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",
