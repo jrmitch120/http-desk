@@ -63,20 +63,23 @@ pub struct KeyValue {
     /// lines above the request line (ignored by JetBrains and VS Code).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Query params only: an empty value is written `name=` rather than `name`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub equals: bool,
 }
 
 impl Default for KeyValue {
     fn default() -> Self {
-        KeyValue { enabled: true, name: String::new(), value: String::new(), description: String::new() }
+        KeyValue { enabled: true, name: String::new(), value: String::new(), description: String::new(), equals: false }
     }
 }
 
 impl KeyValue {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
-        KeyValue { enabled: true, name: name.into(), value: value.into(), description: String::new() }
+        KeyValue { name: name.into(), value: value.into(), ..Default::default() }
     }
     pub fn disabled(name: impl Into<String>, value: impl Into<String>) -> Self {
-        KeyValue { enabled: false, name: name.into(), value: value.into(), description: String::new() }
+        KeyValue { enabled: false, ..KeyValue::new(name, value) }
     }
 }
 

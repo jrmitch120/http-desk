@@ -6,6 +6,7 @@ pub mod exec;
 pub mod model;
 pub mod openapi;
 pub mod parser;
+mod query;
 pub mod serializer;
 pub mod vars;
 pub mod workspace;

@@ -31,7 +31,7 @@ fn s(p: &Path) -> String {
 fn churn_in_ignored_folders_and_unlisted_files_emits_no_events() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     for dir in IGNORED {
         std::fs::create_dir_all(root.join(dir).join("sub")).unwrap();
     }
@@ -68,7 +68,7 @@ fn churn_in_ignored_folders_and_unlisted_files_emits_no_events() {
 fn a_workspace_inside_an_ignored_folder_still_syncs() {
     let h = Harness::new();
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap().join(".config/target/ws");
+    let root = crate::paths::canonicalize(tmp.path()).unwrap().join(".config/target/ws");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     let info = h.ok("open_workspace", json!({ "path": root }));
@@ -85,7 +85,7 @@ fn a_workspace_inside_an_ignored_folder_still_syncs() {
 fn a_workspace_that_cannot_be_watched_keeps_the_previous_one_syncing() {
     let h = Harness::new();
     let (ws_a, ws_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (a, b) = (ws_a.path().canonicalize().unwrap(), ws_b.path().canonicalize().unwrap());
+    let (a, b) = (crate::paths::canonicalize(ws_a.path()).unwrap(), crate::paths::canonicalize(ws_b.path()).unwrap());
     std::fs::write(a.join("a.http"), "GET https://a\n").unwrap();
     h.ok("open_workspace", json!({ "path": a }));
     let rx = events(&h, "workspace-changed");
@@ -105,7 +105,7 @@ fn a_workspace_that_cannot_be_watched_keeps_the_previous_one_syncing() {
 fn assert_missing_reported(remove: impl FnOnce(&Path)) {
     let h = Harness::new();
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().canonicalize().unwrap().join("ws");
+    let root = crate::paths::canonicalize(parent.path()).unwrap().join("ws");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     h.ok("open_workspace", json!({ "path": root }));
