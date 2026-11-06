@@ -2,7 +2,7 @@
   The response viewer's Cookies tab: every cookie the response set, redirect
   hops included, one column per attribute, with click-to-copy values. A
   Set-Cookie that didn't parse is listed raw with the reason. Display only:
-  nothing here is sent back on later requests.
+  nothing here is sent back on later requests. With no cookies it says so.
 -->
 <script lang="ts">
   import { app } from "../lib/store.svelte";
@@ -33,6 +33,9 @@
   }
 </script>
 
+{#if cookies.length === 0}
+  <div class="empty-state small">This response set no cookies.</div>
+{:else}
 <div class="table-wrap">
   <table aria-label="Response cookies">
     <thead>
@@ -73,8 +76,12 @@
     </tbody>
   </table>
 </div>
+{/if}
 
 <style>
+  .small {
+    font-size: 12px;
+  }
   .table-wrap {
     flex: 1;
     overflow: auto;

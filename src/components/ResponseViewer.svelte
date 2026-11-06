@@ -250,8 +250,8 @@
   const tabs = $derived<SegmentedOption[]>([
     { value: "body", label: "Body" },
     { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
-    // Only when the response set any: an empty Cookies tab would be noise on most responses.
-    ...(res?.cookies.length ? [{ value: "cookies", label: "Cookies", count: res.cookies.length }] : []),
+    // Always there, so the tabs don't shift; counted only when there are cookies.
+    { value: "cookies", label: "Cookies", count: res?.cookies.length || undefined },
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
   ]);

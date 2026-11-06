@@ -1,5 +1,6 @@
 // Cookies tab (#69): every cookie the response set, redirect hops included,
-// parsed into columns, with click-to-copy values and a count on the tab.
+// parsed into columns, with click-to-copy values and a count on the tab. The
+// tab is always there; with no cookies it has no count and says so.
 // `?response=cookies` makes the mocked JSON response carry four cookies: one set
 // by a redirect hop, one with Expires, one with Max-Age, and one malformed.
 import { expect, test, type Page } from "@playwright/test";
@@ -54,8 +55,13 @@ test("clicking a cookie value copies it", async ({ page }) => {
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("abc123");
 });
 
-test("a response without cookies has no Cookies tab", async ({ page }) => {
+test("a response without cookies still has a Cookies tab, without a count, saying so", async ({ page }) => {
   await sendListPets(page, "");
-  await expect(viewerTabs(page).getByRole("radio")).toHaveCount(4);
-  await expect(cookiesTab(page)).toHaveCount(0);
+  await expect(viewerTabs(page).getByRole("radio")).toHaveText([/^Body/, /^Headers/, /^Cookies/, /^Timing/, /^Request/]);
+  await expect(cookiesTab(page)).toHaveAccessibleName("Cookies");
+  await expect(cookiesTab(page).locator(".count")).toHaveCount(0);
+
+  await cookiesTab(page).click();
+  await expect(page.getByText("This response set no cookies")).toBeVisible();
+  await expect(page.getByRole("table", { name: "Response cookies" })).toHaveCount(0);
 });

@@ -1,4 +1,4 @@
-// The response viewer's Body / Headers / (Cookies) / Timing / Request switch is the design-system
+// The response viewer's Body / Headers / Cookies / Timing / Request switch is the design-system
 // SegmentedControl, and a tab can show a count of what's inside it.
 import { expect, test, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
@@ -47,6 +47,10 @@ test("the arrow keys move between viewer tabs, showing each panel", async ({ pag
   await expect(page.getByRole("cell", { name: "x-powered-by" })).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
+  await expect(tab("Cookies")).toBeFocused();
+  await expect(page.getByText("This response set no cookies")).toBeVisible();
+
+  await page.keyboard.press("ArrowRight");
   await expect(tab("Timing")).toBeFocused();
   await expect(page.getByRole("list", { name: "Timing phases" })).toBeVisible();
 
@@ -67,11 +71,12 @@ test("the Headers tab counts the response headers; tabs without a count show non
   await sendListPets(page);
   const tabs = viewerTabs(page);
   const radios = tabs.getByRole("radio");
-  await expect(radios).toHaveCount(4);
+  await expect(radios).toHaveCount(5);
   await expect(radios.nth(0)).toHaveAccessibleName("Body");
   await expect(radios.nth(1)).toHaveAccessibleName("Headers 4");
-  await expect(radios.nth(2)).toHaveAccessibleName("Timing");
-  await expect(radios.nth(3)).toHaveAccessibleName("Request");
+  await expect(radios.nth(2)).toHaveAccessibleName("Cookies");
+  await expect(radios.nth(3)).toHaveAccessibleName("Timing");
+  await expect(radios.nth(4)).toHaveAccessibleName("Request");
   await expect(tabs.getByRole("radio", { name: "Headers" }).locator(".count")).toHaveText("4");
   await expect(tabs.locator(".count")).toHaveCount(1);
 
