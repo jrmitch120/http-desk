@@ -22,8 +22,8 @@ impl Fixture {
         let h = Harness::new();
         let ws = tempfile::tempdir().unwrap();
         let out = tempfile::tempdir().unwrap();
-        let root = ws.path().canonicalize().unwrap();
-        let outside = out.path().canonicalize().unwrap();
+        let root = crate::paths::canonicalize(ws.path()).unwrap();
+        let outside = crate::paths::canonicalize(out.path()).unwrap();
         h.ok("open_workspace", json!({ "path": root }));
         Fixture { h, _ws: ws, _out: out, root, outside }
     }

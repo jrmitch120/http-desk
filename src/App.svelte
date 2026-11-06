@@ -112,7 +112,7 @@
       </section>
     </div>
   </div>
-{:else}
+{:else if !app.starting}
   <Welcome />
 {/if}
 

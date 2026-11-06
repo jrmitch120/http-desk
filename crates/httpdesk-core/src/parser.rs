@@ -8,6 +8,7 @@
 use base64::Engine;
 
 use crate::model::*;
+use crate::query::{unescape, Part};
 
 /// Marker prefix for components disabled by HttpDesk.
 pub const DISABLED_MARKER: &str = "#~";
@@ -152,11 +153,11 @@ fn parse_request_line(t: &str) -> (String, String, Option<String>) {
     (method, url_tokens.join(" "), version)
 }
 
+/// Parses `name=value` as written in the file into its decoded form (ADR-0001).
 pub(crate) fn parse_param(s: &str) -> KeyValue {
-    match s.split_once('=') {
-        Some((n, v)) => KeyValue::new(n, v),
-        None => KeyValue::new(s, ""),
-    }
+    let (n, v) = s.split_once('=').unwrap_or((s, ""));
+    let equals = v.is_empty() && s.contains('=');
+    KeyValue { equals, ..KeyValue::new(unescape(n, Part::Name), unescape(v, Part::Value)) }
 }
 
 /// Parses a query string (without `?`) into enabled params.

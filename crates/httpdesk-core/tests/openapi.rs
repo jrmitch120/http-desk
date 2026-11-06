@@ -349,6 +349,25 @@ fn snapshot_library_books_file() {
 }
 
 #[test]
+fn query_examples_are_decoded_in_the_table_and_escaped_once_in_the_file() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Search, version: '1'}
+paths:
+  /search:
+    get:
+      parameters:
+        - {name: q, in: query, required: true, example: 'two words & more'}
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let file = &out.files[0].file;
+    assert_eq!(kv(&file.requests[0].query.items), [("q", "two words & more", true)]);
+    let text = serialize(file);
+    assert!(text.contains("/search?q=two%20words%20%26%20more\n"), "{text}");
+}
+
+#[test]
 fn description_lines_starting_with_at_stay_comments() {
     let spec = r#"
 openapi: 3.0.3

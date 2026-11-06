@@ -455,11 +455,11 @@ fn build_request<'a>(
         let required = p.get("required").and_then(Value::as_bool).unwrap_or(false);
         let value = param_example(ctx, p);
         let description = if with_docs { param_doc(ctx, p, required) } else { String::new() };
-        let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v, description: description.clone() };
+        let mk = |n: String, v: String| KeyValue { enabled: required, name: n, value: v, description: description.clone(), ..Default::default() };
         match p.get("in").and_then(Value::as_str) {
             Some("query") => {
                 for (n, v) in expand_query(name, &value, p) {
-                    req.query.items.push(mk(n, encode_component(&v)));
+                    req.query.items.push(mk(n, v));
                 }
             }
             Some("header") => {

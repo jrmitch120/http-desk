@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::SslConfig;
 use crate::model::*;
+use crate::query::{self, Part};
 use crate::vars::Resolver;
 
 #[derive(Debug, thiserror::Error)]
@@ -228,6 +229,18 @@ fn variable_names(text: &str) -> Vec<String> {
     names
 }
 
+/// A query param as sent (ADR-0001): written as in the file, variables resolved, then
+/// percent-encoded unless the request has `# @no-auto-encoding`. Escaping and encoding
+/// go part by part, so `&`, `=` or `#` from a variable can't split the param.
+fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
+    let part = |text: &str, part: Part| {
+        let written = query::escape(text, part);
+        if auto_encode { query::encode(&written, part, |r| resolver.resolve(r)) } else { resolver.resolve(&written) }
+    };
+    let name = part(&p.name, Part::Name);
+    if p.value.is_empty() && !p.equals { name } else { format!("{name}={}", part(&p.value, Part::Value)) }
+}
+
 /// Resolves variables and applies enablement. Disabled components are never included.
 pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &ExecSettings) -> Result<PreparedRequest, ExecError> {
     let method = req.method.trim().to_ascii_uppercase();
@@ -253,16 +266,10 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
 
     // URL
     let mut url = resolver.resolve(req.url.trim());
-    let mut params: Vec<String> = req
-        .query
-        .active()
-        .map(|p| {
-            let (n, v) = (resolver.resolve(&p.name), resolver.resolve(&p.value));
-            if v.is_empty() { n } else { format!("{n}={v}") }
-        })
-        .collect();
+    let auto_encode = req.directive("no-auto-encoding").is_none();
+    let mut params: Vec<String> = req.query.active().map(|p| wire_param(p, resolver, auto_encode)).collect();
     if auth.enabled && auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query && !auth.key_name.is_empty() {
-        params.push(format!("{}={}", auth.key_name, resolver.resolve(&auth.key_value)));
+        params.push(wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode));
     }
     if !params.is_empty() {
         url.push(if url.contains('?') { '&' } else { '?' });
