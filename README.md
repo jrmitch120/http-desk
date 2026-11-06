@@ -17,6 +17,33 @@ Built with Tauri 2, Rust and Svelte 5. See [docs/ARCHITECTURE.md](docs/ARCHITECT
 for the design: parsing strategy, data model, disabled-component encoding,
 OpenAPI mapping, sync, and known limitations.
 
+## Install
+
+Download the installer for your platform from the
+[latest release](https://github.com/jrmitch120/http-desk/releases/latest):
+
+| Platform | File |
+|---|---|
+| macOS (Apple Silicon) | `HttpDesk_<version>_aarch64.dmg` |
+| macOS (Intel) | `HttpDesk_<version>_x64.dmg` |
+| Windows | `HttpDesk_<version>_x64-setup.exe` or `.msi` |
+| Linux | `.AppImage`, `.deb` or `.rpm` |
+
+The installers aren't code-signed yet, so Windows and macOS warn you the first
+time you open the app. Updates installed from inside the app don't show the warning.
+
+**Windows:** if you see *"Windows protected your PC"*, click **More info**, then
+**Run anyway**.
+
+**macOS:** drag HttpDesk to Applications and open it. If macOS says Apple
+*"could not verify"* the app, open **System Settings → Privacy & Security**,
+scroll down, and click **Open Anyway**. If it says the app *"is damaged and
+can't be opened"*, that's the same check: run this once, then open it again:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/HttpDesk.app
+```
+
 ## What a saved request looks like
 
 ```http
@@ -106,4 +133,9 @@ existing installs can no longer verify updates, so keep a backup.
 
 Updater bundles are only produced with `--config src-tauri/tauri.updater.conf.json`
 (the release workflow passes it), so local `pnpm tauri build` needs no key.
-Code signing and notarization are not configured yet.
+Windows code signing and macOS notarization are not configured yet. See
+[Install](#install) for what users see.
+
+## License
+
+[MIT](LICENSE)
