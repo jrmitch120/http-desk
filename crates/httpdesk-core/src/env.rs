@@ -242,11 +242,22 @@ pub fn merge_variables(dir: &Path, env_name: &str, vars: &[(String, String)], se
     save(dir, &set)
 }
 
-/// Whether git ignores the private env file in `dir`, judged by the `.gitignore` files from
-/// the nearest enclosing repository root (a `.git` dir or file) down to `dir`. `None` when
-/// `dir` isn't inside a git repository. Local-only rules (`.git/info/exclude`, global
-/// excludes) don't count, since they don't protect teammates' clones.
-fn gitignore_status(dir: &Path) -> Option<bool> {
+/// What the repository's `.gitignore` rules say about the private env file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GitignoreRule {
+    /// A rule ignores it (or a folder it is in).
+    Ignored,
+    /// A `!` rule un-ignores it: the user wants it tracked.
+    Negated,
+    /// No rule matches it.
+    Unmatched,
+}
+
+/// The rule that decides whether git ignores the private env file in `dir`, judged by the
+/// `.gitignore` files from the nearest enclosing repository root (a `.git` dir or file) down
+/// to `dir`. `None` when `dir` isn't inside a git repository. Local-only rules
+/// (`.git/info/exclude`, global excludes) don't count, since they don't protect teammates' clones.
+fn gitignore_rule(dir: &Path) -> Option<GitignoreRule> {
     use ignore::gitignore::Gitignore;
     use ignore::Match;
 
@@ -257,6 +268,7 @@ fn gitignore_status(dir: &Path) -> Option<bool> {
     let parts: Vec<_> = file.strip_prefix(root).ok()?.components().collect();
     // Like git, walk down from the root: once a folder is ignored, everything in it is.
     let mut path = root.to_path_buf();
+    let mut rule = GitignoreRule::Unmatched;
     for (i, part) in parts.iter().enumerate() {
         path.push(part);
         let parent = path.parent()?;
@@ -265,18 +277,26 @@ fn gitignore_status(dir: &Path) -> Option<bool> {
             .filter(|g| parent.starts_with(g.path()))
             .map(|g| g.matched(&path, i + 1 < parts.len()))
             .find(|m| !m.is_none());
-        if let Some(Match::Ignore(_)) = verdict {
-            return Some(true);
+        match verdict {
+            Some(Match::Ignore(_)) => return Some(GitignoreRule::Ignored),
+            Some(Match::Whitelist(_)) if i + 1 == parts.len() => rule = GitignoreRule::Negated,
+            _ => {}
         }
     }
-    Some(false)
+    Some(rule)
+}
+
+/// Whether git ignores the private env file in `dir`; `None` outside a git repository.
+fn gitignore_status(dir: &Path) -> Option<bool> {
+    gitignore_rule(dir).map(|r| r == GitignoreRule::Ignored)
 }
 
 /// Makes sure git ignores the private env file, if there is one in `dir`: when `dir` is
-/// inside a git repository and no existing rule ignores it, appends it to `dir/.gitignore`.
-/// Returns whether `.gitignore` changed.
+/// inside a git repository and no rule matches the file at all, appends it to
+/// `dir/.gitignore`. An explicit `!` negation is the user's choice and is left alone (the
+/// Environments editor still warns). Returns whether `.gitignore` changed.
 pub fn ensure_gitignored(dir: &Path) -> std::io::Result<bool> {
-    if !dir.join(PRIVATE_ENV_FILE).exists() || gitignore_status(dir) != Some(false) {
+    if !dir.join(PRIVATE_ENV_FILE).exists() || gitignore_rule(dir) != Some(GitignoreRule::Unmatched) {
         return Ok(false);
     }
     let path = dir.join(".gitignore");
@@ -433,6 +453,22 @@ mod tests {
         std::fs::write(repo.path().join(".gitignore"), "*.private.env.json\n").unwrap();
         std::fs::write(ws.join(".gitignore"), format!("!{PRIVATE_ENV_FILE}\n")).unwrap();
         assert_eq!(load(&ws).unwrap().private_file_ignored, Some(false));
+    }
+
+    #[test]
+    fn an_explicit_negation_is_the_users_choice() {
+        let (repo, ws) = repo_with_workspace_subfolder();
+        let negation = format!("*.private.env.json\n!{PRIVATE_ENV_FILE}\n");
+        std::fs::write(repo.path().join(".gitignore"), &negation).unwrap();
+
+        assert!(!ensure_gitignored(&ws).unwrap(), "nothing appended");
+        let mut set = load(&ws).unwrap();
+        assert_eq!(set.private_file_ignored, Some(false), "the Environments warning still shows");
+        set.environments[0].variables[0].value = "n3w".into();
+        let report = save(&ws, &set).unwrap();
+        assert!(!report.gitignore_updated, "saving environments doesn't re-append it either");
+        assert!(!ws.join(".gitignore").exists());
+        assert_eq!(std::fs::read_to_string(repo.path().join(".gitignore")).unwrap(), negation);
     }
 
     #[test]
