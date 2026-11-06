@@ -9,8 +9,8 @@
   function tabMenu(e: MouseEvent, tab: Tab) {
     menu.show(e, [
       { label: "Close", icon: "x", action: () => app.closeTab(tab.id) },
-      { label: "Close others", action: () => app.tabs.filter((t) => t.id !== tab.id).forEach((t) => app.closeTab(t.id)) },
-      { label: "Close all", action: () => [...app.tabs].forEach((t) => app.closeTab(t.id)) },
+      { label: "Close others", action: () => app.closeTabs(app.tabs.filter((t) => t.id !== tab.id).map((t) => t.id)) },
+      { label: "Close all", action: () => app.closeTabs(app.tabs.map((t) => t.id)) },
       { separator: true },
       { label: "Duplicate request", icon: "copy", action: () => app.duplicateRequest(tab.path, tab.key) },
     ]);
