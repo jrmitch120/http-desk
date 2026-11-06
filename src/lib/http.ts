@@ -25,7 +25,7 @@ export function newRequest(name = "New request"): Request {
     httpVersion: null,
     query: { enabled: true, items: [] },
     headers: { enabled: true, items: [] },
-    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header" },
+    auth: { enabled: true, kind: "none", username: "", password: "", token: "", keyName: "", keyValue: "", keyLocation: "header", raw: null },
     body: { enabled: true, mode: "none", text: "" },
     extraLines: [],
     responseHandler: null,
@@ -35,7 +35,7 @@ export function newRequest(name = "New request"): Request {
 }
 
 export function emptyFile(): HttpFile {
-  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf" };
+  return { header: { comments: [], variables: [], raw: null }, requests: [], trailing: "", lineEnding: "lf", bom: false };
 }
 
 export function displayName(req: Request): string {
@@ -367,6 +367,11 @@ export function basename(path: string): string {
 export function dirname(path: string): string {
   const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i <= 0 ? path : path.slice(0, i);
+}
+
+/** Why `name` can't be used as a file or folder name, or null if it can. */
+export function nameError(name: string): string | null {
+  return /[\\/]/.test(name) || name === "." || name === ".." ? "Names can't contain / or \\, or be . or .." : null;
 }
 
 export function joinPath(dir: string, name: string): string {

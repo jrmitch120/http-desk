@@ -9,6 +9,7 @@ const VSCODE: &str = include_str!("fixtures/vscode.http");
 /// Strips fields that only exist for lossless round-tripping.
 fn semantic(mut r: Request) -> Request {
     r.raw = None;
+    r.auth.raw = None;
     r.leading = String::new();
     r
 }
@@ -101,6 +102,20 @@ fn pre_encoded_basic_auth_is_decoded() {
 }
 
 #[test]
+fn authorization_header_is_kept_as_written_while_credentials_are_unchanged() {
+    let mut f = parse("GET https://x\nAuthorization: Basic dXNlcjpwYXNz\nAccept: */*\n");
+    f.requests[0].headers.items[0].value = "text/plain".into();
+    assert_eq!(serialize(&f), "###\nGET https://x\nAuthorization: Basic dXNlcjpwYXNz\nAccept: text/plain\n");
+
+    f.requests[0].auth.enabled = false;
+    assert!(serialize(&f).contains("\n#~ Authorization: Basic dXNlcjpwYXNz\n"));
+
+    f.requests[0].auth.enabled = true;
+    f.requests[0].auth.password = "changed".into();
+    assert!(serialize(&f).contains("\nAuthorization: Basic user changed\n"));
+}
+
+#[test]
 fn unknown_authorization_schemes_stay_headers() {
     let f = parse("GET https://x\nAuthorization: Digest abc\n");
     assert_eq!(f.requests[0].auth.kind, AuthKind::None);
@@ -116,7 +131,7 @@ fn plain_comments_are_not_treated_as_disabled_items() {
     let f = parse("GET https://x\n# Note: this is a comment\nAccept: */*\n");
     let r = &f.requests[0];
     assert_eq!(r.headers.items.len(), 1);
-    assert_eq!(r.extra_lines, vec!["# Note: this is a comment"]);
+    assert_eq!(r.extra_lines, vec![ExtraLine { text: "# Note: this is a comment".into(), before: Some("Accept".into()) }]);
 }
 
 // ---------------------------------------------------------------- lossless
@@ -286,7 +301,18 @@ fn api_key_auth_round_trips_in_header_and_query() {
 
 #[test]
 fn basic_auth_edge_cases_round_trip() {
-    for (u, p) in [("user", "pass"), ("user", ""), ("", "secret"), ("", ""), ("{{user}}", "{{password}}")] {
+    for (u, p) in [
+        ("user", "pass"),
+        ("user", ""),
+        ("", "secret"),
+        ("", ""),
+        ("{{user}}", "{{password}}"),
+        ("John Doe", "pass"),
+        ("John Doe", ""),
+        ("user", "two words"),
+        ("user", "pa:ss"),
+        ("user", " padded "),
+    ] {
         let mut r = sample();
         r.auth = Auth { kind: AuthKind::Basic, username: u.into(), password: p.into(), ..Default::default() };
         let (_, back) = round_trip(&r);
@@ -306,7 +332,7 @@ fn stale_disabled_body_next_to_active_body_is_preserved() {
     let text = "POST https://x\n#~| old body\n\nnew body\n";
     let f = parse(text);
     assert_eq!(f.requests[0].body.text, "new body");
-    assert_eq!(f.requests[0].extra_lines, vec!["#~| old body"]);
+    assert_eq!(f.requests[0].extra_lines, vec![ExtraLine::new("#~| old body")]);
     assert_eq!(serialize(&f), text);
 }
 
@@ -384,4 +410,132 @@ fn doc_lines_stay_above_the_request_line() {
             assert!(i < method_line, "{out}");
         }
     }
+}
+
+// ---------------------------------------------------------------- byte fidelity
+
+#[test]
+fn utf8_bom_is_stripped_for_parsing_and_written_back() {
+    let text = "\u{FEFF}### First\nGET https://x\n\n### Second\nGET https://y\n";
+    let mut f = parse(text);
+    assert_eq!(f.requests[0].name, "First");
+    assert_eq!(f.requests[0].url, "https://x");
+    assert_eq!(serialize(&f), text);
+
+    f.requests[0].url = "https://z".into();
+    assert_eq!(serialize(&f), "\u{FEFF}### First\nGET https://z\n\n### Second\nGET https://y\n");
+
+    // A `###`-less first request after a BOM is still a request, not a header.
+    let f = parse("\u{FEFF}GET https://x\n");
+    assert_eq!((f.requests.len(), f.requests[0].url.as_str()), (1, "https://x"));
+    assert!(!serialize(&parse("GET https://x\n")).starts_with('\u{FEFF}'));
+}
+
+#[test]
+fn mixed_line_endings_are_saved_with_the_dominant_ending() {
+    // Mostly LF with one stray CRLF.
+    let f = parse("### A\nGET https://x\nAccept: */*\r\n\n### B\nGET https://y\n");
+    assert_eq!(serialize(&f), "### A\nGET https://x\nAccept: */*\n\n### B\nGET https://y\n");
+
+    // Mostly CRLF with one stray LF.
+    let f = parse("### A\r\nGET https://x\nAccept: */*\r\n\r\n### B\r\nGET https://y\r\n");
+    assert_eq!(serialize(&f), "### A\r\nGET https://x\r\nAccept: */*\r\n\r\n### B\r\nGET https://y\r\n");
+}
+
+#[test]
+fn requests_placed_before_a_separatorless_first_request_stay_separate() {
+    let text = "# @name first\nGET https://x\nAccept: */*\n";
+
+    // Insert a new request at the top.
+    let mut f = parse(text);
+    f.requests.insert(0, Request { name: "New".into(), url: "https://new".into(), ..Default::default() });
+    let out = serialize(&f);
+    assert_eq!(out, "### New\nGET https://new\n\n###\n# @name first\nGET https://x\nAccept: */*\n");
+    let urls: Vec<_> = parse(&out).requests.iter().map(|r| r.url.clone()).collect();
+    assert_eq!(urls, ["https://new", "https://x"]);
+
+    // Duplicate the first request (the copy still carries the original text) in front of it.
+    let mut f = parse(text);
+    let copy = f.requests[0].clone();
+    f.requests.insert(0, copy);
+    let out = serialize(&f);
+    assert_eq!(out, "# @name first\nGET https://x\nAccept: */*\n###\n# @name first\nGET https://x\nAccept: */*\n");
+    assert_eq!(parse(&out).requests.len(), 2);
+}
+
+/// Parses `text`, edits its first request so it is re-rendered, and returns the output.
+fn resave(text: &str) -> String {
+    let mut f = parse(text);
+    f.requests[0].method = "PUT".into();
+    serialize(&f)
+}
+
+#[test]
+fn empty_param_docs_survive_a_resave() {
+    let out = resave("# @param a:\n# @header Accept:\nGET https://x?a=1\nAccept: */*\n");
+    assert!(out.contains("# @param a:\n# @header Accept:\nPUT "), "{out}");
+}
+
+#[test]
+fn unknown_httpdesk_directive_values_survive_a_resave() {
+    let out = resave("# @httpdesk-auth oauth2 client-credentials\nGET https://x\n");
+    assert!(out.contains("# @httpdesk-auth oauth2 client-credentials\nPUT "), "{out}");
+
+    // Unknown section names are kept next to the known ones.
+    let out = resave("# @httpdesk-disabled headers, cookies\nGET https://x\n#~ A: 1\n");
+    assert!(out.contains("# @httpdesk-disabled headers, cookies\nPUT "), "{out}");
+    assert!(!parse(&out).requests[0].headers.enabled);
+
+    let out = resave("# @httpdesk-disabled cookies\nGET https://x\n");
+    assert!(out.contains("# @httpdesk-disabled cookies\nPUT "), "{out}");
+}
+
+#[test]
+fn header_area_comments_keep_their_position_on_resave() {
+    let text = "GET https://x?a=1\n\
+# about b\n\
+#~ &b=2\n\
+# credentials\n\
+Authorization: Bearer t\n\
+Accept: */*\n\
+# why X-Two\n\
+# second line\n\
+X-Two: 2\n\
+# trailing note\n";
+    assert_eq!(
+        resave(text),
+        "###\n\
+PUT https://x?a=1\n\
+# about b\n\
+#~ &b=2\n\
+# credentials\n\
+Authorization: Bearer t\n\
+Accept: */*\n\
+# why X-Two\n\
+# second line\n\
+X-Two: 2\n\
+# trailing note\n"
+    );
+
+    // A comment whose header is removed moves to the end rather than being dropped.
+    let mut f = parse(text);
+    f.requests[0].headers.items.retain(|h| h.name != "X-Two");
+    let out = serialize(&f);
+    assert!(out.ends_with("Accept: */*\n# why X-Two\n# second line\n# trailing note\n"), "{out}");
+}
+
+#[test]
+fn file_header_layout_survives_variable_edits() {
+    let text = "# Shared settings\n\n@host = https://x\n@token=abc\n\n# Ids\n@id = 1\n\n\n### First\nGET {{host}}\n";
+    let edit = |f: &mut HttpFile| {
+        f.header.variables[1].value = "xyz".into();
+        f.header.variables.retain(|v| v.name != "id");
+        f.header.variables.push(Variable { name: "new".into(), value: "2".into() });
+    };
+    let mut f = parse(text);
+    edit(&mut f);
+    assert_eq!(
+        serialize(&f),
+        "# Shared settings\n\n@host = https://x\n@token = xyz\n\n# Ids\n@new = 2\n\n\n### First\nGET {{host}}\n"
+    );
 }

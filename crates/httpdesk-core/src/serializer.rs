@@ -4,6 +4,8 @@
 //! canonical output as the edited model is emitted byte-for-byte; only edited
 //! requests are re-rendered. See `docs/ARCHITECTURE.md` §2.
 
+use base64::Engine;
+
 use crate::model::*;
 use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
 
@@ -11,39 +13,37 @@ pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
 
-    let header_text = render_header(&file.header);
-    let header_raw = file
-        .header
-        .raw
-        .as_ref()
-        .filter(|raw| render_header(&parser::parse_header(raw)) == header_text);
-    match header_raw {
-        Some(raw) => out.push_str(raw),
-        None if !header_text.is_empty() => {
-            out.push_str(&header_text);
-            prev_rendered = true;
+    let in_place = file.header.raw.as_deref().and_then(|raw| render_header_in_place(&file.header, raw));
+    match in_place {
+        Some(text) => {
+            if !text.trim().is_empty() {
+                out.push_str(&text);
+            }
         }
-        None => {}
+        None => {
+            out.push_str(&render_header(&file.header));
+            prev_rendered = !out.is_empty();
+        }
     }
-    let has_header = !header_text.is_empty();
-
-    for (i, req) in file.requests.iter().enumerate() {
+    for req in &file.requests {
         if !req.leading.is_empty() {
             separate(&mut out, prev_rendered);
             out.push_str(&req.leading);
             prev_rendered = false;
         }
         let rendered = render_request(req);
-        let raw = req.raw.as_ref().filter(|raw| {
-            // A header followed by a request without `###` would merge into one block.
-            let needs_separator = i == 0 && has_header && req.leading.is_empty();
-            !(needs_separator && !raw.starts_with("###"))
-                && parser::parse_block(raw).map(|p| render_request(&p)).as_deref()
-                    == Some(rendered.as_str())
-        });
+        let raw = req
+            .raw
+            .as_ref()
+            .filter(|raw| parser::parse_block(raw).map(|p| render_request(&p)).as_deref() == Some(rendered.as_str()));
         match raw {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
+                // Only a file's first block may omit `###`; anywhere else it would
+                // merge into the block before it.
+                if !out.is_empty() && !parser::is_separator(raw) {
+                    out.push_str("###\n");
+                }
                 out.push_str(raw);
                 prev_rendered = false;
             }
@@ -60,10 +60,13 @@ pub fn serialize(file: &HttpFile) -> String {
         out.push_str(&file.trailing);
     }
 
-    match file.line_ending {
-        LineEnding::Lf => out,
-        LineEnding::Crlf => out.replace('\n', "\r\n"),
+    if file.line_ending == LineEnding::Crlf {
+        out = out.replace('\n', "\r\n");
     }
+    if file.bom {
+        out.insert(0, parser::BOM);
+    }
+    out
 }
 
 /// Ensures `out` ends with a newline, plus a blank line when `blank` is set.
@@ -87,6 +90,69 @@ pub fn render_header(h: &FileHeader) -> String {
     } else {
         lines.join("\n") + "\n"
     }
+}
+
+/// Renders the header inside its original text so comments and blank lines stay
+/// put: variable lines are updated in place (unchanged ones keep their bytes,
+/// remaining ones follow the model's order), removed ones are dropped, and new
+/// ones follow the last variable line. `None` when the comments were edited.
+fn render_header_in_place(h: &FileHeader, raw: &str) -> Option<String> {
+    if parser::parse_header(raw).comments != h.comments {
+        return None;
+    }
+    let vars: Vec<&Variable> = h.variables.iter().filter(|v| !v.name.is_empty()).collect();
+    let lines: Vec<(&str, Option<Variable>)> =
+        raw.split_inclusive('\n').map(|l| (l, parser::parse_variable(l.trim()))).collect();
+
+    // A variable line is kept while some model variable still has its name.
+    let mut matched = vec![false; vars.len()];
+    let kept: Vec<bool> = lines
+        .iter()
+        .map(|(_, orig)| {
+            let Some(orig) = orig else { return false };
+            let found = (0..vars.len()).find(|&j| !matched[j] && vars[j].name == orig.name);
+            found.inspect(|&j| matched[j] = true).is_some()
+        })
+        .collect();
+    let mut fill = vars.iter().zip(&matched).filter(|(_, m)| **m).map(|(v, _)| *v);
+    let mut added = vars.iter().zip(&matched).filter(|(_, m)| !**m).map(|(v, _)| *v).peekable();
+    let insert_after = lines
+        .iter()
+        .rposition(|(_, v)| v.is_some())
+        .or_else(|| lines.iter().rposition(|(l, _)| !l.trim().is_empty()));
+
+    let mut out = String::new();
+    let mut push_added = |out: &mut String| {
+        for v in added.by_ref() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&render_variable(v));
+            out.push('\n');
+        }
+    };
+    if insert_after.is_none() {
+        push_added(&mut out);
+    }
+    for (i, (line, orig)) in lines.iter().enumerate() {
+        if kept[i] {
+            let v = fill.next()?;
+            if orig.as_ref() == Some(v) {
+                out.push_str(line);
+            } else {
+                out.push_str(&render_variable(v));
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        } else if orig.is_none() {
+            out.push_str(line);
+        }
+        if Some(i) == insert_after {
+            push_added(&mut out);
+        }
+    }
+    Some(out)
 }
 
 fn render_variable(v: &Variable) -> String {
@@ -116,7 +182,11 @@ fn render_basic(auth: &Auth) -> String {
         return v;
     }
     v.push(' ');
-    if !u.is_empty() && !p.is_empty() && !u.contains(':') && !u.contains(char::is_whitespace) {
+    // JetBrains and VS Code split `Basic …` at the first whitespace, so a username
+    // with a space (or a password with edge whitespace) only survives pre-encoded.
+    if u.contains(char::is_whitespace) || p.trim() != p {
+        v.push_str(&base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}")));
+    } else if !u.is_empty() && !p.is_empty() && !u.contains(':') {
         v.push_str(&format!("{u} {p}"));
     } else {
         v.push_str(&format!("{u}:{p}"));
@@ -132,7 +202,13 @@ pub fn render_request(req: &Request) -> String {
     for c in &req.comments {
         lines.push(if c.is_empty() { "#".into() } else { format!("# {c}") });
     }
+    // Section names this version doesn't know, written back on the section line below.
+    let mut off: Vec<&str> = Vec::new();
     for d in &req.directives {
+        if d.name == SECTION_DIRECTIVE {
+            off.push(&d.value);
+            continue;
+        }
         lines.push(if d.value.is_empty() { format!("# @{}", d.name) } else { format!("# @{} {}", d.name, d.value) });
     }
     let docs = [(PARAM_DOC_DIRECTIVE, &req.query.items), (HEADER_DOC_DIRECTIVE, &req.headers.items)];
@@ -143,12 +219,11 @@ pub fn render_request(req: &Request) -> String {
             }
         }
     }
-    let mut off = Vec::new();
-    if !req.query.enabled {
-        off.push("query");
-    }
     if !req.headers.enabled {
-        off.push("headers");
+        off.insert(0, "headers");
+    }
+    if !req.query.enabled {
+        off.insert(0, "query");
     }
     if !off.is_empty() {
         lines.push(format!("# @{} {}", SECTION_DIRECTIVE, off.join(", ")));
@@ -185,37 +260,57 @@ pub fn render_request(req: &Request) -> String {
     }
     lines.push(line);
 
-    // Disabled query params (item and/or section disabled).
+    // Header area as (anchor key, line): disabled query params, auth, headers.
+    let mut area: Vec<(String, String)> = Vec::new();
     let section_off = usize::from(!req.query.enabled);
     for p in req.query.items.iter().filter(|p| !p.name.is_empty()) {
         let depth = usize::from(!p.enabled) + section_off;
         if depth > 0 {
-            lines.push(format!("{}&{}", marker(depth), render_param(p)));
+            area.push((format!("&{}", p.name), format!("{}&{}", marker(depth), render_param(p))));
         }
     }
     if api_key_query && !auth.enabled {
-        lines.push(format!("{}&{}", marker(1), render_param(&KeyValue::new(&auth.key_name, &auth.key_value))));
+        let p = KeyValue::new(&auth.key_name, &auth.key_value);
+        area.push((format!("&{}", p.name), format!("{}&{}", marker(1), render_param(&p))));
     }
 
-    // Auth header.
-    let auth_line = match auth.kind {
-        AuthKind::Basic => Some(format!("Authorization: {}", render_basic(auth))),
-        AuthKind::Bearer => Some(format!("Authorization: Bearer {}", auth.token).trim_end().to_string()),
-        AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
-            Some(format!("{}: {}", auth.key_name, auth.key_value).trim_end().to_string())
+    // Auth header, as written while it still carries the same credentials.
+    let as_written = auth.raw.as_ref().filter(|raw| {
+        parser::parse_authorization(raw).is_some_and(|p| {
+            (p.kind, &p.username, &p.password, &p.token) == (auth.kind, &auth.username, &auth.password, &auth.token)
+        })
+    });
+    let auth_line = match (auth.kind, as_written) {
+        (AuthKind::Basic | AuthKind::Bearer, Some(raw)) => Some(("Authorization", format!("Authorization: {raw}"))),
+        (AuthKind::Basic, None) => Some(("Authorization", format!("Authorization: {}", render_basic(auth)))),
+        (AuthKind::Bearer, None) => {
+            Some(("Authorization", format!("Authorization: Bearer {}", auth.token).trim_end().to_string()))
+        }
+        (AuthKind::ApiKey, _) if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
+            Some((auth.key_name.as_str(), format!("{}: {}", auth.key_name, auth.key_value).trim_end().to_string()))
         }
         _ => None,
     };
-    if let Some(l) = auth_line {
-        lines.push(format!("{}{}", marker(usize::from(!auth.enabled)), l));
+    if let Some((name, l)) = auth_line {
+        area.push((name.to_string(), format!("{}{}", marker(usize::from(!auth.enabled)), l)));
     }
 
     let section_off = usize::from(!req.headers.enabled);
     for h in req.headers.items.iter().filter(|h| !h.name.is_empty()) {
         let depth = usize::from(!h.enabled) + section_off;
-        lines.push(format!("{}{}: {}", marker(depth), h.name, h.value).trim_end().to_string());
+        area.push((h.name.clone(), format!("{}{}: {}", marker(depth), h.name, h.value).trim_end().to_string()));
     }
-    lines.extend(req.extra_lines.iter().cloned());
+
+    // Extra lines go back above the line they preceded, else after the headers.
+    for e in &req.extra_lines {
+        let at = e.before.as_ref().and_then(|b| area.iter().position(|(k, _)| k.eq_ignore_ascii_case(b)));
+        let item = (String::new(), e.text.clone());
+        match at {
+            Some(i) => area.insert(i, item),
+            None => area.push(item),
+        }
+    }
+    lines.extend(area.into_iter().map(|(_, l)| l));
 
     let body = &req.body;
     let body_text = body.text.trim_end_matches(['\n', '\r', ' ', '\t']);
