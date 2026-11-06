@@ -75,8 +75,17 @@ impl AppState {
     }
 }
 
-/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs, tests).
+/// Managed state that gives one app instance its own config folder. The IPC tests
+/// use it because `HTTPDESK_CONFIG_DIR` is shared by every app in the process.
+#[cfg(test)]
+struct ConfigDir(PathBuf);
+
+/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs).
 fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = app.try_state::<ConfigDir>() {
+        return Some(dir.0.join("settings.json"));
+    }
     let dir = std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
 }

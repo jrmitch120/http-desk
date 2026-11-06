@@ -19,15 +19,21 @@ use tauri::webview::InvokeRequest;
 struct Harness {
     _app: tauri::App<tauri::test::MockRuntime>,
     webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
+    /// This app's settings folder; deleted when the harness is dropped.
+    cfg: tempfile::TempDir,
 }
 
 impl Harness {
     fn new() -> Self {
         let cfg = tempfile::tempdir().unwrap();
-        std::env::set_var("HTTPDESK_CONFIG_DIR", cfg.keep());
-        let app = super::with_commands(mock_builder()).build(mock_context(noop_assets())).unwrap();
+        let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
+        let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        Harness { _app: app, webview }
+        Harness { _app: app, webview, cfg }
+    }
+
+    fn config_dir(&self) -> std::path::PathBuf {
+        self.cfg.path().to_path_buf()
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -221,4 +227,15 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
     std::fs::write(&path, "GET https://changed\n").unwrap();
     let ext = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("external change reported");
     assert!(ext.contains("a.http"), "{ext}");
+}
+
+#[test]
+fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    h.ok("open_workspace", json!({ "path": ws.path() }));
+    let cfg = h.config_dir();
+    assert!(cfg.join("settings.json").is_file(), "settings were not written to {}", cfg.display());
+    drop(h);
+    assert!(!cfg.exists(), "{} was left behind", cfg.display());
 }

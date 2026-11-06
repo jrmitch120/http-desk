@@ -1,21 +1,27 @@
-@petId = 1
+@petId = 10
 
 ### List pets
-# Returns all pets, optionally filtered.
-GET {{baseUrl}}/pets?limit=20
-#~ &status=sold
+# Returns the pets with the given status.
+# @param status: available, pending or sold.
+GET {{baseUrl}}/pet/findByStatus?status=available
 Accept: application/json
 #~ X-Debug: true
-Authorization: Bearer {{token}}
 
 ### Create pet
-POST {{baseUrl}}/pets
+# Adds pet {{petId}}, or replaces it if it exists.
+POST {{baseUrl}}/pet
 Content-Type: application/json
+Accept: application/json
 
 {
+  "id": {{petId}},
   "name": "Rex",
-  "tag": "dog"
+  "photoUrls": [],
+  "status": "available"
 }
 
-### Get pet image
-GET {{baseUrl}}/png/{{petId}}
+### Get pet
+# The public Petstore is shared and resets now and then, so pets come and go.
+# If this returns 404, send "Create pet" first.
+GET {{baseUrl}}/pet/{{petId}}
+Accept: application/json
