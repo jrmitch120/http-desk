@@ -7,11 +7,12 @@
   import { untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
+  import type { KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
-  import KeyValueTable from "./KeyValueTable.svelte";
+  import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
   import SectionBar from "./SectionBar.svelte";
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
@@ -53,6 +54,8 @@
     "Content-Length", "Cookie", "Host", "If-Match", "If-None-Match", "If-Modified-Since", "Origin", "Referer",
     "User-Agent", "X-Api-Key", "X-Request-Id", "X-Correlation-Id", "X-Forwarded-For",
   ];
+  /** Params and headers: every column, with descriptions (`# @param` / `# @header`). */
+  const documented: Column<KeyValue>[] = ["enable", "name", "value", "description", "delete"];
 
   const qCount = $derived(req ? req.query.items.filter((i) => i.enabled && i.name).length : 0);
   const hCount = $derived(req ? req.headers.items.filter((i) => i.enabled && i.name).length : 0);
@@ -166,11 +169,11 @@
       <div class="panel" class:fill={section === "body"}>
         {#if section === "params"}
           <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
-          <KeyValueTable bind:items={req.query.items} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" docs />
+          <KeyValueGrid bind:items={req.query.items} columns={documented} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" />
           <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
         {:else if section === "headers"}
           <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueTable bind:items={req.headers.items} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} docs />
+          <KeyValueGrid bind:items={req.headers.items} columns={documented} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} />
           {#if req.auth.kind !== "none" && req.auth.enabled}
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
