@@ -194,7 +194,7 @@ fn read_http_file(state: State<'_, AppState>, path: PathBuf) -> CmdResult<HttpFi
 /// Serializes and writes the file, returning it re-parsed (fresh `raw` snapshots).
 #[tauri::command]
 fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> CmdResult<HttpFile> {
-    let path = state.confine_entry(&path)?;
+    let path = state.confine_write(&path)?;
     let text = httpdesk_core::try_serialize(&file).map_err(err)?;
     state.write_file(&path, &text)?;
     Ok(httpdesk_core::parse(&text))
@@ -207,7 +207,7 @@ fn render_request(request: Request) -> String {
 
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
-    let path = state.confine_entry(&path)?;
+    let path = state.confine_write(&path)?;
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
@@ -427,7 +427,7 @@ fn openapi_generate_blocking(
         doc.generate(options)
     };
     let output_dir = state.confine(output_dir)?;
-    let files = output.files.iter().map(|f| state.confine_entry(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
+    let files = output.files.iter().map(|f| state.confine_write(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
     let conflicts: Vec<PathBuf> = files.iter().filter(|p| p.exists()).cloned().collect();
     // Output is confined to the workspace, so environments always go to its root.
     let env_dir = state.root()?;
