@@ -424,6 +424,22 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     assert!(ext.contains(&p("new/inner.http")), "external change inside a moved folder is still reported: {ext:?}");
 }
 
+/// Story 53: a settings save that can't be written is reported, so the UI can
+/// show "Could not save settings: …" instead of pretending it worked.
+#[test]
+fn saving_settings_reports_a_failed_write() {
+    let h = Harness::new();
+    let settings = h.ok("get_settings", json!({}));
+    h.ok("save_settings", json!({ "settings": settings }));
+    assert!(h.config_dir().join("settings.json").is_file());
+
+    // A folder where the settings file should go: the write can't replace it.
+    std::fs::remove_file(h.config_dir().join("settings.json")).unwrap();
+    std::fs::create_dir(h.config_dir().join("settings.json")).unwrap();
+    let err = h.call("save_settings", json!({ "settings": settings })).expect_err("a failed write was reported as saved");
+    assert!(err.as_str().unwrap().starts_with("Could not save settings to "), "{err}");
+}
+
 #[test]
 fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
     let h = Harness::new();

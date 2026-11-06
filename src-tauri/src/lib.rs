@@ -113,10 +113,9 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     Some(dir.join("settings.json"))
 }
 
-fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) {
-    if let Some(path) = settings_path(app) {
-        let _ = write_settings(&path, settings);
-    }
+fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> CmdResult<()> {
+    let Some(path) = settings_path(app) else { return Ok(()) };
+    write_settings(&path, settings).map_err(|e| format!("Could not save settings to {}: {e}", path.display()))
 }
 
 /// Recents in the form `open_workspace` now stores (older versions saved
@@ -168,7 +167,8 @@ fn open_workspace_blocking<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppSta
     settings.recent_workspaces.retain(|p| p != &root);
     settings.recent_workspaces.insert(0, root.clone());
     settings.recent_workspaces.truncate(10);
-    persist_settings(app, &settings);
+    // The workspace is open either way; a lost recents entry isn't worth failing for.
+    let _ = persist_settings(app, &settings);
     Ok(WorkspaceInfo { root, tree, gitignore_updated })
 }
 
@@ -357,9 +357,11 @@ fn get_settings(state: State<'_, AppState>) -> AppSettings {
 }
 
 #[tauri::command]
-fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, settings: AppSettings) {
-    persist_settings(&app, &settings);
+fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, settings: AppSettings) -> CmdResult<()> {
+    // Applied either way: the UI already shows the new values for this session.
+    let saved = persist_settings(&app, &settings);
     *state.settings.lock().unwrap() = settings;
+    saved
 }
 
 #[tauri::command]
