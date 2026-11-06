@@ -2,6 +2,8 @@
 //! payloads the frontend sends (camelCase args, frontend-only `_key` fields),
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
+mod confinement;
+
 // The origin Tauri serves the app from; capabilities only apply to it.
 #[cfg(windows)]
 const APP_URL: &str = "http://tauri.localhost";

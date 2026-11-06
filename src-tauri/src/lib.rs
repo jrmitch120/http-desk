@@ -16,6 +16,8 @@ use notify_debouncer_mini::{new_debouncer, notify::RecommendedWatcher, notify::R
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod confine;
+
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -171,7 +173,8 @@ fn search_requests(state: State<'_, AppState>, query: String) -> CmdResult<Vec<S
 // ------------------------------------------------------------------ files
 
 #[tauri::command]
-fn read_http_file(path: PathBuf) -> CmdResult<HttpFile> {
+fn read_http_file(state: State<'_, AppState>, path: PathBuf) -> CmdResult<HttpFile> {
+    let path = state.confine_entry(&path)?;
     let text = std::fs::read_to_string(&path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     Ok(httpdesk_core::parse(&text))
 }
@@ -179,6 +182,7 @@ fn read_http_file(path: PathBuf) -> CmdResult<HttpFile> {
 /// Serializes and writes the file, returning it re-parsed (fresh `raw` snapshots).
 #[tauri::command]
 fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> CmdResult<HttpFile> {
+    let path = state.confine_entry(&path)?;
     let text = httpdesk_core::serialize(&file);
     state.write_file(&path, &text)?;
     Ok(httpdesk_core::parse(&text))
@@ -191,6 +195,7 @@ fn render_request(request: Request) -> String {
 
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
+    let path = state.confine_entry(&path)?;
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
@@ -198,7 +203,8 @@ fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> Cm
 }
 
 #[tauri::command]
-fn create_dir(path: PathBuf) -> CmdResult<()> {
+fn create_dir(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
+    let path = state.confine_entry(&path)?;
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
@@ -206,8 +212,9 @@ fn create_dir(path: PathBuf) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn rename_path(from: PathBuf, to: PathBuf) -> CmdResult<()> {
-    if to.exists() {
+fn rename_path(state: State<'_, AppState>, from: PathBuf, to: PathBuf) -> CmdResult<()> {
+    let (from, to) = (state.confine_entry(&from)?, state.confine_entry(&to)?);
+    if to.exists() && !confine::is_case_only_rename(&from, &to) {
         return Err(format!("{} already exists", to.display()));
     }
     if let Some(parent) = to.parent() {
@@ -217,7 +224,8 @@ fn rename_path(from: PathBuf, to: PathBuf) -> CmdResult<()> {
 }
 
 #[tauri::command]
-fn delete_path(path: PathBuf) -> CmdResult<()> {
+fn delete_path(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
+    let path = state.confine_entry(&path)?;
     trash::delete(&path).or_else(|_| {
         if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.map_err(err)
     })
@@ -378,7 +386,8 @@ fn openapi_generate(
         let doc = specs.get(source.trim()).ok_or("Load the specification first")?;
         doc.generate(&options)
     };
-    let files: Vec<PathBuf> = output.files.iter().map(|f| output_dir.join(&f.relative_path)).collect();
+    let output_dir = state.confine(&output_dir)?;
+    let files = output.files.iter().map(|f| state.confine_entry(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
     let conflicts: Vec<PathBuf> = files.iter().filter(|p| p.exists()).cloned().collect();
     // Environments go to the workspace root when generating inside it.
     let env_dir = match state.root.lock().unwrap().clone() {
