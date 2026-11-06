@@ -89,6 +89,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
     `background` to `transparent` through `class`.
 - Width belongs to the caller: pass `class="x"` and style `.parent :global(.x)`. Don't
   target Select's internal class names.
+- `openList()` (through `bind:this`) opens the list from code, focusing the trigger as a
+  click would. The send error panel's "Choose environment" uses it, through the store's
+  `app.chooseEnvironment()`.
 - Keyboard: Enter, Space or the arrows open it; typing filters (case-insensitive, anywhere
   in the label); arrows, Home/End and PageUp/PageDown move; Enter picks; Escape and Tab
   close without a change. Focus stays on the trigger throughout.
