@@ -86,6 +86,24 @@ fn rejects_invalid_documents_with_clear_errors() {
 }
 
 #[test]
+fn versions_newer_than_31_load_with_a_warning() {
+    let newer = |v: &str| format!("OpenAPI {v} is newer than 3.1; generating on a best-effort basis");
+    for v in ["3.2.0", "3.2", "3.3.1"] {
+        let doc = OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\npaths: {{}}\n"), None).unwrap();
+        assert_eq!(doc.summary().warnings, [newer(v), "The specification defines no paths".into()]);
+        // Like 3.1, `paths` is optional.
+        let doc = OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\n"), None).unwrap();
+        assert_eq!(doc.summary().warnings, [newer(v), "The specification defines no paths".into()]);
+    }
+    let doc = OpenApiDoc::parse(r#"{"openapi": "3.2.0", "info": {"title": "x", "version": "1"}, "paths": {"/a": {}}}"#, None).unwrap();
+    assert_eq!(doc.summary().warnings, [newer("3.2.0")], "JSON specs warn the same way");
+    for v in ["3.0.3", "3.1.0", "3.1.1"] {
+        let doc = OpenApiDoc::parse(&format!("openapi: {v}\ninfo: {{title: x, version: '1'}}\npaths: {{/a: {{}}}}\n"), None).unwrap();
+        assert!(doc.summary().warnings.is_empty(), "{v}: {:?}", doc.summary().warnings);
+    }
+}
+
+#[test]
 fn errors_serialize_as_messages() {
     let err = OpenApiDoc::parse("{}", None).unwrap_err();
     assert_eq!(serde_json::to_value(&err).unwrap(), serde_json::Value::String(err.to_string()));
@@ -328,6 +346,54 @@ fn snapshot_petstore_pet_file() {
 fn snapshot_library_books_file() {
     let out = generate(&library(), Grouping::Tag);
     insta::assert_snapshot!("library_books", serialize(file(&out, "books.http")));
+}
+
+#[test]
+fn description_lines_starting_with_at_stay_comments() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Notes, version: '1'}
+paths:
+  /notes:
+    get:
+      operationId: listNotes
+      description: |
+        Lists notes.
+          @name other
+        @timeout 1
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let text = serialize(&out.files[0].file);
+    insta::assert_snapshot!("at_description_lines", text);
+    let back = parse(&text);
+    let names: Vec<_> = back.requests[0].directives.iter().map(|d| (d.name.as_str(), d.value.as_str())).collect();
+    assert_eq!(names, [("name", "listNotes")], "{text}");
+}
+
+#[test]
+fn invalid_json_specs_report_json_errors() {
+    // Missing comma after the `openapi` member.
+    let text = "{\n  \"openapi\": \"3.0.0\"\n  \"info\": {\"title\": \"x\", \"version\": \"1\"},\n  \"paths\": {}\n}\n";
+    let err = OpenApiDoc::parse(text, None).unwrap_err();
+    assert!(matches!(err, OpenApiError::Parse(_)), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 3 column 3"), "{msg}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("api.json");
+    std::fs::write(&path, format!("\n\n{text}")).unwrap();
+    let msg = OpenApiDoc::load_file(&path).unwrap_err().to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 5 column 3"), "{msg}");
+
+    // A `.json` file that doesn't start with `{` is still judged as JSON.
+    std::fs::write(&path, "<html>\n").unwrap();
+    let msg = OpenApiDoc::load_file(&path).unwrap_err().to_string();
+    assert!(msg.contains("invalid JSON") && msg.contains("line 1 column 1"), "{msg}");
+
+    // YAML specs still report YAML errors.
+    let msg = OpenApiDoc::parse("openapi: 3.0.0\ninfo: [unclosed\n", None).unwrap_err().to_string();
+    assert!(msg.contains("invalid YAML"), "{msg}");
 }
 
 // ---------------------------------------------------------------- external refs
