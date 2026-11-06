@@ -319,7 +319,9 @@ New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 also for the size of small fixed elements that are not controls (a badge's height, a
 Toggle's track); `--radius` and `--radius-sm`;
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
-`:focus-visible` for focus; and the `--popup-*` tokens for floating surfaces. Colours
+`:focus-visible` for focus (a control flush against an edge that clips, such as a tab
+in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of
+the ring is cut off); and the `--popup-*` tokens for floating surfaces. Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
 so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control
 works in the light and dark themes without its own rules.

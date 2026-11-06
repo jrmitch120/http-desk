@@ -47,9 +47,13 @@
   --control-h-icon: 26px;
 
   /* the one focus ring every control uses: outline: var(--focus-ring);
-     outline-offset: var(--focus-ring-offset) */
-  --focus-ring: 2px solid var(--focus);
+     outline-offset: var(--focus-ring-offset). A control flush against an edge
+     that clips (a scrolling strip, overflow: hidden) offsets it by
+     --focus-ring-inset instead, which keeps the whole ring inside the control. */
+  --focus-ring-width: 2px;
+  --focus-ring: var(--focus-ring-width) solid var(--focus);
   --focus-ring-offset: -1px;
+  --focus-ring-inset: calc(-1 * var(--focus-ring-width));
 
   /* spacing scale, on a 4px grid */
   --space-1: 4px;

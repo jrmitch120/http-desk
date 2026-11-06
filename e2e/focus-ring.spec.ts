@@ -46,7 +46,8 @@ test("owned controls use the same focus ring", async ({ page }) => {
   // In document order: sidebar separator, tabs, method Select, the Params
   // section's Toggle, a row Checkbox, the request/response separator.
   expect(await tabTo(page, '[role="separator"]')).toEqual(ring);
-  expect(await tabTo(page, '[role="tab"]')).toEqual(ring);
+  // The tab strip scrolls, so it clips: tabs inset the ring to keep all of it.
+  expect(await tabTo(page, '[role="tab"]')).toEqual({ ...ring, offset: "-2px" });
   expect(await tabTo(page, 'button[role="combobox"]')).toEqual(ring);
   expect(await tabTo(page, '[role="switch"]', ".track")).toEqual(ring);
   expect(await tabTo(page, '[role="checkbox"]', ".box")).toEqual(ring);

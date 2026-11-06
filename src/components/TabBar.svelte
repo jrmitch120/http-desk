@@ -119,9 +119,10 @@
     background: var(--panel-2);
     color: var(--text-2);
   }
+  /* The strip scrolls, so it clips: the ring sits fully inside the tab. */
   .tab:focus-visible {
     outline: var(--focus-ring);
-    outline-offset: var(--focus-ring-offset);
+    outline-offset: var(--focus-ring-inset);
   }
   .tab.active {
     background: var(--bg);
