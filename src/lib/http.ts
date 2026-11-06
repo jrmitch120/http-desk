@@ -172,12 +172,19 @@ function encodePreservingVars(s: string): string {
     .join("");
 }
 
+/** Joins one-field-per-line form bodies with `&`, like the sender does. */
+function joinFormLines(text: string): string {
+  let out = "";
+  for (const line of text.split("\n").map((l) => l.trim())) {
+    if (line === "") continue;
+    if (out !== "" && !out.endsWith("&") && !line.startsWith("&")) out += "&";
+    out += line;
+  }
+  return out;
+}
+
 export function parseForm(text: string): FormField[] {
-  const joined = text
-    .split("\n")
-    .map((l) => l.trim())
-    .join("");
-  return joined
+  return joinFormLines(text)
     .split("&")
     .filter((p) => p !== "")
     .map((p) => {
@@ -191,6 +198,24 @@ export function buildForm(fields: FormField[]): string {
     .filter((f) => f.name !== "")
     .map((f) => `${encodePreservingVars(f.name)}=${encodePreservingVars(f.value)}`)
     .join("\n&");
+}
+
+// ------------------------------------------------------------------ file
+
+export interface FileRef {
+  /** `<@ path`: variables in the file's content are substituted. */
+  substitute: boolean;
+  path: string;
+}
+
+/** `< path` or `<@ path` (space optional), the same rule as the sender. `<tag>` and `<?xml` are content. */
+export function parseFileRef(text: string): FileRef | null {
+  const t = text.trim();
+  const m = /^<(@?)\s*([^\n]*)$/.exec(t);
+  if (!m || t.startsWith("<?")) return null;
+  const path = m[2].trim();
+  if (path === "" || path.startsWith("<") || path.includes(">")) return null;
+  return { substitute: m[1] === "@", path };
 }
 
 // ------------------------------------------------------------------ multipart
@@ -221,9 +246,9 @@ export function parseMultipart(text: string, boundary: string): MultipartPart[] 
     const disp = /content-disposition:[^\n]*?;\s*name="([^"]*)"/i.exec(head);
     if (!disp) continue;
     const ct = /content-type:\s*([^\n]+)/i.exec(head)?.[1].trim();
-    const fileRef = /^<\s+(.+)$/.exec(content.trim());
-    const isFile = /filename=/i.test(head) && !!fileRef;
-    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef![1].trim() : content, contentType: ct });
+    const fileRef = parseFileRef(content);
+    const isFile = /filename=/i.test(head) && !!fileRef && !fileRef.substitute;
+    parts.push({ name: disp[1], kind: isFile ? "file" : "text", value: isFile ? fileRef!.path : content, contentType: ct });
   }
   return parts;
 }

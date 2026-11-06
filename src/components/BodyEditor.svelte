@@ -8,6 +8,7 @@
     buildMultipart,
     dirname,
     findHeader,
+    parseFileRef,
     parseForm,
     parseMultipart,
     prettyJson,
@@ -70,7 +71,7 @@
   }
 
   // ---- file
-  const fileRef = $derived(/^<(@?)\s+(.*)$/.exec(body.text.trim()));
+  const fileRef = $derived(parseFileRef(body.text));
   function setFileRef(path: string, substitute: boolean) {
     body.text = `<${substitute ? "@" : ""} ${path}`;
   }
@@ -151,12 +152,12 @@
       <label class="field">
         <span class="muted">File (relative to the .http file)</span>
         <span class="row">
-          <input class="input mono" value={fileRef?.[2] ?? ""} placeholder="./payload.json" spellcheck="false" oninput={(e) => setFileRef(e.currentTarget.value, fileRef?.[1] === "@")} />
-          <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, fileRef?.[1] === "@"))}>Choose…</button>
+          <input class="input mono" value={fileRef?.path ?? ""} placeholder="./payload.json" spellcheck="false" oninput={(e) => setFileRef(e.currentTarget.value, !!fileRef?.substitute)} />
+          <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, !!fileRef?.substitute))}>Choose…</button>
         </span>
       </label>
       <label class="check">
-        <input type="checkbox" checked={fileRef?.[1] === "@"} onchange={(e) => setFileRef(fileRef?.[2] ?? "", e.currentTarget.checked)} />
+        <input type="checkbox" checked={!!fileRef?.substitute} onchange={(e) => setFileRef(fileRef?.path ?? "", e.currentTarget.checked)} />
         Substitute <code>{"{{variables}}"}</code> inside the file
       </label>
       <label class="field">
