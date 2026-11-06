@@ -103,10 +103,16 @@ test("the lock column makes a variable a Secret, saved only to the private file"
   await value.fill("s3cret");
   await expect(value).toHaveAttribute("type", "text");
 
-  const lock = row.getByRole("button", { name: /click to mark as secret/ });
+  // One name for both states; aria-pressed says which, the tooltip says where the value goes.
+  const lock = row.getByRole("button", { name: "Secret", exact: true });
   await expect(lock).toHaveAttribute("aria-pressed", "false");
+  await lock.hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Shareable: saved in http-client.env.json. Click to make it a Secret.");
   await lock.click();
-  await expect(row.getByRole("button", { name: /click to make shareable/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(lock).toHaveAttribute("aria-pressed", "true");
+  await page.mouse.move(0, 0);
+  await lock.hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Secret: saved only in http-client.private.env.json. Click to make it shareable.");
   await expect(value).toHaveAttribute("type", "password");
   await row.getByRole("button", { name: "Show value" }).click();
   await expect(value).toHaveAttribute("type", "text");

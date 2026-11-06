@@ -168,9 +168,11 @@
     <button
       class="icon-btn lock"
       class:active={row.secret}
+      aria-label="Secret"
       aria-pressed={row.secret}
-      use:tooltip
-      aria-label={row.secret ? "Secret: stored in http-client.private.env.json — click to make shareable" : "Secret: stored in http-client.private.env.json — click to mark as secret"}
+      use:tooltip={row.secret
+        ? "Secret: saved only in http-client.private.env.json. Click to make it shareable."
+        : "Shareable: saved in http-client.env.json. Click to make it a Secret."}
       onclick={() => set({ secret: !row.secret })}
     >
       <Icon name={row.secret ? "lock" : "unlock"} size={13} />
