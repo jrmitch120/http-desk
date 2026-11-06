@@ -16,6 +16,8 @@ use crate::parser::DISABLED_MARKER;
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
+mod body;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
     #[error("Invalid URL \"{url}\": {reason}")]
@@ -260,6 +262,9 @@ fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
     }
 }
 
+/// Sent when the request sets no `Accept-Encoding`: every encoding `body` can decode.
+const DEFAULT_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
+
 /// Resolves variables and applies enablement. Disabled components are never included.
 pub fn prepare(
     req: &Request,
@@ -337,6 +342,10 @@ pub fn prepare(
     if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("user-agent")) {
         headers.push(("User-Agent".into(), concat!("HttpDesk/", env!("CARGO_PKG_VERSION")).into()));
     }
+    // Added here rather than by reqwest so the Request tab shows it.
+    if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-encoding")) {
+        headers.push(("Accept-Encoding".into(), DEFAULT_ACCEPT_ENCODING.into()));
+    }
 
     let mut warnings = Vec::new();
     let unresolved = resolver.unresolved();
@@ -381,9 +390,14 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
     pub time_ms: f64,
     pub ttfb_ms: f64,
+    /// Decoded body size (what the viewer shows and the size limit applies to).
     pub body_size: usize,
+    /// Body bytes as received on the wire, before `Content-Encoding` is undone.
+    pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
+    /// The response's `Content-Encoding` header, as sent by the server.
+    pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
     pub body_text: Option<String>,
     /// Base64 for binary content (only below the preview limit).
@@ -424,7 +438,13 @@ fn build_client(
     ssl: &SslConfig,
     cookies: Arc<cookies::Recorder>,
 ) -> Result<reqwest::Client, ExecError> {
+    // Decoding happens in `body` so the raw bytes can be counted. These also
+    // guard against another crate enabling reqwest's decompression features.
     let mut b = reqwest::Client::builder()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
         .cookie_provider(cookies)
         .redirect(if p.follow_redirects {
             reqwest::redirect::Policy::limited(settings.max_redirects)
@@ -520,19 +540,26 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
     let content_type =
         resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
 
-    let mut body = Vec::new();
-    let mut truncated = false;
+    let content_encoding = resp
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string());
+
+    let mut warnings = p.warnings;
+    let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
+    let as_received = unsupported.is_some();
+    warnings.extend(unsupported);
     while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
-        if body.len() + chunk.len() > settings.max_body_bytes {
-            body.extend_from_slice(&chunk[..settings.max_body_bytes - body.len()]);
-            truncated = true;
+        if !reader.push(&chunk).map_err(ExecError::Http)? {
             break;
         }
-        body.extend_from_slice(&chunk);
     }
+    let body::ReceivedBody { bytes: body, transferred, truncated } = reader.finish().map_err(ExecError::Http)?;
     let elapsed = start.elapsed();
 
-    let body_text = decode_text(&body, content_type.as_deref());
+    // Still-encoded bytes are binary whatever the content type says.
+    let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };
     let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
         .then(|| base64::engine::general_purpose::STANDARD.encode(&body));
 
@@ -562,13 +589,15 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
             time_ms: elapsed.as_secs_f64() * 1000.0,
             ttfb_ms: ttfb.as_secs_f64() * 1000.0,
             body_size: body.len(),
+            transferred_size: transferred,
             headers_size,
             content_type,
+            content_encoding,
             body_text,
             body_base64,
             truncated,
             request,
-            warnings: p.warnings,
+            warnings,
             cookies: cookies.take(),
         },
         body,

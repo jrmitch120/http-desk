@@ -531,6 +531,133 @@ async fn an_api_key_query_param_is_resolved_and_encoded() {
     assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
 }
 
+// ---- Content encoding (#66) ----
+
+/// A JSON body big and repetitive enough that every encoding shrinks it.
+fn compressible_json() -> Vec<u8> {
+    let items: Vec<_> = (0..200).map(|i| serde_json::json!({"id": i, "name": "a pet with a long name"})).collect();
+    serde_json::to_vec(&items).unwrap()
+}
+
+/// Encodes `data` the way a server would for `Content-Encoding: <encoding>`.
+fn encode(encoding: &str, data: &[u8]) -> Vec<u8> {
+    match encoding {
+        "gzip" => {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        // HTTP "deflate" is the zlib format (RFC 9110 sec. 8.4.1.2).
+        "deflate" => {
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "br" => {
+            let mut out = Vec::new();
+            brotli::BrotliCompress(&mut &data[..], &mut out, &Default::default()).unwrap();
+            out
+        }
+        "zstd" => zstd::encode_all(data, 0).unwrap(),
+        other => panic!("no test encoder for {other}"),
+    }
+}
+
+/// Serves `body` at `/data` as JSON with the given `Content-Encoding`.
+async fn encoded_server(encoding: &str, body: Vec<u8>) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/data"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Encoding", encoding)
+                .set_body_raw(body, "application/json"),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn an_encoded_response_reports_transferred_and_decoded_sizes_and_its_encoding() {
+    let json = compressible_json();
+    for encoding in ["gzip", "br", "deflate", "zstd"] {
+        let wire = encode(encoding, &json);
+        let server = encoded_server(encoding, wire.clone()).await;
+        let vars = env(&[("base", &server.uri())]);
+
+        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+        assert_eq!(resp.content_encoding.as_deref(), Some(encoding));
+        assert_eq!(resp.transferred_size, wire.len(), "{encoding}: raw bytes on the wire");
+        assert_eq!(resp.body_size, json.len(), "{encoding}: decoded size");
+        assert!(resp.transferred_size < resp.body_size, "{encoding}");
+        assert_eq!(resp.body_text.as_deref(), Some(std::str::from_utf8(&json).unwrap()), "{encoding}");
+        assert!(resp.warnings.is_empty(), "{encoding}: {:?}", resp.warnings);
+    }
+}
+
+#[tokio::test]
+async fn accept_encoding_defaults_to_what_we_decode_and_a_set_one_is_sent_unchanged() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/echo\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    assert_eq!(header(&received, "accept-encoding"), Some("gzip, deflate, br, zstd"));
+    let shown = resp.request.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("accept-encoding"));
+    assert_eq!(shown.map(|(_, v)| v.as_str()), Some("gzip, deflate, br, zstd"), "the Request tab lists it");
+
+    send(&parse("GET {{base}}/echo\nAccept-Encoding: identity\n").requests[0], vars, Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    let sent: Vec<_> = received.headers.get_all("accept-encoding").iter().map(|v| v.to_str().unwrap()).collect();
+    assert_eq!(sent, ["identity"]);
+}
+
+#[tokio::test]
+async fn an_unsupported_encoding_shows_the_bytes_as_received_with_a_warning() {
+    let wire = b"\x1f\x9d\x90some compressed bytes".to_vec();
+    let server = encoded_server("compress", wire.clone()).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+    assert_eq!(resp.content_encoding.as_deref(), Some("compress"));
+    assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
+    assert!(resp.body_text.is_none(), "still-encoded bytes are binary even though the type is JSON");
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
+    assert_eq!(raw, wire);
+    assert_eq!(resp.warnings, ["Content-Encoding compress isn't supported; showing the bytes as received"]);
+}
+
+#[tokio::test]
+async fn the_body_size_limit_applies_to_decoded_bytes() {
+    let json = compressible_json();
+    let wire = encode("gzip", &json);
+    let server = encoded_server("gzip", wire.clone()).await;
+    let settings = ExecSettings { max_body_bytes: wire.len() + 100, ..ExecSettings::default() };
+    let req = parse(&format!("GET {}/data\n", server.uri())).requests.remove(0);
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+
+    let out = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+
+    assert!(out.response.truncated);
+    assert_eq!(out.response.body_size, wire.len() + 100);
+    assert_eq!(out.body, json[..wire.len() + 100]);
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_fails_naming_the_encoding() {
+    let mut wire = encode("gzip", &compressible_json());
+    wire.truncate(wire.len() / 2);
+    let server = encoded_server("gzip", wire).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let err = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap_err();
+
+    assert!(matches!(err, ExecError::Http(_)), "{err}");
+    assert!(err.to_string().contains("Could not decode the gzip response body"), "{err}");
+}
+
 #[tokio::test]
 async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
     let server = MockServer::start().await;

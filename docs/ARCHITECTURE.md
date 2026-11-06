@@ -33,6 +33,7 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   env.rs                http-client.env.json / http-client.private.env.json, gitignore check
   vars.rs               {{variable}} + dynamic variable resolution
   exec.rs               request execution via reqwest
+  exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
   openapi/              OpenAPI 3.0/3.1 loading, validation, generation
   workspace.rs          tree listing, search, ignore rule, atomic writes
 src-tauri/              thin Tauri shell: commands, app state
@@ -477,7 +478,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Disabled query params and multipart parts reorder after the enabled ones | Documented; deterministic. |
 | `@httpdesk-*` directives might trigger an "unknown tag" hint in JetBrains | They are plain comments to both parsers, and only written when needed (section off, API key auth). |
 | Environment file conventions differ (VS Code uses `settings.json`) | Use the JetBrains env files, which are plain JSON in the repo. VS Code users can use the `vscode-restclient` env-file setting or keep both. |
-| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview or a hex dump. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received. Copy body copies a binary body as its base64 text, asking first above 1 MB. |
+| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. The limit counts decoded bytes, after `Content-Encoding` is undone. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview or a hex dump. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received. Copy body copies a binary body as its base64 text, asking first above 1 MB. |
 | Huge OpenAPI specs (thousands of operations) | Generation is linear. The operation picker groups operations under collapsible headings and has a filter; it is not virtualized. |
 | External `$ref` to remote URLs | Not fetched (warning); relative-file refs are resolved for specs loaded from a file. |
 | Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand with the [manual OS rendering check](os-checklist.md). |
@@ -544,6 +545,12 @@ Decisions made during implementation, beyond the plan above:
   0 turns a timeout off. A timeout error names which timeout fired and its value. The
   idle timeout also runs while connecting, so an `@timeout` shorter than the connect
   time is reported as a read timeout.
+* **Content encoding:** reqwest's decompression is off; the core decodes bodies itself
+  so it can count the bytes on the wire (`transferredSize`) as well as the decoded size
+  (`bodySize`). A request without `Accept-Encoding` gets `gzip, deflate, br, zstd` added
+  at prepare time, so the Request tab shows it. A user-set `Accept-Encoding` is sent
+  unchanged. A response in an encoding we can't decode is shown as received (binary),
+  with a warning. A body that fails to decode is a send error.
 * **Auto Content-Type:** choosing a body mode sets the `Content-Type` header (an
   ordinary, visible header). It replaces a type HttpDesk itself sets for some mode but
   keeps a custom one, except that multipart always sets `multipart/form-data;
@@ -590,11 +597,11 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors, custom methods, binary and text responses |
+| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors, custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported) and transferred size |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Env, vars, workspace | Unit tests in each module |
 | IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, environments, OpenAPI generation, confinement, deleting, Windows paths, and the file watcher (including self-write suppression) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |
