@@ -38,6 +38,33 @@ let settings = {
   showDescriptions: true,
 };
 
+type Node = { name: string; path: string; kind: string; children?: Node[] };
+const parentOf = (p: string) => p.slice(0, p.lastIndexOf("/"));
+const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+const findNode = (n: Node, path: string): Node | undefined =>
+  n.path === path ? n : n.children?.map((c) => findNode(c, path)).find(Boolean);
+function addNode(path: string, kind: "dir" | "file") {
+  findNode(tree, parentOf(path))?.children?.push({ name: nameOf(path), path, kind, ...(kind === "dir" ? { children: [] } : {}) });
+}
+/** Re-points a node and everything below it, plus any file contents, to a new path. */
+function moveNode(from: string, to: string) {
+  const node = findNode(tree, from);
+  const parent = findNode(tree, parentOf(from));
+  if (!node || !parent) return;
+  parent.children = parent.children!.filter((c) => c !== node);
+  const remap = (n: Node) => {
+    n.path = to + n.path.slice(from.length);
+    n.children?.forEach(remap);
+  };
+  remap(node);
+  node.name = nameOf(to);
+  findNode(tree, parentOf(to))?.children?.push(node);
+  for (const p of Object.keys(files).filter((p) => p === from || p.startsWith(from + "/"))) {
+    files[to + p.slice(from.length)] = files[p];
+    delete files[p];
+  }
+}
+
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -66,6 +93,19 @@ mockIPC(
       case "save_http_file":
         files[args.path] = clone(args.file);
         return clone(args.file);
+      case "create_file": {
+        // Parsing `args.content` needs the Rust core; one request from the fixture stands in.
+        const req = { ...clone((pets as any).requests[0]), name: "New request", raw: null, leading: "" };
+        files[args.path] = { ...clone(pets as any), requests: [req], trailing: "" };
+        addNode(args.path, "file");
+        return null;
+      }
+      case "create_dir":
+        addNode(args.path, "dir");
+        return null;
+      case "rename_path":
+        moveNode(args.from, args.to);
+        return null;
       case "render_request": {
         const r = args.request;
         return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;

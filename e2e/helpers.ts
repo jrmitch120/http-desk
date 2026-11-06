@@ -35,6 +35,27 @@ export function urlBar(page: Page): Locator {
   return page.locator(".url-input .cm-content");
 }
 
+/** An open request tab in the tab bar, by request name. */
+export function tab(page: Page, name: string): Locator {
+  return page.locator(".tabbar .tab").filter({ has: page.locator(".name", { hasText: new RegExp(`^${escape(name)}$`) }) });
+}
+
+/** A confirm/prompt dialog (or any modal) by its title. */
+export function dialog(page: Page, title: string): Locator {
+  return page.getByRole("dialog", { name: title, exact: true });
+}
+
+/** Right-clicks a sidebar row and picks an item from its context menu. */
+export async function treeMenu(page: Page, label: string, item: string): Promise<void> {
+  await treeItem(page, label).click({ button: "right" });
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
+}
+
+/** The text currently selected in an input. */
+export function selectedText(input: Locator): Promise<string> {
+  return input.evaluate((el: HTMLInputElement) => el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0));
+}
+
 function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
