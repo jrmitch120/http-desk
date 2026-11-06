@@ -4,13 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments } =
-  vi.hoisted(() => ({
+const {
+  readHttpFile,
+  saveHttpFile,
+  createFile,
+  createDir,
+  renamePath,
+  deletePath,
+  deletePermanently,
+  pathExists,
+  searchRequests,
+  openWorkspace,
+  getSettings,
+  loadEnvironments,
+} = vi.hoisted(() => ({
     readHttpFile: vi.fn(),
     saveHttpFile: vi.fn(),
     createFile: vi.fn(),
     createDir: vi.fn(),
     renamePath: vi.fn(),
+    deletePath: vi.fn(),
+    deletePermanently: vi.fn(),
     pathExists: vi.fn(),
     searchRequests: vi.fn(),
     openWorkspace: vi.fn(),
@@ -18,7 +32,20 @@ const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExist
     loadEnvironments: vi.fn(),
   }));
 vi.mock("./api", () => ({
-  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests, openWorkspace, getSettings, loadEnvironments },
+  api: {
+    readHttpFile,
+    saveHttpFile,
+    createFile,
+    createDir,
+    renamePath,
+    deletePath,
+    deletePermanently,
+    pathExists,
+    searchRequests,
+    openWorkspace,
+    getSettings,
+    loadEnvironments,
+  },
   errorMessage: (e: unknown) => String(e),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -53,7 +80,8 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, searchRequests]) fn.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, searchRequests, deletePermanently]) fn.mockReset();
+  deletePath.mockReset().mockResolvedValue("trashed");
   renamePath.mockReset().mockResolvedValue(undefined);
   pathExists.mockReset().mockResolvedValue(true);
   app.dialog = null;
@@ -468,5 +496,47 @@ describe("closing several tabs", () => {
     expect(app.tabs.map((t) => t.id)).toEqual([create.id, get.id]);
     expect(app.dialog).toBeNull();
     expect(app.isRequestDirty(PATH, create.key)).toBe(true);
+  });
+});
+
+describe("deleting", () => {
+  it("moves to the trash after one confirmation, closing the file's tabs", async () => {
+    await openAll(file("List"));
+
+    const deleting = app.deletePath(PATH);
+    expect(await answer("delete")).toBe("Move to trash");
+    await deleting;
+
+    expect(deletePath).toHaveBeenCalledWith(PATH);
+    expect(deletePermanently).not.toHaveBeenCalled();
+    expect(app.dialog).toBeNull();
+    expect(app.tabs).toEqual([]);
+  });
+
+  it("asks before deleting permanently when the trash is unavailable", async () => {
+    deletePath.mockResolvedValue("trashUnavailable");
+    await openAll(file("List"));
+
+    const deleting = app.deletePath(PATH);
+    await answer("delete");
+    expect(await answer("delete")).toBe("Couldn't move to trash");
+    await deleting;
+
+    expect(deletePermanently).toHaveBeenCalledWith(PATH);
+    expect(app.tabs).toEqual([]);
+  });
+
+  it("leaves the file and its tabs alone when the permanent delete is cancelled", async () => {
+    deletePath.mockResolvedValue("trashUnavailable");
+    const tabs = await openAll(file("List"));
+
+    const deleting = app.deletePath(PATH);
+    await answer("delete");
+    await answer("cancel");
+    await deleting;
+
+    expect(deletePermanently).not.toHaveBeenCalled();
+    expect(app.tabs).toEqual(tabs);
+    expect(app.docs[PATH]).toBeDefined();
   });
 });

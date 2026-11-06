@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod confine;
+mod deleting;
 mod self_writes;
+use deleting::{DeleteOutcome, Trash};
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -61,6 +63,7 @@ struct AppState {
     watcher: Mutex<Option<Debouncer<RecommendedWatcher>>>,
     /// What our own file operations left on disk, to ignore their watcher events.
     self_writes: SelfWrites,
+    trash: Trash,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Recent response bodies by response id (for "save to file").
     bodies: Mutex<VecDeque<(String, Vec<u8>)>>,
@@ -230,13 +233,21 @@ fn rename_path(state: State<'_, AppState>, from: PathBuf, to: PathBuf) -> CmdRes
     std::fs::rename(&from, &to).map_err(|e| format!("Could not move {}: {e}", from.display()))
 }
 
+/// Moves a file or folder to the OS trash. Never unlinks: if the trash is
+/// unavailable it says so, and the UI asks before calling `delete_permanently`.
 #[tauri::command]
-fn delete_path(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
+fn delete_path(state: State<'_, AppState>, path: PathBuf) -> CmdResult<DeleteOutcome> {
     let path = state.confine_entry(&path)?;
     state.self_writes.removing(&path);
-    trash::delete(&path).or_else(|_| {
-        if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.map_err(err)
-    })
+    deleting::to_trash(&*state.trash.get(), &path)
+}
+
+/// Unlinks a file or folder. Only called after the user confirms it.
+#[tauri::command]
+fn delete_permanently(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
+    let path = state.confine_entry(&path)?;
+    state.self_writes.removing(&path);
+    deleting::permanently(&path)
 }
 
 #[tauri::command]
@@ -452,6 +463,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
             create_dir,
             rename_path,
             delete_path,
+            delete_permanently,
             path_exists,
             load_environments,
             save_environments,
