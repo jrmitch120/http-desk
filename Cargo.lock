@@ -4095,8 +4095,6 @@ dependencies = [
 [[package]]
 name = "serde_json_path_core"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde67d8dfe7d4967b5a95e247d4148368ddd1e753e500adb34b3ffe40c6bc1bc"
 dependencies = [
  "inventory",
  "serde",

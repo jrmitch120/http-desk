@@ -1,0 +1,9 @@
+Vendored from crates.io serde_json_path_core 0.2.2 (MIT, see LICENSE-MIT) and
+wired in through [patch.crates-io] in the workspace Cargo.toml.
+
+One change, in src/spec/selector/filter.rs (search for PATCHED):
+number_equal_to and number_less_than compare numbers exactly (integers as
+i128, an integer against a float without rounding) instead of through
+as_f64(), which made 1234567890123456789 equal 1234567890123456788.
+
+Drop this copy once upstream compares numbers exactly.

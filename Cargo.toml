@@ -1,8 +1,15 @@
 [workspace]
 resolver = "2"
 members = ["crates/httpdesk-core", "src-tauri"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.3"
 edition = "2021"
 license = "MIT"
+
+# serde_json_path_core 0.2.2 compares filter numbers through f64, so
+# `?(@.id==1234567890123456789)` also matched ...788. The vendored copy compares
+# them exactly; see vendor/serde_json_path_core/PATCHED.
+[patch.crates-io]
+serde_json_path_core = { path = "vendor/serde_json_path_core" }

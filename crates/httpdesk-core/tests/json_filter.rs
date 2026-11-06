@@ -35,10 +35,70 @@ fn whole_objects_are_pretty_printed_in_document_order() {
 }
 
 #[test]
-fn numeric_comparisons_work_on_exact_numbers() {
+fn ordering_compares_decimals_and_exponents_by_value() {
     let doc = JsonDocument::parse(STORE).unwrap();
     let result = doc.filter("$.items[?@.price > 10].id").unwrap();
     assert_eq!(result.text, "[\n  1234567890123456789,\n  2\n]");
+}
+
+/// The ids of the items a filter predicate keeps, as written in the body.
+fn ids(body: &str, predicate: &str) -> String {
+    let doc = JsonDocument::parse(body).unwrap();
+    let text = doc.filter(&format!("$.items[?{predicate}].id")).unwrap().text;
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+const BIG_IDS: &str = r#"{"items": [
+  {"id": 1234567890123456788},
+  {"id": 1234567890123456789},
+  {"id": 9007199254740992},
+  {"id": 9007199254740993},
+  {"id": -9007199254740993}
+]}"#;
+
+#[test]
+fn equality_on_nineteen_digit_ids_is_exact() {
+    assert_eq!(ids(BIG_IDS, "@.id==1234567890123456789"), "[ 1234567890123456789 ]");
+    assert_eq!(
+        ids(BIG_IDS, "@.id!=1234567890123456789"),
+        "[ 1234567890123456788, 9007199254740992, 9007199254740993, -9007199254740993 ]"
+    );
+}
+
+#[test]
+fn equality_just_past_two_to_the_53_is_exact() {
+    assert_eq!(ids(BIG_IDS, "@.id==9007199254740993"), "[ 9007199254740993 ]");
+    assert_eq!(ids(BIG_IDS, "@.id==9007199254740992"), "[ 9007199254740992 ]");
+    assert_eq!(ids(BIG_IDS, "@.id==-9007199254740993"), "[ -9007199254740993 ]");
+}
+
+#[test]
+fn ordering_just_past_two_to_the_53_is_exact() {
+    assert_eq!(ids(BIG_IDS, "@.id>9007199254740992"), "[ 1234567890123456788, 1234567890123456789, 9007199254740993 ]");
+    assert_eq!(ids(BIG_IDS, "@.id<9007199254740993"), "[ 9007199254740992, -9007199254740993 ]");
+    assert_eq!(
+        ids(BIG_IDS, "@.id>=9007199254740993"),
+        "[ 1234567890123456788, 1234567890123456789, 9007199254740993 ]"
+    );
+    assert_eq!(ids(BIG_IDS, "@.id<=-9007199254740993"), "[ -9007199254740993 ]");
+}
+
+#[test]
+fn ordering_on_nineteen_digit_ids_is_exact() {
+    assert_eq!(ids(BIG_IDS, "@.id>1234567890123456788"), "[ 1234567890123456789 ]");
+    assert_eq!(ids(BIG_IDS, "@.id<1234567890123456789 && @.id>9007199254740993"), "[ 1234567890123456788 ]");
+}
+
+#[test]
+fn integers_compare_exactly_with_decimals_and_exponents() {
+    let body = r#"{"items": [{"id": 1, "n": 1e3}, {"id": 2, "n": 1000}, {"id": 3, "n": 10.50}, {"id": 4, "n": 9007199254740993}]}"#;
+    assert_eq!(ids(body, "@.n==1000"), "[ 1, 2 ]");
+    assert_eq!(ids(body, "@.n==1e3"), "[ 1, 2 ]");
+    assert_eq!(ids(body, "@.n==10.5"), "[ 3 ]");
+    // 9007199254740992.0 is a float; the integer one above it is not equal to it, and is greater.
+    assert_eq!(ids(body, "@.n==9007199254740992.0"), "[]");
+    assert_eq!(ids(body, "@.n>9007199254740992.0"), "[ 4 ]");
+    assert_eq!(ids(body, "@.n>10.4 && @.n<10.6"), "[ 3 ]");
 }
 
 #[test]
@@ -157,4 +217,19 @@ fn the_shape_serialises_keys_as_pairs_in_document_order() {
         serde_json::to_value(doc.shape()).unwrap(),
         serde_json::json!({ "keys": [["b", { "items": { "keys": [["x", {}]] } }], ["a", {}], ["1", {}]] })
     );
+}
+
+#[test]
+fn a_body_nested_deeper_than_the_parser_allows_says_so() {
+    // serde_json stops at 128 levels; the formatter allows far more.
+    let deep = format!("{}1{}", "[".repeat(200), "]".repeat(200));
+    let err = JsonDocument::parse(&deep).unwrap_err().to_string();
+    assert_eq!(err, "This body is nested too deeply to filter");
+}
+
+#[test]
+fn a_body_just_inside_the_parsers_depth_limit_still_filters() {
+    let deep = format!("{}1{}", "[".repeat(127), "]".repeat(127));
+    let doc = JsonDocument::parse(&deep).unwrap();
+    assert_eq!(doc.filter("$..*").unwrap().matches, 127);
 }
