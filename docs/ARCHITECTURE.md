@@ -296,7 +296,10 @@ The output is ordinary `.http` text produced by the same serializer the editor u
   * A deleted file makes its tabs Orphaned tabs. Saving recreates the file.
 * Writes go to a temp file followed by a rename, so external tools never see half-written
   files.
-* Deletion moves items to the OS trash (`trash` crate) rather than unlinking them.
+* Deletion moves items to the OS trash (`trash` crate) rather than unlinking them. If
+  the trash is unavailable, `delete_path` reports that and leaves the item in place; the
+  UI asks *"Couldn't move to trash. Delete permanently?"* and only a yes calls
+  `delete_permanently`.
 
 ---
 

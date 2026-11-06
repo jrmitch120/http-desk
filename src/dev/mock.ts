@@ -70,6 +70,15 @@ function moveNode(from: string, to: string) {
   }
 }
 
+/** Drops a node, everything below it, and any file contents. */
+function removeNode(path: string) {
+  const parent = findNode(tree, parentOf(path));
+  if (parent?.children) parent.children = parent.children.filter((c) => c.path !== path);
+  for (const p of Object.keys(files).filter((p) => p === path || p.startsWith(path + "/"))) delete files[p];
+}
+// `?trash=unavailable` simulates a volume without a trash: `delete_path` refuses.
+const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
+
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -110,6 +119,13 @@ mockIPC(
         return null;
       case "rename_path":
         moveNode(args.from, args.to);
+        return null;
+      case "delete_path":
+        if (trashUnavailable) return "trashUnavailable";
+        removeNode(args.path);
+        return "trashed";
+      case "delete_permanently":
+        removeNode(args.path);
         return null;
       case "render_request": {
         const r = args.request;

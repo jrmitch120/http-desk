@@ -668,7 +668,14 @@ class AppStore {
     ]);
     if (r.button !== "delete") return;
     try {
-      await api.deletePath(path);
+      if ((await api.deletePath(path)) === "trashUnavailable") {
+        const ok = await this.choose("Couldn't move to trash", `Delete "${basename(path)}" permanently? This can't be undone.`, [
+          { label: "Cancel", value: "cancel" },
+          { label: "Delete permanently", value: "delete", danger: true },
+        ]);
+        if (ok.button !== "delete") return;
+        await api.deletePermanently(path);
+      }
     } catch (e) {
       this.toast("error", errorMessage(e));
       return;

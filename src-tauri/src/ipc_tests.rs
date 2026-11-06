@@ -3,6 +3,7 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod confinement;
+mod deleting;
 mod paths;
 mod watcher;
 
@@ -17,14 +18,17 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 
 use serde_json::{json, Value};
+use tauri::Manager;
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
 
 struct Harness {
-    _app: tauri::App<tauri::test::MockRuntime>,
+    app: tauri::App<tauri::test::MockRuntime>,
     webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
     /// This app's settings folder; deleted when the harness is dropped.
     cfg: tempfile::TempDir,
+    /// Stands in for the OS trash: `delete_path` moves entries here.
+    trash_bin: tempfile::TempDir,
 }
 
 impl Harness {
@@ -33,7 +37,25 @@ impl Harness {
         let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
         let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        Harness { _app: app, webview, cfg }
+        let trash_bin = tempfile::tempdir().unwrap();
+        let bin = trash_bin.path().to_path_buf();
+        app.state::<super::AppState>().trash.replace(move |path| {
+            std::fs::rename(path, bin.join(path.file_name().unwrap())).map_err(|e| e.to_string())
+        });
+        Harness { app, webview, cfg, trash_bin }
+    }
+
+    /// Makes every move to the trash fail, like a volume without a trash.
+    fn trash_unavailable(&self) {
+        self.app.state::<super::AppState>().trash.replace(|_| Err("no trash on this volume".into()));
+    }
+
+    /// Names of the entries moved to the (fake) trash, sorted.
+    fn trashed(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            std::fs::read_dir(self.trash_bin.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
     }
 
     fn config_dir(&self) -> std::path::PathBuf {
@@ -327,8 +349,7 @@ fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec
     out
 }
 
-/// Delete isn't driven here: on macOS `trash` asks Finder, which would move test
-/// folders into the user's real Trash. It uses the same "absent" expectation as a move's source.
+/// Deletes are covered in `deleting::watcher_ignores_our_own_deletes`.
 #[test]
 fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     use tauri::Listener;
