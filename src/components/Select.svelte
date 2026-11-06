@@ -16,7 +16,7 @@
   // offers a "Use X" item for typed text that matches nothing (custom methods).
   // Controlled: it calls `onchange` and the caller updates `value`.
   import { popup, type CloseReason } from "../lib/popup/popup";
-  import { tooltip as tip } from "../lib/popup/tooltip.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -36,7 +36,7 @@
     /** Extra class on the trigger; style it from the parent with `:global(.x)`. */
     class?: string;
   }
-  let { options, value, onchange, label, create, size = "md", mono = false, tooltip, class: className = "" }: Props = $props();
+  let { options, value, onchange, label, create, size = "md", mono = false, tooltip: tooltipText, class: className = "" }: Props = $props();
 
   type Item = SelectOption<T> & { created?: boolean };
 
@@ -135,7 +135,7 @@
   aria-expanded={open}
   aria-controls={open ? listId : undefined}
   aria-activedescendant={activeItem ? optId(active) : undefined}
-  use:tip={tooltip ?? null}
+  use:tooltip={tooltipText ?? null}
   onclick={() => (open ? close() : show())}
   {onkeydown}
   onblur={close}

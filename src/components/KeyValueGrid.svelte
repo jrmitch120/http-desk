@@ -103,12 +103,13 @@
       return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: "cell" in col ? col.cell : undefined }];
     }),
   );
-  const has = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
-  const toggles = $derived(has("enable"));
-  const showDesc = $derived(has("description") && showDescriptions);
+  const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
+  /** Rows have an enable checkbox (and bulk text a `//` prefix). */
+  const hasEnable = $derived(hasColumn("enable"));
+  const showDesc = $derived(hasColumn("description") && showDescriptions);
   const template = $derived(tracks.map((t) => t.width).join(" "));
   /** Where the description and error lines start: under the first column after the checkbox. */
-  const subStart = $derived(toggles ? 2 : 1);
+  const subStart = $derived(hasEnable ? 2 : 1);
   /** A cell gets a right border unless only the delete column follows it. */
   const divider = (i: number) => tracks.slice(i + 1).some((t) => t.id !== "delete");
 
@@ -155,7 +156,7 @@
   function toggleBulk() {
     if (!bulk) {
       bulkStart = $state.snapshot(items) as R[];
-      bulkText = formatBulk(items, separator, toggles);
+      bulkText = formatBulk(items, separator, hasEnable);
     }
     bulk = !bulk;
   }
@@ -169,8 +170,8 @@
   // Rows changed elsewhere while bulk editing (e.g. query params typed in the URL bar).
   $effect(() => {
     if (!bulk) return;
-    const current = formatBulk(items, separator, toggles);
-    if (current !== untrack(() => formatBulk(parse(bulkText, []), separator, toggles))) {
+    const current = formatBulk(items, separator, hasEnable);
+    if (current !== untrack(() => formatBulk(parse(bulkText, []), separator, hasEnable))) {
       bulkStart = $state.snapshot(items) as R[];
       bulkText = current;
     }
@@ -226,8 +227,8 @@
 <div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label}>
   <div class="kv-head" style:grid-template-columns={template}>
     {#if bulk}
-      {#if toggles}<span class="c-check"></span>{/if}
-      <span class="c-hint muted">{toggles ? `Bulk edit — one per line, "name${separator} value"; prefix with // to disable` : `One per line, "name${separator} value"`}</span>
+      {#if hasEnable}<span class="c-check"></span>{/if}
+      <span class="c-hint muted">{hasEnable ? `Bulk edit — one per line, "name${separator} value"; prefix with // to disable` : `One per line, "name${separator} value"`}</span>
     {:else}
       {#each tracks as t (t.id)}
         {#if t.id === "enable"}
@@ -250,7 +251,7 @@
     {#each rows as { row, i } (row)}
       {@const isGhost = row === ghost}
       {@const error = isGhost ? null : nameError(row.name)}
-      <div class="kv-row" class:off={!isGhost && toggles && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
+      <div class="kv-row" class:off={!isGhost && hasEnable && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
         {#each tracks as t, c (t.id)}
           {#if t.id === "enable"}
             <span class="c-check">

@@ -42,7 +42,7 @@
   }
 
   /** Path fields apply on blur and Enter, not per keystroke. */
-  function pathKey(e: KeyboardEvent, key: PathKey) {
+  function onPathKeydown(e: KeyboardEvent, key: PathKey) {
     if (e.key === "Enter") setPath(key, (e.currentTarget as HTMLInputElement).value);
   }
 
@@ -70,7 +70,7 @@
       <small class="muted">{f.hint}</small>
     </div>
     <div class="row">
-      <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" onblur={(e) => setPath(f.key, e.currentTarget.value)} onkeydown={(e) => pathKey(e, f.key)} />
+      <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" onblur={(e) => setPath(f.key, e.currentTarget.value)} onkeydown={(e) => onPathKeydown(e, f.key)} />
       <button class="btn small" onclick={() => browse(f.key)}>Browse…</button>
       {#if exec[f.key]}
         <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>

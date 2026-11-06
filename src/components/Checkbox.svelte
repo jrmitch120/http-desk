@@ -7,7 +7,7 @@
   // part of the click target.
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
-  import { tooltip as tip } from "../lib/popup/tooltip.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     checked: boolean;
@@ -22,7 +22,7 @@
     class?: string;
     children?: Snippet;
   }
-  let { checked, indeterminate = false, onchange, label, tooltip, class: className = "", children }: Props = $props();
+  let { checked, indeterminate = false, onchange, label, tooltip: tooltipText, class: className = "", children }: Props = $props();
 </script>
 
 <button
@@ -32,7 +32,7 @@
   class:on={checked || indeterminate}
   aria-checked={indeterminate ? "mixed" : checked}
   aria-label={label}
-  use:tip={tooltip ?? null}
+  use:tooltip={tooltipText ?? null}
   onclick={() => onchange(indeterminate ? true : !checked)}
   onkeydown={(e) => {
     if (e.key === "Enter") e.preventDefault();
