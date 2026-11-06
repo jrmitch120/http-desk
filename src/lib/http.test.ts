@@ -17,6 +17,7 @@ import {
   formatBulk,
   parseBulk,
   headerNameError,
+  basicUsernameError,
   variableNameError,
   bodySyntaxWarnings,
 } from "./http";
@@ -300,6 +301,11 @@ describe("field safety", () => {
   it("validates variable names like the parser", () => {
     for (const n of ["host", "$pet.id-2_x", "café", "v2", ""]) expect(variableNameError(n)).toBeNull();
     for (const n of ["base url", "a=b", "a\nb", "{{x}}"]) expect(variableNameError(n)).toBe("Variable names can only use letters, digits, _, -, . and $");
+  });
+
+  it("rejects Basic auth usernames containing ':' (RFC 7617)", () => {
+    for (const n of ["alice", "{{user}}", "first last", ""]) expect(basicUsernameError(n)).toBeNull();
+    expect(basicUsernameError("dom:ain")).toBe("Basic auth usernames can't contain ':'");
   });
 
   it("warns about body lines that .http syntax reads as a separator or handler", () => {

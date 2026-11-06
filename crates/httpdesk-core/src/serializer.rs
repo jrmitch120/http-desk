@@ -98,6 +98,10 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     single_line(context, || "the method".into(), &req.method)?;
     single_line(context, || "the URL".into(), &req.url)?;
     single_line(context, || "the HTTP version".into(), req.http_version.as_deref().unwrap_or(""))?;
+    // The request line splits at whitespace.
+    if req.method.trim().contains(char::is_whitespace) {
+        return Err(InvalidField(format!("{context}: the method {:?} can't contain spaces", req.method)));
+    }
     for d in &req.directives {
         single_line(context, || format!("directive @{}", d.name), &d.name)?;
         single_line(context, || format!("directive @{}", d.name), &d.value)?;
@@ -107,6 +111,15 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     }
     check_items(context, "query param", &req.query.items)?;
     check_items(context, "header", &req.headers.items)?;
+    // `# @param a:b: text` would attach the text to `a`.
+    for p in &req.query.items {
+        if p.name.contains(':') && p.description.lines().any(|l| !l.trim().is_empty()) {
+            return Err(InvalidField(format!(
+                "{context}: query param name {:?} can't contain ':' while it has a description",
+                p.name
+            )));
+        }
+    }
 
     let a = &req.auth;
     let auth_fields = [
@@ -121,6 +134,10 @@ fn check_request(req: &Request) -> Result<(), InvalidField> {
     }
     for h in &req.headers.items {
         check_header_name(context, "header name", &h.name)?;
+    }
+    // RFC 7617: the username ends at the first `:`, so it can't be written back.
+    if a.kind == AuthKind::Basic && a.username.contains(':') {
+        return Err(InvalidField(format!("{context}: the Basic auth username {:?} can't contain ':'", a.username)));
     }
     if a.kind == AuthKind::ApiKey {
         match a.key_location {

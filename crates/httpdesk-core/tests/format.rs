@@ -702,6 +702,24 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
             }),
             "Request \"List pets\": the API key name \"api key\" can't contain spaces",
         ),
+        // The request line splits at whitespace.
+        (Box::new(|f| f.requests[0].method = "GET X".into()), "Request \"List pets\": the method \"GET X\" can't contain spaces"),
+        // `# @param a:b: text` would attach the description to `a`.
+        (
+            Box::new(|f| {
+                let p = &mut f.requests[0].query.items[0];
+                (p.name, p.description) = ("a:b".into(), "Page size".into());
+            }),
+            "Request \"List pets\": query param name \"a:b\" can't contain ':' while it has a description",
+        ),
+        // RFC 7617: the username ends at the first `:`.
+        (
+            Box::new(|f| {
+                let auth = &mut f.requests[0].auth;
+                (auth.kind, auth.username, auth.password, auth.raw) = (AuthKind::Basic, "dom:ain".into(), "pw".into(), None);
+            }),
+            "Request \"List pets\": the Basic auth username \"dom:ain\" can't contain ':'",
+        ),
     ];
     for (edit, want) in cases {
         assert_eq!(save_error(edit), want);
@@ -712,9 +730,11 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
     f.requests[0].variables[0].name = "$pet.id-2_x".into();
     f.requests[0].headers.items[0].name = "{{headerName}}".into();
     f.requests[0].headers.items.push(KeyValue::disabled("X-Ok!", "1"));
+    f.requests[0].query.items.push(KeyValue::new("a:b", "1"));
     let out = try_serialize(&f).unwrap();
     let back = &parse(&out).requests[0];
     assert_eq!(back.variables[0].name, "$pet.id-2_x");
     assert_eq!(back.headers.items[0].name, "{{headerName}}");
     assert_eq!(back.headers.items[1], KeyValue::disabled("X-Ok!", "1"));
+    assert_eq!(back.query.items[1].name, "a:b", "a ':' is fine in a param without a description");
 }
