@@ -16,7 +16,7 @@
   // offers a "Use X" item for typed text that matches nothing (custom methods).
   // Controlled: it calls `onchange` and the caller updates `value`.
   import { popup, type CloseReason } from "../lib/popup/popup";
-  import { tooltip as tip } from "../lib/popup/tooltip.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -33,11 +33,10 @@
     mono?: boolean;
     /** Tooltip text (use:tooltip). */
     tooltip?: string;
-    disabled?: boolean;
     /** Extra class on the trigger; style it from the parent with `:global(.x)`. */
     class?: string;
   }
-  let { options, value, onchange, label, create, size = "md", mono = false, tooltip, disabled = false, class: className = "" }: Props = $props();
+  let { options, value, onchange, label, create, size = "md", mono = false, tooltip: tooltipText, class: className = "" }: Props = $props();
 
   type Item = SelectOption<T> & { created?: boolean };
 
@@ -66,7 +65,6 @@
   });
 
   function show(text = "") {
-    if (disabled) return;
     query = text;
     open = true;
     active = text ? 0 : Math.max(0, options.findIndex((o) => o.value === value));
@@ -132,13 +130,12 @@
   class="select-trigger {size} {className}"
   class:mono
   class:open
-  {disabled}
   aria-label={label}
   aria-haspopup="listbox"
   aria-expanded={open}
   aria-controls={open ? listId : undefined}
   aria-activedescendant={activeItem ? optId(active) : undefined}
-  use:tip={tooltip ?? null}
+  use:tooltip={tooltipText ?? null}
   onclick={() => (open ? close() : show())}
   {onkeydown}
   onblur={close}
@@ -192,7 +189,7 @@
     gap: var(--space-2);
     height: var(--control-h);
     min-width: 0;
-    padding: 0 8px 0 9px;
+    padding: 0 var(--space-2);
     background: var(--panel-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -203,7 +200,7 @@
   }
   .select-trigger.sm {
     height: var(--control-h-sm);
-    padding: 0 6px 0 7px;
+    padding: 0 var(--space-1) 0 var(--space-2);
     font-size: 12px;
   }
   .select-trigger:focus-visible {
@@ -213,10 +210,6 @@
   }
   .select-trigger.open {
     border-color: var(--focus);
-  }
-  .select-trigger:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
   .select-trigger :global(svg) {
     flex: none;
@@ -235,7 +228,7 @@
   }
 
   .select-popup {
-    padding: 4px;
+    padding: var(--space-1);
     font-size: 13px;
     max-width: min(420px, calc(100vw - 12px));
   }
@@ -249,9 +242,9 @@
   .filter {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 8px 6px;
-    margin-bottom: 4px;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    margin-bottom: var(--space-1);
     border-bottom: 1px solid var(--border);
     color: var(--text);
     white-space: pre;
@@ -262,14 +255,14 @@
   .option {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 10px 5px 6px;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
     border-radius: var(--radius-sm);
     cursor: pointer;
     white-space: nowrap;
   }
   .sm .option {
-    padding: 3px 8px 3px 4px;
+    padding: 2px var(--space-2) 2px var(--space-1);
   }
   .option.active {
     background: var(--accent-soft);
@@ -287,7 +280,7 @@
     text-overflow: ellipsis;
   }
   .empty {
-    padding: 5px 10px;
+    padding: var(--space-1) var(--space-2);
     color: var(--muted);
   }
 </style>

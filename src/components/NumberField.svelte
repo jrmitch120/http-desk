@@ -11,13 +11,12 @@
     /** Shown after the field, e.g. "s" or "MB". */
     unit?: string;
     min?: number;
-    max?: number;
     /** Only whole numbers are valid. */
     integer?: boolean;
     disabled?: boolean;
   }
 
-  let { value, onchange, label, unit = "", min, max, integer = false, disabled = false }: Props = $props();
+  let { value, onchange, label, unit = "", min, integer = false, disabled = false }: Props = $props();
 
   const id = $props.id();
   // What the user has typed since the field last applied; null shows `value`.
@@ -29,7 +28,6 @@
     if (t === "" || !Number.isFinite(n)) return { n: null, error: "Enter a number" };
     if (integer && !Number.isInteger(n)) return { n: null, error: "Enter a whole number" };
     if (min !== undefined && n < min) return { n: null, error: `Must be at least ${min}` };
-    if (max !== undefined && n > max) return { n: null, error: `Must be at most ${max}` };
     return { n, error: "" };
   }
 
@@ -85,7 +83,7 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
   }
   .input {
     width: 84px;

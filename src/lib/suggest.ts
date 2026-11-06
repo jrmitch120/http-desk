@@ -1,4 +1,4 @@
-// Matching for SuggestInput's list (header names today, any name cell later).
+// Matching for the `use:suggestions` list (popup/suggestions.svelte.ts): header names today.
 
 export interface SuggestionMatch {
   value: string;

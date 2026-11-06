@@ -24,6 +24,30 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
   await expect(row).toBeFocused();
 });
 
+test("a modal's Tab wrap skips elements that aren't Tab stops", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("ControlOrMeta+Comma");
+  const settings = dialog(page, "Settings");
+  // Roving widgets (a SegmentedControl's unchecked radios) put tabindex=-1
+  // buttons in a modal; here one sits first and one last.
+  await settings.evaluate((box) => {
+    for (const [where, name] of [["afterbegin", "First"], ["beforeend", "Last"]] as const) {
+      const b = document.createElement("button");
+      b.tabIndex = -1;
+      b.textContent = name;
+      box.insertAdjacentElement(where, b);
+    }
+  });
+  const close = settings.getByRole("button", { name: "Close" });
+  const done = settings.getByRole("button", { name: "Done" });
+
+  await done.focus();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(done).toBeFocused();
+});
+
 test("Enter confirms a Delete dialog", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");

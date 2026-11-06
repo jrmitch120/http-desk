@@ -202,6 +202,36 @@ class AppStore {
     if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
+    return this.saveSettings();
+  }
+
+  private settingsSave: Promise<boolean> | null = null;
+  private nextSettingsSave: Promise<boolean> | null = null;
+
+  /**
+   * Saves the whole settings object. Only one save runs at a time: changes made
+   * while one runs share a single follow-up save, which snapshots the settings
+   * when it starts, so an older snapshot can never be written last.
+   */
+  private saveSettings(): Promise<boolean> {
+    if (this.nextSettingsSave) return this.nextSettingsSave;
+    if (!this.settingsSave) return this.startSettingsSave();
+    this.nextSettingsSave = this.settingsSave.then(() => {
+      this.nextSettingsSave = null;
+      return this.startSettingsSave();
+    });
+    return this.nextSettingsSave;
+  }
+
+  private startSettingsSave(): Promise<boolean> {
+    const save = this.writeSettings().finally(() => {
+      if (this.settingsSave === save) this.settingsSave = null;
+    });
+    this.settingsSave = save;
+    return save;
+  }
+
+  private async writeSettings(): Promise<boolean> {
     try {
       await api.saveSettings($state.snapshot(this.settings) as AppSettings);
       return true;

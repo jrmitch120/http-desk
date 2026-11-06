@@ -1,5 +1,6 @@
-// Where a floating surface goes next to its anchor so it stays on screen.
-// Pure geometry (no DOM), shared by every popup in the layer.
+// Where a floating surface goes next to its anchor so it stays on screen,
+// shared by every popup in the layer: `place` is the geometry (no DOM, unit
+// tested), `placeElement` applies it to an element.
 
 export type Side = "top" | "bottom";
 export type Align = "start" | "center" | "end";
@@ -13,35 +14,48 @@ export interface AnchorRect {
 }
 
 export interface PlaceOptions {
-  /** Preferred side; flips to the other one when it doesn't fit. Default "bottom". */
-  side?: Side;
   /** Horizontal alignment with the anchor. Default "start". */
   align?: Align;
   /** Space between anchor and popup. Default 4. */
   gap?: number;
-  /** Minimum distance from the viewport edges. Default 6. */
-  margin?: number;
 }
+
+/** Minimum distance from the viewport edges. */
+const MARGIN = 6;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
-/** Top-left corner for a popup of `size` next to `anchor`, and the side it ended up on. */
+/**
+ * Top-left corner for a popup of `size` next to `anchor`, and the side it ended
+ * up on: below, or above when it only fits there.
+ */
 export function place(
   anchor: AnchorRect,
   size: { width: number; height: number },
   viewport: { width: number; height: number },
-  { side = "bottom", align = "start", gap = 4, margin = 6 }: PlaceOptions = {},
+  { align = "start", gap = 4 }: PlaceOptions = {},
 ): { x: number; y: number; side: Side } {
-  const below = { side: "bottom" as const, y: anchor.bottom + gap, room: viewport.height - margin - anchor.bottom - gap };
-  const above = { side: "top" as const, y: anchor.top - gap - size.height, room: anchor.top - gap - margin };
-  const [first, second] = side === "bottom" ? [below, above] : [above, below];
-  const pick = first.room >= size.height ? first : second.room >= size.height ? second : first.room >= second.room ? first : second;
+  const below = { side: "bottom" as const, y: anchor.bottom + gap, room: viewport.height - MARGIN - anchor.bottom - gap };
+  const above = { side: "top" as const, y: anchor.top - gap - size.height, room: anchor.top - gap - MARGIN };
+  const pick = below.room >= size.height ? below : above.room >= size.height ? above : below.room >= above.room ? below : above;
 
   const width = anchor.right - anchor.left;
   const x = align === "start" ? anchor.left : align === "end" ? anchor.right - size.width : anchor.left + (width - size.width) / 2;
   return {
-    x: clamp(x, margin, viewport.width - margin - size.width),
-    y: clamp(pick.y, margin, viewport.height - margin - size.height),
+    x: clamp(x, MARGIN, viewport.width - MARGIN - size.width),
+    y: clamp(pick.y, MARGIN, viewport.height - MARGIN - size.height),
     side: pick.side,
   };
+}
+
+/**
+ * Moves `el` (a `position: fixed` surface) next to `anchor` and sets its
+ * `data-side`, which picks the direction of the open animation. Uses the layout
+ * size, so the animation's transform doesn't skew it.
+ */
+export function placeElement(el: HTMLElement, anchor: AnchorRect, options?: PlaceOptions) {
+  const p = place(anchor, { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight }, options);
+  el.style.left = `${p.x}px`;
+  el.style.top = `${p.y}px`;
+  el.dataset.side = p.side;
 }

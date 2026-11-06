@@ -32,31 +32,32 @@
 
   const current = $derived(dragging ?? clampPane(size, limits));
   const basis = $derived(ratio ? `${current * 100}%` : `${current}px`);
-  // Ratios are announced as percentages.
-  const aria = (v: number) => Math.round(ratio ? v * 100 : v);
+  // The value assistive tech announces: px, or a ratio as a percentage.
+  const announced = (v: number) => Math.round(ratio ? v * 100 : v);
 
-  function clean(v: number): number {
+  function roundAndClamp(v: number): number {
     return clampPane(ratio ? Math.round(v * 1000) / 1000 : Math.round(v), limits);
   }
 
   function commit(v: number) {
-    const next = clean(v);
+    const next = roundAndClamp(v);
     if (next !== clampPane(size, limits)) onresize(next);
   }
 
-  const along = (e: PointerEvent) => (stacked ? e.clientY : e.clientX);
+  /** The pointer's position along the drag axis. */
+  const pointerAt = (e: PointerEvent) => (stacked ? e.clientY : e.clientX);
 
   function onpointerdown(e: PointerEvent) {
     if (e.button !== 0) return;
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const rect = root.getBoundingClientRect();
-    grab = { pointer: along(e), start: current, span: ratio ? (stacked ? rect.height : rect.width) : 1 };
+    grab = { pointer: pointerAt(e), start: current, span: ratio ? (stacked ? rect.height : rect.width) : 1 };
   }
 
   function onpointermove(e: PointerEvent) {
     if (!grab || !grab.span) return;
-    dragging = clean(grab.start + (along(e) - grab.pointer) / grab.span);
+    dragging = roundAndClamp(grab.start + (pointerAt(e) - grab.pointer) / grab.span);
   }
 
   function onpointerup() {
@@ -95,9 +96,9 @@
     aria-label={label}
     aria-controls="{id}-first"
     aria-orientation={stacked ? "horizontal" : "vertical"}
-    aria-valuenow={aria(current)}
-    aria-valuemin={aria(limits.min)}
-    aria-valuemax={aria(limits.max)}
+    aria-valuenow={announced(current)}
+    aria-valuemin={announced(limits.min)}
+    aria-valuemax={announced(limits.max)}
     {onpointerdown}
     {onpointermove}
     {onpointerup}
@@ -132,7 +133,7 @@
   .rest {
     flex: 1 1 0;
   }
-  /* A 1px line with a wider grab area; hover, drag and keyboard focus light it up. */
+  /* A 1px line with a wider grab area; hover and drag light it up, keyboard focus rings it. */
   .separator {
     flex: none;
     width: 1px;
@@ -156,14 +157,15 @@
     inset: -3px 0;
   }
   .separator:hover,
-  .separator.dragging,
-  .separator:focus-visible {
+  .separator.dragging {
     background: var(--focus);
-    outline: none;
   }
   .separator:hover::after,
-  .separator.dragging::after,
-  .separator:focus-visible::after {
+  .separator.dragging::after {
     background: color-mix(in srgb, var(--focus) 35%, transparent);
+  }
+  .separator:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
   }
 </style>

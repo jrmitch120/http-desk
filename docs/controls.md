@@ -51,8 +51,8 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 
 ### SegmentedControl
 
-`SegmentedControl.svelte`. A row of pill buttons for one exclusive choice; an ARIA
-`radiogroup` of `radio` buttons.
+`SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
+pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
 - Props: `options` (`{ value, label, icon? }[]`), `value`, `onchange(value)`, `label` (the
   group's accessible name, required).
@@ -72,7 +72,7 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 
 - Props: `options` (`{ value, label, color? }[]`), `value`, `onchange(value)`, `label`
   (accessible name of the trigger and the list, required), `create?`, `size?`, `mono?`,
-  `tooltip?`, `disabled?`, `class?`.
+  `tooltip?`, `class?`.
 - Variants:
   - `size="md"` (default, `--control-h`) for toolbars and forms; `size="sm"`
     (`--control-h-sm`) inside grid cells (multipart part type).
@@ -143,7 +143,7 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 spinners.
 
 - Props: `value`, `onchange(n)`, `label` (accessible name), `unit?` (suffix such as `s` or
-  `MB`), `min?`, `max?`, `integer?`, `disabled?`.
+  `MB`), `min?`, `integer?`, `disabled?`.
 - Applies on blur or Enter, never per keystroke. An invalid value shows an inline error
   (`role="alert"`, linked by `aria-describedby`) and isn't applied; leaving the field
   puts back the last valid value.
@@ -203,7 +203,7 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `onchange(items)`.
+  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`.
 - How it's configured today:
   - Params and headers: enable, name, value, description, delete. Headers add
     name suggestions.
@@ -214,8 +214,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   - Environment variables: a custom value column (a password input with a reveal button
     for Secrets), a Secret lock column, and a search filter (`visible`). Bulk edit is
     off, because it would show Secret values as plain text.
-- The description sub-row only shows when "Show parameter descriptions" is on in
-  Settings.
+- The description sub-row only shows with `showDescriptions`; the request editor passes
+  Settings' "Show parameter descriptions".
 
 ### SplitPane
 
@@ -235,6 +235,8 @@ request/response split.
 `Modal.svelte` is the window for Settings, Environments and OpenAPI import: props
 `title` (also its accessible name), `onclose`, `width?`, `height?`, `children`,
 `footer?`. Escape closes it, Tab stays inside it, and focus returns to where it was.
+Closing it (Escape, the backdrop, the close button) blurs the focused field first, so a
+field that applies on blur keeps what was typed.
 Popups opened inside a modal close first on Escape.
 
 For a question or a confirmation, don't build a modal: call `app.choose(title, message,
@@ -249,11 +251,11 @@ and only the colour changes.
 
 - Props: `method?` (colour from the method; the text unless children are given),
   `status?` (colour from the status class; pass the text as children), `tone?` (`neutral`
-  by default, `success`, `warning`, `danger`, `info`), `size?` (`sm` by default, `md`),
+  by default, `success`, `danger`), `size?` (`sm` by default, `md`),
   `class?`.
 - `sm` sits in lists and tabs (method badges, OFF on a section tab); `md` sits in headers
-  (response status, Cancelled, spec version). Method badges are six letters wide so lists
-  line up.
+  (response status, Cancelled, spec version). Method badges are six letters wide, and
+  Badge cuts longer methods to six, so lists line up.
 - Badge takes no tooltip. To explain one, wrap it in a `<span use:tooltip={text}>`.
 
 ### Banner
@@ -280,11 +282,12 @@ CodeMirror's tooltips and autocomplete all use it.
 
 To build a new popup, use the `use:popup` action (`popup.ts`) on an element with
 `class="popup-surface"`, inside an `{#if open}` block where it is the only top-level node.
-Options: `anchor` (an element, or a fixed rect such as a pointer position), `side`,
-`align`, `gap`, `matchWidth`, `onclose(reason)` with `"escape"`, `"outside"` or `"blur"`.
-It places the element, flips it to stay on screen, follows the anchor, and closes on
-Escape (only the most recently opened popup, and the modal underneath doesn't see the
-key), on a click outside, and when the window loses focus. The caller owns roles, ARIA,
+Options: `anchor` (an element, or a fixed rect such as a pointer position), `align`,
+`gap`, `matchWidth`, `onclose(reason)` with `"escape"`, `"outside"` or `"blur"`.
+It places the element below the anchor (above when only that fits), keeps it on
+screen, follows the anchor, and closes on Escape (only the most recently opened popup,
+and the modal underneath doesn't see the key), on a click outside, and when the window
+loses focus. The caller owns roles, ARIA,
 keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 `layer.ts`.
 
@@ -313,4 +316,5 @@ New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
 `:focus-visible` for focus; and the `--popup-*` tokens for floating surfaces. Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
-so on), so a control works in the light and dark themes without its own rules.
+so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control
+works in the light and dark themes without its own rules.

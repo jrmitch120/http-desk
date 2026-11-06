@@ -125,6 +125,36 @@ test("the environment picker filters as you type and selects with Enter", async 
   await expect(env).toHaveText("No environment");
 });
 
+test("the environment picker moves with the arrow keys, and Escape closes it without a change", async ({ page }) => {
+  const env = page.getByRole("combobox", { name: "Active environment" });
+  const list = page.getByRole("listbox", { name: "Active environment" });
+  const option = (name: string) => list.getByRole("option", { name, exact: true });
+  await env.focus();
+
+  // ArrowDown opens at the current environment, then moves (clamped at the ends).
+  await page.keyboard.press("ArrowDown");
+  await expect(option("local")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(option("staging")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(option("No environment")).toHaveAttribute("aria-selected", "true");
+  await expect(env).toHaveAttribute("aria-activedescendant", (await option("No environment").getAttribute("id"))!);
+
+  await page.keyboard.press("Escape");
+  await expect(list).toHaveCount(0);
+  await expect(env).toHaveText("local");
+  await expect(env).toBeFocused();
+
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(list).toHaveCount(0);
+  await expect(env).toHaveText("staging");
+});
+
 test("auth type and API-key location use the same Select", async ({ page }) => {
   await page.getByRole("button", { name: "Authorization" }).click();
   const kind = page.getByRole("combobox", { name: "Authorization type" });

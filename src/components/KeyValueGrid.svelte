@@ -35,16 +35,14 @@
 </script>
 
 <script lang="ts" generics="R extends GridRow">
-  // The one key/value grid (#36): params, headers, File variables, form fields
-  // and multipart parts. Columns are opt-in (`columns`), a trailing ghost row
-  // turns into a real row as you type, and bulk edit shows the rows as text.
-  // Rows are keyed by object, and the ghost row object itself becomes the new
-  // row, so its inputs (and focus) survive the change.
+  // The one key/value grid (#36): params, headers, File variables, form fields,
+  // multipart parts and environment variables. Columns are opt-in (`columns`),
+  // a trailing ghost row turns into a real row as you type, and bulk edit shows
+  // the rows as text. Rows are keyed by object, and the ghost row object itself
+  // becomes the new row, so its inputs (and focus) survive the change.
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import type { KeyValue } from "../lib/types";
-  import { formatBulk, parseBulk } from "../lib/http";
-  import { app } from "../lib/store.svelte";
+  import { formatBulk, KEY_VALUE_ROWS, parseBulk } from "../lib/http";
   import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -72,14 +70,16 @@
     visible?: (row: R) => boolean;
     /** Offer bulk edit (the rows as text). */
     bulkEdit?: boolean;
+    /** Show the "description" column's line under each row (Settings' "Show parameter descriptions"). */
+    showDescriptions?: boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
   }
   let {
     items = $bindable(),
     columns = ["enable", "name", "value", "delete"],
-    blank = () => ({ enabled: true, name: "", value: "" }) as KeyValue as unknown as R,
-    carry = ["description"] as (keyof R)[],
+    blank = KEY_VALUE_ROWS.blank as unknown as () => R,
+    carry = KEY_VALUE_ROWS.carry as (keyof R)[],
     label,
     sectionEnabled = true,
     namePlaceholder = "Key",
@@ -89,6 +89,7 @@
     nameError = () => null,
     visible = () => true,
     bulkEdit = true,
+    showDescriptions = true,
     onchange,
   }: Props = $props();
 
@@ -102,12 +103,13 @@
       return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: "cell" in col ? col.cell : undefined }];
     }),
   );
-  const has = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
-  const toggles = $derived(has("enable"));
-  const showDesc = $derived(has("description") && app.settings?.showDescriptions !== false);
+  const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
+  /** Rows have an enable checkbox (and bulk text a `//` prefix). */
+  const hasEnable = $derived(hasColumn("enable"));
+  const showDesc = $derived(hasColumn("description") && showDescriptions);
   const template = $derived(tracks.map((t) => t.width).join(" "));
   /** Where the description and error lines start: under the first column after the checkbox. */
-  const subStart = $derived(toggles ? 2 : 1);
+  const subStart = $derived(hasEnable ? 2 : 1);
   /** A cell gets a right border unless only the delete column follows it. */
   const divider = (i: number) => tracks.slice(i + 1).some((t) => t.id !== "delete");
 
@@ -154,7 +156,7 @@
   function toggleBulk() {
     if (!bulk) {
       bulkStart = $state.snapshot(items) as R[];
-      bulkText = formatBulk(items, separator, toggles);
+      bulkText = formatBulk(items, separator, hasEnable);
     }
     bulk = !bulk;
   }
@@ -168,8 +170,8 @@
   // Rows changed elsewhere while bulk editing (e.g. query params typed in the URL bar).
   $effect(() => {
     if (!bulk) return;
-    const current = formatBulk(items, separator, toggles);
-    if (current !== untrack(() => formatBulk(parse(bulkText, []), separator, toggles))) {
+    const current = formatBulk(items, separator, hasEnable);
+    if (current !== untrack(() => formatBulk(parse(bulkText, []), separator, hasEnable))) {
       bulkStart = $state.snapshot(items) as R[];
       bulkText = current;
     }
@@ -225,8 +227,8 @@
 <div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label}>
   <div class="kv-head" style:grid-template-columns={template}>
     {#if bulk}
-      {#if toggles}<span class="c-check"></span>{/if}
-      <span class="c-hint muted">{toggles ? `Bulk edit — one per line, "name${separator} value"; prefix with // to disable` : `One per line, "name${separator} value"`}</span>
+      {#if hasEnable}<span class="c-check"></span>{/if}
+      <span class="c-hint muted">{hasEnable ? `Bulk edit — one per line, "name${separator} value"; prefix with // to disable` : `One per line, "name${separator} value"`}</span>
     {:else}
       {#each tracks as t (t.id)}
         {#if t.id === "enable"}
@@ -249,7 +251,7 @@
     {#each rows as { row, i } (row)}
       {@const isGhost = row === ghost}
       {@const error = isGhost ? null : nameError(row.name)}
-      <div class="kv-row" class:off={!isGhost && toggles && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
+      <div class="kv-row" class:off={!isGhost && hasEnable && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
         {#each tracks as t, c (t.id)}
           {#if t.id === "enable"}
             <span class="c-check">
@@ -417,10 +419,10 @@
     -webkit-line-clamp: unset;
     line-clamp: unset;
     background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--focus);
     color: var(--text);
     resize: none;
-    outline: none;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
     overflow: hidden;
     white-space: pre-wrap;
   }
@@ -476,7 +478,8 @@
   }
   .kv :global(.cell:focus) {
     background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--focus);
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
   }
   .kv :global(.cell::placeholder) {
     color: var(--faint);

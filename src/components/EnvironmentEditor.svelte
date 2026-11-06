@@ -153,9 +153,9 @@
   }
 </script>
 
-{#snippet valueCell({ row, ghost, set }: GridCell<EnvVar>)}
+{#snippet valueCell({ row, ghost, set: setRow }: GridCell<EnvVar>)}
   {@const shown = !row.secret || revealed.has(row)}
-  <input class="cell" type={shown ? "text" : "password"} value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => set({ value: e.currentTarget.value })} />
+  <input class="cell" type={shown ? "text" : "password"} value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => setRow({ value: e.currentTarget.value })} />
   {#if row.secret && !ghost}
     <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(row) : revealed.add(row))}>
       <Icon name={shown ? "eye-off" : "eye"} size={13} />
@@ -163,15 +163,17 @@
   {/if}
 {/snippet}
 
-{#snippet lockCell({ row, ghost, set }: GridCell<EnvVar>)}
+{#snippet lockCell({ row, ghost, set: setRow }: GridCell<EnvVar>)}
   {#if !ghost}
     <button
       class="icon-btn lock"
       class:active={row.secret}
+      aria-label="Secret"
       aria-pressed={row.secret}
-      use:tooltip
-      aria-label={row.secret ? "Secret: stored in http-client.private.env.json — click to make shareable" : "Secret: stored in http-client.private.env.json — click to mark as secret"}
-      onclick={() => set({ secret: !row.secret })}
+      use:tooltip={row.secret
+        ? "Secret: saved only in http-client.private.env.json. Click to make it shareable."
+        : "Shareable: saved in http-client.env.json. Click to make it a Secret."}
+      onclick={() => setRow({ secret: !row.secret })}
     >
       <Icon name={row.secret ? "lock" : "unlock"} size={13} />
     </button>

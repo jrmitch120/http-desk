@@ -156,7 +156,7 @@
             tabindex="-1"
             onclick={() => app.openSearchHit(h)}
           >
-            <Badge method={h.method}>{h.method.slice(0, 6)}</Badge>
+            <Badge method={h.method} />
             <span class="hit-text">
               <span class="ellipsis">{h.name}</span>
               <span class="file ellipsis">{basename(h.path)} · {h.url}</span>

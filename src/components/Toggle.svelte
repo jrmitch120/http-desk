@@ -64,13 +64,20 @@
     background: var(--muted);
     transition: transform 0.15s, background 0.15s;
   }
+  .toggle:focus-visible {
+    outline: none;
+  }
+  .toggle:focus-visible .track {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
+  }
   .on .track {
     background: var(--accent);
     border-color: var(--accent);
   }
   .on .knob {
     transform: translateX(12px);
-    background: #fff;
+    background: var(--on-accent);
   }
   .on .label {
     color: var(--text-2);
