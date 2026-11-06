@@ -352,6 +352,8 @@ async fn a_body_that_stalls_fails_with_a_read_timeout_naming_the_value() {
     assert!(matches!(err, ExecError::ReadTimeout(200)), "{err:?}");
     let msg = err.to_string();
     assert!(msg.contains("Read timeout") && msg.contains("200 ms") && msg.contains("@timeout"), "{msg}");
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutIdle".into(), &serde_json::json!({ "timeoutMs": 200 })));
 }
 
 #[tokio::test]
@@ -368,6 +370,8 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
         msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"),
         "{msg}"
     );
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutConnect".into(), &serde_json::json!({ "timeoutMs": 300 })));
 
     let req = parse(&format!("# @connection-timeout 1\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
     let msg = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err().to_string();
@@ -449,6 +453,11 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
         "only host variables are named: {msg}"
     );
     assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
+    let r = report(&err);
+    assert_eq!(
+        (&r["kind"], &r["details"]),
+        (&"unresolvedVariable".into(), &serde_json::json!({ "names": ["baseUrl"] }))
+    );
 
     // A variable that resolves to a URL whose own host is unresolved names that inner variable.
     let r = Resolver::new(env(&[("baseUrl", "https://{{host}}:{{port}}/api")]));
@@ -654,8 +663,98 @@ async fn a_body_that_does_not_decode_fails_naming_the_encoding() {
 
     let err = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap_err();
 
-    assert!(matches!(err, ExecError::Http(_)), "{err}");
+    assert!(matches!(err, ExecError::Other(_)), "{err}");
+    assert_eq!(err.kind(), "other");
     assert!(err.to_string().contains("Could not decode the gzip response body"), "{err}");
+}
+
+// ---------------------------------------------------------------- classified send errors
+
+/// What the UI receives for a failed send: `{ kind, message, details }`.
+fn report(err: &ExecError) -> serde_json::Value {
+    serde_json::to_value(err).unwrap()
+}
+
+#[tokio::test]
+async fn a_closed_port_is_refused_with_host_and_port() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let req = parse(&format!("GET http://127.0.0.1:{port}/x\n")).requests.remove(0);
+
+    let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
+    let r = report(&err);
+    assert_eq!(r["kind"], "refused", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+    assert!(r["message"].as_str().unwrap().contains("127.0.0.1"), "the error chain is kept: {r}");
+}
+
+#[tokio::test]
+async fn an_unknown_host_is_a_dns_error_naming_the_host() {
+    // `.invalid` is reserved (RFC 6761): it never resolves.
+    let req = parse("GET http://api.exmaple.invalid/x\n").requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "dns", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "api.exmaple.invalid" }));
+}
+
+#[tokio::test]
+async fn a_server_that_hangs_up_without_answering_is_a_reset() {
+    // Reads the request, then closes the connection with nothing written.
+    let base = trickle_server(vec![], Duration::ZERO);
+    let port = base.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "reset", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+}
+
+/// An HTTPS server on 127.0.0.1 presenting a self-signed certificate made by
+/// `params`. Handshakes fail on the client side, so it never answers HTTP.
+async fn tls_server(params: rcgen::CertificateParams) -> String {
+    use std::sync::Arc;
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()))
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let _ = acceptor.accept(stream).await;
+            });
+        }
+    });
+    format!("https://{addr}")
+}
+
+async fn tls_reason(params: rcgen::CertificateParams) -> serde_json::Value {
+    let base = tls_server(params).await;
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "tls", "{r}");
+    r["details"]["reason"].clone()
+}
+
+#[tokio::test]
+async fn a_self_signed_certificate_is_a_tls_error_saying_so() {
+    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    assert_eq!(tls_reason(params).await, "selfSigned");
+}
+
+#[tokio::test]
+async fn an_expired_certificate_is_a_tls_error_saying_so() {
+    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+    params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+    assert_eq!(tls_reason(params).await, "expired");
 }
 
 #[tokio::test]

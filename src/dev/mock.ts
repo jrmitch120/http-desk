@@ -136,8 +136,31 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
-// `?sendError=1`: every send fails as if the server were unreachable.
-const sendError = new URLSearchParams(location.search).get("sendError") === "1";
+// `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`).
+const sendErrorKind = new URLSearchParams(location.search).get("sendError");
+const chain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
+const sendErrors: Record<string, { message: string; details: unknown }> = {
+  dns: { message: chain("dns error: failed to lookup address information"), details: { host: "api.exmaple.com" } },
+  refused: { message: chain("tcp connect error: Connection refused (os error 61)"), details: { host: "127.0.0.1", port: 8765 } },
+  reset: { message: chain("connection closed before message completed"), details: { host: "127.0.0.1", port: 8765 } },
+  tls: { message: chain("invalid peer certificate: UnknownIssuer"), details: { reason: "selfSigned" } },
+  timeoutIdle: {
+    message: "Read timeout: no data received for 200 ms. Raise it with # @timeout or the idle timeout in Settings.",
+    details: { timeoutMs: 200 },
+  },
+  timeoutConnect: {
+    message:
+      "Connection timeout: couldn't connect within 10 s. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.",
+    details: { timeoutMs: 10000 },
+  },
+  unresolvedVariable: {
+    message:
+      "The URL's scheme or host uses undefined variables: baseUrl. Pick an environment that defines them, or declare them as file variables.",
+    details: { names: ["baseUrl"] },
+  },
+  other: { message: "Something unexpected went wrong", details: null },
+};
+const sendError = sendErrorKind && sendErrors[sendErrorKind] ? { kind: sendErrorKind, ...sendErrors[sendErrorKind] } : null;
 // `?manyHeaders=1`: the JSON response also carries caching, CORS and rate-limit headers.
 const manyHeaders = new URLSearchParams(location.search).get("manyHeaders") === "1";
 const extraHeaders: [string, string][] = manyHeaders
@@ -268,7 +291,7 @@ mockIPC(
       case "send_request": {
         sent.push(clone(args.request));
         await delay(450);
-        if (sendError) throw "Connection refused (os error 61)";
+        if (sendError) throw clone(sendError);
         const r = args.request;
         if (r.url.includes("png") && bigBinary) {
           return {
