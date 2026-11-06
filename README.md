@@ -105,6 +105,7 @@ cargo test --workspace  # parser/serializer, enablement, execution, env, OpenAPI
 pnpm test               # frontend helpers (URL⇄params sync, form/multipart editors, …)
 pnpm check              # svelte-check / TypeScript
 pnpm test:e2e           # browser tests (Playwright, headless Chromium)
+cargo fmt --all         # format Rust (CI runs `cargo fmt --all --check`; config in rustfmt.toml)
 ```
 
 The browser tests in `e2e/` drive the real UI in headless Chromium against the
