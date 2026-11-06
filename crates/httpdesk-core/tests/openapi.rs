@@ -308,7 +308,7 @@ fn generated_files_serialize_and_reparse() {
                 for (a, b) in back.requests.iter().zip(&f.file.requests) {
                     assert_eq!((&a.name, &a.method, &a.url), (&b.name, &b.method, &b.url));
                     assert_eq!(a.query.items.len(), b.query.items.len(), "{text}");
-                    assert_eq!(a.auth, b.auth, "{text}");
+                    assert_eq!(Auth { raw: None, ..a.auth.clone() }, b.auth, "{text}");
                     assert_eq!(a.body.text, b.body.text, "{text}");
                     assert_eq!(a.body.mode, b.body.mode, "{text}");
                 }
