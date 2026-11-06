@@ -669,6 +669,7 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim().to_string());
 
+    // A body that fails to decode is classified `other`, with body.rs's message.
     let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
     let as_received = unsupported.is_some();
     loop {
@@ -682,10 +683,9 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         }
     }
     let body::ReceivedBody { bytes: body, transferred, truncated } = reader.finish().map_err(ExecError::Other)?;
-    // Taken only now: a failed chunk above still needs the whole request to classify.
+    let elapsed = start.elapsed();
     let mut warnings = p.warnings;
     warnings.extend(unsupported);
-    let elapsed = start.elapsed();
 
     // Still-encoded bytes are binary whatever the content type says.
     let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };

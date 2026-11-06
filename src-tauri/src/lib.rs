@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
+use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
@@ -378,6 +379,15 @@ async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: S
     .await
 }
 
+/// Beautify and the response Pretty view: re-lays out a body without changing
+/// any token (`body_format`). On the blocking pool, since bodies can be large.
+#[tauri::command]
+async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || body_format::format_body(&text, kind, mode).map_err(err))
+        .await
+        .map_err(err)?
+}
+
 // ------------------------------------------------------------------ settings
 
 #[tauri::command]
@@ -554,6 +564,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             send_request,
             cancel_request,
             save_response_body,
+            format_body,
             get_settings,
             save_settings,
             set_unsaved,

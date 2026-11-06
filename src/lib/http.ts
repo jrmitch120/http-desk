@@ -541,13 +541,8 @@ export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
-export function prettyJson(text: string): string | null {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return null;
-  }
-}
+// JSON is formatted in the core (`api.formatBody`): a JSON.parse round trip
+// would change numbers (precision above 2^53, `10.50` → `10.5`).
 
 /** Minimal XML pretty printer: one element per line, two-space indent. */
 export function prettyXml(text: string): string {

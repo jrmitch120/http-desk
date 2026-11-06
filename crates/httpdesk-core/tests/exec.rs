@@ -664,6 +664,7 @@ async fn a_body_that_does_not_decode_fails_naming_the_encoding() {
     let err = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap_err();
 
     assert!(matches!(err, ExecError::Other(_)), "{err}");
+    assert_eq!(err.kind(), "other");
     assert!(err.to_string().contains("Could not decode the gzip response body"), "{err}");
 }
 

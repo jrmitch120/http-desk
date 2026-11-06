@@ -274,6 +274,48 @@ fn quitting_always_asks_the_window_and_only_logout_trusts_the_unsaved_flag() {
 }
 
 #[test]
+fn format_body_keeps_numbers_exact_and_reports_invalid_json_as_a_string() {
+    let h = Harness::new();
+    let input = r#"{"id": 9007199254740993, "price": 10.50, "e": 1e3}"#;
+    let pretty = h.ok("format_body", json!({ "text": input, "kind": "json", "mode": "pretty" }));
+    assert_eq!(pretty, json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3\n}"));
+    let minified = h.ok("format_body", json!({ "text": pretty, "kind": "json", "mode": "minify" }));
+    assert_eq!(minified, json!(r#"{"id":9007199254740993,"price":10.50,"e":1e3}"#));
+
+    let err =
+        h.call("format_body", json!({ "text": "{\"id\": {{id}}}", "kind": "json", "mode": "pretty" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1, column 9: expected a quoted key"), "{err}");
+}
+
+#[test]
+fn a_beautified_body_is_saved_to_the_http_file_with_its_numbers_as_written() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let file_path = root.join("api.http");
+    std::fs::write(
+        &file_path,
+        "### Create\nPOST https://example.com/items\nContent-Type: application/json\n\n{\"id\": 9007199254740993, \"price\": 10.50, \"e\": 1e3}\n",
+    )
+    .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+
+    // What Beautify does: format the body text and write the result back into the model.
+    let mut file = h.ok("read_http_file", json!({ "path": path }));
+    let text = file["requests"][0]["body"]["text"].clone();
+    file["requests"][0]["body"]["text"] =
+        h.ok("format_body", json!({ "text": text, "kind": "json", "mode": "pretty" }));
+    h.ok("save_http_file", json!({ "path": path, "file": file }));
+
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        saved.ends_with("\n{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3\n}\n"),
+        "numbers saved as written: {saved}"
+    );
+}
+
+#[test]
 fn errors_are_strings() {
     let h = Harness::new();
     let err = h.call("get_tree", json!({})).unwrap_err();
