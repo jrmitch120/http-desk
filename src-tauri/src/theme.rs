@@ -79,12 +79,6 @@ mod tests {
         assert!(page_script(r#"x");alert(1);("#).trim_end().ends_with(r#"})("x\");alert(1);(");"#));
     }
 
-    #[test]
-    fn the_window_background_is_the_themes_page_background() {
-        assert_eq!(background(Theme::Dark), Color(0x1c, 0x1d, 0x20, 0xff));
-        assert_eq!(background(Theme::Light), Color(0xf3, 0xf4, 0xf6, 0xff));
-    }
-
     /// `--bg` in the first rule of src/app.css whose selector is `selector`, as a colour.
     fn css_bg(css: &str, selector: &str) -> Color {
         let start = css.find(&format!("{selector} {{")).unwrap_or_else(|| panic!("no `{selector}` rule in app.css"));
