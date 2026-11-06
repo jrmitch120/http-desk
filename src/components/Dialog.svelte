@@ -6,18 +6,23 @@
 
   let value = $state(app.dialog?.input?.value ?? "");
   let input: HTMLInputElement | undefined = $state();
-
-  // Once per dialog: re-selecting on every keystroke would replace what was typed.
-  onMount(() => {
-    if (!input || !app.dialog?.input) return;
-    input.focus();
-    const dot = value.lastIndexOf(".");
-    if (app.dialog.input.selectStem && dot > 0) input.setSelectionRange(0, dot);
-    else input.select();
-  });
+  const buttons: HTMLButtonElement[] = $state([]);
 
   const d = $derived(app.dialog!);
   const primary = $derived(d.buttons.find((b) => b.primary) ?? d.buttons[d.buttons.length - 1]);
+
+  // Once per dialog: re-selecting on every keystroke would replace what was typed.
+  // A confirm (no input) focuses its primary button, so Enter confirms.
+  onMount(() => {
+    if (!input || !d.input) {
+      buttons[d.buttons.indexOf(primary)]?.focus();
+      return;
+    }
+    input.focus();
+    const dot = value.lastIndexOf(".");
+    if (d.input.selectStem && dot > 0) input.setSelectionRange(0, dot);
+    else input.select();
+  });
 </script>
 
 <Modal title={d.title} width="420px" onclose={() => app.closeDialog("cancel")}>
@@ -29,13 +34,18 @@
         bind:this={input}
         bind:value
         placeholder={d.input.placeholder}
-        onkeydown={(e) => e.key === "Enter" && app.closeDialog(primary.value, value)}
+        onkeydown={(e) => {
+          if (e.key !== "Enter") return;
+          // Consumed: focus goes back to the opener at once, and the key must not click it.
+          e.preventDefault();
+          app.closeDialog(primary.value, value);
+        }}
       />
     {/if}
   </div>
   {#snippet footer()}
-    {#each d.buttons as b (b.value)}
-      <button class="btn" class:primary={b.primary} class:danger={b.danger} class:solid={b.danger} onclick={() => app.closeDialog(b.value, value)}>
+    {#each d.buttons as b, i (b.value)}
+      <button class="btn" bind:this={buttons[i]} class:primary={b.primary} class:danger={b.danger} class:solid={b.danger} onclick={() => app.closeDialog(b.value, value)}>
         {b.label}
       </button>
     {/each}

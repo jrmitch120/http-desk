@@ -8,7 +8,9 @@
     <div class="toast {t.kind}" role="status">
       <Icon name={t.kind === "error" ? "alert" : "check"} />
       <span class="selectable">{t.message}</span>
-      <button class="icon-btn" onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}><Icon name="x" size={13} /></button>
+      <button class="icon-btn" aria-label="Dismiss" title="Dismiss" onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}>
+        <Icon name="x" size={13} />
+      </button>
     </div>
   {/each}
 </div>

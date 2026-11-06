@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { onDestroy, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -11,13 +11,47 @@
     footer?: Snippet;
   }
   let { title, onclose, width = "560px", height, children, footer }: Props = $props();
+
+  let box: HTMLDivElement | undefined = $state();
+
+  // Focus goes back to where it was when the modal opened.
+  const returnTo = document.activeElement;
+  onDestroy(() => {
+    if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
+  });
+
+  const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+
+  /** Keeps Tab / Shift+Tab cycling inside the topmost modal. */
+  function trapTab(e: KeyboardEvent) {
+    if (e.key !== "Tab" || e.defaultPrevented || !box) return;
+    const modals = document.querySelectorAll('[aria-modal="true"]');
+    if (modals[modals.length - 1] !== box) return;
+    const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const inside = box.contains(document.activeElement);
+    if (e.shiftKey && (!inside || document.activeElement === first)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (!inside || document.activeElement === last)) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && onclose()} />
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === "Escape") onclose();
+    else trapTab(e);
+  }}
+/>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onmousedown={(e) => e.target === e.currentTarget && onclose()}>
-  <div class="modal" style:width style:height role="dialog" aria-modal="true" aria-label={title}>
+  <div class="modal" bind:this={box} style:width style:height role="dialog" aria-modal="true" aria-label={title}>
     <header>
       <h2>{title}</h2>
       <button class="icon-btn" onclick={onclose} title="Close"><Icon name="x" /></button>
