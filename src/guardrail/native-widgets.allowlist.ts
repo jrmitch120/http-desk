@@ -9,7 +9,6 @@ import type { Allowlist } from "./native-widgets";
 
 export const ALLOWLIST: Allowlist = {
   select: [
-    "src/components/AuthEditor.svelte",
     "src/components/BodyEditor.svelte",
   ],
   checkbox: [],

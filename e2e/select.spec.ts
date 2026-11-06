@@ -111,6 +111,24 @@ test("the environment picker filters as you type and selects with Enter", async 
   await expect(env).toHaveText("No environment");
 });
 
+test("auth type and API-key location use the same Select", async ({ page }) => {
+  await page.getByRole("button", { name: "Authorization" }).click();
+  const kind = page.getByRole("combobox", { name: "Authorization type" });
+  await expect(kind).toHaveText("Bearer Token");
+
+  await kind.focus();
+  await page.keyboard.type("api");
+  await page.keyboard.press("Enter");
+  await expect(kind).toHaveText("API Key");
+
+  const location = page.getByRole("combobox", { name: "Add to" });
+  await expect(location).toHaveText("Header");
+  await location.click();
+  await page.getByRole("listbox", { name: "Add to" }).getByRole("option", { name: "Query params" }).click();
+  await expect(location).toHaveText("Query params");
+  await expect(page.getByText("?<name>=<value>")).toBeVisible();
+});
+
 test('an invalid method token offers no "Use" item', async ({ page }) => {
   await method(page).focus();
   await page.keyboard.type("bad method");
