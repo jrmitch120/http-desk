@@ -197,6 +197,7 @@ textarea.input {
 .btn:focus-visible,
 .icon-btn:focus-visible,
 .link:focus-visible,
+.copyable:focus-visible,
 .subtab:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
@@ -284,6 +285,27 @@ textarea.input {
 }
 .link:hover {
   text-decoration: underline;
+}
+/* A value shown as text that copies itself on click (a response header value).
+   Its text stays selectable, so a part can still be copied by hand. */
+.copyable {
+  display: block;
+  width: calc(100% + 8px);
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.copyable:hover {
+  background: var(--hover);
 }
 
 .muted {

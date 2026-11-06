@@ -352,6 +352,8 @@ async fn a_body_that_stalls_fails_with_a_read_timeout_naming_the_value() {
     assert!(matches!(err, ExecError::ReadTimeout(200)), "{err:?}");
     let msg = err.to_string();
     assert!(msg.contains("Read timeout") && msg.contains("200 ms") && msg.contains("@timeout"), "{msg}");
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutIdle".into(), &serde_json::json!({ "timeoutMs": 200 })));
 }
 
 #[tokio::test]
@@ -368,6 +370,8 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
         msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"),
         "{msg}"
     );
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutConnect".into(), &serde_json::json!({ "timeoutMs": 300 })));
 
     let req = parse(&format!("# @connection-timeout 1\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
     let msg = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err().to_string();
@@ -449,6 +453,11 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
         "only host variables are named: {msg}"
     );
     assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
+    let r = report(&err);
+    assert_eq!(
+        (&r["kind"], &r["details"]),
+        (&"unresolvedVariable".into(), &serde_json::json!({ "names": ["baseUrl"] }))
+    );
 
     // A variable that resolves to a URL whose own host is unresolved names that inner variable.
     let r = Resolver::new(env(&[("baseUrl", "https://{{host}}:{{port}}/api")]));
@@ -529,4 +538,270 @@ async fn an_api_key_query_param_is_resolved_and_encoded() {
     let text = "# @httpdesk-auth apikey query {{keyName}}\nGET {{base}}/echo?n=1&{{keyName}}={{key}}\n";
     let (_, got) = sent_query(text, &[("keyName", "api key"), ("key", "s3cr&t=/+")]).await;
     assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
+}
+
+// ---- Content encoding (#66) ----
+
+/// A JSON body big and repetitive enough that every encoding shrinks it.
+fn compressible_json() -> Vec<u8> {
+    let items: Vec<_> = (0..200).map(|i| serde_json::json!({"id": i, "name": "a pet with a long name"})).collect();
+    serde_json::to_vec(&items).unwrap()
+}
+
+/// Encodes `data` the way a server would for `Content-Encoding: <encoding>`.
+fn encode(encoding: &str, data: &[u8]) -> Vec<u8> {
+    match encoding {
+        "gzip" => {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        // HTTP "deflate" is the zlib format (RFC 9110 sec. 8.4.1.2).
+        "deflate" => {
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "br" => {
+            let mut out = Vec::new();
+            brotli::BrotliCompress(&mut &data[..], &mut out, &Default::default()).unwrap();
+            out
+        }
+        "zstd" => zstd::encode_all(data, 0).unwrap(),
+        other => panic!("no test encoder for {other}"),
+    }
+}
+
+/// Serves `body` at `/data` as JSON with the given `Content-Encoding`.
+async fn encoded_server(encoding: &str, body: Vec<u8>) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/data"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Encoding", encoding)
+                .set_body_raw(body, "application/json"),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn an_encoded_response_reports_transferred_and_decoded_sizes_and_its_encoding() {
+    let json = compressible_json();
+    for encoding in ["gzip", "br", "deflate", "zstd"] {
+        let wire = encode(encoding, &json);
+        let server = encoded_server(encoding, wire.clone()).await;
+        let vars = env(&[("base", &server.uri())]);
+
+        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+        assert_eq!(resp.content_encoding.as_deref(), Some(encoding));
+        assert_eq!(resp.transferred_size, wire.len(), "{encoding}: raw bytes on the wire");
+        assert_eq!(resp.body_size, json.len(), "{encoding}: decoded size");
+        assert!(resp.transferred_size < resp.body_size, "{encoding}");
+        assert_eq!(resp.body_text.as_deref(), Some(std::str::from_utf8(&json).unwrap()), "{encoding}");
+        assert!(resp.warnings.is_empty(), "{encoding}: {:?}", resp.warnings);
+    }
+}
+
+#[tokio::test]
+async fn accept_encoding_defaults_to_what_we_decode_and_a_set_one_is_sent_unchanged() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/echo\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    assert_eq!(header(&received, "accept-encoding"), Some("gzip, deflate, br, zstd"));
+    let shown = resp.request.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("accept-encoding"));
+    assert_eq!(shown.map(|(_, v)| v.as_str()), Some("gzip, deflate, br, zstd"), "the Request tab lists it");
+
+    send(&parse("GET {{base}}/echo\nAccept-Encoding: identity\n").requests[0], vars, Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    let sent: Vec<_> = received.headers.get_all("accept-encoding").iter().map(|v| v.to_str().unwrap()).collect();
+    assert_eq!(sent, ["identity"]);
+}
+
+#[tokio::test]
+async fn an_unsupported_encoding_shows_the_bytes_as_received_with_a_warning() {
+    let wire = b"\x1f\x9d\x90some compressed bytes".to_vec();
+    let server = encoded_server("compress", wire.clone()).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+    assert_eq!(resp.content_encoding.as_deref(), Some("compress"));
+    assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
+    assert!(resp.body_text.is_none(), "still-encoded bytes are binary even though the type is JSON");
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
+    assert_eq!(raw, wire);
+    assert_eq!(resp.warnings, ["Content-Encoding compress isn't supported; showing the bytes as received"]);
+}
+
+#[tokio::test]
+async fn the_body_size_limit_applies_to_decoded_bytes() {
+    let json = compressible_json();
+    let wire = encode("gzip", &json);
+    let server = encoded_server("gzip", wire.clone()).await;
+    let settings = ExecSettings { max_body_bytes: wire.len() + 100, ..ExecSettings::default() };
+    let req = parse(&format!("GET {}/data\n", server.uri())).requests.remove(0);
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+
+    let out = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+
+    assert!(out.response.truncated);
+    assert_eq!(out.response.body_size, wire.len() + 100);
+    assert_eq!(out.body, json[..wire.len() + 100]);
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_fails_naming_the_encoding() {
+    let mut wire = encode("gzip", &compressible_json());
+    wire.truncate(wire.len() / 2);
+    let server = encoded_server("gzip", wire).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let err = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap_err();
+
+    assert!(matches!(err, ExecError::Other(_)), "{err}");
+    assert_eq!(err.kind(), "other");
+    assert!(err.to_string().contains("Could not decode the gzip response body"), "{err}");
+}
+
+// ---------------------------------------------------------------- classified send errors
+
+/// What the UI receives for a failed send: `{ kind, message, details }`.
+fn report(err: &ExecError) -> serde_json::Value {
+    serde_json::to_value(err).unwrap()
+}
+
+#[tokio::test]
+async fn a_closed_port_is_refused_with_host_and_port() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let req = parse(&format!("GET http://127.0.0.1:{port}/x\n")).requests.remove(0);
+
+    let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
+    let r = report(&err);
+    assert_eq!(r["kind"], "refused", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+    assert!(r["message"].as_str().unwrap().contains("127.0.0.1"), "the error chain is kept: {r}");
+}
+
+#[tokio::test]
+async fn an_unknown_host_is_a_dns_error_naming_the_host() {
+    // `.invalid` is reserved (RFC 6761): it never resolves.
+    let req = parse("GET http://api.exmaple.invalid/x\n").requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "dns", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "api.exmaple.invalid" }));
+}
+
+#[tokio::test]
+async fn a_server_that_hangs_up_without_answering_is_a_reset() {
+    // Reads the request, then closes the connection with nothing written.
+    let base = trickle_server(vec![], Duration::ZERO);
+    let port = base.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "reset", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+}
+
+/// An HTTPS server on 127.0.0.1 presenting a self-signed certificate made by
+/// `params`. Handshakes fail on the client side, so it never answers HTTP.
+async fn tls_server(params: rcgen::CertificateParams) -> String {
+    use std::sync::Arc;
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()))
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let _ = acceptor.accept(stream).await;
+            });
+        }
+    });
+    format!("https://{addr}")
+}
+
+async fn tls_reason(params: rcgen::CertificateParams) -> serde_json::Value {
+    let base = tls_server(params).await;
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "tls", "{r}");
+    r["details"]["reason"].clone()
+}
+
+#[tokio::test]
+async fn a_self_signed_certificate_is_a_tls_error_saying_so() {
+    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    assert_eq!(tls_reason(params).await, "selfSigned");
+}
+
+#[tokio::test]
+async fn an_expired_certificate_is_a_tls_error_saying_so() {
+    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+    params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+    assert_eq!(tls_reason(params).await, "expired");
+}
+
+// ---------------------------------------------------------------- download progress
+
+/// Sends `req` with default settings, recording each progress report and when it came.
+async fn send_with_progress(req: &Request) -> (exec::HttpResponse, Vec<(std::time::Instant, usize)>) {
+    let settings = ExecSettings::default();
+    let prepared = prepare(req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+    let mut reports = Vec::new();
+    let out = exec::execute_with_progress(prepared, &settings, &SslConfig::default(), |n| {
+        reports.push((std::time::Instant::now(), n))
+    })
+    .await
+    .unwrap();
+    (out.response, reports)
+}
+
+#[tokio::test]
+async fn a_trickled_body_reports_growing_byte_counts_until_it_completes() {
+    let mut parts = vec![response_head(5000)];
+    parts.extend((0..5).map(|i| vec![b'a' + i; 1000]));
+    let base = trickle_server(parts, Duration::from_millis(150));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    let counts: Vec<usize> = reports.iter().map(|r| r.1).collect();
+    assert!(counts.len() >= 3, "too few progress reports: {counts:?}");
+    assert!(counts.windows(2).all(|w| w[0] < w[1]), "counts must grow: {counts:?}");
+    assert!(counts[0] < 5000, "the first report comes before the body is complete: {counts:?}");
+    assert!(*counts.last().unwrap() <= 5000, "{counts:?}");
+    assert_eq!(resp.transferred_size, 5000);
+}
+
+#[tokio::test]
+async fn progress_reports_are_rate_limited_however_small_the_chunks() {
+    let mut parts = vec![response_head(60)];
+    parts.extend((0..60).map(|_| b"x".to_vec()));
+    let base = trickle_server(parts, Duration::from_millis(10));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    assert_eq!(resp.body_size, 60);
+    assert!(reports.len() >= 2, "a slow body still reports progress: {reports:?}");
+    let gaps: Vec<Duration> = reports.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    assert!(gaps.iter().all(|g| *g >= Duration::from_millis(90)), "more than ~10 reports a second: {gaps:?}");
+    let window = Duration::from_millis(resp.time_ms as u64);
+    assert!(reports.len() as u128 <= window.as_millis() / 100 + 1, "{} reports in {window:?}", reports.len());
 }

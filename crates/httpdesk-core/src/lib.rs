@@ -9,6 +9,7 @@ pub mod openapi;
 pub mod parser;
 mod query;
 pub mod serializer;
+mod tls_probe;
 pub mod vars;
 pub mod workspace;
 

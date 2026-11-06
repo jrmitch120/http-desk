@@ -16,6 +16,8 @@
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import SendErrorPanel from "./SendErrorPanel.svelte";
+  import HeadersPanel from "./HeadersPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -142,8 +144,24 @@
     }
   }
 
+  // The viewer's tabs. Adding one is a line here plus its panel below. A
+  // `count` shows after the label; leave it out for none, and pass 0 only where
+  // an empty tab says something (no headers at all is worth knowing).
+  const tabs = $derived<SegmentedOption[]>([
+    { value: "body", label: "Body" },
+    { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    { value: "request", label: "Request" },
+  ]);
+  // A remembered tab that this response doesn't have falls back to Body.
+  const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
+
   const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
-  const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
+  const sizeTitle = $derived.by(() => {
+    if (!res) return "";
+    const headers = `Headers ${formatBytes(res.headersSize)}`;
+    if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
+    return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
+  });
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
@@ -162,7 +180,10 @@
     <div class="statusbar">
       <span class="title">Response</span>
       {#if run.loading}
-        <span class="loading"><span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}</span>
+        <span class="loading">
+          <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
+          {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
+        </span>
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
@@ -183,25 +204,18 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <Banner severity="error" inline heading="Could not send request" class="send-error">
-        <div class="err-msg selectable mono">{run.error}</div>
-        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
-      </Banner>
+      <SendErrorPanel error={run.error} onretry={() => app.send(tab.id)} />
     {:else if res}
       {#if res.warnings.length || res.truncated}
         <Banner severity="warning">
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
         </Banner>
       {/if}
-      <nav class="subtabs">
-        <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
-        <button class="subtab" class:active={view === "headers"} onclick={() => (view = "headers")}>
-          <span class="label">Headers</span><span class="count">{res.headers.length}</span>
-        </button>
-        <button class="subtab" class:active={view === "request"} onclick={() => (view = "request")}><span class="label">Request</span></button>
-      </nav>
+      <div class="tabs">
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view = t)} />
+      </div>
 
-      {#if view === "body"}
+      {#if current === "body"}
         <div class="toolbar">
           <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
@@ -236,16 +250,8 @@
             <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} />
           {/if}
         </div>
-      {:else if view === "headers"}
-        <div class="table-wrap">
-          <table>
-            <tbody>
-              {#each res.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+      {:else if current === "headers"}
+        <HeadersPanel headers={res.headers} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
@@ -309,6 +315,9 @@
     color: var(--muted);
     font-size: 12px;
   }
+  .received {
+    font-family: var(--mono);
+  }
   .spinner {
     width: 13px;
     height: 13px;
@@ -325,10 +334,11 @@
   .viewer :global(.send-error) {
     margin: 18px;
   }
-  .err-msg {
-    color: var(--text);
-    margin: 4px 0 6px;
-    word-break: break-word;
+  .tabs {
+    display: flex;
+    padding: 6px 10px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
   }
   .toolbar {
     display: flex;

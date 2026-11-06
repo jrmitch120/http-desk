@@ -345,6 +345,33 @@ fn errors_are_strings() {
 }
 
 #[test]
+fn send_errors_arrive_classified() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    std::fs::write(root.join("a.http"), format!("GET http://127.0.0.1:{port}/x\n\n###\nGET {{{{baseUrl}}}}/x\n"))
+        .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let file = h.ok("read_http_file", json!({ "path": root.join("a.http") }));
+    let send = |i: usize| {
+        h.call(
+            "send_request",
+            json!({ "runId": "r1", "request": file["requests"][i], "filePath": root.join("a.http"), "fileVariables": [], "environment": null }),
+        )
+        .unwrap_err()
+    };
+
+    let err = send(0);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("refused"), &json!({ "host": "127.0.0.1", "port": port })));
+    assert!(err["message"].as_str().unwrap().contains("Connection refused"), "{err}");
+
+    // Errors found before sending are classified too.
+    let err = send(1);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("unresolvedVariable"), &json!({ "names": ["baseUrl"] })));
+}
+
+#[test]
 fn watcher_reports_external_changes_but_not_our_own_writes() {
     use tauri::Listener;
     let h = Harness::new();
@@ -554,4 +581,62 @@ fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
     assert!(cfg.join("settings.json").is_file(), "settings were not written to {}", cfg.display());
     drop(h);
     assert!(!cfg.exists(), "{} was left behind", cfg.display());
+}
+
+/// One-shot HTTP server that sends a `len`-byte text body in `chunks` pieces, `gap` apart.
+fn trickle_server(len: usize, chunks: usize, gap: std::time::Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (mut head, mut buf) = (Vec::new(), [0u8; 4096]);
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => head.extend_from_slice(&buf[..n]),
+            }
+        }
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {len}\r\n\r\n");
+        for _ in 0..chunks {
+            std::thread::sleep(gap);
+            if stream.write_all(&vec![b'x'; len / chunks]).and_then(|_| stream.flush()).is_err() {
+                return;
+            }
+        }
+    });
+    url
+}
+
+#[test]
+fn a_downloading_body_emits_growing_progress_for_its_run_until_the_send_returns() {
+    use tauri::Listener;
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let file_path = root.join("dl.http");
+    let server = trickle_server(4000, 4, std::time::Duration::from_millis(150));
+    std::fs::write(&file_path, format!("GET {server}/download\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+
+    let (tx, rx) = mpsc::channel::<Value>();
+    h.webview.listen_any("send-progress", move |e| {
+        let _ = tx.send(serde_json::from_str(e.payload()).unwrap());
+    });
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "dl-1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+    assert_eq!(resp["bodySize"], 4000);
+
+    let events: Vec<Value> = rx.try_iter().collect();
+    assert!(events.len() >= 2, "too few progress events: {events:?}");
+    assert!(events.iter().all(|e| e["runId"] == "dl-1"), "{events:?}");
+    let received: Vec<u64> = events.iter().map(|e| e["received"].as_u64().unwrap()).collect();
+    assert!(received.windows(2).all(|w| w[0] < w[1]), "counts must grow: {received:?}");
+    assert!(*received.last().unwrap() <= 4000, "{received:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(rx.try_iter().count(), 0, "progress was emitted after the send returned");
 }

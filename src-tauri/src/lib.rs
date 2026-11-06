@@ -8,13 +8,13 @@ use std::sync::Mutex;
 
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
-use httpdesk_core::exec::{self, ExecSettings, HttpResponse};
+use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 mod bodies;
 mod confine;
@@ -313,15 +313,28 @@ fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResu
 
 // ------------------------------------------------------------------ execution
 
+/// Payload of the `send-progress` event: body bytes received so far on the
+/// wire for an in-flight send. Emitted at most ~10 times a second (see
+/// `exec::PROGRESS_INTERVAL`) and never after the send returns.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendProgress {
+    run_id: String,
+    received: usize,
+}
+
+/// Unlike other commands, a failed send is a classified `{ kind, message, details }`
+/// object (see `ExecError`), so the viewer can explain it and offer the fix.
 #[tauri::command]
-async fn send_request(
+async fn send_request<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     run_id: String,
     request: Request,
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
-) -> CmdResult<HttpResponse> {
+) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
     let base_dir = file_path
         .as_ref()
@@ -332,12 +345,12 @@ async fn send_request(
 
     let (prepared, ssl) = {
         let env_set = match &root {
-            Some(r) => env::load(r).map_err(err)?,
+            Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
             None => EnvironmentSet::default(),
         };
         let env_vars = env::variables(&env_set, environment.as_deref());
         let resolver = Resolver::for_request(&env_vars, &file_variables, &request.variables, Some(&base_dir));
-        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings).map_err(err)?;
+        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, e),
             _ => Default::default(),
@@ -345,7 +358,11 @@ async fn send_request(
         (prepared, ssl)
     };
 
-    let task = tokio::spawn(async move { exec::execute(prepared, &settings, &ssl).await });
+    let progress_id = run_id.clone();
+    let on_progress = move |received| {
+        let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
+    };
+    let task = tokio::spawn(async move { exec::execute_with_progress(prepared, &settings, &ssl, on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
@@ -355,9 +372,9 @@ async fn send_request(
             state.bodies.lock().unwrap().push(outcome.response.id.clone(), outcome.body);
             Ok(outcome.response)
         }
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(e) if e.is_cancelled() => Err("Request cancelled".into()),
-        Err(e) => Err(e.to_string()),
+        Ok(Err(e)) => Err(e),
+        Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
+        Err(e) => Err(ExecError::Other(e.to_string())),
     }
 }
 

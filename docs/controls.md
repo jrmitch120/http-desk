@@ -54,10 +54,14 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 `SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
 pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
-- Props: `options` (`{ value, label, icon? }[]`), `value`, `onchange(value)`, `label` (the
-  group's accessible name, required).
-- One look and one size, on purpose: every switch in the app (body type, response view,
-  Settings theme and layout, OpenAPI source and grouping) must match.
+- Props: `options` (`{ value, label, icon?, count? }[]`), `value`, `onchange(value)`,
+  `label` (the group's accessible name, required).
+- `count` shows a number after the label and is part of the option's name ("Headers 4").
+  Leave it out and nothing shows; pass `0` only where an empty option says something
+  (a response with no headers), so empty tabs don't fill up with zeros.
+- One look and one size, on purpose: every switch in the app (body type, the response
+  viewer's tabs, response view, Settings theme and layout, OpenAPI source and grouping)
+  must match.
   `e2e/segmented-control.spec.ts` compares their computed styles, so don't restyle one
   from its parent.
 - Keyboard: Tab reaches the checked option; arrows and Home/End move and select (wrapping).
@@ -177,6 +181,10 @@ Global classes in `src/app.css`, not components:
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
 - `.link`: a button that reads as a link.
+- `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
+  toast and a `use:tooltip={"Click to copy"}` (response header values). Its accessible
+  name is the value. The text stays selectable; the click handler skips the copy when
+  the click ended a drag that selected part of it.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
   Focus shows `--focus-ring`.
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.
