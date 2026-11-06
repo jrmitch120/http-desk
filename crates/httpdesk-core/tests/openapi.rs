@@ -372,6 +372,44 @@ paths:
 }
 
 #[test]
+fn example_bodies_never_contain_http_syntax_lines() {
+    let spec = r#"
+openapi: 3.0.3
+info: {title: Notes, version: '1'}
+paths:
+  /notes:
+    post:
+      operationId: createNote
+      requestBody:
+        content:
+          text/plain:
+            example: |
+              Intro
+              ### Heading
+              >> saved.txt
+              > {% client.log(1) %}
+              > handler.js
+              ## not a separator
+              end
+      responses: {'200': {description: OK}}
+  /notes/{id}:
+    get:
+      operationId: getNote
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: OK}}
+"#;
+    let out = generate(&OpenApiDoc::parse(spec, None).unwrap(), Grouping::Single);
+    let generated = &out.files[0].file;
+    let text = serialize(generated);
+    insta::assert_snapshot!("http_syntax_in_examples", text);
+    let back = parse(&text);
+    assert_eq!(back.requests.len(), generated.requests.len(), "{text}");
+    let note = &back.requests[0];
+    assert_eq!(note.response_handler, None, "{text}");
+    assert_eq!(note.body.text, generated.requests[0].body.text.trim_end());
+}
+
+#[test]
 fn invalid_json_specs_report_json_errors() {
     // Missing comma after the `openapi` member.
     let text = "{\n  \"openapi\": \"3.0.0\"\n  \"info\": {\"title\": \"x\", \"version\": \"1\"},\n  \"paths\": {}\n}\n";

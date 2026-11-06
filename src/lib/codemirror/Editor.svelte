@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState } from "@codemirror/state";
+  import { Compartment, EditorState, type Extension } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
   import { foldAll, unfoldAll } from "@codemirror/language";
@@ -15,8 +15,10 @@
     placeholder?: string;
     variables?: VarProvider | null;
     gutters?: boolean;
+    /** Extra extensions, fixed at mount. */
+    extensions?: Extension;
   }
-  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true }: Props = $props();
+  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, extensions = [] }: Props = $props();
 
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);
@@ -33,6 +35,7 @@
           baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
+          extensions,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
           }),

@@ -9,6 +9,140 @@ use base64::Engine;
 use crate::model::*;
 use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
 
+/// A model field whose text would change the file's structure if written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidField(pub String);
+
+/// Serializes `file`, refusing a model whose single-line fields contain line
+/// breaks or whose names would be read back as something else. Use this for
+/// models that come from outside (the UI); `serialize` doesn't check.
+pub fn try_serialize(file: &HttpFile) -> Result<String, InvalidField> {
+    check_file(file)?;
+    Ok(serialize(file))
+}
+
+fn has_line_break(s: &str) -> bool {
+    s.contains(['\n', '\r'])
+}
+
+/// `Err` with "`context`: `what` contains a line break" when `value` has one.
+fn single_line(context: &str, what: impl FnOnce() -> String, value: &str) -> Result<(), InvalidField> {
+    if has_line_break(value) {
+        return Err(InvalidField(format!("{context}: {} contains a line break", what())));
+    }
+    Ok(())
+}
+
+fn check_file(file: &HttpFile) -> Result<(), InvalidField> {
+    for c in &file.header.comments {
+        single_line("File header", || "a comment line".into(), c)?;
+    }
+    for v in &file.header.variables {
+        check_variable("File variables", v)?;
+    }
+    for req in &file.requests {
+        check_request(req)?;
+    }
+    Ok(())
+}
+
+fn check_variable(context: &str, v: &Variable) -> Result<(), InvalidField> {
+    single_line(context, || format!("variable name {:?}", v.name), &v.name)?;
+    single_line(context, || format!("the value of variable {:?}", v.name), &v.value)?;
+    // Empty names aren't written. Any other name must read back as a variable line.
+    if !v.name.is_empty() && !parser::is_variable_name(&v.name) {
+        return Err(InvalidField(format!(
+            "{context}: variable name {:?} can only use letters, digits, _, -, . and $",
+            v.name
+        )));
+    }
+    Ok(())
+}
+
+/// Why a header line with this name would read back as something else (a
+/// comment, a disabled query param or body line, or no header at all).
+fn header_name_problem(name: &str) -> Option<String> {
+    if name.contains(char::is_whitespace) {
+        return Some("can't contain spaces".into());
+    }
+    if name.contains(':') {
+        return Some("can't contain ':'".into());
+    }
+    ["//", "#", "~", "|", "&", "?"]
+        .into_iter()
+        .find(|p| name.starts_with(p))
+        .map(|p| format!("can't start with '{p}'"))
+}
+
+fn check_header_name(context: &str, what: &str, name: &str) -> Result<(), InvalidField> {
+    match header_name_problem(name) {
+        Some(problem) if !name.is_empty() => Err(InvalidField(format!("{context}: {what} {name:?} {problem}"))),
+        _ => Ok(()),
+    }
+}
+
+fn check_items(context: &str, kind: &str, items: &[KeyValue]) -> Result<(), InvalidField> {
+    for kv in items {
+        single_line(context, || format!("{kind} name {:?}", kv.name), &kv.name)?;
+        single_line(context, || format!("the value of {kind} {:?}", kv.name), &kv.value)?;
+    }
+    Ok(())
+}
+
+fn check_request(req: &Request) -> Result<(), InvalidField> {
+    let context = format!("Request {:?}", req.display_name());
+    let context = context.as_str();
+    single_line(context, || "the name".into(), &req.name)?;
+    single_line(context, || "the method".into(), &req.method)?;
+    single_line(context, || "the URL".into(), &req.url)?;
+    single_line(context, || "the HTTP version".into(), req.http_version.as_deref().unwrap_or(""))?;
+    for d in &req.directives {
+        single_line(context, || format!("directive @{}", d.name), &d.name)?;
+        single_line(context, || format!("directive @{}", d.name), &d.value)?;
+    }
+    for v in &req.variables {
+        check_variable(context, v)?;
+    }
+    check_items(context, "query param", &req.query.items)?;
+    check_items(context, "header", &req.headers.items)?;
+
+    let a = &req.auth;
+    let auth_fields = [
+        ("the username", &a.username),
+        ("the password", &a.password),
+        ("the bearer token", &a.token),
+        ("the API key name", &a.key_name),
+        ("the API key value", &a.key_value),
+    ];
+    for (what, value) in auth_fields {
+        single_line(context, || what.into(), value)?;
+    }
+    for h in &req.headers.items {
+        check_header_name(context, "header name", &h.name)?;
+    }
+    if a.kind == AuthKind::ApiKey {
+        match a.key_location {
+            ApiKeyLocation::Header => check_header_name(context, "API key header name", &a.key_name)?,
+            // `# @httpdesk-auth apikey query <name>` splits at whitespace.
+            ApiKeyLocation::Query if a.key_name.contains(char::is_whitespace) => {
+                return Err(InvalidField(format!("{context}: the API key name {:?} can't contain spaces", a.key_name)));
+            }
+            ApiKeyLocation::Query => {}
+        }
+    }
+    single_line(context, || "the Authorization header".into(), a.raw.as_deref().unwrap_or(""))?;
+    for e in &req.extra_lines {
+        single_line(context, || "a header-area line".into(), &e.text)?;
+    }
+    Ok(())
+}
+
+/// Splits on `\r\n`, `\r` or `\n`.
+fn split_lines(s: &str) -> impl Iterator<Item = &str> {
+    s.split('\n').flat_map(|l| l.strip_suffix('\r').unwrap_or(l).split('\r'))
+}
+
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
@@ -199,7 +333,8 @@ pub fn render_request(req: &Request) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(if req.name.trim().is_empty() { "###".into() } else { format!("### {}", req.name.trim()) });
 
-    for c in &req.comments {
+    // A multi-line description entry becomes one `#` line per line.
+    for c in req.comments.iter().flat_map(|c| split_lines(c)) {
         lines.push(if c.is_empty() { "#".into() } else { format!("# {c}") });
     }
     // Section names this version doesn't know, written back on the section line below.

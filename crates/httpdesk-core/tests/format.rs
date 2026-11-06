@@ -539,3 +539,114 @@ fn file_header_layout_survives_variable_edits() {
         "# Shared settings\n\n@host = https://x\n@token = xyz\n\n# Ids\n@new = 2\n\n\n### First\nGET {{host}}\n"
     );
 }
+
+// ---------------------------------------------------------------- field safety
+
+#[test]
+fn multi_line_descriptions_save_as_one_comment_line_per_line() {
+    let mut f = parse("### A\nGET https://x\n");
+    f.requests[0].comments = vec!["First line\nsecond line".into()];
+    let out = try_serialize(&f).unwrap();
+    assert_eq!(out, "### A\n# First line\n# second line\nGET https://x\n");
+    let back = parse(&out);
+    assert_eq!(back.requests.len(), 1);
+    assert_eq!(back.requests[0].comments, ["First line", "second line"]);
+    assert_eq!(back.requests[0].url, "https://x");
+
+    // CRLF and a lone CR count as line breaks too; blank lines stay as `#`.
+    f.requests[0].comments = vec!["a\r\n\rb".into()];
+    assert_eq!(try_serialize(&f).unwrap(), "### A\n# a\n#\n# b\nGET https://x\n");
+}
+
+#[test]
+fn only_column_zero_handler_lines_end_the_body() {
+    // JetBrains reads `>` / `>>` as a handler only at the start of a line.
+    let text = "POST https://x\n\nquote:\n  > {% not a script %}\n  >> not.txt\n\n> {% client.log(1) %}\n";
+    let req = &parse(text).requests[0];
+    assert_eq!(req.body.text, "quote:\n  > {% not a script %}\n  >> not.txt");
+    assert_eq!(req.response_handler.as_deref(), Some("> {% client.log(1) %}"));
+}
+
+const EDITABLE: &str = "@host = https://x\n\n### List pets\n# @timeout 5\n@id = 1\nGET {{host}}/pets?limit=20\nAuthorization: Bearer t\nAccept: */*\n";
+
+/// A model edit for the table-driven save tests.
+type Edit = Box<dyn FnOnce(&mut HttpFile)>;
+
+/// Applies `edit` to a parsed `EDITABLE` and returns the save error.
+fn save_error(edit: impl FnOnce(&mut HttpFile)) -> String {
+    let mut f = parse(EDITABLE);
+    edit(&mut f);
+    match try_serialize(&f) {
+        Ok(text) => panic!("saved:\n{text}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn save_refuses_line_breaks_in_single_line_fields() {
+    assert_eq!(try_serialize(&parse(EDITABLE)).unwrap(), EDITABLE);
+
+    let cases: Vec<(Edit, &str)> = vec![
+        (Box::new(|f| f.requests[0].name = "List\npets".into()), "Request \"List\\npets\": the name contains a line break"),
+        (Box::new(|f| f.requests[0].headers.items[0].value = "*/*\nX-Evil: 1".into()), "Request \"List pets\": the value of header \"Accept\" contains a line break"),
+        (Box::new(|f| f.requests[0].headers.items[0].name = "Acc\nept".into()), "Request \"List pets\": header name \"Acc\\nept\" contains a line break"),
+        (Box::new(|f| f.requests[0].query.items[0].value = "20\r".into()), "Request \"List pets\": the value of query param \"limit\" contains a line break"),
+        (Box::new(|f| f.requests[0].query.items[0].name = "li\nmit".into()), "Request \"List pets\": query param name \"li\\nmit\" contains a line break"),
+        (Box::new(|f| f.requests[0].url = "{{host}}\n/pets".into()), "Request \"List pets\": the URL contains a line break"),
+        (Box::new(|f| f.requests[0].method = "GET\n".into()), "Request \"List pets\": the method contains a line break"),
+        (Box::new(|f| f.requests[0].auth.token = "t\nX: 1".into()), "Request \"List pets\": the bearer token contains a line break"),
+        (Box::new(|f| f.requests[0].variables[0].value = "1\n2".into()), "Request \"List pets\": the value of variable \"id\" contains a line break"),
+        (Box::new(|f| f.requests[0].directives[0].value = "5\nGET https://evil".into()), "Request \"List pets\": directive @timeout contains a line break"),
+        (Box::new(|f| f.header.variables[0].value = "https://x\n### Injected".into()), "File variables: the value of variable \"host\" contains a line break"),
+    ];
+    for (edit, want) in cases {
+        assert_eq!(save_error(edit), want);
+    }
+}
+
+#[test]
+fn save_refuses_names_that_would_read_back_as_something_else() {
+    for text in [JETBRAINS, VSCODE] {
+        assert!(try_serialize(&parse(text)).is_ok());
+    }
+
+    let cases: Vec<(Edit, &str)> = vec![
+        // `@my var = 1` isn't a variable line; in a request it would become the request line.
+        (Box::new(|f| f.requests[0].variables[0].name = "my id".into()), "Request \"List pets\": variable name \"my id\" can only use letters, digits, _, -, . and $"),
+        (Box::new(|f| f.header.variables[0].name = "base=url".into()), "File variables: variable name \"base=url\" can only use letters, digits, _, -, . and $"),
+        (Box::new(|f| f.requests[0].headers.items[0].name = "X Trace".into()), "Request \"List pets\": header name \"X Trace\" can't contain spaces"),
+        (Box::new(|f| f.requests[0].headers.items[0].name = "X:Trace".into()), "Request \"List pets\": header name \"X:Trace\" can't contain ':'"),
+        // Read back as a comment, a disabled item or a disabled body line.
+        (Box::new(|f| f.requests[0].headers.items[0].name = "#Trace".into()), "Request \"List pets\": header name \"#Trace\" can't start with '#'"),
+        (Box::new(|f| f.requests[0].headers.items[0].name = "//Trace".into()), "Request \"List pets\": header name \"//Trace\" can't start with '//'"),
+        (Box::new(|f| f.requests[0].headers.items[0].name = "|Trace".into()), "Request \"List pets\": header name \"|Trace\" can't start with '|'"),
+        (
+            Box::new(|f| {
+                let auth = &mut f.requests[0].auth;
+                (auth.kind, auth.key_name, auth.key_location) = (AuthKind::ApiKey, "X Key".into(), ApiKeyLocation::Header);
+            }),
+            "Request \"List pets\": API key header name \"X Key\" can't contain spaces",
+        ),
+        (
+            Box::new(|f| {
+                let auth = &mut f.requests[0].auth;
+                (auth.kind, auth.key_name, auth.key_location) = (AuthKind::ApiKey, "api key".into(), ApiKeyLocation::Query);
+            }),
+            "Request \"List pets\": the API key name \"api key\" can't contain spaces",
+        ),
+    ];
+    for (edit, want) in cases {
+        assert_eq!(save_error(edit), want);
+    }
+
+    // Names that read back unchanged are fine, as is a disabled header with an odd name.
+    let mut f = parse(EDITABLE);
+    f.requests[0].variables[0].name = "$pet.id-2_x".into();
+    f.requests[0].headers.items[0].name = "{{headerName}}".into();
+    f.requests[0].headers.items.push(KeyValue::disabled("X-Ok!", "1"));
+    let out = try_serialize(&f).unwrap();
+    let back = &parse(&out).requests[0];
+    assert_eq!(back.variables[0].name, "$pet.id-2_x");
+    assert_eq!(back.headers.items[0].name, "{{headerName}}");
+    assert_eq!(back.headers.items[1], KeyValue::disabled("X-Ok!", "1"));
+}

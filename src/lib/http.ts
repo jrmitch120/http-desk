@@ -374,6 +374,52 @@ export function nameError(name: string): string | null {
   return /[\\/]/.test(name) || name === "." || name === ".." ? "Names can't contain / or \\, or be . or .." : null;
 }
 
+// ------------------------------------------------------------------ field safety
+// Mirrors the save-time checks in crates/httpdesk-core/src/serializer.rs.
+
+/** Why a header line with this name would read back as something else, or null. */
+export function headerNameError(name: string): string | null {
+  if (/[\r\n]/.test(name)) return "Header names can't contain line breaks";
+  if (/\s/.test(name)) return "Header names can't contain spaces";
+  if (name.includes(":")) return "Header names can't contain ':'";
+  const prefix = ["//", "#", "~", "|", "&", "?"].find((p) => name.startsWith(p));
+  return prefix ? `Header names can't start with '${prefix}'` : null;
+}
+
+/** Why `@name = value` wouldn't read back as a variable, or null. Empty names aren't saved. */
+export function variableNameError(name: string): string | null {
+  return name === "" || /^[\p{Alphabetic}\p{N}_.$-]+$/u.test(name) ? null : "Variable names can only use letters, digits, _, -, . and $";
+}
+
+export interface BodySyntaxWarning {
+  /** 1-based line number. */
+  line: number;
+  message: string;
+}
+
+/** Response handler or output redirect at column 0, the same rule as the parser. */
+function isHandlerStart(line: string): boolean {
+  if (line.startsWith(">>")) return true;
+  if (!line.startsWith(">")) return false;
+  const rest = line.slice(1).trim();
+  return rest.startsWith("{%") || (rest !== "" && !/\s/.test(rest) && rest.endsWith(".js"));
+}
+
+/** Body lines that `.http` syntax (other clients, and HttpDesk on reload) reads as a separator or handler. */
+export function bodySyntaxWarnings(text: string): BodySyntaxWarning[] {
+  const out: BodySyntaxWarning[] = [];
+  text.split("\n").forEach((l, i) => {
+    const line = i + 1;
+    if (l.startsWith("###")) {
+      out.push({ line, message: `Line ${line} starts with ###, so it will be read as the start of a new request.` });
+    } else if (isHandlerStart(l)) {
+      const prefix = l.startsWith(">>") ? ">>" : ">";
+      out.push({ line, message: `Line ${line} starts with ${prefix}, so it and the lines after it will be read as a response handler.` });
+    }
+  });
+  return out;
+}
+
 export function joinPath(dir: string, name: string): string {
   const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
   return dir.endsWith(sep) ? dir + name : dir + sep + name;

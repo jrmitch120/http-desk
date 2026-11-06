@@ -104,12 +104,15 @@ pub(crate) fn parse_variable(t: &str) -> Option<Variable> {
     let rest = t.strip_prefix('@')?;
     let (name, value) = rest.split_once('=')?;
     let name = name.trim();
-    if name.is_empty()
-        || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
-    {
+    if !is_variable_name(name) {
         return None;
     }
     Some(Variable { name: name.to_string(), value: value.trim().to_string() })
+}
+
+/// Names an `@name = value` line can declare.
+pub(crate) fn is_variable_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
 }
 
 fn parse_directive(c: &str) -> Option<Directive> {
@@ -173,12 +176,13 @@ fn split_header(s: &str) -> Option<(String, String)> {
     Some((name.to_string(), value.trim().to_string()))
 }
 
-fn is_handler_start(line: &str) -> bool {
-    let t = line.trim_start();
-    if t.starts_with(">>") {
+/// A response handler or output redirect starts at column 0 (JetBrains), so an
+/// indented `>` line is body content.
+pub(crate) fn is_handler_start(line: &str) -> bool {
+    if line.starts_with(">>") {
         return true;
     }
-    if let Some(rest) = t.strip_prefix('>') {
+    if let Some(rest) = line.strip_prefix('>') {
         let rest = rest.trim();
         return rest.starts_with("{%")
             || (!rest.is_empty() && !rest.contains(char::is_whitespace) && rest.ends_with(".js"));

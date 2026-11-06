@@ -16,6 +16,8 @@
     separator?: string;
     /** Per-row descriptions shown under the key, editable in place. */
     docs?: boolean;
+    /** Why a name can't be saved (shown under the row), or null. */
+    nameError?: (name: string) => string | null;
   }
   let {
     items = $bindable(),
@@ -26,6 +28,7 @@
     suggestions = [],
     separator = ":",
     docs = false,
+    nameError = () => null,
   }: Props = $props();
 
   const listId = `kv-${Math.random().toString(36).slice(2)}`;
@@ -140,6 +143,7 @@
   {:else}
     {#each rows as row, i (i)}
       {@const ghost = i === items.length}
+      {@const error = ghost ? null : nameError(row.name)}
       <div class="kv-row" class:off={!ghost && toggles && !row.enabled} class:ghost class:no-check={!toggles}>
         {#if toggles}
           <span class="c-check">
@@ -154,6 +158,7 @@
           placeholder={ghost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
           list={suggestions.length ? listId : undefined}
           spellcheck="false"
+          aria-invalid={error ? "true" : undefined}
           oninput={(e) => set(i, "name", e.currentTarget.value)}
         />
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
@@ -179,6 +184,9 @@
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
             <button class="desc add" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(i)}>Add description</button>
           {/if}
+        {/if}
+        {#if error}
+          <div class="row-error" role="alert">{error}</div>
         {/if}
       </div>
     {/each}
@@ -208,7 +216,7 @@
   .kv-row {
     display: grid;
     grid-template-columns: 34px 38% 1fr 34px;
-    grid-template-rows: 31px auto;
+    grid-template-rows: 31px auto auto;
   }
   .kv-row.no-check {
     grid-template-columns: 38% 1fr 34px;
@@ -249,8 +257,20 @@
     -webkit-user-select: text;
     white-space: pre-line;
   }
-  .kv-row.no-check .desc {
+  .kv-row.no-check .desc,
+  .kv-row.no-check .row-error {
     grid-column: 1 / -1;
+  }
+  .row-error {
+    grid-row: 3;
+    grid-column: 2 / -1;
+    padding: 4px 10px 5px;
+    font-size: 11.5px;
+    color: var(--danger);
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .cell[aria-invalid="true"] {
+    box-shadow: inset 0 0 0 1px var(--danger);
   }
   .desc:hover {
     color: var(--text-2);
