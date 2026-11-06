@@ -28,7 +28,10 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import ResponseFilter from "./ResponseFilter.svelte";
-  import type { FilterResult } from "../lib/types";
+  import type { FilterResult, JsonShape } from "../lib/types";
+  import { keymap } from "@codemirror/view";
+  import { menu } from "../lib/menu.svelte";
+  import { pathAt } from "../lib/jsonpath";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -137,6 +140,55 @@
   const filtered = $derived(outcome?.result && !filterError ? outcome.result : null);
   /** A large body's Pretty text is still on its way (filter matches show instead, if any). */
   const formatting = $derived(!filtered && !!rendering && res?.bodyText != null && res.prettyText == null && rendered?.key !== rendering);
+
+  // Key completion: the body's shape summary, built once per response in the
+  // core and fetched once when the filter box is first focused; every keystroke
+  // completes from it locally.
+  let shapeOf = $state<{ id: string; shape: JsonShape | null } | null>(null);
+  const shape = $derived(res && shapeOf?.id === res.id ? shapeOf.shape : null);
+  function loadShape() {
+    if (!res || !canFilter || shapeOf?.id === res.id) return;
+    const { id } = res;
+    shapeOf = { id, shape: null }; // asked for; one request per response
+    api.responseShape(id).then(
+      (s) => {
+        if (shapeOf?.id === id) shapeOf = { id, shape: s };
+      },
+      () => {}, // no completion, the filter still works
+    );
+  }
+
+  // "Copy path" in the body editor's context menu (JSON bodies only; other
+  // bodies keep the webview's own menu). Paths are of the text on screen, so
+  // not while filter matches show.
+  const jsonBody = $derived(kind === "json" && !isBinary);
+  function bodyMenu(e: MouseEvent) {
+    if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
+    const ed = editor;
+    const offset = ed.caretForMenu(e);
+    const selection = ed.selectedText();
+    menu.show(
+      e,
+      [
+        { label: "Copy", icon: "copy", disabled: !selection, action: () => void copyText(selection, "Copied") },
+        { label: "Select all", action: () => ed.selectAll() },
+        { separator: true },
+        { label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) },
+      ],
+      { label: "Body" },
+    );
+  }
+  async function copyText(text: string, message: string) {
+    await navigator.clipboard.writeText(text);
+    app.toast("success", message);
+  }
+  function copyPath(text: string, offset: number) {
+    const path = pathAt(text, offset);
+    if (path === null) app.toast("error", "There's no JSON value at the cursor");
+    else void copyText(path, `Copied ${path}`);
+  }
+  /** Shift+F10 in the body editor opens the same menu at the caret. */
+  const bodyKeys = keymap.of([{ key: "Shift-F10", run: () => (jsonBody ? (editor?.openMenuAtCaret(), true) : false) }]);
 
   const bodyText = $derived.by(() => {
     if (!res) return "";
@@ -285,10 +337,12 @@
         </div>
         {#if canFilter}
           <div class="filter-row">
-            <ResponseFilter value={filter} onchange={(v) => (filter = v)} matches={filtered?.matches ?? null} error={filterError} />
+            <ResponseFilter value={filter} onchange={(v) => (filter = v)} matches={filtered?.matches ?? null} error={filterError} {shape} needshape={loadShape} />
           </div>
         {/if}
-        <div class="body">
+        <!-- The body editor's context menu (Copy path); other content keeps the webview's. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="body" oncontextmenu={bodyMenu}>
           {#if effectiveMode === "preview" && dataUrl}
             {#if kind === "image"}
               <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
@@ -308,7 +362,7 @@
           {:else if formatting}
             <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
           {:else}
-            <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} />
+            <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} extensions={bodyKeys} />
           {/if}
         </div>
       {:else if current === "headers"}

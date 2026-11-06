@@ -76,6 +76,40 @@
   export function focus() {
     view?.focus();
   }
+  /** The document's text as shown. */
+  export function text(): string {
+    return view?.state.doc.toString() ?? "";
+  }
+  /** The selected text (the main selection), or "" if nothing is selected. */
+  export function selectedText(): string {
+    if (!view) return "";
+    const { from, to } = view.state.selection.main;
+    return view.state.sliceDoc(from, to);
+  }
+  export function selectAll() {
+    view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+  }
+  /** Opens the context menu at the caret, for Shift+F10 (dispatches `contextmenu` on the content). */
+  export function openMenuAtCaret() {
+    if (!view) return;
+    const at = view.coordsAtPos(view.state.selection.main.head);
+    const x = at ? at.left : 0;
+    const y = at ? (at.top + at.bottom) / 2 : 0;
+    view.contentDOM.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }
+  /**
+   * For a context menu at `e`: moves the caret to the clicked spot unless the
+   * click is inside the selection (which a Copy item then copies), and returns
+   * the caret offset. A menu without a position keeps the caret.
+   */
+  export function caretForMenu(e: MouseEvent): number {
+    if (!view) return 0;
+    const sel = view.state.selection.main;
+    const pos = e.clientX || e.clientY ? view.posAtCoords({ x: e.clientX, y: e.clientY }) : null;
+    if (pos === null || (pos >= sel.from && pos <= sel.to && !sel.empty)) return sel.head;
+    view.dispatch({ selection: { anchor: pos } });
+    return pos;
+  }
 </script>
 
 <div class="cm-host" bind:this={host}></div>

@@ -5,6 +5,7 @@ import type {
   BodyKind,
   FilterResult,
   FormatMode,
+  JsonShape,
   EnvironmentSet,
   GenerateOptions,
   GenerateReport,
@@ -68,6 +69,8 @@ export const api = {
    * has been evicted.
    */
   prettyResponse: (responseId: string) => invoke<string>("pretty_response", { responseId }),
+  /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
+  responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

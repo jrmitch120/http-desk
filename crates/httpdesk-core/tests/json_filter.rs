@@ -1,6 +1,6 @@
 //! JSONPath filtering of response bodies (`json_filter`).
 
-use httpdesk_core::json_filter::JsonDocument;
+use httpdesk_core::json_filter::{JsonDocument, Shape};
 
 const STORE: &str = r#"{
   "items": [
@@ -106,4 +106,55 @@ fn the_same_node_selected_twice_is_listed_twice() {
     let doc = JsonDocument::parse("[7.0, 8]").unwrap();
     let result = doc.filter("$[0, 0]").unwrap();
     assert_eq!((result.matches, result.text.as_str()), (2, "[\n  7.0,\n  7.0\n]"));
+}
+
+// ------------------------------------------------------------ shape summary
+
+/// `(key, child)` pairs of a shape, by name only, for compact assertions.
+fn key_names(shape: &Shape) -> Vec<&str> {
+    shape.keys.iter().map(|(k, _)| k.as_str()).collect()
+}
+
+fn child<'a>(shape: &'a Shape, key: &str) -> &'a Shape {
+    &shape.keys.iter().find(|(k, _)| k == key).unwrap_or_else(|| panic!("no key {key}")).1
+}
+
+#[test]
+fn the_shape_lists_the_keys_reachable_at_each_place_merged_across_array_items() {
+    let doc = JsonDocument::parse(
+        r#"{"items": [{"id": 1, "name": "Rex"}, {"id": 2, "owner": {"name": "Ann"}}, 3], "total": 2, "odd key": []}"#,
+    )
+    .unwrap();
+    let shape = doc.shape();
+    assert_eq!(key_names(shape), ["items", "total", "odd key"]);
+    assert_eq!(shape.items, None);
+    let items = child(shape, "items").items.as_deref().expect("items is an array");
+    assert_eq!(key_names(items), ["id", "name", "owner"]);
+    assert_eq!(key_names(child(items, "owner")), ["name"]);
+    assert_eq!(child(shape, "total"), &Shape::default());
+    // An empty array is still an array; its items just have no keys.
+    assert_eq!(child(shape, "odd key").items.as_deref(), Some(&Shape::default()));
+}
+
+#[test]
+fn the_shape_is_computed_once_per_document() {
+    let doc = JsonDocument::parse(STORE).unwrap();
+    assert!(std::ptr::eq(doc.shape(), doc.shape()));
+}
+
+#[test]
+fn the_shape_keeps_at_most_a_thousand_keys_per_object() {
+    let body = format!("{{{}}}", (0..1500).map(|i| format!("\"k{i}\": {i}")).collect::<Vec<_>>().join(","));
+    let doc = JsonDocument::parse(&body).unwrap();
+    assert_eq!(doc.shape().keys.len(), 1000);
+    assert_eq!(doc.shape().keys[999].0, "k999");
+}
+
+#[test]
+fn the_shape_serialises_keys_as_pairs_in_document_order() {
+    let doc = JsonDocument::parse(r#"{"b": [{"x": 1}], "a": {}, "1": 0}"#).unwrap();
+    assert_eq!(
+        serde_json::to_value(doc.shape()).unwrap(),
+        serde_json::json!({ "keys": [["b", { "items": { "keys": [["x", {}]] } }], ["a", {}], ["1", {}]] })
+    );
 }

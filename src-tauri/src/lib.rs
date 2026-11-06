@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
-use httpdesk_core::json_filter::{FilterResult, JsonDocument};
+use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
@@ -482,6 +482,14 @@ async fn pretty_response<R: tauri::Runtime>(app: AppHandle<R>, response_id: Stri
     .await
 }
 
+/// Key completion for the filter bar: the keys reachable at each place in a
+/// stored JSON response body. Built once per parsed document and kept with it,
+/// so the frontend fetches it once per response and completes locally.
+#[tauri::command]
+async fn response_shape<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<Shape> {
+    off_main(app, move |state| Ok(json_doc(state, &response_id)?.shape().clone())).await
+}
+
 // ------------------------------------------------------------------ settings
 
 #[tauri::command]
@@ -662,6 +670,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             hexdump,
             filter_response,
             pretty_response,
+            response_shape,
             get_settings,
             save_settings,
             set_unsaved,
