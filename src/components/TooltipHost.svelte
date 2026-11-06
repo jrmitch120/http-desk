@@ -41,6 +41,8 @@
     font-size: 12px;
     line-height: 1.4;
     overflow-wrap: anywhere;
+    /* "\n" in a tooltip's text starts a new line (e.g. the status pill's). */
+    white-space: pre-line;
     pointer-events: none;
   }
   .tooltip[hidden] {
