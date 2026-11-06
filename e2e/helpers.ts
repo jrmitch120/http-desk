@@ -47,7 +47,7 @@ export function searchResults(page: Page): Locator {
 
 /** The active request's tab in the tab strip. It contains a `.dot` while unsaved. */
 export function activeTab(page: Page): Locator {
-  return page.locator(".tabbar .tab.active");
+  return page.getByRole("tablist", { name: "Open requests" }).getByRole("tab", { selected: true });
 }
 
 /** The active request's body editor (a CodeMirror editor; open the Body section first). */
@@ -62,7 +62,10 @@ export function sentRequests(page: Page): Promise<{ method: string; url: string 
 
 /** An open request tab in the tab bar, by request name. */
 export function tab(page: Page, name: string): Locator {
-  return page.locator(".tabbar .tab").filter({ has: page.locator(".name", { hasText: new RegExp(`^${escape(name)}$`) }) });
+  return page
+    .getByRole("tablist", { name: "Open requests" })
+    .getByRole("tab")
+    .filter({ has: page.locator(".name", { hasText: new RegExp(`^${escape(name)}$`) }) });
 }
 
 /** A confirm/prompt dialog (or any modal) by its title. */

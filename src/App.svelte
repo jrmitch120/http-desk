@@ -28,11 +28,23 @@
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
+    if (e.key === "F10" && e.shiftKey) return keyboardContextMenu(e);
     const action = shortcut(e);
     if (!action) return;
     e.preventDefault();
     // Under a modal or dialog only Escape acts, and Modal.svelte handles it.
     if (!modalOpen()) action();
+  }
+
+  /**
+   * Shift+F10 opens the focused element's context menu (macOS keyboards have no
+   * Menu key). Text fields keep the webview's own behaviour.
+   */
+  function keyboardContextMenu(e: KeyboardEvent) {
+    const t = e.target;
+    if (!(t instanceof HTMLElement) || t === document.body || t.closest("input, textarea, .cm-editor") || modalOpen()) return;
+    e.preventDefault();
+    t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   }
 
   /** The global shortcut `e` triggers, if any. */
