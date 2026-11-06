@@ -97,6 +97,10 @@ test("the response view and Settings switches are the same radiogroup", async ({
   expect(await pick(view, "Raw")).toBe(look);
   await expect(page.locator(".body .cm-content")).toContainText('{"items":[');
   await pick(view, "Pretty");
+  // The viewer's Body / Headers / Request tabs, counts and all.
+  const tabs = page.getByRole("radiogroup", { name: "Response tabs" });
+  expect(await pick(tabs, "Request")).toBe(look);
+  expect(await pick(tabs, "Body")).toBe(look);
 
   await page.keyboard.press("ControlOrMeta+Comma");
   const settings = dialog(page, "Settings");
