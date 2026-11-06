@@ -22,6 +22,7 @@
     type MultipartPart,
   } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
+  import Checkbox from "./Checkbox.svelte";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
 
@@ -161,10 +162,9 @@
           <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, !!fileRef?.substitute))}>Choose…</button>
         </span>
       </label>
-      <label class="check">
-        <input type="checkbox" checked={!!fileRef?.substitute} onchange={(e) => setFileRef(fileRef?.path ?? "", e.currentTarget.checked)} />
+      <Checkbox class="check" checked={!!fileRef?.substitute} onchange={(on) => setFileRef(fileRef?.path ?? "", on)}>
         Substitute <code>{"{{variables}}"}</code> inside the file
-      </label>
+      </Checkbox>
       <label class="field">
         <span class="muted">Content-Type</span>
         <input class="input mono" value={contentType} placeholder="application/octet-stream" spellcheck="false" oninput={(e) => setHeader(req, "Content-Type", e.currentTarget.value)} />
@@ -355,16 +355,10 @@
   .field .row .input {
     flex: 1;
   }
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 7px;
+  .file-mode :global(.check) {
+    align-self: flex-start;
     font-size: 12px;
     color: var(--text-2);
-  }
-  .check input {
-    accent-color: var(--accent);
-    margin: 0;
   }
   .small-link {
     font-size: 12px;

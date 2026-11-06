@@ -66,6 +66,28 @@ test("Space toggles a focused checkbox and Enter leaves it alone", async ({ page
   await expect(debug).toBeFocused();
 });
 
+test("the file body's checkbox turns variable substitution on and off", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await page.getByRole("button", { name: "Body" }).click();
+  await page.getByRole("radio", { name: "File" }).click();
+  await page.getByPlaceholder("./payload.json").fill("./pet.json");
+
+  const substitute = page.getByRole("checkbox", { name: "Substitute {{variables}} inside the file" });
+  await expect(substitute).toHaveAttribute("aria-checked", "false");
+  await page.getByText("inside the file").click(); // the label is part of the target
+  await expect(substitute).toHaveAttribute("aria-checked", "true");
+
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(async () => (await sentRequests(page)).length).toBe(1);
+  const sent = (await sentRequests(page)) as unknown as { body: { text: string } }[];
+  expect(sent.at(-1)!.body.text).toBe("<@ ./pet.json");
+
+  await substitute.click();
+  await expect(substitute).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByPlaceholder("./payload.json")).toHaveValue("./pet.json");
+});
+
 test("a focused checkbox shows the focus ring", async ({ page }) => {
   await openHeaders(page);
   // The row's checkbox comes just before its name cell in tab order.

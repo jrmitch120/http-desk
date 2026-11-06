@@ -15,7 +15,6 @@ export const ALLOWLIST: Allowlist = {
     "src/components/TopBar.svelte",
   ],
   checkbox: [
-    "src/components/BodyEditor.svelte",
     "src/components/OpenApiImport.svelte",
   ],
   radio: [
