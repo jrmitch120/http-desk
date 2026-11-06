@@ -288,10 +288,12 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 * **Frontend handling:**
   * The tree refreshes (debounced).
   * An open file with **no unsaved edits** is reloaded silently, and its tabs are remapped
-    to their requests (by name + method + URL, falling back to index).
+    to their requests (by name + method + URL, then by name, then by index when the
+    request count is unchanged). A tab left unmatched becomes an **Orphaned tab**: it
+    keeps its edits and last response, and saving it appends the request to the file.
   * An open file **with unsaved edits** shows a banner, *"Changed on disk — Reload /
     Keep mine"*, so neither side is overwritten silently.
-  * A deleted file marks its tabs as orphaned. Saving recreates the file.
+  * A deleted file makes its tabs Orphaned tabs. Saving recreates the file.
 * Writes go to a temp file followed by a rename, so external tools never see half-written
   files.
 * Deletion moves items to the OS trash (`trash` crate) rather than unlinking them.
