@@ -1893,6 +1893,8 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+ "tower-layer",
+ "tower-service",
  "url",
  "uuid",
  "wiremock",

@@ -168,6 +168,22 @@ export interface HttpResponse {
   truncated: boolean;
   request: SentRequest;
   warnings: string[];
+  timings: Timings;
+}
+
+/**
+ * Phase timing of the final request after redirects, in ms (`timeMs` covers
+ * every hop). A phase that wasn't measured is absent, not zero: DNS and
+ * connect on a reused connection, DNS for an IP address.
+ */
+export interface Timings {
+  dns?: number;
+  /** TCP connect plus the TLS handshake for https. */
+  connect?: number;
+  ttfb: number;
+  download: number;
+  reused: boolean;
+  redirects: number;
 }
 
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
