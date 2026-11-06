@@ -88,6 +88,32 @@ test("the file body's checkbox turns variable substitution on and off", async ({
   await expect(page.getByPlaceholder("./payload.json")).toHaveValue("./pet.json");
 });
 
+test("the OpenAPI importer's group checkbox shows the mixed state when part of the group is selected", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await page.getByPlaceholder("/path/to/openapi.yaml").fill("/demo/openapi.yaml");
+  await page.keyboard.press("Enter");
+
+  // Everything starts selected; the "pet" tag has four operations.
+  const group = page.getByRole("checkbox", { name: "Select all in pet" });
+  const create = page.getByRole("checkbox", { name: "POST /pets Create a pet" });
+  await expect(group).toHaveAttribute("aria-checked", "true");
+  await expect(create).toHaveAttribute("aria-checked", "true");
+
+  await page.getByText("Create a pet").click(); // the whole row is the target
+  await expect(create).toHaveAttribute("aria-checked", "false");
+  await expect(group).toHaveAttribute("aria-checked", "mixed");
+  await expect(page.getByText("4 of 5 selected")).toBeVisible();
+
+  await group.click();
+  await expect(group).toHaveAttribute("aria-checked", "true");
+  await expect(create).toHaveAttribute("aria-checked", "true");
+
+  await group.click();
+  await expect(group).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText("1 of 5 selected")).toBeVisible();
+});
+
 test("a focused checkbox shows the focus ring", async ({ page }) => {
   await openHeaders(page);
   // The row's checkbox comes just before its name cell in tab order.
