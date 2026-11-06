@@ -94,6 +94,69 @@ test("a certificate path applies on Enter and on Clear, not per keystroke", asyn
   await expect(ca.getByRole("textbox")).toHaveValue("");
 });
 
+/**
+ * Makes Chromium behave like WebKit, which fires no blur when the focused
+ * element is removed from the page: blur and focusout events dispatched while
+ * a node is being removed never reach their listeners.
+ */
+async function noBlurOnRemoval(page: Page) {
+  await page.addInitScript(() => {
+    let removing = 0;
+    const wrap = <T extends object>(proto: T, name: keyof T) => {
+      const original = proto[name] as (...args: unknown[]) => unknown;
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value(this: unknown, ...args: unknown[]) {
+          removing++;
+          try {
+            return original.apply(this, args);
+          } finally {
+            removing--;
+          }
+        },
+      });
+    };
+    wrap(Element.prototype, "remove");
+    wrap(CharacterData.prototype, "remove");
+    wrap(Node.prototype, "removeChild");
+    wrap(Element.prototype, "replaceChildren");
+    for (const type of ["blur", "focusout"]) {
+      window.addEventListener(type, (e) => removing && e.stopImmediatePropagation(), true);
+    }
+  });
+}
+
+// Closing removes the focused field, and WebKit fires no blur for a removed
+// element, so the modal has to commit the edit itself before it goes.
+const closers: { how: string; close: (page: Page) => Promise<void> }[] = [
+  { how: "Escape", close: (page) => page.keyboard.press("Escape") },
+  { how: "a click on the backdrop", close: (page) => page.mouse.click(4, 4) },
+];
+test.describe("without a blur on removal (as in WebKit)", () => {
+  test.beforeEach(({ page }) => noBlurOnRemoval(page));
+
+  for (const { how, close } of closers) {
+    test(`closing Settings with ${how} applies the number being typed`, async ({ page }) => {
+      await openApp(page);
+      const settings = await openSettings(page);
+      await settings.getByRole("textbox", { name: "Idle timeout" }).fill("45");
+      await close(page);
+      await expect(settings).toHaveCount(0);
+      await expect.poll(async () => (await savedSettings(page)).exec.timeoutMs).toBe(45000);
+    });
+
+    test(`closing Settings with ${how} applies the certificate path being typed`, async ({ page }) => {
+      await openApp(page);
+      const settings = await openSettings(page);
+      await settings.locator(".setting", { hasText: "CA certificate" }).getByRole("textbox").fill("/certs/ca.pem");
+      await close(page);
+      await expect(settings).toHaveCount(0);
+      await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
+    });
+  }
+});
+
 test("the Settings footer has only a Done button", async ({ page }) => {
   await openApp(page);
   const settings = await openSettings(page);

@@ -235,6 +235,8 @@ request/response split.
 `Modal.svelte` is the window for Settings, Environments and OpenAPI import: props
 `title` (also its accessible name), `onclose`, `width?`, `height?`, `children`,
 `footer?`. Escape closes it, Tab stays inside it, and focus returns to where it was.
+Closing it (Escape, the backdrop, the close button) blurs the focused field first, so a
+field that applies on blur keeps what was typed.
 Popups opened inside a modal close first on Escape.
 
 For a question or a confirmation, don't build a modal: call `app.choose(title, message,

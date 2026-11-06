@@ -21,6 +21,17 @@
     if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
   });
 
+  /**
+   * Blurs a focused field inside the modal before closing, so a field that
+   * applies on blur (NumberField, Settings paths) keeps what was typed. WebKit
+   * fires no blur when the focused element is removed with the modal.
+   */
+  function close() {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && box?.contains(focused)) focused.blur();
+    onclose();
+  }
+
   const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 
   /** Keeps Tab / Shift+Tab cycling inside the topmost modal. */
@@ -45,17 +56,17 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === "Escape") onclose();
+    if (e.key === "Escape") close();
     else trapTab(e);
   }}
 />
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onmousedown={(e) => e.target === e.currentTarget && onclose()}>
+<div class="backdrop" onmousedown={(e) => e.target === e.currentTarget && close()}>
   <div class="modal" bind:this={box} style:width style:height role="dialog" aria-modal="true" aria-label={title}>
     <header>
       <h2>{title}</h2>
-      <button class="icon-btn" onclick={onclose} aria-label="Close" use:tooltip><Icon name="x" /></button>
+      <button class="icon-btn" onclick={close} aria-label="Close" use:tooltip><Icon name="x" /></button>
     </header>
     <div class="content">{@render children()}</div>
     {#if footer}<footer>{@render footer()}</footer>{/if}
