@@ -5,6 +5,7 @@ import {
   buildMultipart,
   composeUrl,
   newRequest,
+  parseFileRef,
   parseForm,
   parseMultipart,
   prettyXml,
@@ -87,6 +88,27 @@ describe("form bodies", () => {
       { name: "a", value: "1" },
       { name: "b", value: "two words" },
     ]);
+  });
+
+  it("reads a body written one field per line, as it is sent", () => {
+    expect(parseForm("a=1\nb=2\n&c=3&\nd=4")).toEqual([
+      { name: "a", value: "1" },
+      { name: "b", value: "2" },
+      { name: "c", value: "3" },
+      { name: "d", value: "4" },
+    ]);
+  });
+});
+
+describe("file bodies", () => {
+  it("reads `< path` and `<@ path` with or without a space, as they are sent", () => {
+    expect(parseFileRef("< ./a.json")).toEqual({ substitute: false, path: "./a.json" });
+    expect(parseFileRef("<./a.json")).toEqual({ substitute: false, path: "./a.json" });
+    expect(parseFileRef("<@./a.json\n")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<@ ./a.json")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<tag/>")).toBeNull();
+    expect(parseFileRef("<?xml version=1.0")).toBeNull();
+    expect(parseFileRef("< ./a.json\n< ./b.json")).toBeNull();
   });
 });
 

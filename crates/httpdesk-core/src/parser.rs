@@ -25,11 +25,19 @@ const KNOWN_METHODS: &[&str] = &[
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT",
 ];
 
+pub const BOM: char = '\u{FEFF}';
+
 pub fn parse(text: &str) -> HttpFile {
-    let line_ending = if text.contains("\r\n") { LineEnding::Crlf } else { LineEnding::Lf };
+    let (bom, text) = match text.strip_prefix(BOM) {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+    let line_ending = if crlf > lf { LineEnding::Crlf } else { LineEnding::Lf };
     let normalized = text.replace("\r\n", "\n");
 
-    let mut file = HttpFile { line_ending, ..Default::default() };
+    let mut file = HttpFile { line_ending, bom, ..Default::default() };
     let mut pending = String::new();
 
     for (i, raw) in split_blocks(&normalized).into_iter().enumerate() {
@@ -63,7 +71,7 @@ pub(crate) fn split_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-fn is_separator(line: &str) -> bool {
+pub(crate) fn is_separator(line: &str) -> bool {
     line.starts_with("###")
 }
 
@@ -92,7 +100,7 @@ fn strip_one_space(s: &str) -> &str {
     s.strip_prefix(' ').unwrap_or(s)
 }
 
-fn parse_variable(t: &str) -> Option<Variable> {
+pub(crate) fn parse_variable(t: &str) -> Option<Variable> {
     let rest = t.strip_prefix('@')?;
     let (name, value) = rest.split_once('=')?;
     let name = name.trim();
@@ -211,12 +219,18 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         if let Some(c) = comment_body(t) {
             match parse_directive(c) {
                 Some(d) if d.name == SECTION_DIRECTIVE => {
+                    let mut unknown = Vec::new();
                     for s in d.value.split(|c: char| c == ',' || c.is_whitespace()) {
                         match s.trim() {
                             "query" | "params" => query_marked_disabled = true,
                             "headers" => headers_marked_disabled = true,
-                            _ => {}
+                            "" => {}
+                            other => unknown.push(other),
                         }
+                    }
+                    // Kept so the serializer writes them back on the section line.
+                    if !unknown.is_empty() {
+                        req.directives.push(Directive { name: d.name, value: unknown.join(", ") });
                     }
                 }
                 Some(d) if d.name == AUTH_DIRECTIVE => {
@@ -227,6 +241,8 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
                             _ => ApiKeyLocation::Header,
                         };
                         api_key = Some((loc, parts.get(2).unwrap_or(&"").to_string()));
+                    } else {
+                        req.directives.push(d);
                     }
                 }
                 Some(d)
@@ -293,13 +309,15 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
     let mut header_items: Vec<(usize, KeyValue)> = Vec::new();
     let mut disabled_body: Vec<String> = Vec::new();
     let mut disabled_body_raw: Vec<String> = Vec::new();
+    // Extra lines from this index on are still waiting for the line they sit above.
+    let mut unanchored = 0;
     while let Some(line) = lines.get(idx) {
         let t = line.trim();
         idx += 1;
         if t.is_empty() {
             break;
         }
-        if let Some(after) = t.strip_prefix(DISABLED_MARKER) {
+        let anchor = if let Some(after) = t.strip_prefix(DISABLED_MARKER) {
             let depth = 1 + after.chars().take_while(|c| *c == '~').count();
             let rest = after.trim_start_matches('~');
             if let Some(b) = rest.strip_prefix('|') {
@@ -309,18 +327,32 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
             }
             let rest = rest.trim_start();
             if let Some(p) = rest.strip_prefix('&').or_else(|| rest.strip_prefix('?')) {
-                query_items.push((depth, parse_param(p)));
+                let p = parse_param(p);
+                let key = format!("&{}", p.name);
+                query_items.push((depth, p));
+                Some(key)
             } else if let Some((n, v)) = split_header(rest) {
-                header_items.push((depth, KeyValue::new(n, v)));
+                header_items.push((depth, KeyValue::new(n.clone(), v)));
+                Some(n)
             } else {
-                req.extra_lines.push(line.to_string());
+                None
             }
         } else if comment_body(t).is_some() {
-            req.extra_lines.push(line.to_string());
+            None
         } else if let Some((n, v)) = split_header(t) {
-            header_items.push((0, KeyValue::new(n, v)));
+            header_items.push((0, KeyValue::new(n.clone(), v)));
+            Some(n)
         } else {
-            req.extra_lines.push(line.to_string());
+            None
+        };
+        match anchor {
+            Some(key) => {
+                for e in &mut req.extra_lines[unanchored..] {
+                    e.before = Some(key.clone());
+                }
+                unanchored = req.extra_lines.len();
+            }
+            None => req.extra_lines.push(ExtraLine::new(*line)),
         }
     }
 
@@ -367,6 +399,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
             let (depth, kv) = header_items.remove(pos);
             let mut auth = parse_authorization(&kv.value).unwrap();
             auth.enabled = depth == 0;
+            auth.raw = Some(kv.value);
             req.auth = auth;
         }
     }
@@ -381,7 +414,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         let text = body_lines.join("\n");
         req.body = Body { enabled: true, mode: detect_body_mode(content_type.as_deref(), &text), text };
         // Stale disabled body next to an active one: keep it rather than drop it.
-        req.extra_lines.extend(disabled_body_raw);
+        req.extra_lines.extend(disabled_body_raw.into_iter().map(ExtraLine::new));
     } else if !disabled_body.is_empty() {
         let refs: Vec<&str> = disabled_body.iter().map(String::as_str).collect();
         let text = trim_blank_lines(&refs).join("\n");
@@ -445,16 +478,37 @@ fn parse_basic_credentials(creds: &str) -> Option<(String, String)> {
     Some((u.to_string(), p.to_string()))
 }
 
+/// A body file reference parsed from one line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileReference<'a> {
+    /// `<@ path`: substitute variables in the file's content.
+    pub substitute: bool,
+    pub path: &'a str,
+}
+
+/// Reads `< path` or `<@ path` (the space is optional) from a single line. The
+/// editor and the sender both use this rule. `<tag>`, `<?xml` and `<<` are content.
+pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
+    let t = line.trim();
+    if t.contains('\n') || t.starts_with("<?") {
+        return None;
+    }
+    let rest = t.strip_prefix('<')?;
+    let (substitute, path) = match rest.strip_prefix('@') {
+        Some(p) => (true, p),
+        None => (false, rest),
+    };
+    let path = path.trim();
+    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(FileReference { substitute, path })
+}
+
 pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return BodyMode::None;
     }
-    if !trimmed.contains('\n') && trimmed.starts_with('<') && !trimmed.starts_with("<?") {
-        let path = trimmed.trim_start_matches('<').trim_start_matches('@').trim();
-        if !path.starts_with('<') && !path.contains('>') {
-            return BodyMode::File;
-        }
+    if file_reference(trimmed).is_some() {
+        return BodyMode::File;
     }
     let ct = content_type.unwrap_or("").to_ascii_lowercase();
     if ct.contains("json") {
@@ -480,7 +534,7 @@ pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
 
 /// Attaches `@param` / `@header` docs to the first item with that name (params
 /// match exactly, headers case-insensitively). Repeated lines append. Docs that
-/// match nothing stay as directives so they're never dropped.
+/// match nothing, or have no text, stay as directives so they're never dropped.
 fn attach_docs(req: &mut Request, docs: Vec<Directive>) {
     for d in docs {
         let is_header = d.name.eq_ignore_ascii_case(HEADER_DOC_DIRECTIVE);
@@ -499,8 +553,7 @@ fn attach_docs(req: &mut Request, docs: Vec<Directive>) {
                 }
                 item.description.push_str(&text);
             }
-            Some(_) => {}
-            None => req.directives.push(d),
+            _ => req.directives.push(d),
         }
     }
 }
