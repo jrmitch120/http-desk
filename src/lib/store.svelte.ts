@@ -3,7 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, newRequest, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
 
 export interface Doc {
@@ -342,7 +342,20 @@ class AppStore {
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private async onExternalChange(paths: string[]) {
+  /** Whether `file`, fresh from disk, is still what the document was last loaded or saved as. */
+  private matchesSaved(doc: Doc, file: HttpFile): boolean {
+    const keys = doc.savedOrder ? doc.savedOrder.split(",") : [];
+    return (
+      JSON.stringify(file.header) === doc.savedHeader &&
+      file.trailing === doc.file.trailing &&
+      file.lineEnding === doc.file.lineEnding &&
+      file.requests.length === keys.length &&
+      file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
+    );
+  }
+
+  /** Handles a `workspace-changed` event from the watcher. */
+  async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p))) await this.loadEnvironments();
@@ -354,7 +367,9 @@ class AppStore {
         doc.missing = true;
       } else if (this.isDocDirty(p)) {
         doc.missing = false;
-        doc.externalChange = true;
+        // Our own rename or move (or a touch) leaves the content as loaded: nothing to warn about.
+        const disk = await api.readHttpFile(p).catch(() => null);
+        if (!disk || !this.matchesSaved(doc, disk)) doc.externalChange = true;
       } else {
         await this.reload(p);
       }
@@ -492,7 +507,7 @@ class AppStore {
 
   async createFile(dir: string) {
     const name = await this.prompt("New .http file", "requests.http", "requests.http", true);
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     const file = name.match(/\.(http|rest)$/i) ? name : `${name}.http`;
     const path = joinPath(dir, file);
     const content = "### New request\nGET https://httpbin.org/get\nAccept: application/json\n";
@@ -509,7 +524,7 @@ class AppStore {
 
   async createFolder(dir: string) {
     const name = await this.prompt("New folder", "", "folder name");
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     try {
       await api.createDir(joinPath(dir, name));
       this.expanded[dir] = true;
@@ -520,9 +535,21 @@ class AppStore {
   }
 
   async renamePath(path: string) {
-    const name = await this.prompt("Rename", basename(path), undefined, true);
-    if (!name || name === basename(path)) return;
+    const old = basename(path);
+    const typed = await this.prompt("Rename", old, undefined, true);
+    if (!typed || !this.validName(typed)) return;
+    // A request file keeps its extension when the new name leaves it out.
+    const ext = old.match(/\.(http|rest)$/i)?.[0];
+    const name = ext && !/\.(http|rest)$/i.test(typed) ? typed + ext : typed;
+    if (name === old) return;
     await this.movePath(path, joinPath(dirname(path), name));
+  }
+
+  /** Shows why a typed file/folder name is invalid; true if it's fine. */
+  private validName(name: string): boolean {
+    const error = nameError(name);
+    if (error) this.toast("error", error);
+    return !error;
   }
 
   async movePath(from: string, to: string) {
