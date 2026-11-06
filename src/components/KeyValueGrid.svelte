@@ -106,7 +106,7 @@
   const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
   /** Rows have an enable checkbox (and bulk text a `//` prefix). */
   const hasEnable = $derived(hasColumn("enable"));
-  const showDesc = $derived(hasColumn("description") && showDescriptions);
+  const descriptionColumnShown = $derived(hasColumn("description") && showDescriptions);
   const template = $derived(tracks.map((t) => t.width).join(" "));
   /** Where the description and error lines start: under the first column after the checkbox. */
   const subStart = $derived(hasEnable ? 2 : 1);
@@ -284,7 +284,7 @@
             </span>
           {/if}
         {/each}
-        {#if showDesc && !isGhost}
+        {#if descriptionColumnShown && !isGhost}
           {#if editing === row}
             <textarea
               class="desc desc-edit"
