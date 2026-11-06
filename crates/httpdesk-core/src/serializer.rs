@@ -7,6 +7,7 @@
 use base64::Engine;
 
 use crate::model::*;
+use crate::query::{escape, Part};
 use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
 
 pub fn serialize(file: &HttpFile) -> String {
@@ -167,11 +168,14 @@ fn marker(depth: usize) -> String {
     }
 }
 
-fn render_param(p: &KeyValue) -> String {
+/// `name=value` as written in the file, escaping only what would change the query's
+/// structure (ADR-0001).
+pub(crate) fn render_param(p: &KeyValue) -> String {
+    let name = escape(&p.name, Part::Name);
     if p.value.is_empty() {
-        p.name.clone()
+        if p.equals { name + "=" } else { name }
     } else {
-        format!("{}={}", p.name, p.value)
+        format!("{name}={}", escape(&p.value, Part::Value))
     }
 }
 

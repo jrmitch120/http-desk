@@ -19,6 +19,8 @@ export interface KeyValue {
   value: string;
   /** Params/headers only: saved as `# @param name: …` / `# @header Name: …`. */
   description?: string;
+  /** Query params only: an empty value is written `name=` rather than `name`. */
+  equals?: boolean;
 }
 
 export interface KvSection {

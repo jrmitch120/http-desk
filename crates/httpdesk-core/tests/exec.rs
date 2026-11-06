@@ -371,3 +371,58 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
     let msg = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err().to_string();
     assert!(msg.contains("apiHost"), "{msg}");
 }
+
+// ---------------------------------------------------------------- query encoding (ADR-0001)
+
+/// Sends `text` (one request, URL relative to `{{base}}`) and returns the raw query the server saw.
+async fn sent_query(text: &str, vars: &[(&str, &str)]) -> (Option<String>, Vec<(String, String)>) {
+    let server = echo_server().await;
+    let mut vars = env(vars);
+    vars.insert("base".into(), server.uri());
+    send(&parse(text).requests[0], vars, Path::new(".")).await.unwrap();
+    let got = last_request(&server).await;
+    (got.url.query().map(str::to_string), got.url.query_pairs().map(|(n, v)| (n.into_owned(), v.into_owned())).collect())
+}
+
+fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+    items.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect()
+}
+
+#[tokio::test]
+async fn variable_values_in_the_query_arrive_as_one_param() {
+    let (_, got) = sent_query("GET {{base}}/echo?q={{q}}&n=1\n", &[("q", "a&b c#d")]).await;
+    assert_eq!(got, pairs(&[("q", "a&b c#d"), ("n", "1")]));
+}
+
+#[tokio::test]
+async fn an_empty_value_keeps_its_equals_sign_on_the_wire() {
+    let (raw, _) = sent_query("GET {{base}}/echo?flag=&bare&v={{empty}}\n", &[("empty", "")]).await;
+    assert_eq!(raw.as_deref(), Some("flag=&bare&v="));
+}
+
+#[tokio::test]
+async fn existing_escapes_are_not_encoded_twice() {
+    let (raw, got) = sent_query("GET {{base}}/echo?email=a%40b.c&q=a%20b%26c&t={{t}}\n", &[("t", "x%2Fy z")]).await;
+    assert_eq!(raw.as_deref(), Some("email=a%40b.c&q=a%20b%26c&t=x%2Fy%20z"));
+    assert_eq!(got, pairs(&[("email", "a@b.c"), ("q", "a b&c"), ("t", "x/y z")]));
+}
+
+#[tokio::test]
+async fn the_rest_is_encoded_at_send() {
+    let (raw, got) = sent_query("GET {{base}}/echo?ids[]=1|2&name=café&next=http://x/?a=1&sp=a+b\n", &[]).await;
+    assert_eq!(raw.as_deref(), Some("ids%5B%5D=1%7C2&name=caf%C3%A9&next=http://x/?a=1&sp=a+b"), "a written `+` is kept");
+    assert_eq!(got, pairs(&[("ids[]", "1|2"), ("name", "café"), ("next", "http://x/?a=1"), ("sp", "a b")]));
+}
+
+#[tokio::test]
+async fn no_auto_encoding_sends_the_query_as_written() {
+    let (raw, _) = sent_query("# @no-auto-encoding\nGET {{base}}/echo?ids[]=1|2&q=a%2Bb&t={{t}}\n", &[("t", "x,y|z")]).await;
+    assert_eq!(raw.as_deref(), Some("ids[]=1|2&q=a%2Bb&t=x,y|z"));
+}
+
+#[tokio::test]
+async fn an_api_key_query_param_is_resolved_and_encoded() {
+    let text = "# @httpdesk-auth apikey query {{keyName}}\nGET {{base}}/echo?n=1&{{keyName}}={{key}}\n";
+    let (_, got) = sent_query(text, &[("keyName", "api key"), ("key", "s3cr&t=/+")]).await;
+    assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
+}
