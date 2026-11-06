@@ -13,6 +13,8 @@ import {
   setDirective,
   getDirective,
   findHeader,
+  formatBulk,
+  parseBulk,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -154,6 +156,59 @@ describe("body mode switching", () => {
     setBodyMode(r, "multipart");
     expect(findHeader(r, "content-type")?.value).toBe("multipart/form-data; boundary=HttpDeskBoundary");
     expect(parseMultipart(r.body.text, "HttpDeskBoundary").map((p) => p.name)).toEqual(["a", "b"]);
+  });
+
+  it("removes the Content-Type it added when switching to none", () => {
+    const r = newRequest();
+    r.headers.items.push({ enabled: true, name: "Accept", value: "application/json" });
+    setBodyMode(r, "json");
+    setBodyMode(r, "none");
+    expect(r.headers.items).toEqual([{ enabled: true, name: "Accept", value: "application/json" }]);
+
+    setBodyMode(r, "multipart");
+    setBodyMode(r, "none");
+    expect(findHeader(r, "content-type")).toBeUndefined();
+  });
+
+  it("keeps a Content-Type the user typed when switching to none", () => {
+    const r = newRequest();
+    setBodyMode(r, "json");
+    findHeader(r, "content-type")!.value = "application/json; charset=utf-8";
+    setBodyMode(r, "none");
+    expect(findHeader(r, "content-type")?.value).toBe("application/json; charset=utf-8");
+
+    const typed = newRequest();
+    typed.body.mode = "text";
+    typed.headers.items.push({ enabled: true, name: "Content-Type", value: "application/xml" });
+    setBodyMode(typed, "none");
+    expect(findHeader(typed, "content-type")?.value).toBe("application/xml");
+  });
+});
+
+describe("bulk edit", () => {
+  const headers = [
+    { enabled: true, name: "Accept", value: "application/json", description: "What we read" },
+    { enabled: false, name: "X-Debug", value: "1" },
+  ];
+
+  it("shows rows as text, one per line, with // marking disabled ones", () => {
+    expect(formatBulk(headers, ":", true)).toBe("Accept: application/json\n//X-Debug: 1");
+    expect(formatBulk([{ enabled: true, name: "page", value: "2" }], "=", true)).toBe("page=2");
+  });
+
+  it("turns text back into rows, keeping descriptions by name", () => {
+    expect(parseBulk("//X-Debug: 1\n\nAccept: text/plain\nX-New", ":", headers)).toEqual([
+      { enabled: false, name: "X-Debug", value: "1" },
+      { enabled: true, name: "Accept", value: "text/plain", description: "What we read" },
+      { enabled: true, name: "X-New", value: "" },
+    ]);
+  });
+
+  it("keeps a description while its name is retyped, since every keystroke is applied", () => {
+    // Rows are re-parsed from the text on each input, always against the rows
+    // the bulk edit started from, so a half-typed name doesn't lose the doc.
+    expect(parseBulk("Acc: application/json", ":", headers)[0].description).toBeUndefined();
+    expect(parseBulk("Accept: application/json", ":", headers)[0].description).toBe("What we read");
   });
 });
 

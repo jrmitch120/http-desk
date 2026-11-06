@@ -34,8 +34,7 @@
     if (!copy) return;
     saving = true;
     try {
-      await app.updateSettings(copy);
-      app.modal = null;
+      if (await app.updateSettings(copy)) app.modal = null;
     } finally {
       saving = false;
     }

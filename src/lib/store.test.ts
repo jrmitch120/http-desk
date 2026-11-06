@@ -1,13 +1,27 @@
 // Store behaviour that depends on async ordering (concurrent loads of the same
-// file, refreshing documents the app itself rewrote) and Orphaned tabs.
+// file, refreshing documents the app itself rewrote), Orphaned tabs, sending,
+// settings, toasts and startup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HttpFile, HttpResponse } from "./types";
+import type { AppSettings, HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile } = vi.hoisted(() => ({ readHttpFile: vi.fn(), saveHttpFile: vi.fn() }));
-vi.mock("./api", () => ({ api: { readHttpFile, saveHttpFile }, errorMessage: (e: unknown) => String(e) }));
+const api = vi.hoisted(() => ({
+  readHttpFile: vi.fn(),
+  saveHttpFile: vi.fn(),
+  sendRequest: vi.fn(),
+  cancelRequest: vi.fn(),
+  saveSettings: vi.fn(),
+  getSettings: vi.fn(),
+  pathExists: vi.fn(),
+  openWorkspace: vi.fn(),
+  loadEnvironments: vi.fn(),
+}));
+const { readHttpFile, saveHttpFile } = api;
+vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}) }),
+}));
 
 import { app } from "./store.svelte";
 
@@ -37,11 +51,11 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  readHttpFile.mockReset();
-  saveHttpFile.mockReset();
+  Object.values(api).forEach((fn) => fn.mockReset());
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
+  app.runs = {};
 });
 
 describe("loadDoc", () => {
@@ -203,5 +217,117 @@ describe("closing an Orphaned tab", () => {
     expect(app.tabs).toHaveLength(1);
     expect(app.dirtyDocs()).toEqual([]);
     expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelling a request", () => {
+  it("shows a neutral Cancelled state and keeps the previous response", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    const previous = { id: "r1", status: 200, statusText: "OK" } as HttpResponse;
+    api.sendRequest.mockResolvedValueOnce(previous);
+    await app.send(tab.id);
+
+    // The backend rejects the pending send once it's cancelled.
+    let reject!: (e: unknown) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+    api.cancelRequest.mockImplementationOnce(async () => reject("Request cancelled"));
+    const sending = app.send(tab.id);
+    await app.cancel(tab.id);
+    await sending;
+
+    expect(app.runs[tab.id]).toMatchObject({ loading: false, cancelled: true, response: previous });
+    expect(app.runs[tab.id].error).toBeUndefined();
+  });
+});
+
+describe("saving settings", () => {
+  const settings = () => ({ theme: "dark", recentWorkspaces: [], environments: {} }) as unknown as AppSettings;
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.toasts = [];
+    app.settings = settings();
+    app.root = "/ws";
+  });
+
+  it("shows an error toast when a theme toggle can't be saved", async () => {
+    api.saveSettings.mockRejectedValueOnce("disk full");
+    await app.updateSettings({ theme: "light" });
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["error", "Could not save settings: disk full"]]);
+  });
+
+  it("shows an error toast when the selected environment can't be saved", async () => {
+    api.saveSettings.mockRejectedValueOnce("disk full");
+    await app.selectEnvironment("staging");
+    expect(app.envName).toBe("staging");
+    expect(app.toasts.map((t) => t.kind)).toEqual(["error"]);
+  });
+});
+
+describe("toasts", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    app.toasts = [];
+    return () => vi.useRealTimers();
+  });
+
+  it("dismiss themselves after a while", () => {
+    app.toast("error", "Save failed");
+    vi.advanceTimersByTime(6000);
+    expect(app.toasts).toHaveLength(1);
+    vi.advanceTimersByTime(2000);
+    expect(app.toasts).toHaveLength(0);
+  });
+
+  it("stay while held (hovered or text in them selected), then dismiss", () => {
+    app.toast("error", "Save failed");
+    app.holdToast(app.toasts[0].id, true);
+    vi.advanceTimersByTime(60_000);
+    expect(app.toasts.map((t) => t.message)).toEqual(["Save failed"]);
+
+    app.holdToast(app.toasts[0].id, false);
+    vi.advanceTimersByTime(2000);
+    expect(app.toasts).toHaveLength(0);
+  });
+});
+
+describe("startup", () => {
+  const settings = (recentWorkspaces: string[]) =>
+    ({ theme: "dark", recentWorkspaces, environments: {} }) as unknown as AppSettings;
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.root = null;
+    app.starting = true;
+    api.loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: null });
+  });
+
+  it("is still starting (no Welcome screen) until the last workspace has reopened", async () => {
+    api.getSettings.mockResolvedValue(settings(["/ws"]));
+    api.pathExists.mockResolvedValue(true);
+    let opened!: () => void;
+    api.openWorkspace.mockReturnValueOnce(new Promise((r) => (opened = () => r({ root: "/ws", tree: { name: "ws", path: "/ws", kind: "dir" } }))));
+
+    const starting = app.init();
+    await vi.waitFor(() => expect(api.openWorkspace).toHaveBeenCalled());
+    expect(app.starting).toBe(true);
+    opened();
+    await starting;
+
+    expect(app.root).toBe("/ws");
+    expect(app.starting).toBe(false);
+  });
+
+  it("removes recent workspaces whose folders are gone", async () => {
+    api.getSettings.mockResolvedValue(settings(["/gone", "/ws", "/also-gone"]));
+    api.pathExists.mockImplementation(async (p: string) => p === "/ws");
+
+    await app.init();
+
+    expect(api.saveSettings).toHaveBeenCalledTimes(1);
+    expect(api.saveSettings.mock.calls[0][0].recentWorkspaces).toEqual(["/ws"]);
+    expect(app.settings?.recentWorkspaces).toEqual(["/ws"]);
+    expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
+    expect(app.starting).toBe(false);
   });
 });
