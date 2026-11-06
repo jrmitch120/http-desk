@@ -8,6 +8,7 @@
   import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
 
   interface Props {
     items: KeyValue[];
@@ -35,7 +36,6 @@
     nameError = () => null,
   }: Props = $props();
 
-  const listId = `kv-${Math.random().toString(36).slice(2)}`;
   let bulk = $state(false);
   let bulkText = $state("");
 
@@ -157,10 +157,10 @@
           class="cell c-name"
           value={row.name}
           placeholder={ghost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
-          list={suggestions.length ? listId : undefined}
           spellcheck="false"
           aria-invalid={error ? "true" : undefined}
           oninput={(e) => set(i, "name", e.currentTarget.value)}
+          use:suggest={{ options: suggestions, label: `${namePlaceholder} suggestions` }}
         />
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
         <span class="c-del">
@@ -191,12 +191,6 @@
         {/if}
       </div>
     {/each}
-  {/if}
-
-  {#if suggestions.length}
-    <datalist id={listId}>
-      {#each suggestions as s (s)}<option value={s}></option>{/each}
-    </datalist>
   {/if}
 </div>
 
