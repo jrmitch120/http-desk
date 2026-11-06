@@ -4,6 +4,7 @@
   import { app } from "../lib/store.svelte";
   import type { EnvironmentSet, EnvVar } from "../lib/types";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
 
   const SHARED = "$shared";
@@ -152,7 +153,7 @@
     <aside>
       <div class="side-head">
         <span class="muted">Environments</span>
-        <button class="icon-btn" title="New environment" onclick={addEnv}><Icon name="plus" /></button>
+        <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
       </div>
       <div class="list">
         <button class="env" class:selected={selected === SHARED} onclick={() => (selected = SHARED)}>
@@ -192,13 +193,13 @@
             class="btn small"
             disabled={saving || inUse}
             onclick={() => useEnv(selected)}
-            title={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
+            use:tooltip={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
           >
             <Icon name="check" size={13} />{inUse ? "In use" : onDisk(selected) ? "Use" : "Save & use"}
           </button>
-          <button class="icon-btn" title="Rename" onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
-          <button class="icon-btn" title="Duplicate" onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
-          <button class="icon-btn danger-hover" title="Delete" onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
+          <button class="icon-btn" aria-label="Rename" use:tooltip onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
+          <button class="icon-btn" aria-label="Duplicate" use:tooltip onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
+          <button class="icon-btn danger-hover" aria-label="Delete" use:tooltip onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
         {/if}
         <div class="filter">
           <Icon name="search" size={13} />
@@ -240,7 +241,7 @@
                       spellcheck="false"
                     />
                     {#if v.secret}
-                      <button class="icon-btn" title={revealed[key] ? "Hide value" : "Show value"} onclick={() => (revealed[key] = !revealed[key])}>
+                      <button class="icon-btn" aria-label={revealed[key] ? "Hide value" : "Show value"} use:tooltip onclick={() => (revealed[key] = !revealed[key])}>
                         <Icon name={revealed[key] ? "eye-off" : "eye"} size={13} />
                       </button>
                     {/if}
@@ -251,12 +252,13 @@
                     <button
                       class="icon-btn"
                       class:active={v.secret}
-                      title={v.secret ? "Secret: stored in http-client.private.env.json — click to make shareable" : "Secret: stored in http-client.private.env.json — click to mark as secret"}
+                      use:tooltip
+                      aria-label={v.secret ? "Secret: stored in http-client.private.env.json — click to make shareable" : "Secret: stored in http-client.private.env.json — click to mark as secret"}
                       onclick={() => (v.secret = !v.secret)}
                     >
                       <Icon name={v.secret ? "lock" : "unlock"} size={13} />
                     </button>
-                    <button class="icon-btn danger-hover" title="Delete variable" onclick={() => vars.splice(i, 1)}><Icon name="trash" size={13} /></button>
+                    <button class="icon-btn danger-hover" aria-label="Delete variable" use:tooltip onclick={() => vars.splice(i, 1)}><Icon name="trash" size={13} /></button>
                   {/if}
                 </td>
               </tr>

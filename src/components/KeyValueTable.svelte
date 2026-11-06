@@ -6,6 +6,7 @@
   import { formatBulk, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     items: KeyValue[];
@@ -123,7 +124,8 @@
             checked={allOn}
             indeterminate={!allOn && items.some((r) => r.enabled)}
             onchange={(e) => items.forEach((r) => (r.enabled = e.currentTarget.checked))}
-            title="Enable/disable all"
+            aria-label="Enable/disable all"
+            use:tooltip
           />
         {/if}
       </span>
@@ -147,7 +149,7 @@
         {#if toggles}
           <span class="c-check">
             {#if !ghost}
-              <input type="checkbox" checked={row.enabled} onchange={(e) => (items[i].enabled = e.currentTarget.checked)} title={row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"} />
+              <input type="checkbox" checked={row.enabled} onchange={(e) => (items[i].enabled = e.currentTarget.checked)} aria-label={row.enabled ? "Enabled — will be sent" : "Disabled — kept but not sent"} use:tooltip />
             {/if}
           </span>
         {/if}
@@ -163,7 +165,7 @@
         <input class="cell c-value" value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(i, "value", e.currentTarget.value)} />
         <span class="c-del">
           {#if !ghost}
-            <button class="icon-btn" title="Delete" onclick={() => items.splice(i, 1)}><Icon name="trash" size={13} /></button>
+            <button class="icon-btn" aria-label="Delete" use:tooltip onclick={() => items.splice(i, 1)}><Icon name="trash" size={13} /></button>
           {/if}
         </span>
         {#if showDesc && !ghost}
@@ -178,7 +180,7 @@
               onblur={commitEdit}
             ></textarea>
           {:else if row.description}
-            <button class="desc" title={row.description} onclick={() => startEdit(i)}>{row.description}</button>
+            <button class="desc" use:tooltip={row.description} onclick={() => startEdit(i)}>{row.description}</button>
           {:else}
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
             <button class="desc add" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(i)}>Add description</button>

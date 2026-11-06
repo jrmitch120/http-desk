@@ -70,7 +70,7 @@ test("the unsaved-changes dialog focuses Save", async ({ page }) => {
   await openRequest(page, ["api", "pets.http"], "List pets");
   await urlBar(page).click();
   await page.keyboard.type("x");
-  await activeTab(page).getByTitle("Close").click();
+  await activeTab(page).getByRole("button", { name: "Close" }).click();
 
   await expect(dialog(page, 'Save changes to "List pets"?').getByRole("button", { name: "Save", exact: true })).toBeFocused();
 });
@@ -189,7 +189,7 @@ test("icon-only buttons, including toast close buttons, have accessible labels",
   await expect(page.getByText("Environments saved")).toHaveCount(0);
   const unlabelled = await page.locator("button").evaluateAll((buttons) =>
     buttons
-      .filter((b) => !b.textContent?.trim() && !b.getAttribute("aria-label") && !b.getAttribute("title"))
+      .filter((b) => !b.textContent?.trim() && !b.getAttribute("aria-label"))
       .map((b) => b.outerHTML.slice(0, 80)),
   );
   expect(unlabelled).toEqual([]);

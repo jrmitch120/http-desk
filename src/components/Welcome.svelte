@@ -3,6 +3,7 @@
   import { app } from "../lib/store.svelte";
   import { basename } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   async function openFolder() {
     const dir = await open({ directory: true, title: "Open workspace folder" });
@@ -27,7 +28,7 @@
       <div class="recent">
         <div class="label">Recent</div>
         {#each app.settings.recentWorkspaces as ws (ws)}
-          <button class="recent-item" onclick={() => app.openWorkspace(ws)} title={ws}>
+          <button class="recent-item" onclick={() => app.openWorkspace(ws)} use:tooltip={ws}>
             <Icon name="folder" />
             <span class="name">{basename(ws)}</span>
             <span class="path ellipsis">{ws}</span>

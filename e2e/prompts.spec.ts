@@ -48,7 +48,7 @@ const cases: Case[] = [
   {
     name: "new folder",
     open: async (page) => {
-      await page.getByTitle("New folder", { exact: true }).click();
+      await page.getByRole("button", { name: "New folder", exact: true }).click();
       return "New folder";
     },
     result: (page) => treeItem(page, "ABC"),
@@ -66,7 +66,7 @@ const cases: Case[] = [
     name: "new environment",
     open: async (page) => {
       await page.keyboard.press("ControlOrMeta+e");
-      await environments(page).getByTitle("New environment").click();
+      await environments(page).getByRole("button", { name: "New environment" }).click();
       return "New environment";
     },
     result: (page) => environments(page).getByRole("button", { name: /^ABC\b/ }),
@@ -76,7 +76,7 @@ const cases: Case[] = [
     open: async (page) => {
       await page.keyboard.press("ControlOrMeta+e");
       await environments(page).getByRole("button", { name: /^staging\b/ }).click();
-      await environments(page).getByTitle("Rename", { exact: true }).click();
+      await environments(page).getByRole("button", { name: "Rename", exact: true }).click();
       return "Rename environment";
     },
     selected: "staging",
@@ -86,10 +86,10 @@ const cases: Case[] = [
     name: "custom method",
     open: async (page) => {
       await openRequest(page, ["api", "pets.http"], "List pets");
-      await page.getByTitle("HTTP method").selectOption("__custom");
+      await page.getByRole("combobox", { name: "HTTP method" }).selectOption("__custom");
       return "Custom HTTP method";
     },
-    result: (page) => page.getByTitle("HTTP method"),
+    result: (page) => page.getByRole("combobox", { name: "HTTP method" }),
     expected: { value: "ABC" },
   },
 ];

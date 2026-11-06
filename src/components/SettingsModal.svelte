@@ -6,6 +6,7 @@
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import Toggle from "./Toggle.svelte";
 
@@ -62,7 +63,7 @@
       <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" oninput={(e) => setPath(f.key, e.currentTarget.value)} />
       <button class="btn small" onclick={() => browse(f.key)}>Browse…</button>
       {#if exec[f.key]}
-        <button class="icon-btn" title="Clear" onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>
+        <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>
       {/if}
     </div>
   </div>
@@ -89,7 +90,7 @@
         </div>
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>
-          <Toggle checked={copy.showDescriptions} onchange={(v) => (copy!.showDescriptions = v)} />
+          <Toggle ariaLabel="Show parameter descriptions" checked={copy.showDescriptions} onchange={(v) => (copy!.showDescriptions = v)} />
         </div>
       </section>
 
@@ -97,7 +98,7 @@
         <h3>Updates</h3>
         <div class="setting">
           <div class="label"><span>Check for updates on startup</span><small class="muted">{version ? `HttpDesk ${version}` : "HttpDesk"}</small></div>
-          <Toggle checked={copy.checkUpdates} onchange={(v) => (copy!.checkUpdates = v)} />
+          <Toggle ariaLabel="Check for updates on startup" checked={copy.checkUpdates} onchange={(v) => (copy!.checkUpdates = v)} />
         </div>
         <div class="setting">
           <div class="label"><span>Check now</span><small class="muted">Downloads come from the project's GitHub releases</small></div>
@@ -125,7 +126,7 @@
         </div>
         <div class="setting">
           <div class="label"><span>Follow redirects</span></div>
-          <Toggle checked={copy.exec.followRedirects} onchange={(v) => (copy!.exec.followRedirects = v)} />
+          <Toggle ariaLabel="Follow redirects" checked={copy.exec.followRedirects} onchange={(v) => (copy!.exec.followRedirects = v)} />
         </div>
         <div class="setting">
           <div class="label"><span>Maximum redirects</span></div>
@@ -138,7 +139,7 @@
         <h3>TLS</h3>
         <div class="setting">
           <div class="label"><span>Verify server certificates</span></div>
-          <Toggle checked={copy.exec.verifyTls} onchange={(v) => (copy!.exec.verifyTls = v)} />
+          <Toggle ariaLabel="Verify server certificates" checked={copy.exec.verifyTls} onchange={(v) => (copy!.exec.verifyTls = v)} />
         </div>
         {#if !copy.exec.verifyTls}
           <div class="banner warning inline"><Icon name="alert" /><span>Certificate verification is off. Responses could come from an impostor server — only use this for local development.</span></div>

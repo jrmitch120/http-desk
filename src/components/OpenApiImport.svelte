@@ -7,6 +7,7 @@
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import Toggle from "./Toggle.svelte";
 
@@ -204,7 +205,7 @@
         {#if summary.servers.length}
           <div class="servers muted">
             {#each summary.servers as s (s.url)}
-              <span class="mono" title={s.description ?? ""}>{s.url}{#if s.description}<span class="desc">{` — ${s.description}`}</span>{/if}</span>
+              <span class="mono" use:tooltip={s.description}>{s.url}{#if s.description}<span class="desc">{` — ${s.description}`}</span>{/if}</span>
             {/each}
           </div>
         {/if}
@@ -241,7 +242,7 @@
               {@const count = g.ops.filter((o) => selected.has(o.id)).length}
               <div class="group">
                 <div class="group-head">
-                  <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} title={collapsed[g.name] ? "Expand" : "Collapse"}>
+                  <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} aria-label={collapsed[g.name] ? "Expand" : "Collapse"} use:tooltip>
                     <Icon name={collapsed[g.name] ? "chevron-right" : "chevron-down"} size={13} />
                   </button>
                   <input
@@ -260,8 +261,8 @@
                     <label class="op" class:deprecated={op.deprecated}>
                       <input type="checkbox" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)} />
                       <span class="method-badge {methodClass(op.method)}">{op.method}</span>
-                      <span class="path mono ellipsis" title={op.path}>{op.path}</span>
-                      <span class="summary muted ellipsis" title={op.summary ?? op.operationId ?? ""}>{op.summary ?? op.operationId ?? ""}</span>
+                      <span class="path mono ellipsis" use:tooltip={op.path}>{op.path}</span>
+                      <span class="summary muted ellipsis" use:tooltip={op.summary ?? op.operationId}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
                     </label>
                   {/each}
@@ -299,7 +300,7 @@
           </div>
           <label class="field">
             <span>Output directory</span>
-            <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" title={outputDir} />
+            <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" use:tooltip={outputDir} />
             <button class="btn small browse" onclick={browseOutput}>Browse…</button>
           </label>
           <div class="estimate">

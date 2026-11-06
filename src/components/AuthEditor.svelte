@@ -3,6 +3,7 @@
   import { basicUsernameError, headerNameError } from "../lib/http";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { auth }: { auth: Auth } = $props();
   let reveal = $state(false);
@@ -74,7 +75,7 @@
         <span>Password</span>
         <div class="with-btn">
           <input class="input mono" type={reveal ? "text" : "password"} bind:value={auth.password} placeholder={"{{password}}"} spellcheck="false" />
-          <button class="icon-btn" title={reveal ? "Hide" : "Show"} onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
+          <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
       </label>
     {:else if auth.kind === "bearer"}
@@ -82,7 +83,7 @@
         <span>Token</span>
         <div class="with-btn">
           <input class="input mono" type={reveal || auth.token.startsWith("{{") ? "text" : "password"} bind:value={auth.token} placeholder={"{{token}}"} spellcheck="false" />
-          <button class="icon-btn" title={reveal ? "Hide" : "Show"} onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
+          <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
       </label>
     {:else if auth.kind === "apiKey"}

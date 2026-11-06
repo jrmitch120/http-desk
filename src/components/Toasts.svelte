@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   // A toast stays while hovered or while text in it is selected.
   const hovered = new Set<string>();
@@ -39,7 +40,7 @@
     >
       <Icon name={t.kind === "error" ? "alert" : "check"} />
       <span class="selectable">{t.message}</span>
-      <button class="icon-btn" aria-label="Dismiss" title="Dismiss" onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}>
+      <button class="icon-btn" aria-label="Dismiss" use:tooltip onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}>
         <Icon name="x" size={13} />
       </button>
     </div>

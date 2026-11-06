@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     title: string;
@@ -54,7 +55,7 @@
   <div class="modal" bind:this={box} style:width style:height role="dialog" aria-modal="true" aria-label={title}>
     <header>
       <h2>{title}</h2>
-      <button class="icon-btn" onclick={onclose} title="Close"><Icon name="x" /></button>
+      <button class="icon-btn" onclick={onclose} aria-label="Close" use:tooltip><Icon name="x" /></button>
     </header>
     <div class="content">{@render children()}</div>
     {#if footer}<footer>{@render footer()}</footer>{/if}

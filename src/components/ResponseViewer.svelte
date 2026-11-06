@@ -11,6 +11,7 @@
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -128,13 +129,13 @@
       {:else if run.cancelled && !res}
         <span class="pill cancelled">Cancelled</span>
       {:else if res}
-        {#if run.cancelled}<span class="pill cancelled" title="The last send was cancelled; this is the response before it">Cancelled</span>{/if}
-        <span class="pill {statusClass(res.status)}" title={statusTitle}>{res.status} {res.statusText}</span>
-        <span class="metric" title={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
-        <span class="metric" title={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
+        {#if run.cancelled}<span class="pill cancelled" use:tooltip={"The last send was cancelled; this is the response before it"}>Cancelled</span>{/if}
+        <span class="pill {statusClass(res.status)}" use:tooltip={statusTitle}>{res.status} {res.statusText}</span>
+        <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
+        <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
-        <button class="icon-btn" title="Copy body" disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
-        <button class="icon-btn" title="Save body to file" onclick={saveBody}><Icon name="download" /></button>
+        <button class="icon-btn" aria-label="Copy body" use:tooltip disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
+        <button class="icon-btn" aria-label="Save body to file" use:tooltip onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <span class="pill s-5xx">Error</span>
       {/if}
@@ -180,12 +181,12 @@
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
           <span class="spacer"></span>
           {#if effectiveMode !== "preview"}
-            <button class="icon-btn" title="Search (⌘/Ctrl F)" onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
+            <button class="icon-btn" aria-label="Search" use:tooltip={"Search (⌘/Ctrl F)"} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
             {#if kind === "json" || kind === "xml"}
-              <button class="icon-btn" title="Fold all" onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
-              <button class="icon-btn" title="Unfold all" onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
+              <button class="icon-btn" aria-label="Fold all" use:tooltip onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+              <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
             {/if}
-            <button class="icon-btn" class:active={wrap} title="Wrap lines" onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
+            <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
           {/if}
         </div>
         <div class="body">

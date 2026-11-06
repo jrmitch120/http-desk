@@ -3,6 +3,7 @@
   import { menu } from "../lib/menu.svelte";
   import { basename, displayName, methodClass } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let strip: HTMLDivElement | undefined = $state();
 
@@ -59,7 +60,7 @@
         role="tab"
         aria-selected={active}
         tabindex={active ? 0 : -1}
-        title="{req ? displayName(req) : ''} — {orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}"
+        use:tooltip={`${req ? displayName(req) : ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
         onclick={() => (app.activeTabId = tab.id)}
         onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
@@ -73,12 +74,12 @@
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}
           {#if dirty}<span class="dot"></span>{/if}
-          <button class="close" title="Close" onclick={(e) => (e.stopPropagation(), app.closeTab(tab.id))}><Icon name="x" size={12} /></button>
+          <button class="close" aria-label="Close" use:tooltip onclick={(e) => (e.stopPropagation(), app.closeTab(tab.id))}><Icon name="x" size={12} /></button>
         </span>
       </div>
     {/each}
   </div>
-  <button class="icon-btn plus" title="New request (⌘/Ctrl T)" onclick={newRequest}><Icon name="plus" /></button>
+  <button class="icon-btn plus" aria-label="New request" use:tooltip={"New request (⌘/Ctrl T)"} onclick={newRequest}><Icon name="plus" /></button>
 </div>
 
 <style>

@@ -28,20 +28,5 @@ export const ALLOWLIST: Allowlist = {
   datalist: [
     "src/components/KeyValueTable.svelte",
   ],
-  title: [
-    "src/components/AuthEditor.svelte",
-    "src/components/EnvironmentEditor.svelte",
-    "src/components/KeyValueTable.svelte",
-    "src/components/Modal.svelte",
-    "src/components/OpenApiImport.svelte",
-    "src/components/RequestEditor.svelte",
-    "src/components/ResponseViewer.svelte",
-    "src/components/SettingsModal.svelte",
-    "src/components/Sidebar.svelte",
-    "src/components/TabBar.svelte",
-    "src/components/Toasts.svelte",
-    "src/components/Toggle.svelte",
-    "src/components/TreeItem.svelte",
-    "src/components/Welcome.svelte",
-  ],
+  title: [],
 };

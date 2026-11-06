@@ -24,6 +24,7 @@
   import Editor from "../lib/codemirror/Editor.svelte";
   import SectionBar from "./SectionBar.svelte";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
@@ -122,7 +123,7 @@
           <input class="cell" value={row.name} placeholder={ghost ? "Add key" : "Key"} spellcheck="false" oninput={(e) => setForm(i, "name", e.currentTarget.value)} />
           <input class="cell" value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => setForm(i, "value", e.currentTarget.value)} />
           <span class="del">
-            {#if !ghost}<button class="icon-btn" onclick={() => (formRows.splice(i, 1), (body.text = buildForm(formRows)))}><Icon name="trash" size={13} /></button>{/if}
+            {#if !ghost}<button class="icon-btn" aria-label="Delete" use:tooltip onclick={() => (formRows.splice(i, 1), (body.text = buildForm(formRows)))}><Icon name="trash" size={13} /></button>{/if}
           </span>
         </div>
       {/each}
@@ -147,7 +148,7 @@
             <input class="cell" value={p.value} placeholder="Value" spellcheck="false" oninput={(e) => setPart(i, { value: e.currentTarget.value })} />
           {/if}
           <input class="cell" value={p.contentType ?? ""} placeholder="auto" spellcheck="false" oninput={(e) => setPart(i, { contentType: e.currentTarget.value || undefined })} />
-          <span class="del">{#if !ghost}<button class="icon-btn" onclick={() => removePart(i)}><Icon name="trash" size={13} /></button>{/if}</span>
+          <span class="del">{#if !ghost}<button class="icon-btn" aria-label="Delete" use:tooltip onclick={() => removePart(i)}><Icon name="trash" size={13} /></button>{/if}</span>
         </div>
       {/each}
     </div>
