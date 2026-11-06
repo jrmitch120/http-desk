@@ -79,6 +79,8 @@ export const theme = EditorView.theme({
     animation: "popup-in 120ms ease-out",
   },
   ".cm-tooltip-autocomplete": { overflow: "hidden" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12px", padding: "4px" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { borderRadius: "5px", padding: "2px 6px" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--text)" },
   ".cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "8px" },
   ".cm-placeholder": { color: "var(--faint)" },
