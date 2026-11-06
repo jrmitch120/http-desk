@@ -450,9 +450,11 @@ class AppStore {
     }
   }
 
-  async closeTab(id: string) {
+  /** Closes a tab, asking first if it has unsaved edits. Returns false if it stays open
+   *  (the user cancelled or the save failed). */
+  async closeTab(id: string): Promise<boolean> {
     const tab = this.tabs.find((t) => t.id === id);
-    if (!tab) return;
+    if (!tab) return true;
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
@@ -460,11 +462,19 @@ class AppStore {
         { label: "Don't save", value: "discard", danger: true },
         { label: "Save", value: "save", primary: true },
       ]);
-      if (r.button === "cancel") return;
-      if (r.button === "save" && !(await this.saveTab(tab))) return;
+      if (r.button === "cancel") return false;
+      if (r.button === "save" && !(await this.saveTab(tab))) return false;
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     this.removeTab(id);
+    return true;
+  }
+
+  /** Closes tabs one after another (Close all / Close others), asking about each
+   *  unsaved one in turn. Stops at the first tab that stays open; the rest stay too. */
+  async closeTabs(ids: string[]): Promise<boolean> {
+    for (const id of ids) if (!(await this.closeTab(id))) return false;
+    return true;
   }
 
   revertRequest(path: string, key: string) {
@@ -685,30 +695,38 @@ class AppStore {
     setTimeout(() => (this.toasts = this.toasts.filter((t) => t.id !== id)), kind === "error" ? 7000 : 3500);
   }
 
-  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+  /** Dialogs waiting for the one on screen (`dialog`) to be answered, oldest first. */
+  private dialogQueue: DialogState[] = [];
+
+  /** Shows the dialog, or queues it behind the one on screen. */
+  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string }> {
     return new Promise((resolve) => {
-      this.dialog = { title, message, buttons, resolve };
+      const next = { ...d, resolve };
+      if (this.dialog) this.dialogQueue.push(next);
+      else this.dialog = next;
     });
   }
 
+  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+    return this.openDialog({ title, message, buttons });
+  }
+
   async prompt(title: string, value: string, placeholder?: string, selectStem = false): Promise<string | null> {
-    const r = await new Promise<{ button: string; value: string }>((resolve) => {
-      this.dialog = {
-        title,
-        input: { value, placeholder, selectStem },
-        buttons: [
-          { label: "Cancel", value: "cancel" },
-          { label: "OK", value: "ok", primary: true },
-        ],
-        resolve,
-      };
+    const r = await this.openDialog({
+      title,
+      input: { value, placeholder, selectStem },
+      buttons: [
+        { label: "Cancel", value: "cancel" },
+        { label: "OK", value: "ok", primary: true },
+      ],
     });
     return r.button === "ok" ? r.value : null;
   }
 
+  /** Answers the dialog on screen and shows the next queued one, if any. */
   closeDialog(button: string, value = "") {
     const d = this.dialog;
-    this.dialog = null;
+    this.dialog = this.dialogQueue.shift() ?? null;
     d?.resolve({ button, value });
   }
 }

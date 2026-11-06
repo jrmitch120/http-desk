@@ -382,3 +382,66 @@ describe("search", () => {
     expect(app.activeTabId).toBe(post.id);
   });
 });
+
+describe("dialog queue", () => {
+  it("shows one dialog at a time and resolves each with the user's own answer", async () => {
+    const del = app.choose("Delete request", 'Delete "List"?', [
+      { label: "Cancel", value: "cancel" },
+      { label: "Delete", value: "delete", danger: true },
+    ]);
+    const name = app.prompt("Rename request", "List");
+
+    // The prompt waits until the confirm is answered.
+    expect(app.dialog?.title).toBe("Delete request");
+    app.closeDialog("delete");
+    expect(app.dialog?.title).toBe("Rename request");
+    expect(app.dialog?.input?.value).toBe("List");
+    app.closeDialog("ok", "List books");
+
+    expect(await del).toEqual({ button: "delete", value: "" });
+    expect(await name).toBe("List books");
+    expect(app.dialog).toBeNull();
+  });
+});
+
+/** Waits for a dialog to be on screen, answers it, and returns its title. */
+async function answer(button: string, value = ""): Promise<string> {
+  await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+  const title = app.dialog!.title;
+  app.closeDialog(button, value);
+  return title;
+}
+
+describe("closing several tabs", () => {
+  async function openEdited() {
+    const tabs = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    for (const t of tabs) app.requestFor(t)!.url += "?edited";
+    return tabs;
+  }
+
+  it("Close all asks about each unsaved tab in turn; Don't save on each closes them all", async () => {
+    await openEdited();
+
+    const closing = app.closeTabs(app.tabs.map((t) => t.id));
+    const titles = [await answer("discard"), await answer("discard"), await answer("discard")];
+    await closing;
+
+    expect(titles).toEqual(['Save changes to "List"?', 'Save changes to "Create"?', 'Save changes to "Get"?']);
+    expect(app.tabs).toEqual([]);
+    expect(app.dialog).toBeNull();
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("Cancel stops the remaining closes and leaves those tabs open", async () => {
+    const [list, create, get] = await openEdited();
+
+    const closing = app.closeTabs([list.id, create.id, get.id]);
+    await answer("discard");
+    await answer("cancel");
+    await closing;
+
+    expect(app.tabs.map((t) => t.id)).toEqual([create.id, get.id]);
+    expect(app.dialog).toBeNull();
+    expect(app.isRequestDirty(PATH, create.key)).toBe(true);
+  });
+});

@@ -172,7 +172,7 @@
         {:else if section === "auth"}
           <AuthEditor auth={req.auth} />
         {:else if section === "body"}
-          <BodyEditor {req} filePath={tab.path} {variables} />
+          <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
           <RequestSettings {req} file={doc.file} />
         {/if}
