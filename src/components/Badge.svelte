@@ -2,14 +2,14 @@
   // A small pill: HTTP methods, response statuses, "OFF", "Active", versions.
   // Every badge shares one type, corner radius and padding per size; only the
   // colour changes. `method` and `status` pick their colour from the method or
-  // status; otherwise `tone` does. Method badges are as wide as six letters so
-  // they line up in lists. To adjust one at a call site, pass a `class` and
-  // style it with `:global(...)`.
+  // status; otherwise `tone` does. Method badges are as wide as six letters, and
+  // show at most six, so they line up in lists. To adjust one at a call site,
+  // pass a `class` and style it with `:global(...)`.
   import type { Snippet } from "svelte";
   import { methodClass, statusClass } from "../lib/http";
 
   interface Props {
-    /** An HTTP method; it's also the text unless `children` is given. */
+    /** An HTTP method; its first six letters are the text unless `children` is given. */
     method?: string;
     /** An HTTP status code (colour only; pass the text as `children`). */
     status?: number;
@@ -24,7 +24,7 @@
 </script>
 
 <span class="badge {size} {colour} {className}" class:method={method !== undefined}>
-  {#if children}{@render children()}{:else}{method}{/if}
+  {#if children}{@render children()}{:else}{method?.slice(0, 6)}{/if}
 </span>
 
 <style>

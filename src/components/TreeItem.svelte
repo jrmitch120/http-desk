@@ -135,7 +135,7 @@
         onkeydown={(e) => e.key === "Enter" && app.openRequest(node.path, { key: req._key })}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
-        <Badge method={req.method}>{req.method.slice(0, 6)}</Badge>
+        <Badge method={req.method} />
         <span class="label ellipsis">{displayName(req)}</span>
         {#if app.isRequestDirty(node.path, req._key!)}<span class="dot"></span>{/if}
       </div>

@@ -254,8 +254,8 @@ and only the colour changes.
   by default, `success`, `warning`, `danger`, `info`), `size?` (`sm` by default, `md`),
   `class?`.
 - `sm` sits in lists and tabs (method badges, OFF on a section tab); `md` sits in headers
-  (response status, Cancelled, spec version). Method badges are six letters wide so lists
-  line up.
+  (response status, Cancelled, spec version). Method badges are six letters wide, and
+  Badge cuts longer methods to six, so lists line up.
 - Badge takes no tooltip. To explain one, wrap it in a `<span use:tooltip={text}>`.
 
 ### Banner

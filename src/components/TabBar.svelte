@@ -68,7 +68,7 @@
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
         {#if req}
-          <Badge method={req.method} class="tab-method">{req.method.slice(0, 6)}</Badge>
+          <Badge method={req.method} class="tab-method" />
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
