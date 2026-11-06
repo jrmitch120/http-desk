@@ -1,11 +1,10 @@
 //! Tauri shell: thin commands over `httpdesk-core`, plus the workspace file
 //! watcher. All domain logic lives in the core crate.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecSettings, HttpResponse};
@@ -13,19 +12,31 @@ use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
 use httpdesk_core::{HttpFile, Request, Variable};
-use notify_debouncer_mini::{new_debouncer, notify::RecommendedWatcher, notify::RecursiveMode, DebounceEventResult, Debouncer};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
+mod bodies;
 mod confine;
+mod paths;
 mod quit;
 mod self_writes;
+mod watcher;
+use bodies::RecentBodies;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// Runs a slow command body on the blocking pool, so a big workspace or a
+/// large write never freezes the window (sync commands run on the main thread).
+async fn off_main<R: tauri::Runtime, T: Send + 'static>(
+    app: AppHandle<R>,
+    f: impl FnOnce(&AppState) -> CmdResult<T> + Send + 'static,
+) -> CmdResult<T> {
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>())).await.map_err(err)?
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,12 +71,12 @@ impl Default for AppSettings {
 #[derive(Default)]
 struct AppState {
     root: Mutex<Option<PathBuf>>,
-    watcher: Mutex<Option<Debouncer<RecommendedWatcher>>>,
+    watcher: Mutex<Option<watcher::Watcher>>,
     /// What our own file operations left on disk, to ignore their watcher events.
     self_writes: SelfWrites,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Recent response bodies by response id (for "save to file").
-    bodies: Mutex<VecDeque<(String, Vec<u8>)>>,
+    bodies: Mutex<RecentBodies>,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
@@ -84,8 +95,17 @@ impl AppState {
     }
 }
 
-/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs, tests).
+/// Managed state that gives one app instance its own config folder. The IPC tests
+/// use it because `HTTPDESK_CONFIG_DIR` is shared by every app in the process.
+#[cfg(test)]
+struct ConfigDir(PathBuf);
+
+/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs).
 fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = app.try_state::<ConfigDir>() {
+        return Some(dir.0.join("settings.json"));
+    }
     let dir = std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
 }
@@ -94,6 +114,18 @@ fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSetting
     if let Some(path) = settings_path(app) {
         let _ = write_settings(&path, settings);
     }
+}
+
+/// Recents in the form `open_workspace` now stores (older versions saved
+/// `\\?\C:\…` on Windows), without the duplicates that leaves.
+fn simplified_recents(recents: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in recents.iter().map(|p| paths::simplified(p)) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// Atomic, so a crash mid-save can't leave a truncated file that resets every setting.
@@ -112,52 +144,19 @@ struct WorkspaceInfo {
     gitignore_updated: bool,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChangeEvent {
-    paths: Vec<PathBuf>,
-}
-
-fn is_watched_noise(path: &Path) -> bool {
-    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-    name.ends_with(".httpdesk-tmp")
-        || path.components().any(|c| matches!(c.as_os_str().to_str(), Some(".git" | "node_modules" | "target")))
-}
-
-fn start_watcher<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, root: &Path) -> CmdResult<()> {
-    let app = app.clone();
-    let self_writes = state.self_writes.clone();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: DebounceEventResult| {
-        let Ok(events) = res else { return };
-        let mut paths: Vec<PathBuf> = Vec::new();
-        for ev in events {
-            if is_watched_noise(&ev.path) || paths.contains(&ev.path) {
-                continue;
-            }
-            if self_writes.is_own(&ev.path) {
-                continue;
-            }
-            paths.push(ev.path);
-        }
-        if !paths.is_empty() {
-            let _ = app.emit("workspace-changed", ChangeEvent { paths });
-        }
-    })
-    .map_err(err)?;
-    debouncer.watcher().watch(root, RecursiveMode::Recursive).map_err(err)?;
-    *state.watcher.lock().unwrap() = Some(debouncer);
-    Ok(())
-}
-
 #[tauri::command]
-fn open_workspace<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, path: PathBuf) -> CmdResult<WorkspaceInfo> {
-    let root = path.canonicalize().map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
+async fn open_workspace<R: tauri::Runtime>(app: AppHandle<R>, path: PathBuf) -> CmdResult<WorkspaceInfo> {
+    off_main(app.clone(), move |state| open_workspace_blocking(&app, state, path)).await
+}
+
+fn open_workspace_blocking<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, path: PathBuf) -> CmdResult<WorkspaceInfo> {
+    let root = paths::canonicalize(&path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
     let tree = workspace::tree(&root).map_err(err)?;
-    *state.watcher.lock().unwrap() = None;
-    start_watcher(&app, &state, &root)?;
+    let watcher = watcher::start(app, state.self_writes.clone(), &root)?;
+    *state.watcher.lock().unwrap() = Some(watcher);
     *state.root.lock().unwrap() = Some(root.clone());
     // Covers private env files created before HttpDesk handled workspaces inside a repo.
     let gitignore_updated = env::ensure_gitignored(&root).unwrap_or(false);
@@ -166,18 +165,18 @@ fn open_workspace<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppStat
     settings.recent_workspaces.retain(|p| p != &root);
     settings.recent_workspaces.insert(0, root.clone());
     settings.recent_workspaces.truncate(10);
-    persist_settings(&app, &settings);
+    persist_settings(app, &settings);
     Ok(WorkspaceInfo { root, tree, gitignore_updated })
 }
 
 #[tauri::command]
-fn get_tree(state: State<'_, AppState>) -> CmdResult<TreeNode> {
-    workspace::tree(&state.root()?).map_err(err)
+async fn get_tree<R: tauri::Runtime>(app: AppHandle<R>) -> CmdResult<TreeNode> {
+    off_main(app, |state| workspace::tree(&state.root()?).map_err(err)).await
 }
 
 #[tauri::command]
-fn search_requests(state: State<'_, AppState>, query: String) -> CmdResult<Vec<SearchHit>> {
-    Ok(workspace::search(&state.root()?, &query))
+async fn search_requests<R: tauri::Runtime>(app: AppHandle<R>, query: String) -> CmdResult<Vec<SearchHit>> {
+    off_main(app, move |state| Ok(workspace::search(&state.root()?, &query))).await
 }
 
 // ------------------------------------------------------------------ files
@@ -236,12 +235,15 @@ fn rename_path(state: State<'_, AppState>, from: PathBuf, to: PathBuf) -> CmdRes
 }
 
 #[tauri::command]
-fn delete_path(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
-    let path = state.confine_entry(&path)?;
-    state.self_writes.removing(&path);
-    trash::delete(&path).or_else(|_| {
-        if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.map_err(err)
+async fn delete_path<R: tauri::Runtime>(app: AppHandle<R>, path: PathBuf) -> CmdResult<()> {
+    off_main(app, move |state| {
+        let path = state.confine_entry(&path)?;
+        state.self_writes.removing(&path);
+        trash::delete(&path).or_else(|_| {
+            if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.map_err(err)
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -308,11 +310,7 @@ async fn send_request(
 
     match result {
         Ok(Ok(outcome)) => {
-            let mut bodies = state.bodies.lock().unwrap();
-            bodies.push_back((outcome.response.id.clone(), outcome.body));
-            while bodies.len() > 20 {
-                bodies.pop_front();
-            }
+            state.bodies.lock().unwrap().push(outcome.response.id.clone(), outcome.body);
             Ok(outcome.response)
         }
         Ok(Err(e)) => Err(e.to_string()),
@@ -329,10 +327,12 @@ fn cancel_request(state: State<'_, AppState>, run_id: String) {
 }
 
 #[tauri::command]
-fn save_response_body(state: State<'_, AppState>, response_id: String, path: PathBuf) -> CmdResult<()> {
-    let bodies = state.bodies.lock().unwrap();
-    let (_, body) = bodies.iter().find(|(id, _)| *id == response_id).ok_or("Response is no longer available")?;
-    std::fs::write(&path, body).map_err(err)
+async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String, path: PathBuf) -> CmdResult<()> {
+    off_main(app, move |state| {
+        let body = state.bodies.lock().unwrap().get(&response_id).ok_or("Response is no longer available")?;
+        std::fs::write(&path, body).map_err(err)
+    })
+    .await
 }
 
 // ------------------------------------------------------------------ settings
@@ -388,27 +388,35 @@ struct GenerateReport {
 }
 
 #[tauri::command]
-fn openapi_generate(
-    state: State<'_, AppState>,
+async fn openapi_generate<R: tauri::Runtime>(
+    app: AppHandle<R>,
     source: String,
     options: GenerateOptions,
     output_dir: PathBuf,
     overwrite: bool,
     dry_run: bool,
 ) -> CmdResult<GenerateReport> {
+    off_main(app, move |state| openapi_generate_blocking(state, &source, &options, &output_dir, overwrite, dry_run)).await
+}
+
+fn openapi_generate_blocking(
+    state: &AppState,
+    source: &str,
+    options: &GenerateOptions,
+    output_dir: &Path,
+    overwrite: bool,
+    dry_run: bool,
+) -> CmdResult<GenerateReport> {
     let output = {
         let specs = state.specs.lock().unwrap();
         let doc = specs.get(source.trim()).ok_or("Load the specification first")?;
-        doc.generate(&options)
+        doc.generate(options)
     };
-    let output_dir = state.confine(&output_dir)?;
+    let output_dir = state.confine(output_dir)?;
     let files = output.files.iter().map(|f| state.confine_entry(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
     let conflicts: Vec<PathBuf> = files.iter().filter(|p| p.exists()).cloned().collect();
-    // Environments go to the workspace root when generating inside it.
-    let env_dir = match state.root.lock().unwrap().clone() {
-        Some(root) if output_dir.starts_with(&root) => root,
-        _ => output_dir.clone(),
-    };
+    // Output is confined to the workspace, so environments always go to its root.
+    let env_dir = state.root()?;
     let mut report = GenerateReport {
         files,
         conflicts,
@@ -445,7 +453,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         .manage(AppState::default())
         .setup(|app| {
             if let Some(text) = settings_path(app.handle()).and_then(|p| std::fs::read_to_string(p).ok()) {
-                if let Ok(s) = serde_json::from_str::<AppSettings>(&text) {
+                if let Ok(mut s) = serde_json::from_str::<AppSettings>(&text) {
+                    s.recent_workspaces = simplified_recents(&s.recent_workspaces);
                     *app.state::<AppState>().settings.lock().unwrap() = s;
                 }
             }

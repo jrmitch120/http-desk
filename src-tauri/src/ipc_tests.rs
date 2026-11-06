@@ -3,6 +3,8 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod confinement;
+mod paths;
+mod watcher;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
 #[cfg(windows)]
@@ -21,15 +23,21 @@ use tauri::webview::InvokeRequest;
 struct Harness {
     _app: tauri::App<tauri::test::MockRuntime>,
     webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
+    /// This app's settings folder; deleted when the harness is dropped.
+    cfg: tempfile::TempDir,
 }
 
 impl Harness {
     fn new() -> Self {
         let cfg = tempfile::tempdir().unwrap();
-        std::env::set_var("HTTPDESK_CONFIG_DIR", cfg.keep());
-        let app = super::with_commands(mock_builder()).build(mock_context(noop_assets())).unwrap();
+        let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
+        let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        Harness { _app: app, webview }
+        Harness { _app: app, webview, cfg }
+    }
+
+    fn config_dir(&self) -> std::path::PathBuf {
+        self.cfg.path().to_path_buf()
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -84,7 +92,7 @@ fn capture_server() -> (String, mpsc::Receiver<String>) {
 fn vertical_slice_over_ipc() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let (server, received) = capture_server();
     let file_path = root.join("api.http");
     std::fs::write(
@@ -163,7 +171,7 @@ fn opening_a_repo_subfolder_gitignores_its_private_env_file() {
 fn environments_and_openapi_over_ipc() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
     h.ok("open_workspace", json!({ "path": root }));
 
@@ -236,7 +244,7 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
     use tauri::Listener;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let path = root.join("a.http");
     std::fs::write(&path, "GET https://a\n").unwrap();
     h.ok("open_workspace", json!({ "path": root }));
@@ -264,7 +272,7 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
 fn saving_through_a_symlink_updates_the_target_and_keeps_the_link() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::create_dir(root.join("shared")).unwrap();
     let target = root.join("shared/real.http");
     std::fs::write(&target, "### R\nGET https://old\n").unwrap();
@@ -287,7 +295,7 @@ fn saving_keeps_the_file_mode() {
     use std::os::unix::fs::PermissionsExt;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let path = root.join("private.http");
     std::fs::write(&path, "### R\nGET https://old\n").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -301,8 +309,7 @@ fn saving_keeps_the_file_mode() {
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
 }
 
-/// Called directly: the harness's config dir is a process-wide env var, so a
-/// parallel test could redirect `save_settings` mid-test.
+/// Called directly, so the settings file can be a symlink set up beforehand.
 #[cfg(unix)]
 #[test]
 fn settings_are_replaced_atomically_through_symlinks() {
@@ -342,7 +349,7 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     use tauri::Listener;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     std::fs::create_dir(root.join("old")).unwrap();
     std::fs::write(root.join("old/inner.http"), "GET https://inner\n").unwrap();
@@ -368,4 +375,15 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     let ext = changed_paths(&rx, std::time::Duration::from_secs(2));
     assert!(ext.contains(&p("dir/b.http")), "external change after a move is still reported: {ext:?}");
     assert!(ext.contains(&p("new/inner.http")), "external change inside a moved folder is still reported: {ext:?}");
+}
+
+#[test]
+fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    h.ok("open_workspace", json!({ "path": ws.path() }));
+    let cfg = h.config_dir();
+    assert!(cfg.join("settings.json").is_file(), "settings were not written to {}", cfg.display());
+    drop(h);
+    assert!(!cfg.exists(), "{} was left behind", cfg.display());
 }

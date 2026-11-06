@@ -1,14 +1,47 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+
+  // A toast stays while hovered or while text in it is selected.
+  const hovered = new Set<string>();
+  const selected = new Set<string>();
+  const sync = (id: string) => app.holdToast(id, hovered.has(id) || selected.has(id));
+
+  function hover(id: string, on: boolean) {
+    if (on) hovered.add(id);
+    else hovered.delete(id);
+    sync(id);
+  }
+
+  function onSelectionChange() {
+    const sel = document.getSelection();
+    for (const el of document.querySelectorAll<HTMLElement>(".toast[data-id]")) {
+      const id = el.dataset.id!;
+      const inside = !!sel && !sel.isCollapsed && (el.contains(sel.anchorNode) || el.contains(sel.focusNode));
+      if (inside === selected.has(id)) continue;
+      if (inside) selected.add(id);
+      else selected.delete(id);
+      sync(id);
+    }
+  }
 </script>
+
+<svelte:document onselectionchange={onSelectionChange} />
 
 <div class="toasts">
   {#each app.toasts as t (t.id)}
-    <div class="toast {t.kind}" role="status">
+    <div
+      class="toast {t.kind}"
+      data-id={t.id}
+      role={t.kind === "error" ? "alert" : "status"}
+      onmouseenter={() => hover(t.id, true)}
+      onmouseleave={() => hover(t.id, false)}
+    >
       <Icon name={t.kind === "error" ? "alert" : "check"} />
       <span class="selectable">{t.message}</span>
-      <button class="icon-btn" onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}><Icon name="x" size={13} /></button>
+      <button class="icon-btn" aria-label="Dismiss" title="Dismiss" onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}>
+        <Icon name="x" size={13} />
+      </button>
     </div>
   {/each}
 </div>

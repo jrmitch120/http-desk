@@ -32,12 +32,16 @@ export interface RunState {
   startedAt: number;
   response?: HttpResponse;
   error?: string;
+  /** The last send was cancelled; `response` is still the one before it. */
+  cancelled?: boolean;
 }
 
 export interface Toast {
   id: string;
   kind: "info" | "success" | "error";
   message: string;
+  /** Hovered or has selected text: not auto-dismissed (see `holdToast`). */
+  held?: boolean;
 }
 
 export interface DialogButton {
@@ -83,6 +87,9 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  /** True until `init` has finished reopening the last workspace, so the
+   *  Welcome screen doesn't flash first. */
+  starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
 
@@ -103,12 +110,22 @@ class AppStore {
 
   async init() {
     try {
+      await this.start();
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  private async start() {
+    try {
       this.settings = await api.getSettings();
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
     this.applyTheme();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
+    await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
+    await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
     // The window's close button, and on macOS ⌘Q / Dock Quit (the shell turns
     // those into a close request while files are unsaved; see quit.rs).
     await getCurrentWindow().onCloseRequested(async (e) => {
@@ -122,19 +139,29 @@ class AppStore {
         if (now !== unsaved) api.setUnsaved((unsaved = now)).catch(() => {});
       });
     });
-    const last = this.settings?.recentWorkspaces[0];
-    if (last && (await api.pathExists(last).catch(() => false))) await this.openWorkspace(last);
+    // Forget recent workspaces whose folders are gone, then reopen the last one.
+    const recent = this.settings?.recentWorkspaces ?? [];
+    const exists = await Promise.all(recent.map((p) => api.pathExists(p).catch(() => true)));
+    if (exists.includes(false)) await this.updateSettings({ recentWorkspaces: recent.filter((_, i) => exists[i]) });
+    if (recent.length && exists[0]) await this.openWorkspace(recent[0]);
   }
 
   applyTheme() {
     document.documentElement.dataset.theme = this.settings?.theme ?? "dark";
   }
 
-  async updateSettings(patch: Partial<AppSettings>) {
-    if (!this.settings) return;
+  /** Applies and saves settings; a failed save shows an error toast and returns false. */
+  async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
+    if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
-    await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+    try {
+      await api.saveSettings($state.snapshot(this.settings) as AppSettings);
+      return true;
+    } catch (e) {
+      this.toast("error", `Could not save settings: ${errorMessage(e)}`);
+      return false;
+    }
   }
 
   /** The unsaved-changes flow for leaving the open documents behind (closing the
@@ -175,6 +202,7 @@ class AppStore {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {
       const info = await api.openWorkspace(path);
+      this.missingRoot = null;
       if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
       this.root = info.root;
       this.tree = info.tree;
@@ -193,8 +221,11 @@ class AppStore {
     }
   }
 
+  /** A workspace folder that was deleted or moved while open; the user has been told. */
+  private missingRoot: string | null = null;
+
   async refreshTree() {
-    if (!this.root) return;
+    if (!this.root || this.root === this.missingRoot) return;
     try {
       this.tree = await api.getTree();
     } catch (e) {
@@ -420,6 +451,18 @@ class AppStore {
         await this.reload(p);
       }
     }
+  }
+
+  /** Handles a `workspace-missing` event: the open workspace folder was deleted or moved. */
+  onWorkspaceMissing(root: string) {
+    if (root !== this.root || root === this.missingRoot) return;
+    this.missingRoot = root;
+    this.toast("error", `The workspace folder "${basename(root)}" was deleted or moved. Open it again from where it is now.`);
+  }
+
+  /** Handles a `workspace-watch-error` event. */
+  onWatchError(message: string) {
+    this.toast("error", `Watching the workspace for changes failed: ${message}. Changes made outside HttpDesk may not show up.`);
   }
 
   // ---------------------------------------------------------------- search
@@ -687,7 +730,8 @@ class AppStore {
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading) return;
     const runId = uid();
-    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: this.runs[tabId]?.response };
+    const previous = this.runs[tabId]?.response;
+    this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({
         runId,
@@ -698,13 +742,23 @@ class AppStore {
       });
       if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
     } catch (e) {
-      if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+      if (this.runs[tabId]?.runId !== runId) return;
+      this.runs[tabId] = this.cancelled.delete(runId)
+        ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
+        : { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+    } finally {
+      this.cancelled.delete(runId);
     }
   }
 
+  /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */
+  private cancelled = new Set<string>();
+
   async cancel(tabId: string) {
     const run = this.runs[tabId];
-    if (run?.loading) await api.cancelRequest(run.runId);
+    if (!run?.loading) return;
+    this.cancelled.add(run.runId);
+    await api.cancelRequest(run.runId);
   }
 
   // ---------------------------------------------------------------- environments
@@ -735,7 +789,18 @@ class AppStore {
   toast(kind: Toast["kind"], message: string) {
     const id = uid();
     this.toasts.push({ id, kind, message });
-    setTimeout(() => (this.toasts = this.toasts.filter((t) => t.id !== id)), kind === "error" ? 7000 : 3500);
+    const expire = () => {
+      // Held toasts (hovered, or with text selected) wait until released.
+      if (this.toasts.find((t) => t.id === id)?.held) setTimeout(expire, 1000);
+      else this.toasts = this.toasts.filter((t) => t.id !== id);
+    };
+    setTimeout(expire, kind === "error" ? 7000 : 3500);
+  }
+
+  /** Keeps a toast on screen while the user hovers it or selects its text. */
+  holdToast(id: string, held: boolean) {
+    const t = this.toasts.find((t) => t.id === id);
+    if (t) t.held = held;
   }
 
   /** Dialogs waiting for the one on screen (`dialog`) to be answered, oldest first. */

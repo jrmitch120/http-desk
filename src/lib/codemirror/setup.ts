@@ -8,6 +8,7 @@ import { xml } from "@codemirror/lang-xml";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
+import { VAR_RE } from "../http";
 import {
   Decoration,
   drawSelection,
@@ -117,8 +118,6 @@ export interface VarProvider {
   info: (name: string) => VarInfo;
   names: () => { name: string; detail: string }[];
 }
-
-const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 
 function varDecorations(provider: VarProvider) {
   const decorator = new MatchDecorator({
