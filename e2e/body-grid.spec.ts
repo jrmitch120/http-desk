@@ -1,6 +1,6 @@
 // The form-urlencoded and multipart bodies are edited in the shared key/value
-// grid (#51): ghost row, delete with a tooltip, bulk edit. Neither has an
-// enable column, because a disabled field can't be saved to the .http file yet (#41).
+// grid (#51): ghost row, delete with a tooltip, bulk edit, and an enable column
+// (#41). A disabled field is a `#~` line in the body text (ADR-0003).
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest, sentRequests } from "./helpers";
 
@@ -15,7 +15,8 @@ async function bodyOf(page: Page, mode: string): Promise<Locator> {
 }
 
 async function send(page: Page): Promise<Sent["body"]> {
-  await page.keyboard.press("ControlOrMeta+Enter");
+  // The button, not ⌘/Ctrl Enter: the shortcut lives in text fields, and a test may end on a checkbox.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await sentRequests(page)).length).toBeGreaterThan(0);
   const sent = (await sentRequests(page)) as unknown as Sent[];
   return sent[sent.length - 1].body;
@@ -29,8 +30,6 @@ async function addRow(grid: Locator, name: string, value: string): Promise<void>
 
 test("form-urlencoded fields are added in the ghost row, deleted and bulk-edited", async ({ page }) => {
   const grid = await bodyOf(page, "x-www-form-urlencoded");
-  await expect(grid.getByRole("checkbox")).toHaveCount(0);
-
   await addRow(grid, "name", "Rex");
   // Typing into the ghost row keeps focus there, and Tab moves on to its value.
   await grid.getByPlaceholder("Add key").click();
@@ -66,7 +65,6 @@ test("form-urlencoded fields are added in the ghost row, deleted and bulk-edited
 
 test("multipart parts switch between text and file with the Select and take a content type", async ({ page }) => {
   const grid = await bodyOf(page, "form-data");
-  await expect(grid.getByRole("checkbox")).toHaveCount(0);
   await expect(grid.locator("select")).toHaveCount(0);
 
   await addRow(grid, "note", "hello");
@@ -130,4 +128,54 @@ test("multipart bulk edit keeps each part's type and content type", async ({ pag
   const body = await send(page);
   expect(body.text).toContain('name="avatar"; filename="cat.png"');
   expect(body.text).toContain('name="note"\n\nhi');
+});
+
+test("form fields can be disabled one at a time and stay in the body as #~ lines", async ({ page }) => {
+  const grid = await bodyOf(page, "x-www-form-urlencoded");
+  await addRow(grid, "a", "1");
+  await addRow(grid, "b", "2");
+  await addRow(grid, "c", "3");
+
+  await grid.getByRole("checkbox", { name: "Enable a", exact: true }).click();
+  await expect(grid.locator(".kv-row").first()).toHaveClass(/\boff\b/);
+  await grid.getByRole("checkbox", { name: "Enable c" }).click();
+
+  // The first field sent loses its `&`: JetBrains sends an empty body otherwise.
+  const body = await send(page);
+  expect(body.text).toBe("#~ a=1\nb=2\n#~ &c=3");
+
+  await grid.getByRole("button", { name: "Bulk edit" }).click();
+  await expect(grid.locator("textarea.bulk-text")).toHaveValue("//a=1\nb=2\n//c=3");
+});
+
+test("a multipart part can be disabled and is held as #~ lines", async ({ page }) => {
+  const grid = await bodyOf(page, "form-data");
+  await addRow(grid, "note", "hello");
+  await addRow(grid, "debug", "true");
+
+  await grid.getByRole("checkbox", { name: "Enable debug" }).click();
+  await expect(grid.locator(".kv-row").nth(1)).toHaveClass(/\boff\b/);
+
+  const body = await send(page);
+  expect(body.text).toBe(
+    [
+      "--HttpDeskBoundary",
+      'Content-Disposition: form-data; name="note"',
+      "",
+      "hello",
+      "#~ --HttpDeskBoundary",
+      '#~ Content-Disposition: form-data; name="debug"',
+      "#~",
+      "#~ true",
+      "--HttpDeskBoundary--",
+    ].join("\n"),
+  );
+
+  // Turning the whole body off and on keeps the part's own state.
+  const bodySwitch = page.locator(".section-bar").filter({ hasText: "Body" }).getByRole("switch");
+  await bodySwitch.click();
+  await expect(bodySwitch).toHaveAttribute("aria-checked", "false");
+  await bodySwitch.click();
+  await expect(grid.getByRole("checkbox", { name: "Enable debug" })).not.toBeChecked();
+  await expect(grid.getByRole("checkbox", { name: "Enable note" })).toBeChecked();
 });

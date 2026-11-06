@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::SslConfig;
 use crate::model::*;
+use crate::parser::DISABLED_MARKER;
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
@@ -156,7 +157,8 @@ fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Optio
     let bytes = match body.mode {
         BodyMode::Multipart => {
             let mut out = Vec::new();
-            for line in text.lines() {
+            // `#~` lines are disabled parts (see the parser).
+            for line in text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)) {
                 match file_reference(line, resolver, base_dir) {
                     Some(file) => out.extend(file?),
                     None => out.extend(resolver.resolve(line).into_bytes()),
@@ -173,9 +175,13 @@ fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Optio
 
 /// Joins a form body written one field per line with `&`. Lines that already
 /// start (or the previous line ends) with `&`, as VS Code writes them, are kept.
+/// Comment lines, including `#~` disabled fields, are skipped as JetBrains and
+/// VS Code do, and so is the `&` left in front of the first field sent.
 fn join_form_lines(text: &str) -> String {
     let mut out = String::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+    let fields = text.lines().map(str::trim).filter(|l| !l.is_empty() && crate::parser::comment_body(l).is_none());
+    for line in fields {
+        let line = if out.is_empty() { line.trim_start_matches('&') } else { line };
         if !out.is_empty() && !out.ends_with('&') && !line.starts_with('&') {
             out.push('&');
         }

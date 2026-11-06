@@ -201,7 +201,8 @@ as written in the file.
 `Body.mode` ∈ `none | json | xml | text | formUrlEncoded | multipart | file | raw`. The
 body is always stored as `.http` body **text**. The structured editors (form fields,
 multipart parts, file picker) parse and rebuild that text, so whatever the GUI produces
-is the same body JetBrains or VS Code would send.
+is the same body JetBrains or VS Code would send. A disabled form field or multipart part
+is held in that text as `#~` lines, in place (§5).
 
 ---
 
@@ -260,6 +261,31 @@ Accept: application/json
 | Query parameter | `#~ &name=value` |
 | Authentication | the auth header/param line prefixed with `#~ ` |
 | Body (whole) | every body line prefixed with `#~| `, kept in the header area (no blank line before it, so it can never be sent as a body by any client) |
+| Form-urlencoded field | `#~ &name=value` **in the body**, where the field was (`#~ name=value` on the first line). The first field sent is written without `&` |
+| Multipart part | every line of the part, its `--boundary` line included, prefixed with `#~=` in the header area |
+
+Disabled form fields and multipart parts are placed differently because JetBrains treats
+comments differently in the two bodies: it drops them from a form body but sends them as
+part content in a multipart body ([ADR-0003](adr/0003-disabled-form-fields-and-multipart-parts.md),
+[research](research/http-comment-compat.md) Appendix C). VS Code drops every comment line.
+JetBrains also sends an empty form body when the first line it sends starts with `&`, so
+that line never has one.
+
+```http
+### Upload
+POST {{baseUrl}}/upload
+Content-Type: multipart/form-data; boundary=B
+#~= --B
+#~= Content-Disposition: form-data; name="debug"
+#~=
+#~= true
+
+--B
+Content-Disposition: form-data; name="title"
+
+Hello
+--B--
+```
 
 ### Section-level toggles (all headers / all query params)
 
@@ -278,8 +304,10 @@ in the request preamble.
 # @httpdesk-disabled query, headers
 ```
 
-Auth and body have no sub-items, so they need no directive: a commented auth line or
-`#~|` body lines mean disabled.
+Auth and body need no directive: a commented auth line or `#~|` body lines mean disabled.
+Fields of a disabled body keep their own state by nesting: the body's in-memory text,
+disabled fields included, is written as `#~|` lines, so a disabled multipart part reads
+`#~| #~ --B` and a disabled form field `#~| #~ &name=value`.
 
 ### Parsing rules and external edits
 
@@ -291,7 +319,11 @@ Auth and body have no sub-items, so they need no directive: a commented auth lin
   lines are kept in `extra_lines`, so nothing is discarded.
 * Plain `#` comments are **never** interpreted as disabled items. They are preserved as
   comments. A human-written `# X-Foo: bar` therefore stays a comment, which avoids
-  misreading prose such as `# Note: this is cool`.
+  misreading prose such as `# Note: this is cool`. In a form body, plain `#` and `//`
+  lines stay comments too: the form editor keeps them above the field they preceded, and
+  they are not sent (neither JetBrains nor VS Code sends them).
+* `#~=` lines are read into a multipart body before its closing `--boundary--` line. Next
+  to a body that isn't multipart they are kept in `extra_lines`, like stale `#~|` lines.
 
 ### Implications (documented limitation)
 
@@ -301,8 +333,11 @@ Auth and body have no sub-items, so they need no directive: a commented auth lin
   reload **disabled query parameters are listed after the enabled ones**. Relative order
   within each group is preserved. Query parameter order rarely matters to servers, and
   putting comments inside a multi-line URL is not reliably supported by other clients.
-* Individual form-urlencoded or multipart fields cannot be disabled in v1. The whole
-  body can.
+* Disabled multipart parts are stored in the header area, so on reload they are listed
+  after the enabled parts, in their original relative order. Disabled form fields stay in
+  place.
+* In an enabled multipart part, a content line starting with `#~` is read as a disabled
+  part line.
 
 ---
 
@@ -439,7 +474,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 |---|---|
 | Dialect differences (JetBrains vs VS Code) | Parse the union, emit the common subset. JetBrains-only features (scripts, `> {% %}` handlers) are preserved verbatim, never executed (scripting is out of scope). |
 | `#~` items render as comments in other editors | Intended; documented above. |
-| Disabled query params reorder after the enabled ones | Documented; deterministic. |
+| Disabled query params and multipart parts reorder after the enabled ones | Documented; deterministic. |
 | `@httpdesk-*` directives might trigger an "unknown tag" hint in JetBrains | They are plain comments to both parsers, and only written when needed (section off, API key auth). |
 | Environment file conventions differ (VS Code uses `settings.json`) | Use the JetBrains env files, which are plain JSON in the repo. VS Code users can use the `vscode-restclient` env-file setting or keep both. |
 | Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview or a hex dump. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received. |
@@ -517,7 +552,9 @@ Decisions made during implementation, beyond the plan above:
   XML, text and form-urlencoded bodies.
 * **Body mode `none`** means "no body". Text left in other modes is discarded on
   save. To keep a body without sending it, disable the body instead.
-* **Form bodies** written one field per line are sent joined with `&`.
+* **Form bodies** written one field per line are sent joined with `&`. `#` and `//` lines,
+  `#~` disabled fields included, are skipped, as JetBrains and VS Code skip them, and so
+  is an `&` in front of the first field sent.
 * **Basic auth** is written as `Basic user password`, or `Basic user:password` when
   either part is empty. When the username contains whitespace, or the password has
   leading or trailing whitespace, it is written pre-encoded as `Basic <base64>`, because
@@ -564,8 +601,6 @@ Decisions made during implementation, beyond the plan above:
 
 ### Known gaps / next steps
 
-* Individual form-urlencoded and multipart fields can't be disabled; only the whole
-  body can (see §5).
 * No cookie jar; responses' `Set-Cookie` is not replayed.
 * Scripts (`< {% %}`, `> {% %}`) are preserved but not executed (out of scope).
 * Request-to-request variables (`{{login.response.body.token}}`) are not supported.

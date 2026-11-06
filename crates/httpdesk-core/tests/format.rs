@@ -354,6 +354,133 @@ fn stale_disabled_body_next_to_active_body_is_preserved() {
     assert_eq!(serialize(&f), text);
 }
 
+fn multipart(text: &str, enabled: bool) -> Request {
+    Request {
+        method: "POST".into(),
+        url: "https://x".into(),
+        headers: KvSection {
+            enabled: true,
+            items: vec![KeyValue::new("Content-Type", "multipart/form-data; boundary=B")],
+        },
+        body: Body { enabled, mode: BodyMode::Multipart, text: text.into() },
+        ..Default::default()
+    }
+}
+
+const PART_A: &str = "--B\nContent-Disposition: form-data; name=\"a\"\n\n1";
+const PART_B_OFF: &str = "#~ --B\n#~ Content-Disposition: form-data; name=\"b\"\n#~\n#~ 2";
+
+#[test]
+fn disabled_multipart_parts_are_written_in_the_header_area() {
+    let r = multipart(&format!("{PART_A}\n{PART_B_OFF}\n--B--"), true);
+    let (text, back) = round_trip(&r);
+    assert_eq!(
+        text,
+        "###\n\
+         POST https://x\n\
+         Content-Type: multipart/form-data; boundary=B\n\
+         #~= --B\n\
+         #~= Content-Disposition: form-data; name=\"b\"\n\
+         #~=\n\
+         #~= 2\n\
+         \n\
+         --B\n\
+         Content-Disposition: form-data; name=\"a\"\n\
+         \n\
+         1\n\
+         --B--\n"
+    );
+    assert_eq!(back, r);
+}
+
+#[test]
+fn disabled_multipart_parts_reload_before_the_closing_boundary() {
+    // A part disabled in the middle comes back after the enabled ones (documented).
+    let r = multipart(&format!("{PART_B_OFF}\n{PART_A}\n--B--"), true);
+    let (_, back) = round_trip(&r);
+    assert_eq!(back.body.text, format!("{PART_A}\n{PART_B_OFF}\n--B--"));
+}
+
+#[test]
+fn disabled_parts_inside_a_disabled_body_keep_their_own_state() {
+    let r = multipart(&format!("{PART_A}\n{PART_B_OFF}\n--B--"), false);
+    let (text, back) = round_trip(&r);
+    assert!(text.contains("\n#~| --B\n"), "{text}");
+    assert!(
+        text.contains("\n#~| #~ --B\n#~| #~ Content-Disposition: form-data; name=\"b\"\n#~| #~\n#~| #~ 2\n"),
+        "{text}"
+    );
+    assert!(!text.contains("#~="), "{text}");
+    assert_eq!(back, r);
+}
+
+#[test]
+fn disabled_form_fields_stay_in_the_body() {
+    let mut r = multipart("#~ a=1\nb=2\n#~ &c=3\n# a note\n&d=4", true);
+    r.headers.items[0].value = "application/x-www-form-urlencoded".into();
+    r.body.mode = BodyMode::FormUrlEncoded;
+    let (text, back) = round_trip(&r);
+    assert!(text.ends_with("\n\n#~ a=1\nb=2\n#~ &c=3\n# a note\n&d=4\n"), "{text}");
+    assert_eq!(back, r);
+}
+
+#[test]
+fn disabled_form_fields_inside_a_disabled_body_keep_their_own_state() {
+    let mut r = multipart("a=1\n#~ &b=2", false);
+    r.headers.items[0].value = "application/x-www-form-urlencoded".into();
+    r.body.mode = BodyMode::FormUrlEncoded;
+    let (text, back) = round_trip(&r);
+    assert!(text.ends_with("\n#~| a=1\n#~| #~ &b=2\n"), "{text}");
+    assert_eq!(back, r);
+}
+
+#[test]
+fn untouched_bodies_with_disabled_fields_and_comments_save_byte_identical() {
+    let text = "### Form\n\
+        POST https://x\n\
+        Content-Type: application/x-www-form-urlencoded\n\
+        \n\
+        #~ a=1\n\
+        // why b\n\
+        b=2\n\
+        #~ &c=3\n\
+        \n\
+        ### Parts\n\
+        POST https://x\n\
+        Content-Type: multipart/form-data; boundary=B\n\
+        #~= --B\n\
+        #~= Content-Disposition: form-data; name=\"off\"\n\
+        #~=\n\
+        #~= 1\n\
+        \n\
+        --B\n\
+        Content-Disposition: form-data; name=\"note\"\n\
+        \n\
+        # a value line, not a comment\n\
+        // also content\n\
+        --B--\n";
+    let f = parse(text);
+    assert_eq!(f.requests[1].body.text.lines().filter(|l| l.starts_with("#~")).count(), 4);
+    assert_eq!(serialize(&f), text);
+
+    // Edited, the parts request is re-rendered with the same layout.
+    let mut edited = parse(text);
+    edited.requests[1].url = "https://y".into();
+    assert_eq!(
+        serialize(&edited),
+        text.replace("POST https://x\nContent-Type: multipart", "POST https://y\nContent-Type: multipart")
+    );
+}
+
+#[test]
+fn disabled_part_lines_next_to_a_non_multipart_body_are_kept() {
+    let text = "POST https://x\nContent-Type: text/plain\n#~= --B\n\nhello\n";
+    let f = parse(text);
+    assert_eq!(f.requests[0].body.text, "hello");
+    assert_eq!(f.requests[0].extra_lines, vec![ExtraLine::new("#~= --B")]);
+    assert_eq!(serialize(&f), text);
+}
+
 #[test]
 fn file_variables_added_to_header_stay_in_header() {
     let mut f = parse("GET https://x\n");

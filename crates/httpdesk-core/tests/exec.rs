@@ -191,6 +191,59 @@ async fn bodies_json_form_multipart_and_files() {
 }
 
 #[tokio::test]
+async fn disabled_form_fields_are_not_sent() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+    let form = "Content-Type: application/x-www-form-urlencoded\n\n";
+    let cases = [
+        // First, middle and last field disabled, one field per line.
+        ("#~ a=1\nb=2\n&c=3", "b=2&c=3"),
+        ("a=1\n#~ &b=2\n&c=3", "a=1&c=3"),
+        ("a=1\n&b=2\n#~ &c=3", "a=1&b=2"),
+        // A hand-edited file that kept the `&` on the first enabled field.
+        ("#~ a=1\n&b=2", "b=2"),
+        // Single-line layout: first, middle and last field disabled.
+        ("#~ a=1\nb=2&c=3", "b=2&c=3"),
+        ("a=1\n#~ &b=2\n&c=3&d=4", "a=1&c=3&d=4"),
+        ("a=1&c=3\n#~ &b=2", "a=1&c=3"),
+        // Plain comments are never sent, as in JetBrains and VS Code.
+        ("a=1\n# note\n// note\n&c=3", "a=1&c=3"),
+    ];
+    for (body, expected) in cases {
+        let req = parse(&format!("POST {{{{base}}}}/echo\n{form}{body}\n")).requests.remove(0);
+        send(&req, vars.clone(), Path::new(".")).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn disabled_multipart_parts_are_not_sent() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+    let head = "POST {{base}}/echo\nContent-Type: multipart/form-data; boundary=B\n";
+    let part = |name: &str, value: &str| format!("--B\nContent-Disposition: form-data; name=\"{name}\"\n\n{value}\n");
+    let off = |text: String| text.lines().map(|l| format!("#~ {l}").trim_end().to_string() + "\n").collect::<String>();
+    let expected = "--B\r\nContent-Disposition: form-data; name=\"b\"\r\n\r\n2\r\n--B--\r\n";
+
+    let disabled_file = "--B\nContent-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\n\
+        Content-Type: application/octet-stream\n\n< ./missing.bin\n";
+    let bodies = [
+        // Written by HttpDesk: in the header area, with `#~=`.
+        format!("{head}{}\n{}--B--\n", off(part("a", "1")).replace("#~", "#~="), part("b", "2")),
+        // Held in memory (and hand-written) inline: first, last, and a file part.
+        format!("{head}\n{}{}--B--\n", off(part("a", "1")), part("b", "2")),
+        format!("{head}\n{}{}--B--\n", part("b", "2"), off(part("c", "3"))),
+        format!("{head}\n{}{}{}--B--\n", off(part("a", "1")), part("b", "2"), off(part("c", "3"))),
+        format!("{head}\n{}{}--B--\n", part("b", "2"), off(disabled_file.to_string())),
+    ];
+    for text in bodies {
+        let req = parse(&text).requests.remove(0);
+        send(&req, vars.clone(), Path::new(".")).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{text}");
+    }
+}
+
+#[tokio::test]
 async fn redirects_timeouts_and_methods() {
     let server = MockServer::start().await;
     Mock::given(path("/old"))
