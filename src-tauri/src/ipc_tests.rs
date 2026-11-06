@@ -21,15 +21,21 @@ use tauri::webview::InvokeRequest;
 struct Harness {
     _app: tauri::App<tauri::test::MockRuntime>,
     webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
+    /// This app's settings folder; deleted when the harness is dropped.
+    cfg: tempfile::TempDir,
 }
 
 impl Harness {
     fn new() -> Self {
         let cfg = tempfile::tempdir().unwrap();
-        std::env::set_var("HTTPDESK_CONFIG_DIR", cfg.keep());
-        let app = super::with_commands(mock_builder()).build(mock_context(noop_assets())).unwrap();
+        let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
+        let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
-        Harness { _app: app, webview }
+        Harness { _app: app, webview, cfg }
+    }
+
+    fn config_dir(&self) -> std::path::PathBuf {
+        self.cfg.path().to_path_buf()
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -286,8 +292,7 @@ fn saving_keeps_the_file_mode() {
     assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
 }
 
-/// Called directly: the harness's config dir is a process-wide env var, so a
-/// parallel test could redirect `save_settings` mid-test.
+/// Called directly, so the settings file can be a symlink set up beforehand.
 #[cfg(unix)]
 #[test]
 fn settings_are_replaced_atomically_through_symlinks() {
@@ -353,4 +358,15 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     let ext = changed_paths(&rx, std::time::Duration::from_secs(2));
     assert!(ext.contains(&p("dir/b.http")), "external change after a move is still reported: {ext:?}");
     assert!(ext.contains(&p("new/inner.http")), "external change inside a moved folder is still reported: {ext:?}");
+}
+
+#[test]
+fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    h.ok("open_workspace", json!({ "path": ws.path() }));
+    let cfg = h.config_dir();
+    assert!(cfg.join("settings.json").is_file(), "settings were not written to {}", cfg.display());
+    drop(h);
+    assert!(!cfg.exists(), "{} was left behind", cfg.display());
 }
