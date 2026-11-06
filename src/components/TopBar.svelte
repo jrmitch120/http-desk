@@ -4,6 +4,7 @@
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { updates } from "../lib/updates.svelte";
 
@@ -20,7 +21,10 @@
     ]);
   }
 
-  const envNames = $derived(app.envSet?.environments.map((e) => e.name) ?? []);
+  const envOptions: SelectOption[] = $derived([
+    { value: "", label: "No environment" },
+    ...(app.envSet?.environments.map((e) => ({ value: e.name, label: e.name })) ?? []),
+  ]);
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
   // The theme menu: System / Light / Dark, the current choice checked.
@@ -63,16 +67,14 @@
 
   <div class="env" class:none={!app.envName}>
     <Icon name="globe" size={14} />
-    <select
+    <Select
       class="env-select"
+      options={envOptions}
       value={app.envName ?? ""}
-      onchange={(e) => app.selectEnvironment((e.currentTarget as HTMLSelectElement).value || null)}
-      aria-label="Active environment"
-      use:tooltip
-    >
-      <option value="">No environment</option>
-      {#each envNames as n (n)}<option value={n}>{n}</option>{/each}
-    </select>
+      onchange={(v) => app.selectEnvironment(v || null)}
+      label="Active environment"
+      tooltip="Active environment"
+    />
     <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
   </div>
 
@@ -181,15 +183,12 @@
   .env.none {
     color: var(--muted);
   }
-  .env-select {
+  .env :global(.env-select) {
     height: 28px;
-    border: none;
+    border-color: transparent;
     background: transparent;
-    color: var(--text);
-    outline: none;
     padding: 0 6px;
     min-width: 150px;
     max-width: 220px;
-    cursor: pointer;
   }
 </style>

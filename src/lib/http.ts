@@ -9,6 +9,16 @@ export function methodClass(method: string): string {
   return STANDARD_METHODS.includes(m) ? `m-${m.toLowerCase()}` : "m-custom";
 }
 
+/**
+ * The method a typed token stands for (uppercased), or null when it isn't one.
+ * It must start with a letter, then letters, digits, `-` or `_`: the `.http`
+ * parser only reads such tokens back as a method.
+ */
+export function customMethod(text: string): string | null {
+  const t = text.trim();
+  return /^[A-Za-z][A-Za-z0-9_-]*$/.test(t) ? t.toUpperCase() : null;
+}
+
 export function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
