@@ -3,7 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, newRequest, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
 
 export interface Doc {
@@ -438,7 +438,7 @@ class AppStore {
 
   async createFile(dir: string) {
     const name = await this.prompt("New .http file", "requests.http", "requests.http", true);
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     const file = name.match(/\.(http|rest)$/i) ? name : `${name}.http`;
     const path = joinPath(dir, file);
     const content = "### New request\nGET https://httpbin.org/get\nAccept: application/json\n";
@@ -455,7 +455,7 @@ class AppStore {
 
   async createFolder(dir: string) {
     const name = await this.prompt("New folder", "", "folder name");
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     try {
       await api.createDir(joinPath(dir, name));
       this.expanded[dir] = true;
@@ -466,9 +466,21 @@ class AppStore {
   }
 
   async renamePath(path: string) {
-    const name = await this.prompt("Rename", basename(path), undefined, true);
-    if (!name || name === basename(path)) return;
+    const old = basename(path);
+    const typed = await this.prompt("Rename", old, undefined, true);
+    if (!typed || !this.validName(typed)) return;
+    // A request file keeps its extension when the new name leaves it out.
+    const ext = old.match(/\.(http|rest)$/i)?.[0];
+    const name = ext && !/\.(http|rest)$/i.test(typed) ? typed + ext : typed;
+    if (name === old) return;
     await this.movePath(path, joinPath(dirname(path), name));
+  }
+
+  /** Shows why a typed file/folder name is invalid; true if it's fine. */
+  private validName(name: string): boolean {
+    const error = nameError(name);
+    if (error) this.toast("error", error);
+    return !error;
   }
 
   async movePath(from: string, to: string) {

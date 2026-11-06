@@ -344,6 +344,11 @@ export function dirname(path: string): string {
   return i <= 0 ? path : path.slice(0, i);
 }
 
+/** Why `name` can't be used as a file or folder name, or null if it can. */
+export function nameError(name: string): string | null {
+  return /[\\/]/.test(name) || name === "." || name === ".." ? "Names can't contain / or \\, or be . or .." : null;
+}
+
 export function joinPath(dir: string, name: string): string {
   const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
   return dir.endsWith(sep) ? dir + name : dir + sep + name;
