@@ -195,7 +195,7 @@ fn read_http_file(state: State<'_, AppState>, path: PathBuf) -> CmdResult<HttpFi
 #[tauri::command]
 fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> CmdResult<HttpFile> {
     let path = state.confine_entry(&path)?;
-    let text = httpdesk_core::serialize(&file);
+    let text = httpdesk_core::try_serialize(&file).map_err(err)?;
     state.write_file(&path, &text)?;
     Ok(httpdesk_core::parse(&text))
 }
@@ -444,9 +444,11 @@ fn openapi_generate_blocking(
         return Ok(report);
     }
 
+    // Serialize everything first so a refused file leaves nothing half-written.
+    let texts = output.files.iter().map(|g| httpdesk_core::try_serialize(&g.file).map_err(err)).collect::<CmdResult<Vec<_>>>()?;
     std::fs::create_dir_all(&output_dir).map_err(err)?;
-    for (gen, path) in output.files.iter().zip(&report.files) {
-        state.write_file(path, &httpdesk_core::serialize(&gen.file))?;
+    for (text, path) in texts.iter().zip(&report.files) {
+        state.write_file(path, text)?;
     }
     for e in &output.environments {
         env::merge_variables(&env_dir, &e.name, &e.variables, false).map_err(err)?;

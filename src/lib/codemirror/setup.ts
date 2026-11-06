@@ -7,8 +7,8 @@ import { html } from "@codemirror/lang-html";
 import { xml } from "@codemirror/lang-xml";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { EditorState, type Extension } from "@codemirror/state";
-import { VAR_RE } from "../http";
+import { EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { bodySyntaxWarnings, VAR_RE } from "../http";
 import {
   Decoration,
   drawSelection,
@@ -204,6 +204,27 @@ export function variableExtensions(provider: VarProvider): Extension {
     autocompletion({ override: [varCompletion(provider)], icons: false }),
   ];
 }
+
+// ---------------------------------------------------------------- body syntax warnings
+
+/** Highlights body lines that `.http` syntax reads as a separator or handler (see `bodySyntaxWarnings`). */
+export const bodySyntaxHighlight: Extension = [
+  EditorView.decorations.compute(["doc"], (state) => {
+    const b = new RangeSetBuilder<Decoration>();
+    for (const w of bodySyntaxWarnings(state.doc.toString())) {
+      const line = state.doc.line(w.line);
+      b.add(line.from, line.from, Decoration.line({ class: "cm-syntax-warning", attributes: { title: w.message } }));
+    }
+    return b.finish();
+  }),
+  EditorView.theme({
+    ".cm-syntax-warning": {
+      backgroundColor: "color-mix(in srgb, var(--warning) 14%, transparent)",
+      textDecoration: "underline wavy color-mix(in srgb, var(--warning) 70%, transparent)",
+      textUnderlineOffset: "3px",
+    },
+  }),
+];
 
 // ---------------------------------------------------------------- presets
 

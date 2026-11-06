@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, Prec } from "@codemirror/state";
+  import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
   import { foldAll, unfoldAll } from "@codemirror/language";
@@ -17,8 +17,10 @@
     gutters?: boolean;
     /** Runs on Mod-Enter instead of the default (insert a blank line). */
     onsend?: () => void;
+    /** Extra extensions, fixed at mount. */
+    extensions?: Extension;
   }
-  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend }: Props = $props();
+  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
 
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);
@@ -36,6 +38,7 @@
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
           Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => (onsend ? (onsend(), true) : false) }])),
+          extensions,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
           }),

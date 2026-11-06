@@ -8,6 +8,7 @@ use super::{
     OperationInfo, ServerInfo,
 };
 use crate::model::*;
+use crate::parser;
 
 pub const HTTP_METHODS: &[&str] = &["get", "put", "post", "delete", "options", "head", "patch", "trace"];
 const BOUNDARY: &str = "WebAppBoundary";
@@ -612,7 +613,17 @@ fn build_body<'a>(ctx: &Ctx<'a>, op: &'a Value) -> Option<(String, Body)> {
             (ct, BodyMode::Raw, text)
         }
     };
-    Some((content_type, Body { enabled: true, mode, text }))
+    Some((content_type, Body { enabled: true, mode, text: indent_http_syntax(&text) }))
+}
+
+/// Indents example lines that `.http` syntax would read as a request separator
+/// or response handler, so the generated request stays one request.
+fn indent_http_syntax(text: &str) -> String {
+    let collides = |l: &str| parser::is_separator(l) || parser::is_handler_start(l);
+    if !text.lines().any(collides) {
+        return text.to_string();
+    }
+    text.split('\n').map(|l| if collides(l) { format!(" {l}") } else { l.to_string() }).collect::<Vec<_>>().join("\n")
 }
 
 fn extension_for(media_type: &str) -> &'static str {

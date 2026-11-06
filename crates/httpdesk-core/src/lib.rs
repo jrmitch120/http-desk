@@ -13,4 +13,4 @@ pub mod workspace;
 
 pub use model::*;
 pub use parser::parse;
-pub use serializer::{render_request, serialize};
+pub use serializer::{render_request, serialize, try_serialize, InvalidField};

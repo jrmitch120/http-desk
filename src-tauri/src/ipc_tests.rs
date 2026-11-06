@@ -311,6 +311,22 @@ fn saving_through_a_symlink_updates_the_target_and_keeps_the_link() {
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "### R\nGET https://new\n");
 }
 
+#[test]
+fn saving_refuses_a_line_break_in_a_header_value_and_leaves_the_file_alone() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = ws.path().canonicalize().unwrap();
+    let path = root.join("a.http");
+    std::fs::write(&path, "### R\nGET https://x\nAccept: */*\n").unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let mut file = h.ok("read_http_file", json!({ "path": path }));
+    file["requests"][0]["headers"]["items"][0]["value"] = json!("*/*\nX-Injected: 1");
+    let err = h.call("save_http_file", json!({ "path": path, "file": file })).unwrap_err();
+    assert_eq!(err, json!("Request \"R\": the value of header \"Accept\" contains a line break"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "### R\nGET https://x\nAccept: */*\n");
+}
+
 #[cfg(unix)]
 #[test]
 fn saving_keeps_the_file_mode() {

@@ -16,6 +16,9 @@ import {
   findHeader,
   formatBulk,
   parseBulk,
+  headerNameError,
+  variableNameError,
+  bodySyntaxWarnings,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -277,5 +280,36 @@ describe("misc", () => {
   it("computes relative paths", () => {
     expect(relativePath("/w/api", "/w/api/files/a.json")).toBe("./files/a.json");
     expect(relativePath("/w/api", "/w/data/a.json")).toBe("../data/a.json");
+  });
+});
+
+describe("field safety", () => {
+  it("accepts header names that read back as headers", () => {
+    for (const n of ["Accept", "X-Request-Id", "{{headerName}}", "X-Ok!", ""]) expect(headerNameError(n)).toBeNull();
+  });
+
+  it("rejects header names that would read back as something else", () => {
+    expect(headerNameError("X\nEvil")).toBe("Header names can't contain line breaks");
+    expect(headerNameError("X Trace")).toBe("Header names can't contain spaces");
+    expect(headerNameError("X:Trace")).toBe("Header names can't contain ':'");
+    expect(headerNameError("#Trace")).toBe("Header names can't start with '#'");
+    expect(headerNameError("//Trace")).toBe("Header names can't start with '//'");
+    for (const p of ["~", "|", "&", "?"]) expect(headerNameError(`${p}x`)).toBe(`Header names can't start with '${p}'`);
+  });
+
+  it("validates variable names like the parser", () => {
+    for (const n of ["host", "$pet.id-2_x", "café", "v2", ""]) expect(variableNameError(n)).toBeNull();
+    for (const n of ["base url", "a=b", "a\nb", "{{x}}"]) expect(variableNameError(n)).toBe("Variable names can only use letters, digits, _, -, . and $");
+  });
+
+  it("warns about body lines that .http syntax reads as a separator or handler", () => {
+    const text = ["Intro", "### Heading", "  ### indented is fine", ">> out.txt", "> {% client.log(1) %}", "> check.js", "  > {% indented %}", "> quoted text", "end"].join("\n");
+    expect(bodySyntaxWarnings(text)).toEqual([
+      { line: 2, message: "Line 2 starts with ###, so it will be read as the start of a new request." },
+      { line: 4, message: "Line 4 starts with >>, so it and the lines after it will be read as a response handler." },
+      { line: 5, message: "Line 5 starts with >, so it and the lines after it will be read as a response handler." },
+      { line: 6, message: "Line 6 starts with >, so it and the lines after it will be read as a response handler." },
+    ]);
+    expect(bodySyntaxWarnings('{\n  "a": 1\n}')).toEqual([]);
   });
 });
