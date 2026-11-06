@@ -385,15 +385,15 @@ class AppStore {
           }
         }
       }
-      if (file.requests.length === old.file.requests.length) {
-        file.requests.forEach((r, i) => {
-          const o = old.file.requests[i];
-          if (!r._key && unused.has(o._key!)) {
-            r._key = o._key;
-            unused.delete(o._key!);
-          }
-        });
-      }
+      // Then by position: a still-unmatched request takes the one now at its
+      // index, unless that one was already claimed.
+      old.file.requests.forEach((o, i) => {
+        const r = file.requests[i];
+        if (r && !r._key && unused.has(o._key!)) {
+          r._key = o._key;
+          unused.delete(o._key!);
+        }
+      });
       const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
       orphans = [...unused.values()].filter((r) => held.has(r._key!));
     }

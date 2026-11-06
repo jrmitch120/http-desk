@@ -231,6 +231,32 @@ describe("Orphaned tabs after reload", () => {
     expect([list, create, get].map((t) => app.isOrphaned(t))).toEqual([false, false, false]);
   });
 
+  it("falls back to position when requests were also added or removed", async () => {
+    const [list, get] = await openAll(fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+
+    // Another editor renamed Get in place and added a request after it.
+    readHttpFile.mockResolvedValueOnce(
+      fileOf(["GET", "List", "https://x/books"], ["GET", "Fetch", "https://x/books/{id}"], ["DELETE", "Remove", "https://x/books/1"]),
+    );
+    await app.reload(PATH);
+
+    expect(app.tabs.map((t) => app.requestFor(t)?.name)).toEqual(["List", "Fetch"]);
+    expect([list, get].map((t) => app.isOrphaned(t))).toEqual([false, false]);
+  });
+
+  it("doesn't fall back to a position whose request another tab already holds", async () => {
+    const [, create, get] = await openAll(
+      fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]),
+    );
+
+    // Create was removed, so Get moved up into its position; then Get was renamed.
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/{id}"]));
+    await app.reload(PATH);
+
+    expect(app.requestFor(get)?.url).toBe("https://x/books/{id}");
+    expect(app.isOrphaned(create)).toBe(true);
+  });
+
   it("keeps an unmatched tab open as an Orphaned tab with its edits and last response", async () => {
     const [list, remove] = await openAll(fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]));
     app.requestFor(remove)!.headers.items.push({ enabled: true, name: "X-Reason", value: "cleanup" });
