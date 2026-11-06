@@ -21,6 +21,8 @@ import {
   variableNameError,
   bodySyntaxWarnings,
   customMethod,
+  type FormField,
+  type MultipartPart,
 } from "./http";
 
 describe("URL ⇄ query params", () => {
@@ -254,6 +256,28 @@ describe("bulk edit", () => {
     // the bulk edit started from, so a half-typed name doesn't lose the doc.
     expect(parseBulk("Acc: application/json", ":", headers)[0].description).toBeUndefined();
     expect(parseBulk("Accept: application/json", ":", headers)[0].description).toBe("What we read");
+  });
+
+  it("works on any row type, carrying the fields the text can't show over by name", () => {
+    const parts: MultipartPart[] = [
+      { name: "avatar", kind: "file", value: "./cat.png", contentType: "image/png" },
+      { name: "note", kind: "text", value: "hi" },
+    ];
+    expect(formatBulk(parts, ":", false)).toBe("avatar: ./cat.png\nnote: hi");
+    const blank = (): MultipartPart => ({ name: "", kind: "text", value: "" });
+    expect(parseBulk("note: hello\navatar: ./dog.png\nextra: 1", ":", parts, { blank, carry: ["kind", "contentType"] })).toEqual([
+      { name: "note", kind: "text", value: "hello" },
+      { name: "avatar", kind: "file", value: "./dog.png", contentType: "image/png" },
+      { name: "extra", kind: "text", value: "1" },
+    ]);
+  });
+
+  it("reads // as disabled only for rows that can be disabled", () => {
+    const blank = (): FormField => ({ name: "", value: "" });
+    expect(parseBulk("//a=1\nb=2", "=", [], { blank, carry: [] })).toEqual([
+      { name: "//a", value: "1" },
+      { name: "b", value: "2" },
+    ]);
   });
 });
 
