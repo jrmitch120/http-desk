@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod confine;
+mod self_writes;
+use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -57,8 +59,8 @@ impl Default for AppSettings {
 struct AppState {
     root: Mutex<Option<PathBuf>>,
     watcher: Mutex<Option<Debouncer<RecommendedWatcher>>>,
-    /// Content hash of files we wrote, to ignore our own watcher events.
-    written: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    /// What our own file operations left on disk, to ignore their watcher events.
+    self_writes: SelfWrites,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Recent response bodies by response id (for "save to file").
     bodies: Mutex<VecDeque<(String, Vec<u8>)>>,
@@ -72,7 +74,7 @@ impl AppState {
     }
 
     fn write_file(&self, path: &Path, text: &str) -> CmdResult<()> {
-        self.written.lock().unwrap().insert(path.to_path_buf(), workspace::content_hash(text.as_bytes()));
+        self.self_writes.writing(path, text.as_bytes());
         workspace::write_atomic(path, text.as_bytes()).map_err(|e| format!("Could not write {}: {e}", path.display()))
     }
 }
@@ -85,9 +87,13 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
 
 fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) {
     if let Some(path) = settings_path(app) {
-        let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let _ = std::fs::write(path, serde_json::to_string_pretty(settings).unwrap());
+        let _ = write_settings(&path, settings);
     }
+}
+
+/// Atomic, so a crash mid-save can't leave a truncated file that resets every setting.
+fn write_settings(path: &Path, settings: &AppSettings) -> std::io::Result<()> {
+    workspace::write_atomic(path, serde_json::to_string_pretty(settings).unwrap().as_bytes())
 }
 
 // ------------------------------------------------------------------ workspace
@@ -113,7 +119,7 @@ fn is_watched_noise(path: &Path) -> bool {
 
 fn start_watcher<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, root: &Path) -> CmdResult<()> {
     let app = app.clone();
-    let written = state.written.clone();
+    let self_writes = state.self_writes.clone();
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: DebounceEventResult| {
         let Ok(events) = res else { return };
         let mut paths: Vec<PathBuf> = Vec::new();
@@ -121,13 +127,8 @@ fn start_watcher<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, root: 
             if is_watched_noise(&ev.path) || paths.contains(&ev.path) {
                 continue;
             }
-            // Drop events for content we wrote ourselves.
-            if let Ok(bytes) = std::fs::read(&ev.path) {
-                let mut map = written.lock().unwrap();
-                if map.get(&ev.path) == Some(&workspace::content_hash(&bytes)) {
-                    continue;
-                }
-                map.remove(&ev.path);
+            if self_writes.is_own(&ev.path) {
+                continue;
             }
             paths.push(ev.path);
         }
@@ -208,6 +209,7 @@ fn create_dir(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
+    state.self_writes.creating_dir(&path);
     std::fs::create_dir_all(&path).map_err(err)
 }
 
@@ -220,12 +222,14 @@ fn rename_path(state: State<'_, AppState>, from: PathBuf, to: PathBuf) -> CmdRes
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(err)?;
     }
+    state.self_writes.moving(&from, &to);
     std::fs::rename(&from, &to).map_err(|e| format!("Could not move {}: {e}", from.display()))
 }
 
 #[tauri::command]
 fn delete_path(state: State<'_, AppState>, path: PathBuf) -> CmdResult<()> {
     let path = state.confine_entry(&path)?;
+    state.self_writes.removing(&path);
     trash::delete(&path).or_else(|_| {
         if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }.map_err(err)
     })
@@ -246,13 +250,10 @@ fn load_environments(state: State<'_, AppState>) -> CmdResult<EnvironmentSet> {
 #[tauri::command]
 fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResult<SaveReport> {
     let root = state.root()?;
-    // Pre-register hashes is not possible before serialization; mark both env files after saving.
+    // The core serializes, so the bytes are only known afterwards: mark both env files after saving.
     let report = env::save(&root, &set).map_err(err)?;
     for name in [env::ENV_FILE, env::PRIVATE_ENV_FILE] {
-        let p = root.join(name);
-        if let Ok(bytes) = std::fs::read(&p) {
-            state.written.lock().unwrap().insert(p, workspace::content_hash(&bytes));
-        }
+        state.self_writes.wrote(&root.join(name));
     }
     Ok(report)
 }

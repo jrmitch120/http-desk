@@ -4,15 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath } = vi.hoisted(() => ({
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists } = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
   saveHttpFile: vi.fn(),
   createFile: vi.fn(),
   createDir: vi.fn(),
   renamePath: vi.fn(),
+  pathExists: vi.fn(),
 }));
 vi.mock("./api", () => ({
-  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath },
+  api: { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists },
   errorMessage: (e: unknown) => String(e),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
@@ -46,7 +47,9 @@ async function openAll(f: HttpFile) {
 }
 
 beforeEach(() => {
-  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir, renamePath]) fn.mockReset();
+  for (const fn of [readHttpFile, saveHttpFile, createFile, createDir]) fn.mockReset();
+  renamePath.mockReset().mockResolvedValue(undefined);
+  pathExists.mockReset().mockResolvedValue(true);
   app.dialog = null;
   app.toasts = [];
   app.docs = {};
@@ -146,6 +149,39 @@ describe("renamePath", () => {
   it("allows case-only renames", async () => {
     await answerPrompt(app.renamePath("/ws/api.http"), "API.http");
     expect(renamePath).toHaveBeenCalledWith("/ws/api.http", "/ws/API.http");
+  });
+});
+
+describe("watcher events", () => {
+  const MOVED = "/ws/api/library.http";
+
+  async function openAndEdit() {
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.openRequest(PATH, { index: 0 });
+    app.requestFor(app.tabs[0])!.url = "https://example.com/edited";
+  }
+
+  it("shows no banner when a dirty file renamed inside the app still holds what was loaded", async () => {
+    await openAndEdit();
+    await app.movePath(PATH, MOVED);
+
+    // A late event for our own rename: the disk still has the loaded content.
+    readHttpFile.mockResolvedValueOnce(file("List", "Create"));
+    await app.onExternalChange([PATH, MOVED]);
+
+    expect(app.docs[MOVED].externalChange).toBe(false);
+    expect(app.tabs[0].path).toBe(MOVED);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
+  });
+
+  it("still shows the banner when another editor changed a dirty file", async () => {
+    await openAndEdit();
+
+    readHttpFile.mockResolvedValueOnce(file("List", "Create", "Delete"));
+    await app.onExternalChange([PATH]);
+
+    expect(app.docs[PATH].externalChange).toBe(true);
+    expect(app.requestFor(app.tabs[0])?.url).toBe("https://example.com/edited");
   });
 });
 
