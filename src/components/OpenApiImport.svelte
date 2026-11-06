@@ -3,9 +3,11 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { SvelteSet } from "svelte/reactivity";
   import { api, errorMessage } from "../lib/api";
-  import { joinPath, methodClass, slugify } from "../lib/http";
+  import { joinPath, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
@@ -194,7 +196,7 @@
         </label>
       {/if}
       {#if loadError}
-        <div class="banner error load-error"><Icon name="alert" /><span class="selectable">{loadError}</span></div>
+        <Banner severity="error" inline><span class="selectable">{loadError}</span></Banner>
       {/if}
     </div>
   {:else if summary}
@@ -202,8 +204,8 @@
       <div class="spec-head">
         <div class="spec-title">
           <strong>{summary.title}</strong>
-          <span class="pill">v{summary.version}</span>
-          <span class="pill">OpenAPI {summary.openapiVersion}</span>
+          <Badge size="md">v{summary.version}</Badge>
+          <Badge size="md">OpenAPI {summary.openapiVersion}</Badge>
         </div>
         {#if summary.servers.length}
           <div class="servers muted">
@@ -214,18 +216,17 @@
         {/if}
       </div>
       {#if summary.warnings.length}
-        <div class="banner warning warn">
+        <Banner severity="warning">
           <button class="warn-toggle" onclick={() => (showWarnings = !showWarnings)}>
-            <Icon name="alert" />
             {summary.warnings.length} warning{summary.warnings.length === 1 ? "" : "s"} while reading the specification
             <Icon name={showWarnings ? "chevron-down" : "chevron-right"} size={13} />
           </button>
           {#if showWarnings}
-            <ul class="selectable">
+            <ul class="warn-list selectable">
               {#each summary.warnings as w, i (i)}<li>{w}</li>{/each}
             </ul>
           {/if}
-        </div>
+        </Banner>
       {/if}
 
       <div class="body">
@@ -261,7 +262,7 @@
                 {#if !collapsed[g.name]}
                   {#each g.ops as op (op.id)}
                     <Checkbox class="op{op.deprecated ? ' deprecated' : ''}" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)}>
-                      <span class="method-badge {methodClass(op.method)}">{op.method}</span>
+                      <Badge method={op.method} />
                       <span class="path mono ellipsis" title={op.path}>{op.path}</span>
                       <span class="summary muted ellipsis" title={op.summary ?? op.operationId ?? ""}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
@@ -353,11 +354,6 @@
   .grow {
     flex: 1;
   }
-  .load-error {
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    align-items: flex-start;
-  }
   .select {
     display: flex;
     flex-direction: column;
@@ -374,13 +370,6 @@
     gap: 8px;
     font-size: 14px;
   }
-  .pill {
-    font-size: 11px;
-    padding: 1px 7px;
-    border-radius: 10px;
-    background: var(--panel-3);
-    color: var(--text-2);
-  }
   .servers {
     display: flex;
     flex-wrap: wrap;
@@ -390,10 +379,6 @@
   }
   .desc {
     font-family: var(--font);
-  }
-  .warn {
-    flex-direction: column;
-    align-items: stretch;
   }
   .warn-toggle {
     display: flex;
@@ -406,9 +391,9 @@
     cursor: pointer;
     font-size: 12px;
   }
-  .warn ul {
+  .warn-list {
     margin: 6px 0 2px;
-    padding-left: 22px;
+    padding-left: 16px;
     max-height: 90px;
     overflow: auto;
     color: var(--text-2);

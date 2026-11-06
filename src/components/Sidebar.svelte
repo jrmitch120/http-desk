@@ -1,9 +1,10 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
-  import { basename, joinPath, methodClass } from "../lib/http";
+  import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
 
   let query = $state("");
@@ -154,7 +155,7 @@
             tabindex="-1"
             onclick={() => app.openSearchHit(h)}
           >
-            <span class="method-badge {methodClass(h.method)}">{h.method.slice(0, 6)}</span>
+            <Badge method={h.method}>{h.method.slice(0, 6)}</Badge>
             <span class="hit-text">
               <span class="ellipsis">{h.name}</span>
               <span class="file ellipsis">{basename(h.path)} · {h.url}</span>

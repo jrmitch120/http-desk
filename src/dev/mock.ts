@@ -93,6 +93,8 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
+// `?sendError=1`: every send fails as if the server were unreachable.
+const sendError = new URLSearchParams(location.search).get("sendError") === "1";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -161,6 +163,7 @@ mockIPC(
       case "send_request": {
         sent.push(clone(args.request));
         await delay(450);
+        if (sendError) throw "Connection refused (os error 61)";
         const r = args.request;
         if (r.url.includes("png")) {
           return {

@@ -8,9 +8,11 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration, prettyJson, prettyXml, statusClass } from "../lib/http";
+  import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
+  import Badge from "./Badge.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import SegmentedControl from "./SegmentedControl.svelte";
 
@@ -133,37 +135,32 @@
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
-        <span class="pill cancelled">Cancelled</span>
+        <Badge size="md">Cancelled</Badge>
       {:else if res}
-        {#if run.cancelled}<span class="pill cancelled" title="The last send was cancelled; this is the response before it">Cancelled</span>{/if}
-        <span class="pill {statusClass(res.status)}" title={statusTitle}>{res.status} {res.statusText}</span>
+        {#if run.cancelled}<span class="tip" title="The last send was cancelled; this is the response before it"><Badge size="md">Cancelled</Badge></span>{/if}
+        <span class="tip" title={statusTitle}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
         <span class="metric" title={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" title={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
         <button class="icon-btn" title="Copy body" disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" title="Save body to file" onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
-        <span class="pill s-5xx">Error</span>
+        <Badge size="md" tone="danger">Error</Badge>
       {/if}
     </div>
 
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <div class="error">
-        <Icon name="alert" size={22} />
-        <div>
-          <div class="err-title">Could not send request</div>
-          <div class="err-msg selectable mono">{run.error}</div>
-          <div class="muted small">Check the URL, the selected environment, and that the server is reachable.</div>
-        </div>
-      </div>
+      <Banner severity="error" inline heading="Could not send request" class="send-error">
+        <div class="err-msg selectable mono">{run.error}</div>
+        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
+      </Banner>
     {:else if res}
       {#if res.warnings.length || res.truncated}
-        <div class="banner warning">
-          <Icon name="alert" />
+        <Banner severity="warning">
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
-        </div>
+        </Banner>
       {/if}
       <nav class="subtabs">
         <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
@@ -262,16 +259,9 @@
     font-weight: 600;
     font-size: 12.5px;
   }
-  .pill {
-    font-weight: 650;
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: color-mix(in srgb, currentColor 13%, transparent);
-  }
-  .pill.cancelled {
-    color: var(--muted);
+  /* Holds a badge's tooltip. */
+  .tip {
+    display: flex;
   }
   .metric {
     font-size: 12px;
@@ -301,24 +291,12 @@
       transform: rotate(360deg);
     }
   }
-  .error {
-    display: flex;
-    gap: 14px;
+  .viewer :global(.send-error) {
     margin: 18px;
-    padding: 16px;
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    background: color-mix(in srgb, var(--danger) 8%, transparent);
-    color: var(--danger);
-  }
-  .err-title {
-    font-weight: 600;
-    margin-bottom: 6px;
   }
   .err-msg {
     color: var(--text);
-    font-size: 12px;
-    margin-bottom: 8px;
+    margin: 4px 0 6px;
     word-break: break-word;
   }
   .toolbar {
