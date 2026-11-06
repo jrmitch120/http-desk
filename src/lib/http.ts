@@ -228,7 +228,8 @@ export interface BulkRows<R extends BulkRow> {
   carry: (keyof R)[];
 }
 
-const KEY_VALUE_ROWS: BulkRows<KeyValue> = { blank: () => ({ enabled: true, name: "", value: "" }), carry: ["description"] };
+/** Rows of plain `KeyValue`s (params, headers): enabled when new, descriptions carried. */
+export const KEY_VALUE_ROWS: BulkRows<KeyValue> = { blank: () => ({ enabled: true, name: "", value: "" }), carry: ["description"] };
 
 /** Rows as bulk-edit text: one `name<sep> value` per line, `//` = disabled. */
 export function formatBulk(items: BulkRow[], separator: string, toggles: boolean): string {

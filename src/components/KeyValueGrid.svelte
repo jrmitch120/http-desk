@@ -42,8 +42,7 @@
   // becomes the new row, so its inputs (and focus) survive the change.
   import { untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import type { KeyValue } from "../lib/types";
-  import { formatBulk, parseBulk } from "../lib/http";
+  import { formatBulk, KEY_VALUE_ROWS, parseBulk } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Icon from "./Icon.svelte";
@@ -78,8 +77,8 @@
   let {
     items = $bindable(),
     columns = ["enable", "name", "value", "delete"],
-    blank = () => ({ enabled: true, name: "", value: "" }) as KeyValue as unknown as R,
-    carry = ["description"] as (keyof R)[],
+    blank = KEY_VALUE_ROWS.blank as unknown as () => R,
+    carry = KEY_VALUE_ROWS.carry as (keyof R)[],
     label,
     sectionEnabled = true,
     namePlaceholder = "Key",
