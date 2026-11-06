@@ -2,7 +2,7 @@
 // with a lock column that makes a variable a Secret. The mocked `local`
 // environment has a Secret (`token`).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp } from "./helpers";
+import { mockState, openApp } from "./helpers";
 
 const warning = /http-client\.private\.env\.json is not ignored by git/;
 
@@ -92,8 +92,7 @@ test("variables have no bulk edit, which would show Secrets as plain text", asyn
   await expect(grid.getByRole("button", { name: "Bulk edit" })).toHaveCount(0);
 });
 
-type EnvFiles = { shared: Record<string, Record<string, unknown>>; private: Record<string, Record<string, unknown>> };
-const envFiles = (page: Page) => page.evaluate(() => (window as unknown as { __mock: { envFiles: EnvFiles } }).__mock.envFiles);
+const envFiles = (page: Page) => mockState(page, "envFiles");
 
 test("the lock column makes a variable a Secret, saved only to the private file", async ({ page }) => {
   const grid = await variables(page);

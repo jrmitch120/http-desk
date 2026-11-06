@@ -14,9 +14,19 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 
 use crate::exec::TlsReason;
 
+/// Whether reqwest sends requests for `url` through a proxy. It reads the
+/// proxy environment variables (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and
+/// NO_PROXY, either case) with this same hyper-util matcher. Behind a proxy
+/// the server may not be reachable directly, and a direct connection could
+/// reach a different server, so the certificate isn't fetched again.
+pub(crate) fn through_proxy(url: &url::Url) -> bool {
+    let Ok(uri) = url.as_str().parse::<http::Uri>() else { return false };
+    hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri).is_some()
+}
+
 /// Why `host:port`'s certificate is untrustworthy, when the certificate alone
 /// tells: it has expired, or it's self-signed. `None` when it doesn't, or when
-/// it can't be fetched within `timeout` (e.g. a proxy sits in between).
+/// it can't be fetched within `timeout`.
 pub(crate) async fn certificate_reason(host: &str, port: u16, timeout: Duration) -> Option<TlsReason> {
     let leaf = tokio::time::timeout(timeout, fetch_certificate(host, port)).await.ok().flatten()?;
     judge(&leaf)

@@ -38,6 +38,7 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 | A number with limits and a unit | [NumberField](#numberfield) |
 | Free text, paths, or values with their own syntax (`30s`) | [`.input`](#buttons-inputs-and-links) |
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
+| A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A short label next to an item (method, status, OFF, version) | [Badge](#badge) |
@@ -185,6 +186,20 @@ spinners.
 - Suggestions are free text: the user can type anything. If only listed values are
   allowed, use a Select.
 
+### FilterField
+
+`FilterField.svelte`. A text field with a filter icon inside it, for narrowing what a
+panel shows: the Headers tab's name filter and the Body tab's JSONPath filter bar.
+
+- Props: `value`, `oninput(value)` (the owner keeps the value and decides what typing
+  does), `label` (accessible name), `placeholder?`, `mono?` (for expressions),
+  `invalid?` with `describedby?` (a danger border, and the id of the inline error),
+  `suggest?` (`use:suggestions` options, making it a combobox), `onfocus?`, `onkeydown?`.
+- Height `--control-h-sm`. It fills the space its owner gives it (`flex: 1`), so the
+  owner sets the width by layout, not a literal size.
+- Escape doesn't clear it by itself; an owner that wants that (the JSONPath bar) does it
+  in `onkeydown`.
+
 ### Buttons, inputs and links
 
 Global classes in `src/app.css`, not components:
@@ -197,9 +212,14 @@ Global classes in `src/app.css`, not components:
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
-  toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its accessible
-  name is the value. The text stays selectable; the click handler skips the copy when
-  the click ended a drag that selected part of it.
+  toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
+  accessible name is the value. The click is the `use:copyable={{ value, copied }}`
+  action (`src/lib/copyable.ts`; `copied` is the toast). The text stays selectable; the
+  action skips the copy when the click ended a drag that selected part of it.
+- `.data-table`: the scrolling wrapper of a table of rows in a response tab (headers,
+  cookies, the sent request). Inside it, `td.k` is a bold name column sized to its
+  content, `td.v` a monospace value column, and `th` heads columns where a table has
+  them.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
   Focus shows `--focus-ring`.
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.

@@ -53,16 +53,19 @@ pub struct JsonDocument {
 
 impl JsonDocument {
     /// Parses `text` (a leading byte order mark is ignored). Fails for invalid
-    /// JSON, and for nesting deeper than serde_json's limit of 128 levels.
+    /// JSON, and for nesting deeper than serde_json's limit of 128 levels
+    /// (which the formatter, allowing 1000, would still lay out).
     pub fn parse(text: &str) -> Result<Self, FilterError> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let root = serde_json::from_str(text).map_err(|e| FilterError(format!("The body isn't valid JSON: {e}")))?;
+        let root = serde_json::from_str(text).map_err(|e| {
+            // serde_json has no error category for its depth limit, only this message.
+            if e.to_string().starts_with("recursion limit exceeded") {
+                FilterError("This body is nested too deeply to filter".into())
+            } else {
+                FilterError(format!("The body isn't valid JSON: {e}"))
+            }
+        })?;
         Ok(JsonDocument { text: text.to_owned(), root, shape: OnceLock::new() })
-    }
-
-    /// The parsed body, for summaries built on top of the document.
-    pub fn value(&self) -> &Value {
-        &self.root
     }
 
     /// The keys reachable at each place in the body, for key completion.

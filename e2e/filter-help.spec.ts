@@ -2,7 +2,7 @@
 // shape summary of the body (`response_shape`, fetched once per response), and
 // "Copy path" in the body editor's context menu.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests } from "./helpers";
+import { mockState, openApp, openRequest, sentRequests } from "./helpers";
 
 async function send(page: Page): Promise<void> {
   await page.keyboard.press("ControlOrMeta+Enter");
@@ -12,7 +12,7 @@ async function send(page: Page): Promise<void> {
 const filterBox = (page: Page) => page.getByRole("combobox", { name: "Filter with JSONPath" });
 const keyList = (page: Page) => page.getByRole("listbox", { name: "Key suggestions" });
 const bodyLines = (page: Page) => page.locator(".body .cm-content .cm-line");
-const shapeRequests = (page: Page) => page.evaluate(() => (window as unknown as { __mock: { shapeRequests: string[] } }).__mock.shapeRequests);
+const shapeRequests = (page: Page) => mockState(page, "shapeRequests");
 const copied = (page: Page) => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied);
 
 /** Records clipboard writes instead of touching the real clipboard. */

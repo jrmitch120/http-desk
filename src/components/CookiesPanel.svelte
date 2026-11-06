@@ -2,11 +2,11 @@
   The response viewer's Cookies tab: every cookie the response set, redirect
   hops included, one column per attribute, with click-to-copy values. A
   Set-Cookie that didn't parse is listed raw with the reason. Display only:
-  nothing here is sent back on later requests.
+  nothing here is sent back on later requests. With no cookies it says so.
 -->
 <script lang="ts">
-  import { app } from "../lib/store.svelte";
   import { cookieExpiry } from "../lib/cookies";
+  import { copyable } from "../lib/copyable";
   import type { ResponseCookie } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
@@ -24,16 +24,12 @@
     }
   }
 
-  /** Copies a value, unless the click ended a drag that selected part of it (the user copies that themselves). */
-  async function copyValue(e: MouseEvent, value: string) {
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed && (e.currentTarget as Node).contains(sel.anchorNode)) return;
-    await navigator.clipboard.writeText(value);
-    app.toast("success", "Cookie value copied");
-  }
 </script>
 
-<div class="table-wrap">
+{#if cookies.length === 0}
+  <div class="empty-state small">This response set no cookies.</div>
+{:else}
+<div class="data-table">
   <table aria-label="Response cookies">
     <thead>
       <tr>{#each COLUMNS as c (c)}<th>{c}</th>{/each}</tr>
@@ -50,7 +46,7 @@
             <td class="name"><span use:tooltip={`Set-Cookie: ${c.raw}`}>{c.name}</span></td>
             <td class="v">
               {#if c.value}
-                <button class="copyable" use:tooltip={"Click to copy"} onclick={(e) => copyValue(e, c.value)}>{c.value}</button>
+                <button class="copyable" use:tooltip={"Click to copy"} use:copyable={{ value: c.value, copied: "Cookie value copied" }}>{c.value}</button>
               {:else}
                 <span class="muted">(empty)</span>
               {/if}
@@ -73,39 +69,18 @@
     </tbody>
   </table>
 </div>
+{/if}
 
 <style>
-  .table-wrap {
-    flex: 1;
-    overflow: auto;
-    padding: 8px 16px 16px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12.5px;
-  }
-  th {
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border-strong);
-    text-align: left;
-    font-weight: 600;
+  .small {
     font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-  td {
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
   }
   .name {
     font-weight: 600;
     white-space: nowrap;
     color: var(--text-2);
   }
-  .mono,
-  .v {
+  .mono {
     font-family: var(--mono);
     font-size: 12px;
   }

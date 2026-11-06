@@ -2,13 +2,13 @@
 // or Settings. The browser's emulated colour scheme stands in for the OS
 // appearance; playwright.config.ts starts every test with a dark OS.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, openApp } from "./helpers";
+import { dialog, mockState, openApp } from "./helpers";
 
 const applied = (page: Page) => page.locator("html");
 const themeButton = (page: Page) => page.getByRole("button", { name: "Theme", exact: true });
 const themeMenu = (page: Page) => page.getByRole("menu", { name: "Theme" });
 const choice = (page: Page, name: string) => themeMenu(page).getByRole("menuitemradio", { name });
-const saved = (page: Page) => page.evaluate(() => (window as unknown as { __mock: { settings: { theme: string } } }).__mock.settings.theme);
+const saved = async (page: Page) => (await mockState(page, "settings")).theme;
 
 test("new installs follow the OS appearance", async ({ page }) => {
   await openApp(page);

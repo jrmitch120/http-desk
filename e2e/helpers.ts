@@ -57,7 +57,47 @@ export function bodyEditor(page: Page): Locator {
 
 /** The requests the mocked `send_request` has received so far, in order. */
 export function sentRequests(page: Page): Promise<{ method: string; url: string }[]> {
-  return page.evaluate(() => (window as unknown as { __mock: { sent: { method: string; url: string }[] } }).__mock.sent);
+  return mockState(page, "sent");
+}
+
+/** A `.http` file model as the mock last saved it (it has no serializer). */
+export type SavedFile = { requests: { name: string; body: { text: string } }[] };
+type EnvFile = Record<string, Record<string, unknown>>;
+
+/** What the mocked backend exposes to tests as `window.__mock` (see src/dev/mock.ts). */
+export interface MockState {
+  sent: { method: string; url: string }[];
+  /** The settings it last saved. */
+  settings: { theme: string; exec: Record<string, unknown> };
+  /** `.http` file models by path, as last saved. */
+  files: Record<string, SavedFile>;
+  /** What "Save body to file" wrote, by path. */
+  savedBodies: Record<string, string>;
+  /** The response ids `response_shape` was asked for, in order. */
+  shapeRequests: string[];
+  /** The two env files as last written. */
+  envFiles: { shared: EnvFile; private: EnvFile };
+  /** How many times the viewer called `pretty_response`. */
+  prettyRequests: number;
+  /** Whether the app has been given its settings yet. */
+  settingsServed: boolean;
+}
+
+/** One value of the mock's test-facing state, read from the page. */
+export function mockState<K extends keyof MockState>(page: Page, key: K): Promise<MockState[K]> {
+  return page.evaluate((k) => (window as unknown as { __mock: MockState }).__mock[k], key) as Promise<MockState[K]>;
+}
+
+/** Starts the mock's `pretty_response` count from zero. */
+export function resetPrettyRequests(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    (window as unknown as { __mock: MockState }).__mock.prettyRequests = 0;
+  });
+}
+
+/** Lets settings held by `?settingsDelay=hold` through. */
+export function releaseSettings(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());
 }
 
 /** An open request tab in the tab bar, by request name. */

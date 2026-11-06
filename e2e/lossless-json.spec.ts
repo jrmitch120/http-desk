@@ -2,12 +2,10 @@
 // and Beautify only change whitespace, so 64-bit IDs, `10.50` and `1e3` stay
 // exactly as written. The mocked `format_body` re-indents tokens like the core.
 import { expect, test, type Page } from "@playwright/test";
-import { bodyEditor, openApp, openRequest } from "./helpers";
+import { bodyEditor, mockState, openApp, openRequest } from "./helpers";
 
-type SavedFiles = Record<string, { requests: { name: string; body: { text: string } }[] }>;
-
-function savedFiles(page: Page): Promise<SavedFiles> {
-  return page.evaluate(() => (window as unknown as { __mock: { files: SavedFiles } }).__mock.files);
+function savedFiles(page: Page) {
+  return mockState(page, "files");
 }
 
 test("Pretty view shows a 64-bit ID exactly as the server sent it", async ({ page }) => {

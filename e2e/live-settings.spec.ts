@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, openApp } from "./helpers";
+import { dialog, mockState, openApp } from "./helpers";
 
 async function openSettings(page: Page) {
   await page.keyboard.press("ControlOrMeta+Comma");
@@ -8,7 +8,7 @@ async function openSettings(page: Page) {
 
 /** The settings the mocked backend last saved. */
 async function savedSettings(page: Page) {
-  return page.evaluate(() => (window as unknown as { __mock: { settings: { exec: Record<string, unknown> } } }).__mock.settings);
+  return mockState(page, "settings");
 }
 
 test("toggling Follow redirects applies at once and is still applied after reopening Settings", async ({ page }) => {

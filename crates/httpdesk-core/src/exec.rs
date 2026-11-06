@@ -1,19 +1,21 @@
 //! Request execution. [`prepare`] turns a model [`Request`] into the exact bytes
 //! to send (applying variables and dropping disabled components). [`execute`]
-//! sends it with reqwest, on a fresh [`ExecClient`] (or a given one with
-//! [`execute_on`]).
+//! sends it with reqwest on a fresh [`ExecClient`]; [`execute_on`] sends it on
+//! a given one, such as an idle client from a [`ClientPool`], so a connection
+//! left open by an earlier send can be reused.
 
 mod timing;
 
 pub use timing::Timings;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::body_format::{self, ResponseKind};
 use crate::cookies::{self, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
@@ -71,23 +73,41 @@ fn human_ms(ms: u64) -> String {
     }
 }
 
+/// The class of a failed send, which the UI picks a heading, hint and fix-it
+/// button by. Serialised in camelCase (`timeoutIdle`), as `SendError["kind"]`
+/// in `src/lib/types.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorKind {
+    Dns,
+    Refused,
+    Reset,
+    Tls,
+    TimeoutIdle,
+    TimeoutConnect,
+    InvalidUrl,
+    UnresolvedVariable,
+    File,
+    Other,
+}
+
 impl ExecError {
     /// The class of failure the UI picks a heading, hint and fix-it buttons by.
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            ExecError::Dns { .. } => "dns",
-            ExecError::Refused { .. } => "refused",
-            ExecError::Reset { .. } => "reset",
-            ExecError::ReadTimeout(_) => "timeoutIdle",
-            ExecError::ConnectTimeout(_) => "timeoutConnect",
-            ExecError::InvalidUrl { .. } => "invalidUrl",
-            ExecError::UnresolvedHost(_) => "unresolvedVariable",
-            ExecError::File { .. } => "file",
-            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => "tls",
+            ExecError::Dns { .. } => ErrorKind::Dns,
+            ExecError::Refused { .. } => ErrorKind::Refused,
+            ExecError::Reset { .. } => ErrorKind::Reset,
+            ExecError::ReadTimeout(_) => ErrorKind::TimeoutIdle,
+            ExecError::ConnectTimeout(_) => ErrorKind::TimeoutConnect,
+            ExecError::InvalidUrl { .. } => ErrorKind::InvalidUrl,
+            ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
+            ExecError::File { .. } => ErrorKind::File,
+            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
             | ExecError::InvalidHeader(_)
             | ExecError::DynamicVariable(_)
-            | ExecError::Other(_) => "other",
+            | ExecError::Other(_) => ErrorKind::Other,
         }
     }
 
@@ -128,7 +148,7 @@ impl Serialize for ExecError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut st = s.serialize_struct("ExecError", 3)?;
-        st.serialize_field("kind", self.kind())?;
+        st.serialize_field("kind", &self.kind())?;
         st.serialize_field("message", &self.to_string())?;
         st.serialize_field("details", &self.details())?;
         st.end()
@@ -472,6 +492,9 @@ pub struct HttpResponse {
     pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
+    /// What the body is, for the viewer (see [`body_format::response_kind`]).
+    #[serde(default)]
+    pub body_kind: ResponseKind,
     /// The response's `Content-Encoding` header, as sent by the server.
     pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
@@ -565,7 +588,13 @@ async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
                     0 => 5_000,
                     ms => ms.min(5_000),
                 });
-                let found = crate::tls_probe::certificate_reason(&host, port, timeout).await;
+                // Behind a proxy, the verifier's reason is all there is.
+                let found = match &url {
+                    Some(u) if !crate::tls_probe::through_proxy(u) => {
+                        crate::tls_probe::certificate_reason(&host, port, timeout).await
+                    }
+                    _ => None,
+                };
                 found.unwrap_or(if cert == C::UnknownIssuer { TlsReason::UnknownIssuer } else { TlsReason::Other })
             }
             _ => TlsReason::Other,
@@ -585,12 +614,11 @@ async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
 
 /// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
 /// with the hooks that time its phases and record the cookies its responses
-/// set. [`execute`] builds one per send, so settings can differ per request;
-/// [`execute_on`] reuses one, which lets a later request go over a connection
-/// that is still open.
+/// set. [`execute`] builds one per send; [`execute_on`] reuses one, which lets
+/// a later request go over a connection that is still open.
 ///
 /// It times and records one request at a time: concurrent sends on one client
-/// would mix their phases and cookies.
+/// would mix their phases and cookies. [`ClientPool`] keeps to that.
 pub struct ExecClient {
     http: reqwest::Client,
     timing: timing::Recorder,
@@ -605,6 +633,120 @@ impl ExecClient {
         let cookies = Arc::new(cookies::Recorder::default());
         let http = build_client(p, settings, ssl, &timing, cookies.clone())?;
         Ok(Self { http, timing, cookies })
+    }
+}
+
+/// Everything [`build_client`] builds a client from, so two sends with equal
+/// keys can share one. Certificate files are identified by path, size and
+/// modification time, so replacing one builds a new client. The proxy
+/// environment variables are read when the client is built, so they're part of
+/// it too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClientKey {
+    follow_redirects: bool,
+    max_redirects: usize,
+    accept_invalid_certs: bool,
+    timeout_ms: u64,
+    connect_timeout_ms: u64,
+    files: Vec<Option<FileStamp>>,
+    proxy_env: Vec<Option<std::ffi::OsString>>,
+}
+
+/// A certificate file as a [`ClientKey`] sees it: its path, and its size and
+/// modification time if it can be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileStamp {
+    path: PathBuf,
+    stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+impl ClientKey {
+    fn new(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Self {
+        let file = |path: Option<&PathBuf>| {
+            path.map(|path| {
+                let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.len(), m.modified().ok()?)));
+                FileStamp { path: path.clone(), stamp }
+            })
+        };
+        let cert = ssl.client_certificate.as_ref().or(settings.client_cert_path.as_ref());
+        let key = ssl.client_certificate_key.as_ref().or(settings.client_key_path.as_ref());
+        let proxy_vars = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+        ClientKey {
+            follow_redirects: p.follow_redirects,
+            max_redirects: settings.max_redirects,
+            accept_invalid_certs: !settings.verify_tls || ssl.verify_host_certificate == Some(false),
+            timeout_ms: p.timeout_ms,
+            connect_timeout_ms: p.connect_timeout_ms,
+            files: vec![file(settings.ca_cert_path.as_ref()), file(cert), file(key)],
+            proxy_env: proxy_vars
+                .iter()
+                .flat_map(|v| [v.to_string(), v.to_ascii_uppercase()])
+                .chain(["REQUEST_METHOD".to_string()])
+                .map(std::env::var_os)
+                .collect(),
+        }
+    }
+}
+
+/// At most this many idle clients are kept; the longest idle goes first.
+pub const MAX_IDLE_CLIENTS: usize = 8;
+
+/// Idle [`ExecClient`]s kept between sends, so a send can go over a
+/// connection an earlier one left open. [`ClientPool::checkout`] hands out an
+/// idle client built with the same settings, or builds a new one; a client
+/// is never handed out while it's checked out, so each times one request at a
+/// time. Cloning shares the pool.
+#[derive(Clone, Default)]
+pub struct ClientPool {
+    idle: Arc<Mutex<Vec<(ClientKey, ExecClient)>>>,
+}
+
+impl ClientPool {
+    /// An idle client for sending `p` with these settings, or a new one. It
+    /// returns to the pool when the [`PooledClient`] is dropped.
+    pub fn checkout(
+        &self,
+        p: &PreparedRequest,
+        settings: &ExecSettings,
+        ssl: &SslConfig,
+    ) -> Result<PooledClient, ExecError> {
+        let key = ClientKey::new(p, settings, ssl);
+        let idle = {
+            let mut idle = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+            // The most recently used one has the warmest connections.
+            idle.iter().rposition(|(k, _)| *k == key).map(|i| idle.remove(i).1)
+        };
+        let client = match idle {
+            Some(client) => client,
+            None => ExecClient::new(p, settings, ssl)?,
+        };
+        Ok(PooledClient { entry: Some((key, client)), pool: self.clone() })
+    }
+}
+
+/// A client checked out of a [`ClientPool`]; dropping it returns it.
+pub struct PooledClient {
+    entry: Option<(ClientKey, ExecClient)>,
+    pool: ClientPool,
+}
+
+impl std::ops::Deref for PooledClient {
+    type Target = ExecClient;
+
+    fn deref(&self) -> &ExecClient {
+        &self.entry.as_ref().expect("present until dropped").1
+    }
+}
+
+impl Drop for PooledClient {
+    fn drop(&mut self) {
+        if let Some(entry) = self.entry.take() {
+            let mut idle = self.pool.idle.lock().unwrap_or_else(|e| e.into_inner());
+            idle.push(entry);
+            if idle.len() > MAX_IDLE_CLIENTS {
+                idle.remove(0);
+            }
+        }
     }
 }
 
@@ -684,41 +826,93 @@ pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     }
 }
 
+/// What the Request tab shows: the request as it reached the server that sent
+/// the final response. Without redirects that is `p`. After them it is rebuilt
+/// with the rules reqwest (and tower-http's follow-redirect under it) applies
+/// to each hop:
+/// - 301/302 turn a POST into a GET, and 303 turns anything but HEAD into a
+///   GET; both drop the body and its Content-Type, Content-Length,
+///   Content-Encoding and Transfer-Encoding headers, for every later hop too.
+/// - A hop to another origin (scheme, host or port) than the one before it
+///   leaves out Authorization, Cookie, Cookie2, Proxy-Authorization and
+///   WWW-Authenticate. Each hop starts again from the request's headers, so
+///   this depends on the final hop only.
+/// - The final hop carries a Referer naming the URL before it (without
+///   userinfo or fragment), except from https to http.
+///
+/// It's a reconstruction: headers reqwest adds itself (Host, Accept, ...)
+/// aren't listed.
+fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> SentRequest {
+    let mut method = p.method.clone();
+    let mut body = p.body.as_deref();
+    let mut headers = p.headers.clone();
+    let without = |headers: &mut Vec<(String, String)>, names: &[&str]| {
+        headers.retain(|(n, _)| !names.iter().any(|g| n.eq_ignore_ascii_case(g)));
+    };
+    let payload = ["content-type", "content-length", "content-encoding", "transfer-encoding"];
+    for hop in hops {
+        let to_get = match hop.status {
+            301 | 302 if method == "POST" => true,
+            303 => method != "HEAD",
+            _ => continue,
+        };
+        if to_get {
+            method = "GET".into();
+        }
+        body = None;
+        without(&mut headers, &payload);
+    }
+    if let Some(last) = hops.last() {
+        let (to, from) = (&last.to, &last.from);
+        let cross_origin = to.host_str() != from.host_str()
+            || to.port_or_known_default() != from.port_or_known_default()
+            || to.scheme() != from.scheme();
+        if cross_origin {
+            without(&mut headers, &["authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate"]);
+        }
+        if !(to.scheme() == "http" && from.scheme() == "https") {
+            let mut referer = from.clone();
+            let _ = referer.set_username("");
+            let _ = referer.set_password(None);
+            referer.set_fragment(None);
+            match headers.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case("referer")) {
+                Some((_, v)) => *v = referer.to_string(),
+                None => headers.push(("Referer".into(), referer.to_string())),
+            }
+        }
+    }
+    SentRequest {
+        method,
+        url: if hops.is_empty() { p.url.clone() } else { final_url.to_string() },
+        headers,
+        body_size: body.map_or(0, <[u8]>::len),
+        body_preview: body.map(|b| {
+            let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
+            if b.len() > 64 * 1024 {
+                format!("{s}\n… ({} bytes total)", b.len())
+            } else {
+                s
+            }
+        }),
+    }
+}
+
 /// Sends `p` on a new [`ExecClient`] built for it.
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
-    execute_with_progress(p, settings, ssl, |_| {}).await
+    let client = ExecClient::new(&p, settings, ssl)?;
+    execute_on(&client, p, settings, |_| {}).await
 }
 
 /// The shortest gap between two progress reports, so a body arriving in many
 /// small chunks doesn't flood the UI (at most ~10 reports a second).
 pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
-/// [`execute`], calling `on_progress` with the body bytes received on the wire
-/// so far while the body downloads. Reports come at most once per
-/// [`PROGRESS_INTERVAL`], each larger than the last, and none after the
-/// function returns.
-pub async fn execute_with_progress(
-    p: PreparedRequest,
-    settings: &ExecSettings,
-    ssl: &SslConfig,
-    on_progress: impl FnMut(usize) + Send,
-) -> Result<ExecOutcome, ExecError> {
-    let client = ExecClient::new(&p, settings, ssl)?;
-    send_on(&client, p, settings, on_progress).await
-}
-
 /// Sends `p` on `client`, which keeps the redirect, timeout and TLS settings
-/// it was built with; `settings` supplies the body size limit.
+/// it was built with; `settings` supplies the body size limit. While the body
+/// downloads, `on_progress` gets the body bytes received on the wire so far:
+/// at most once per [`PROGRESS_INTERVAL`], each larger than the last, and none
+/// after the function returns.
 pub async fn execute_on(
-    client: &ExecClient,
-    p: PreparedRequest,
-    settings: &ExecSettings,
-) -> Result<ExecOutcome, ExecError> {
-    send_on(client, p, settings, |_| {}).await
-}
-
-/// The one send path behind [`execute_with_progress`] and [`execute_on`].
-async fn send_on(
     client: &ExecClient,
     p: PreparedRequest,
     settings: &ExecSettings,
@@ -769,9 +963,9 @@ async fn send_on(
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim().to_string());
 
-    // A body that fails to decode is classified `other`, with body.rs's message.
+    // A body that can't be decoded (an unknown encoding, or bytes that don't
+    // decode) is kept as received, with a warning.
     let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
-    let as_received = unsupported.is_some();
     let mut last_report: Option<Instant> = None;
     loop {
         let chunk = match resp.chunk().await {
@@ -779,7 +973,7 @@ async fn send_on(
             Ok(None) => break,
             Err(e) => return Err(classify(e, &p).await),
         };
-        if !reader.push(&chunk).map_err(ExecError::Other)? {
+        if !reader.push(&chunk) {
             break;
         }
         // The first chunk reports at once; after that, once per interval.
@@ -788,33 +982,21 @@ async fn send_on(
             on_progress(reader.transferred());
         }
     }
-    let body::ReceivedBody { bytes: body, transferred, truncated } = reader.finish().map_err(ExecError::Other)?;
+    let body::ReceivedBody { bytes: body, transferred, truncated, decode_failure } = reader.finish();
+    let as_received = unsupported.is_some() || decode_failure.is_some();
     let end = Instant::now();
     let elapsed = end - start;
     let timings = client.timing.timings(start, headers_at, end);
     let cookies = client.cookies.take();
+    let request = final_request(&p, &client.timing.hops(), &final_url);
     let mut warnings = p.warnings;
     warnings.extend(unsupported);
+    warnings.extend(decode_failure);
 
     // Still-encoded bytes are binary whatever the content type says.
     let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };
     let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
         .then(|| base64::engine::general_purpose::STANDARD.encode(&body));
-
-    let request = SentRequest {
-        method: p.method.clone(),
-        url: p.url.clone(),
-        headers: p.headers.clone(),
-        body_size: p.body.as_ref().map_or(0, Vec::len),
-        body_preview: p.body.as_ref().map(|b| {
-            let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
-            if b.len() > 64 * 1024 {
-                format!("{s}\n… ({} bytes total)", b.len())
-            } else {
-                s
-            }
-        }),
-    };
 
     Ok(ExecOutcome {
         response: HttpResponse {
@@ -829,6 +1011,7 @@ async fn send_on(
             body_size: body.len(),
             transferred_size: transferred,
             headers_size,
+            body_kind: body_format::response_kind(content_type.as_deref(), body_text.as_deref()),
             content_type,
             content_encoding,
             body_text,

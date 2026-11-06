@@ -286,7 +286,46 @@ textarea.input {
 .link:hover {
   text-decoration: underline;
 }
-/* A value shown as text that copies itself on click (a response header value).
+/* A scrolling table of rows in a response tab (headers, cookies, the sent
+   request). `.k` is a bold name column sized to its content, `.v` a monospace
+   value column; `th` heads columns where a table has them. */
+.data-table {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+}
+.data-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.data-table th {
+  padding: 6px var(--space-2);
+  border-bottom: 1px solid var(--border-strong);
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 6px var(--space-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.data-table .k {
+  font-weight: 600;
+  white-space: nowrap;
+  width: 1%;
+  padding-right: var(--space-6);
+  color: var(--text-2);
+}
+.data-table .v {
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+/* A value shown as text that copies itself on click (use:copyable, src/lib/copyable.ts).
    Its text stays selectable, so a part can still be copied by hand. */
 .copyable {
   display: block;

@@ -2,7 +2,7 @@
   // Why the last send failed: a heading and hint chosen by the error's kind,
   // the core's message, and the buttons that act on it. Retry is always there;
   // kind-specific fix-it buttons go before it.
-  import { describeSendError, sendErrorFix, type SendErrorFix } from "../lib/sendError";
+  import { describeSendError, sendErrorFix } from "../lib/sendError";
   import { app } from "../lib/store.svelte";
   import type { SendError } from "../lib/types";
   import Banner from "./Banner.svelte";
@@ -11,19 +11,13 @@
 
   const text = $derived(describeSendError(error));
   const fix = $derived(sendErrorFix(error));
-
-  function apply(f: SendErrorFix) {
-    if (f === "tlsSettings") app.openSettings("tls");
-    else if (f === "requestSettings") app.showRequestSettings(tabId);
-    else app.chooseEnvironment();
-  }
 </script>
 
 <Banner severity="error" inline heading={text.heading} class="send-error">
   <div class="err-msg selectable mono">{error.message}</div>
   {#if text.hint}<div class="muted">{text.hint}</div>{/if}
   {#snippet actions()}
-    {#if fix}<button class="btn small" onclick={() => apply(fix.fix)}>{fix.label}</button>{/if}
+    {#if fix}<button class="btn small" onclick={() => fix.run(app, tabId)}>{fix.label}</button>{/if}
     <button class="btn small" onclick={onretry}>Retry</button>
   {/snippet}
 </Banner>

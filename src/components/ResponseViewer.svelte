@@ -1,37 +1,33 @@
 <script module lang="ts">
-  type BodyView = "pretty" | "raw" | "preview";
+  import type { BodyMode } from "../lib/bodyView.svelte";
   /** Per editor tab, in memory only: viewer tab, body view, wrap, and the JSONPath filter. */
-  const viewByTab = new Map<string, { tab: string; mode: BodyView; wrap: boolean; filter: string }>();
-  /** Typing pauses this long before the filter runs again on the same response. */
-  const FILTER_DEBOUNCE_MS = 120;
+  const viewByTab = new Map<string, { tab: string; mode: BodyMode; wrap: boolean; filter: string }>();
   /** Above this many body bytes, copying a binary body as base64 asks first. */
   const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
 
 <script lang="ts">
+  // The response pane: the status bar (status, time, size, Copy and Save), the
+  // send error or warnings, and the tabs. Each tab is its own panel; the Body
+  // tab's state lives in a BodyView so it outlives a switch to another tab.
   import { untrack } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration } from "../lib/http";
+  import { base64DecodedLength, formatBytes, formatDuration } from "../lib/http";
   import { explainStatus } from "../lib/status";
-  import { formatPhase, redirectNote, timingPhases } from "../lib/timing";
-  import Editor from "../lib/codemirror/Editor.svelte";
-  import type { Language } from "../lib/codemirror/setup";
+  import { BodyView, saveName } from "../lib/bodyView.svelte";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import SendErrorPanel from "./SendErrorPanel.svelte";
+  import BodyPanel from "./BodyPanel.svelte";
   import HeadersPanel from "./HeadersPanel.svelte";
   import CookiesPanel from "./CookiesPanel.svelte";
   import TimingPanel from "./TimingPanel.svelte";
+  import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
-  import ResponseFilter from "./ResponseFilter.svelte";
-  import type { FilterResult, JsonShape } from "../lib/types";
-  import { keymap } from "@codemirror/view";
-  import { menu } from "../lib/menu.svelte";
-  import { pathAt } from "../lib/jsonpath";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -39,14 +35,17 @@
   const res = $derived(run?.response);
 
   const saved = untrack(() => viewByTab.get(tab.id));
-  let view = $state(saved?.tab ?? "body");
-  let mode = $state<BodyView>(saved?.mode ?? "pretty");
+  let viewerTab = $state(saved?.tab ?? "body");
+  let mode = $state<BodyMode>(saved?.mode ?? "pretty");
   let wrap = $state(saved?.wrap ?? false);
   let filter = $state(saved?.filter ?? "");
-  let editor: Editor | undefined = $state();
   $effect(() => {
-    viewByTab.set(tab.id, { tab: view, mode, wrap, filter });
+    viewByTab.set(tab.id, { tab: viewerTab, mode, wrap, filter });
   });
+
+  const body = new BodyView(() => ({ res, mode, filter }));
+  const isBinary = $derived(body.isBinary);
+  const filtered = $derived(body.filtered);
 
   // Elapsed time while loading.
   let now = $state(performance.now());
@@ -54,148 +53,6 @@
     if (!run?.loading) return;
     const t = setInterval(() => (now = performance.now()), 100);
     return () => clearInterval(t);
-  });
-
-  const ct = $derived((res?.contentType ?? "").toLowerCase());
-  const kind = $derived.by(() => {
-    if (!res) return "none";
-    if (ct.includes("json")) return "json";
-    if (ct.includes("html")) return "html";
-    if (ct.includes("xml") || ct.includes("svg")) return "xml";
-    if (ct.startsWith("image/")) return "image";
-    if (ct.includes("pdf")) return "pdf";
-    if (ct.startsWith("audio/") || ct.startsWith("video/")) return "media";
-    if (res.bodyText !== null) {
-      const t = res.bodyText.trimStart();
-      if (t.startsWith("{") || t.startsWith("[")) return "json";
-      if (t.startsWith("<")) return "xml";
-      return "text";
-    }
-    return "binary";
-  });
-  const canPreview = $derived(["html", "image", "pdf", "media"].includes(kind));
-  const isBinary = $derived(!!res && res.bodyText === null);
-
-  const effectiveMode = $derived<BodyView>(isBinary ? (canPreview && mode !== "raw" ? "preview" : "raw") : mode === "preview" && !canPreview ? "pretty" : mode);
-  const viewOptions = $derived<SegmentedOption<BodyView>[]>([
-    ...(isBinary ? [] : [{ value: "pretty" as const, label: "Pretty" }]),
-    { value: "raw", label: isBinary ? "Hex" : "Raw" },
-    ...(canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),
-  ]);
-
-  const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
-
-  // Text the core renders for the editor, from the body the shell stored:
-  // Pretty JSON/XML from its lossless formatter (numbers and text stay as the
-  // server sent them), or the Hex view of a binary body. A small body's Pretty
-  // text arrives with the response; a large one's is asked for once, when
-  // Pretty is opened, with a loading state meanwhile. If the body doesn't
-  // parse or is no longer stored, Pretty shows the raw text.
-  const dataUrl = $derived(res?.bodyBase64 ? `data:${res.contentType ?? "application/octet-stream"};base64,${res.bodyBase64}` : null);
-  const rendering = $derived.by(() => {
-    if (!res) return null;
-    if (res.bodyText === null) return effectiveMode === "preview" && dataUrl ? null : `hex:${res.id}`;
-    if (effectiveMode === "pretty" && (kind === "json" || kind === "xml")) return `${kind}:${res.id}`;
-    return null;
-  });
-  let rendered = $state<{ key: string; text: string } | null>(null);
-  $effect(() => {
-    const key = rendering;
-    if (!key || !res || res.prettyText != null || untrack(() => rendered?.key) === key) return;
-    const { id, bodyText: raw } = res;
-    const keep = (text: string) => {
-      if (res?.id === id) rendered = { key, text }; // a newer response may have arrived
-    };
-    if (raw === null) api.hexdump(id).then(keep, (e) => keep(`(${errorMessage(e)})`));
-    else api.prettyResponse(id).then(keep, () => keep(raw));
-  });
-
-  // The JSONPath filter runs in the core against the stored body, by response
-  // id, so a re-send re-runs it on the new response. Only for whole JSON bodies;
-  // otherwise the expression is kept for the next JSON response in this tab.
-  const canFilter = $derived(!!res && kind === "json" && res.bodyText !== null && !res.truncated);
-  const expression = $derived(canFilter ? filter.trim() : "");
-  let filterOutcome = $state<{ id: string; expression: string; result?: FilterResult; error?: string } | null>(null);
-  $effect(() => {
-    if (!res || !expression) return;
-    const { id } = res;
-    const expr = expression;
-    const last = untrack(() => filterOutcome);
-    if (last?.id === id && last.expression === expr) return;
-    const settle = (outcome: { result?: FilterResult; error?: string }) => {
-      if (res?.id === id && expression === expr) filterOutcome = { id, expression: expr, ...outcome };
-    };
-    // A new response is filtered at once; typing waits for a pause.
-    const timer = setTimeout(
-      () => api.filterResponse(id, expr).then((result) => settle({ result }), (e) => settle({ error: errorMessage(e) })),
-      last?.id === id ? FILTER_DEBOUNCE_MS : 0,
-    );
-    return () => clearTimeout(timer);
-  });
-  // This response's latest outcome. While a newer expression runs, its last
-  // matches stay up, so typing doesn't flash the full body.
-  const outcome = $derived(expression && filterOutcome?.id === res?.id ? filterOutcome : null);
-  const filterError = $derived(outcome?.expression === expression ? (outcome.error ?? null) : null);
-  /** The matches on screen (the body view is then always pretty, and Copy copies them). */
-  const filtered = $derived(outcome?.result && !filterError ? outcome.result : null);
-  /** A large body's Pretty text is still on its way (filter matches show instead, if any). */
-  const formatting = $derived(!filtered && !!rendering && res?.bodyText != null && res.prettyText == null && rendered?.key !== rendering);
-
-  // Key completion: the body's shape summary, built once per response in the
-  // core and fetched once when the filter box is first focused; every keystroke
-  // completes from it locally.
-  let shapeOf = $state<{ id: string; shape: JsonShape | null } | null>(null);
-  const shape = $derived(res && shapeOf?.id === res.id ? shapeOf.shape : null);
-  function loadShape() {
-    if (!res || !canFilter || shapeOf?.id === res.id) return;
-    const { id } = res;
-    shapeOf = { id, shape: null }; // asked for; one request per response
-    api.responseShape(id).then(
-      (s) => {
-        if (shapeOf?.id === id) shapeOf = { id, shape: s };
-      },
-      () => {}, // no completion, the filter still works
-    );
-  }
-
-  // "Copy path" in the body editor's context menu (JSON bodies only; other
-  // bodies keep the webview's own menu). Paths are of the text on screen, so
-  // not while filter matches show.
-  const jsonBody = $derived(kind === "json" && !isBinary);
-  function bodyMenu(e: MouseEvent) {
-    if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
-    const ed = editor;
-    const offset = ed.caretForMenu(e);
-    const selection = ed.selectedText();
-    menu.show(
-      e,
-      [
-        { label: "Copy", icon: "copy", disabled: !selection, action: () => void copyText(selection, "Copied") },
-        { label: "Select all", action: () => ed.selectAll() },
-        { separator: true },
-        { label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) },
-      ],
-      { label: "Body" },
-    );
-  }
-  async function copyText(text: string, message: string) {
-    await navigator.clipboard.writeText(text);
-    app.toast("success", message);
-  }
-  function copyPath(text: string, offset: number) {
-    const path = pathAt(text, offset);
-    if (path === null) app.toast("error", "There's no JSON value at the cursor");
-    else void copyText(path, `Copied ${path}`);
-  }
-  /** Shift+F10 in the body editor opens the same menu at the caret. */
-  const bodyKeys = keymap.of([{ key: "Shift-F10", run: () => (jsonBody ? (editor?.openMenuAtCaret(), true) : false) }]);
-
-  const bodyText = $derived.by(() => {
-    if (!res) return "";
-    if (filtered) return filtered.text;
-    if (rendering && res.bodyText !== null && res.prettyText != null) return res.prettyText;
-    if (rendering && rendered?.key === rendering) return rendered.text;
-    return res.bodyText ?? "";
   });
 
   async function copyBody() {
@@ -212,7 +69,7 @@
     }
     const b64 = res.bodyBase64;
     if (!b64) return;
-    const bytes = base64Bytes(b64);
+    const bytes = base64DecodedLength(b64);
     if (bytes > BASE64_COPY_CONFIRM_BYTES) {
       const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
       const r = await app.choose("Copy as base64?", message, [
@@ -225,16 +82,9 @@
     app.toast("success", "Response body copied as base64");
   }
 
-  /** How many bytes a base64 string decodes to, without decoding it. */
-  function base64Bytes(b64: string): number {
-    const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
-    return Math.floor((b64.length * 3) / 4) - pad;
-  }
-
   async function saveBody() {
     if (!res) return;
-    const ext = kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : (ct.split("/")[1]?.split(";")[0] ?? "bin");
-    const path = await save({ defaultPath: `response.${ext}` });
+    const path = await save({ defaultPath: saveName(res) });
     if (!path) return;
     try {
       await api.saveResponseBody(res.id, path);
@@ -250,22 +100,22 @@
   const tabs = $derived<SegmentedOption[]>([
     { value: "body", label: "Body" },
     { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
-    // Only when the response set any: an empty Cookies tab would be noise on most responses.
-    ...(res?.cookies.length ? [{ value: "cookies", label: "Cookies", count: res.cookies.length }] : []),
+    // Always there, so the tabs don't shift; counted only when there are cookies.
+    { value: "cookies", label: "Cookies", count: res?.cookies.length || undefined },
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
-  const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
+  const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
 
-  const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
-  const sizeTitle = $derived.by(() => {
+  const statusTooltip = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
+  const sizeTooltip = $derived.by(() => {
     if (!res) return "";
     const headers = `Headers ${formatBytes(res.headersSize)}`;
     if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
     return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
   });
-  const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
+  const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
 <div class="viewer">
@@ -293,9 +143,9 @@
         <Badge size="md">Cancelled</Badge>
       {:else if res}
         {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
-        <span class="tip" use:tooltip={statusTitle}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
-        <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
-        <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
+        <span class="tip" use:tooltip={statusTooltip}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
+        <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
+        <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
         <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
@@ -315,56 +165,11 @@
         </Banner>
       {/if}
       <div class="tabs">
-        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view = t)} />
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (viewerTab = t)} />
       </div>
 
       {#if current === "body"}
-        <div class="toolbar">
-          <!-- Filter matches are always pretty-printed, so the view is fixed while they show. -->
-          <span class="tip" use:tooltip={filtered ? "Filter matches are always pretty-printed" : ""}>
-            <SegmentedControl label="Response view" options={viewOptions} value={filtered ? "pretty" : effectiveMode} disabled={!!filtered} onchange={(m) => (mode = m)} />
-          </span>
-          {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
-          <span class="spacer"></span>
-          {#if effectiveMode !== "preview"}
-            <button class="icon-btn" aria-label="Search" use:tooltip={"Search (⌘/Ctrl F)"} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
-            {#if kind === "json" || kind === "xml"}
-              <button class="icon-btn" aria-label="Fold all" use:tooltip onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
-              <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
-            {/if}
-            <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
-          {/if}
-        </div>
-        {#if canFilter}
-          <div class="filter-row">
-            <ResponseFilter value={filter} onchange={(v) => (filter = v)} matches={filtered?.matches ?? null} error={filterError} {shape} needshape={loadShape} />
-          </div>
-        {/if}
-        <!-- The body editor's context menu (Copy path); other content keeps the webview's. -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="body" oncontextmenu={bodyMenu}>
-          {#if effectiveMode === "preview" && dataUrl}
-            {#if kind === "image"}
-              <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
-            {:else if kind === "html"}
-              <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
-            {:else if kind === "pdf"}
-              <iframe title="PDF preview" src={dataUrl}></iframe>
-            {:else if kind === "media"}
-              <div class="preview-img">
-                {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
-              </div>
-            {/if}
-          {:else if effectiveMode === "preview" && kind === "html"}
-            <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
-          {:else if res.bodySize === 0}
-            <div class="empty-state small">The response has no body.</div>
-          {:else if formatting}
-            <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
-          {:else}
-            <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} extensions={bodyKeys} />
-          {/if}
-        </div>
+        <BodyPanel {res} view={body} bind:mode bind:wrap bind:filter />
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />
       {:else if current === "cookies"}
@@ -372,28 +177,7 @@
       {:else if current === "timing"}
         <TimingPanel {res} />
       {:else}
-        <div class="table-wrap">
-          <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
-          <table>
-            <tbody>
-              {#each res.request.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{k.toLowerCase() === "authorization" ? v.replace(/^(\S+\s+).+$/, "$1••••••••") : v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-          {#if res.request.bodyPreview !== null}
-            <div class="sent-body-title muted">Body · {formatBytes(res.request.bodySize)}</div>
-            <pre class="sent-body selectable mono">{res.request.bodyPreview}</pre>
-          {/if}
-          <div class="sent-body-title muted">Timing · {formatDuration(res.timeMs)} total{res.timings.redirects ? `, ${redirectNote(res.timings.redirects)}` : ""}</div>
-          <div class="sent-timing selectable mono">
-            {timingPhases(res).map((p) => `${p.label} ${formatPhase(p.ms)}`).join(" · ")}{res.timings.reused ? " · reused connection" : ""}
-          </div>
-          <p class="muted small">
-            A reconstruction of the final request from what HttpDesk prepared, not the bytes on the wire. Disabled components and unresolved sections are not included.
-            {#if res.timings.redirects}It ended at {res.url}; later hops may differ in method and headers.{/if}
-          </p>
-        </div>
+        <RequestPanel {res} />
       {/if}
     {/if}
   {/if}
@@ -465,103 +249,5 @@
     padding: 6px 10px 6px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
-  }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px 6px 16px;
-    flex: none;
-  }
-  .filter-row {
-    display: flex;
-    padding: 0 10px 6px 16px;
-    flex: none;
-  }
-  .lang {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-  }
-  .body {
-    flex: 1;
-    min-height: 0;
-    border-top: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-  }
-  .body > :global(*) {
-    flex: 1;
-  }
-  iframe {
-    border: none;
-    width: 100%;
-    height: 100%;
-    background: #fff;
-  }
-  .preview-img {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: auto;
-    padding: 16px;
-    background: repeating-conic-gradient(var(--panel-2) 0 25%, var(--panel) 0 50%) 0 0 / 16px 16px;
-  }
-  .preview-img img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-  }
-  .table-wrap {
-    flex: 1;
-    overflow: auto;
-    padding: 8px 16px 16px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12.5px;
-  }
-  td {
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  .k {
-    font-weight: 600;
-    white-space: nowrap;
-    width: 1%;
-    padding-right: 24px;
-    color: var(--text-2);
-  }
-  .v {
-    font-family: var(--mono);
-    font-size: 12px;
-    word-break: break-all;
-  }
-  .sent-line {
-    padding: 8px;
-    font-size: 12.5px;
-    word-break: break-all;
-  }
-  .sent-body-title {
-    margin: 14px 8px 6px;
-    font-size: 12px;
-  }
-  .sent-timing {
-    padding: 0 8px;
-    font-size: 12px;
-  }
-  .sent-body {
-    margin: 0;
-    padding: 10px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 320px;
-    overflow: auto;
   }
 </style>

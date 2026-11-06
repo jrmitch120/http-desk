@@ -1,27 +1,29 @@
 // Explaining a failed send. The core classifies the error and owns its
-// message; the heading and the hint ("what to do about it") are chosen here,
-// by kind.
+// message; the heading, the hint ("what to do about it") and the fix-it button
+// are chosen here, by kind.
 
 import { errorMessage } from "./api";
+import type { app } from "./store.svelte";
 import type { SendError, SendErrorKind, TlsReason } from "./types";
 
-const KINDS: SendErrorKind[] = [
-  "dns",
-  "refused",
-  "reset",
-  "tls",
-  "timeoutIdle",
-  "timeoutConnect",
-  "invalidUrl",
-  "unresolvedVariable",
-  "file",
-  "other",
-];
+/** The error panel's heading for each kind; its keys are every kind the core sends. */
+const HEADINGS: Record<SendErrorKind, string> = {
+  dns: "Host not found",
+  refused: "Connection refused",
+  reset: "Connection reset",
+  tls: "Secure connection failed",
+  timeoutIdle: "Timed out",
+  timeoutConnect: "Timed out",
+  invalidUrl: "Invalid URL",
+  unresolvedVariable: "Undefined variables in the URL",
+  file: "Couldn't read a file",
+  other: "Could not send request",
+};
 
 /** A classified error as it is, anything else (a join error, a mock's string) as `other`. */
 export function toSendError(e: unknown): SendError {
-  const maybe = e as Partial<SendError> | null;
-  if (maybe && typeof maybe === "object" && KINDS.includes(maybe.kind!) && typeof maybe.message === "string") {
+  const maybe = e as { kind?: unknown; message?: unknown } | null;
+  if (maybe && typeof maybe === "object" && typeof maybe.kind === "string" && Object.hasOwn(HEADINGS, maybe.kind) && typeof maybe.message === "string") {
     return e as SendError;
   }
   return { kind: "other", message: errorMessage(e), details: null };
@@ -42,56 +44,59 @@ function humanMs(ms: number): string {
   return `${ms} ms`;
 }
 
-/** The error panel's heading, and the hint under the message (`null` when the message says it all). */
-export function describeSendError(err: SendError): { heading: string; hint: string | null } {
-  const d = (err.details ?? {}) as Record<string, any>;
+/** The hint under the message, or `null` when the message says it all. */
+function hint(err: SendError): string | null {
   switch (err.kind) {
     case "dns":
-      return { heading: "Host not found", hint: `Couldn't find host ${d.host}. Check the URL or the selected environment.` };
+      return `Couldn't find host ${err.details.host}. Check the URL or the selected environment.`;
     case "refused":
-      return { heading: "Connection refused", hint: `Nothing is listening on ${d.host}:${d.port}. Is the server running?` };
+      return `Nothing is listening on ${err.details.host}:${err.details.port}. Is the server running?`;
     case "reset":
-      return { heading: "Connection reset", hint: "The server closed the connection." };
+      return "The server closed the connection.";
     case "tls":
-      return {
-        heading: "Secure connection failed",
-        hint: `${TLS_REASONS[d.reason as TlsReason] ?? TLS_REASONS.other} Certificate options are in Settings → TLS and in the environment's SSLConfiguration.`,
-      };
+      return `${TLS_REASONS[err.details.reason] ?? TLS_REASONS.other} Certificate options are in Settings → TLS and in the environment's SSLConfiguration.`;
     case "timeoutIdle":
-      return { heading: "Timed out", hint: `The idle timeout fired: no data arrived for ${humanMs(d.timeoutMs)}.` };
+      return `The idle timeout fired: no data arrived for ${humanMs(err.details.timeoutMs)}.`;
     case "timeoutConnect":
-      return { heading: "Timed out", hint: `The connection timeout fired: couldn't connect within ${humanMs(d.timeoutMs)}.` };
-    case "invalidUrl":
-      return { heading: "Invalid URL", hint: null };
+      return `The connection timeout fired: couldn't connect within ${humanMs(err.details.timeoutMs)}.`;
     case "unresolvedVariable":
-      return {
-        heading: "Undefined variables in the URL",
-        hint: `Not defined: ${(d.names as string[]).join(", ")}. Choose an environment that defines them.`,
-      };
+      return `Not defined: ${err.details.names.join(", ")}. Choose an environment that defines them.`;
+    case "invalidUrl":
     case "file":
-      return { heading: "Couldn't read a file", hint: null };
+      return null;
     case "other":
-      return { heading: "Could not send request", hint: "Check the URL, the selected environment, and that the server is reachable." };
+      return "Check the URL, the selected environment, and that the server is reachable.";
   }
 }
 
-/** What a fix-it button on the error panel opens. */
-export type SendErrorFix = "tlsSettings" | "requestSettings" | "environment";
+/** The error panel's heading, and the hint under the message (`null` when the message says it all). */
+export function describeSendError(err: SendError): { heading: string; hint: string | null } {
+  return { heading: HEADINGS[err.kind], hint: hint(err) };
+}
+
+/** The store actions a fix-it button can take. */
+export type FixActions = Pick<typeof app, "openSettings" | "showRequestSettings" | "chooseEnvironment">;
+
+/** A fix-it button: its label, and what clicking it does for the editor tab `tabId`. */
+export interface SendErrorFix {
+  label: string;
+  run: (actions: FixActions, tabId: string) => void;
+}
 
 /**
  * The fix-it button for an error, or `null` when Retry is all there is. A TLS
  * error points at the certificate settings, never at a switch that turns
  * verification off.
  */
-export function sendErrorFix(err: SendError): { fix: SendErrorFix; label: string } | null {
+export function sendErrorFix(err: SendError): SendErrorFix | null {
   switch (err.kind) {
     case "tls":
-      return { fix: "tlsSettings", label: "Open Settings → TLS" };
+      return { label: "Open Settings → TLS", run: (actions) => actions.openSettings("tls") };
     case "timeoutIdle":
     case "timeoutConnect":
-      return { fix: "requestSettings", label: "Open request Settings" };
+      return { label: "Open request Settings", run: (actions, tabId) => actions.showRequestSettings(tabId) };
     case "unresolvedVariable":
-      return { fix: "environment", label: "Choose environment" };
+      return { label: "Choose environment", run: (actions) => actions.chooseEnvironment() };
     default:
       return null;
   }
