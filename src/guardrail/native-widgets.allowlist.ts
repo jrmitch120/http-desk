@@ -16,9 +16,7 @@ export const ALLOWLIST: Allowlist = {
   ],
   checkbox: [],
   radio: [],
-  number: [
-    "src/components/SettingsModal.svelte",
-  ],
+  number: [],
   datalist: [
     "src/components/KeyValueTable.svelte",
   ],
