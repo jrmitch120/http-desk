@@ -139,6 +139,25 @@ fn vertical_slice_over_ipc() {
 }
 
 #[test]
+fn opening_a_repo_subfolder_gitignores_its_private_env_file() {
+    let h = Harness::new();
+    let repo = tempfile::tempdir().unwrap();
+    let repo = repo.path().canonicalize().unwrap();
+    std::fs::create_dir(repo.join(".git")).unwrap();
+    let ws = repo.join("api");
+    std::fs::create_dir(&ws).unwrap();
+    std::fs::write(ws.join("http-client.private.env.json"), r#"{ "dev": { "token": "s3cret" } }"#).unwrap();
+
+    let info = h.ok("open_workspace", json!({ "path": ws }));
+    assert_eq!(info["gitignoreUpdated"], true);
+    assert!(std::fs::read_to_string(ws.join(".gitignore")).unwrap().contains("http-client.private.env.json"));
+    assert_eq!(h.ok("load_environments", json!({}))["privateFileIgnored"], true);
+
+    let again = h.ok("open_workspace", json!({ "path": ws }));
+    assert_eq!(again["gitignoreUpdated"], false);
+}
+
+#[test]
 fn environments_and_openapi_over_ipc() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();

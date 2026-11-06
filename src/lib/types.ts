@@ -92,6 +92,8 @@ export interface TreeNode {
 export interface WorkspaceInfo {
   root: string;
   tree: TreeNode;
+  /** Opening added the private env file to the workspace `.gitignore`. */
+  gitignoreUpdated: boolean;
 }
 
 export interface SearchHit {
@@ -102,10 +104,14 @@ export interface SearchHit {
   url: string;
 }
 
+/** JSON type an env value was read with; saving writes it back with it (missing = string). */
+export type JsonType = "string" | "number" | "boolean" | "null";
+
 export interface EnvVar {
   name: string;
   value: string;
   secret: boolean;
+  jsonType?: JsonType;
 }
 
 export interface Environment {

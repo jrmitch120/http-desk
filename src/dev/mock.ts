@@ -53,7 +53,7 @@ mockIPC(
       case "path_exists":
         return true;
       case "open_workspace":
-        return { root: ROOT, tree };
+        return { root: ROOT, tree, gitignoreUpdated: false };
       case "get_tree":
         return tree;
       case "load_environments":

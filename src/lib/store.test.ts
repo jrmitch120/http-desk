@@ -4,10 +4,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
 
-const { readHttpFile, saveHttpFile } = vi.hoisted(() => ({ readHttpFile: vi.fn(), saveHttpFile: vi.fn() }));
-vi.mock("./api", () => ({ api: { readHttpFile, saveHttpFile }, errorMessage: (e: unknown) => String(e) }));
+const { readHttpFile, saveHttpFile, openWorkspace, getSettings, loadEnvironments } = vi.hoisted(() => ({
+  readHttpFile: vi.fn(),
+  saveHttpFile: vi.fn(),
+  openWorkspace: vi.fn(),
+  getSettings: vi.fn(),
+  loadEnvironments: vi.fn(),
+}));
+vi.mock("./api", () => ({
+  api: { readHttpFile, saveHttpFile, openWorkspace, getSettings, loadEnvironments },
+  errorMessage: (e: unknown) => String(e),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTitle: async () => {} }) }));
 
 import { app } from "./store.svelte";
 
@@ -203,5 +212,26 @@ describe("closing an Orphaned tab", () => {
     expect(app.tabs).toHaveLength(1);
     expect(app.dirtyDocs()).toEqual([]);
     expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("opening a workspace", () => {
+  const tree = { name: "ws", path: "/ws", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    app.toasts = [];
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+  });
+
+  it("tells the user when it added the private env file to .gitignore", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: true });
+    await app.openWorkspace("/ws");
+    expect(app.toasts.map((t) => [t.kind, t.message])).toEqual([["info", "Added http-client.private.env.json to .gitignore"]]);
+  });
+
+  it("stays quiet when .gitignore was left alone", async () => {
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: false });
+    await app.openWorkspace("/ws");
+    expect(app.toasts).toEqual([]);
   });
 });
