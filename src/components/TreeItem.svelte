@@ -2,9 +2,10 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
-  import { basename, displayName, joinPath, methodClass } from "../lib/http";
+  import { basename, displayName, joinPath } from "../lib/http";
   import type { TreeNode } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
 
   let { node, depth }: { node: TreeNode; depth: number } = $props();
@@ -133,7 +134,7 @@
         onkeydown={(e) => e.key === "Enter" && app.openRequest(node.path, { key: req._key })}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
-        <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
+        <Badge method={req.method}>{req.method.slice(0, 6)}</Badge>
         <span class="label ellipsis">{displayName(req)}</span>
         {#if app.isRequestDirty(node.path, req._key!)}<span class="dot"></span>{/if}
       </div>
@@ -198,11 +199,6 @@
   .label {
     flex: 1;
     min-width: 0;
-  }
-  .req .method-badge {
-    min-width: 40px;
-    text-align: right;
-    padding-right: 4px;
   }
   .dot {
     width: 7px;

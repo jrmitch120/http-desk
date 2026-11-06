@@ -1,7 +1,8 @@
 <script lang="ts">
   import { app, type Tab } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
-  import { basename, displayName, methodClass } from "../lib/http";
+  import { basename, displayName } from "../lib/http";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
 
   let strip: HTMLDivElement | undefined = $state();
@@ -66,7 +67,7 @@
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
         {#if req}
-          <span class="method-badge {methodClass(req.method)}">{req.method.slice(0, 6)}</span>
+          <Badge method={req.method} class="tab-method">{req.method.slice(0, 6)}</Badge>
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
@@ -143,7 +144,7 @@
     height: 1px;
     background: var(--bg);
   }
-  .tab .method-badge {
+  .tab :global(.tab-method) {
     min-width: 0;
   }
   .name {

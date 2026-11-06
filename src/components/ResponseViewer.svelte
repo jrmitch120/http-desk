@@ -7,9 +7,10 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration, prettyJson, prettyXml, statusClass } from "../lib/http";
+  import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
+  import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
 
@@ -127,17 +128,17 @@
         <span class="spacer"></span>
         <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
       {:else if run.cancelled && !res}
-        <span class="pill cancelled">Cancelled</span>
+        <Badge size="md">Cancelled</Badge>
       {:else if res}
-        {#if run.cancelled}<span class="pill cancelled" title="The last send was cancelled; this is the response before it">Cancelled</span>{/if}
-        <span class="pill {statusClass(res.status)}" title={statusTitle}>{res.status} {res.statusText}</span>
+        {#if run.cancelled}<span class="tip" title="The last send was cancelled; this is the response before it"><Badge size="md">Cancelled</Badge></span>{/if}
+        <span class="tip" title={statusTitle}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
         <span class="metric" title={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" title={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
         <button class="icon-btn" title="Copy body" disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" title="Save body to file" onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
-        <span class="pill s-5xx">Error</span>
+        <Badge size="md" tone="danger">Error</Badge>
       {/if}
     </div>
 
@@ -259,16 +260,9 @@
     font-weight: 600;
     font-size: 12.5px;
   }
-  .pill {
-    font-weight: 650;
-    font-family: var(--mono);
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: color-mix(in srgb, currentColor 13%, transparent);
-  }
-  .pill.cancelled {
-    color: var(--muted);
+  /* Holds a badge's tooltip. */
+  .tip {
+    display: flex;
   }
   .metric {
     font-size: 12px;

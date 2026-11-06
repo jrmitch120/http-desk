@@ -315,15 +315,6 @@ textarea.input {
 .m-options { color: var(--m-options); }
 .m-custom { color: var(--m-custom); }
 
-.method-badge {
-  font-family: var(--mono);
-  font-weight: 700;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  min-width: 38px;
-  flex: none;
-}
-
 /* status colors */
 .s-2xx { color: var(--success); }
 .s-3xx { color: var(--info); }
@@ -369,15 +360,6 @@ textarea.input {
   text-decoration: line-through;
   text-decoration-color: var(--faint);
   color: var(--faint);
-}
-.subtab .off-pill {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: var(--panel-3);
-  color: var(--muted);
 }
 
 .empty-state {

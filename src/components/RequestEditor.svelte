@@ -16,6 +16,7 @@
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
+  import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
 
@@ -140,19 +141,19 @@
       <nav class="subtabs">
         <button class="subtab" class:active={section === "params"} class:off={!req.query.enabled} onclick={() => (section = "params")}>
           <span class="label">Params</span>
-          {#if !req.query.enabled}<span class="off-pill">OFF</span>{:else if qCount}<span class="count">{qCount}</span>{/if}
+          {#if !req.query.enabled}<Badge>OFF</Badge>{:else if qCount}<span class="count">{qCount}</span>{/if}
         </button>
         <button class="subtab" class:active={section === "headers"} class:off={!req.headers.enabled} onclick={() => (section = "headers")}>
           <span class="label">Headers</span>
-          {#if !req.headers.enabled}<span class="off-pill">OFF</span>{:else if hCount}<span class="count">{hCount}</span>{/if}
+          {#if !req.headers.enabled}<Badge>OFF</Badge>{:else if hCount}<span class="count">{hCount}</span>{/if}
         </button>
         <button class="subtab" class:active={section === "auth"} class:off={!req.auth.enabled && req.auth.kind !== "none"} onclick={() => (section = "auth")}>
           <span class="label">Authorization</span>
-          {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<span class="off-pill">OFF</span>{/if}{/if}
+          {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
         </button>
         <button class="subtab" class:active={section === "body"} class:off={!req.body.enabled && req.body.mode !== "none"} onclick={() => (section = "body")}>
           <span class="label">Body</span>
-          {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<span class="off-pill">OFF</span>{/if}{/if}
+          {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
         </button>
         <button class="subtab" class:active={section === "settings"} onclick={() => (section = "settings")}>
           <span class="label">Settings</span>

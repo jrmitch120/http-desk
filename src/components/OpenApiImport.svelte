@@ -3,9 +3,10 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { SvelteSet } from "svelte/reactivity";
   import { api, errorMessage } from "../lib/api";
-  import { joinPath, methodClass, slugify } from "../lib/http";
+  import { joinPath, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
+  import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
@@ -199,8 +200,8 @@
       <div class="spec-head">
         <div class="spec-title">
           <strong>{summary.title}</strong>
-          <span class="pill">v{summary.version}</span>
-          <span class="pill">OpenAPI {summary.openapiVersion}</span>
+          <Badge size="md">v{summary.version}</Badge>
+          <Badge size="md">OpenAPI {summary.openapiVersion}</Badge>
         </div>
         {#if summary.servers.length}
           <div class="servers muted">
@@ -259,7 +260,7 @@
                   {#each g.ops as op (op.id)}
                     <label class="op" class:deprecated={op.deprecated}>
                       <input type="checkbox" checked={selected.has(op.id)} onchange={() => toggleOp(op.id)} />
-                      <span class="method-badge {methodClass(op.method)}">{op.method}</span>
+                      <Badge method={op.method} />
                       <span class="path mono ellipsis" title={op.path}>{op.path}</span>
                       <span class="summary muted ellipsis" title={op.summary ?? op.operationId ?? ""}>{op.summary ?? op.operationId ?? ""}</span>
                       {#if op.deprecated}<span class="dep">deprecated</span>{/if}
@@ -399,13 +400,6 @@
     align-items: center;
     gap: 8px;
     font-size: 14px;
-  }
-  .pill {
-    font-size: 11px;
-    padding: 1px 7px;
-    border-radius: 10px;
-    background: var(--panel-3);
-    color: var(--text-2);
   }
   .servers {
     display: flex;
