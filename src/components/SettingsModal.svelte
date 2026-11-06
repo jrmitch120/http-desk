@@ -5,6 +5,7 @@
   import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
   import Toggle from "./Toggle.svelte";
@@ -141,7 +142,7 @@
           <Toggle checked={copy.exec.verifyTls} onchange={(v) => (copy!.exec.verifyTls = v)} />
         </div>
         {#if !copy.exec.verifyTls}
-          <div class="banner warning inline"><Icon name="alert" /><span>Certificate verification is off. Responses could come from an impostor server — only use this for local development.</span></div>
+          <Banner severity="warning" inline class="tls-off">Certificate verification is off. Responses could come from an impostor server — only use this for local development.</Banner>
         {/if}
         {#each pathFields as f (f.key)}
           {@render pathRow(copy.exec, f)}
@@ -258,10 +259,7 @@
     font-size: 11.5px;
     line-height: 1.5;
   }
-  .banner.inline {
-    border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
-    border-radius: var(--radius);
+  .body :global(.tls-off) {
     margin: 2px 0 6px;
-    line-height: 1.45;
   }
 </style>

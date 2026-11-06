@@ -23,6 +23,7 @@
   } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
   import SectionBar from "./SectionBar.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
 
   let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
@@ -182,13 +183,10 @@
     </div>
   {/if}
   {#if syntaxWarnings.length}
-    <div class="syntax-warnings" role="status">
-      <Icon name="alert" size={13} />
-      <div>
-        {#each syntaxWarnings as w (w.line)}<div>{w.message}</div>{/each}
-        <div class="muted">Other .http clients read it the same way, and so does HttpDesk when it reloads the file. Indent the line to keep it in the body.</div>
-      </div>
-    </div>
+    <Banner severity="warning" inline class="syntax-warnings">
+      {#each syntaxWarnings as w (w.line)}<div>{w.message}</div>{/each}
+      <div class="muted">Other .http clients read it the same way, and so does HttpDesk when it reloads the file. Indent the line to keep it in the body.</div>
+    </Banner>
   {/if}
 </div>
 
@@ -223,20 +221,8 @@
   .content.off {
     opacity: 0.55;
   }
-  .syntax-warnings {
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
+  .content :global(.syntax-warnings) {
     margin-top: 8px;
-    padding: 7px 10px;
-    border-radius: var(--radius-sm);
-    background: rgba(232, 182, 76, 0.12);
-    color: var(--warning);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-  .syntax-warnings .muted {
-    color: var(--muted);
   }
   .none {
     padding: 30px 0;

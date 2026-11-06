@@ -16,6 +16,7 @@
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
 
   let { tab }: { tab: Tab } = $props();
@@ -82,19 +83,19 @@
 {:else}
   <div class="editor">
     {#if doc.missing}
-      <div class="banner error"><Icon name="alert" />{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</div>
+      <Banner severity="error">{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</Banner>
     {:else if orphaned}
-      <div class="banner error">
-        <Icon name="alert" />This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
-      </div>
+      <Banner severity="error">
+        This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
+      </Banner>
     {:else if doc.externalChange}
-      <div class="banner warning">
-        <Icon name="alert" />
-        <span>{basename(tab.path)} changed on disk while you have unsaved edits.</span>
-        <span class="spacer"></span>
-        <button class="btn small" onclick={reloadFromDisk}>Reload from disk</button>
-        <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
-      </div>
+      <Banner severity="warning">
+        {basename(tab.path)} changed on disk while you have unsaved edits.
+        {#snippet actions()}
+          <button class="btn small" onclick={reloadFromDisk}>Reload from disk</button>
+          <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
+        {/snippet}
+      </Banner>
     {/if}
 
     <div class="crumbs">

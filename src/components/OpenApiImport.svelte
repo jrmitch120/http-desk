@@ -6,6 +6,7 @@
   import { joinPath, methodClass, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
   import Toggle from "./Toggle.svelte";
@@ -190,7 +191,7 @@
         </label>
       {/if}
       {#if loadError}
-        <div class="banner error load-error"><Icon name="alert" /><span class="selectable">{loadError}</span></div>
+        <Banner severity="error" inline><span class="selectable">{loadError}</span></Banner>
       {/if}
     </div>
   {:else if summary}
@@ -210,18 +211,17 @@
         {/if}
       </div>
       {#if summary.warnings.length}
-        <div class="banner warning warn">
+        <Banner severity="warning">
           <button class="warn-toggle" onclick={() => (showWarnings = !showWarnings)}>
-            <Icon name="alert" />
             {summary.warnings.length} warning{summary.warnings.length === 1 ? "" : "s"} while reading the specification
             <Icon name={showWarnings ? "chevron-down" : "chevron-right"} size={13} />
           </button>
           {#if showWarnings}
-            <ul class="selectable">
+            <ul class="warn-list selectable">
               {#each summary.warnings as w, i (i)}<li>{w}</li>{/each}
             </ul>
           {/if}
-        </div>
+        </Banner>
       {/if}
 
       <div class="body">
@@ -384,11 +384,6 @@
   .grow {
     flex: 1;
   }
-  .load-error {
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    align-items: flex-start;
-  }
   .select {
     display: flex;
     flex-direction: column;
@@ -422,10 +417,6 @@
   .desc {
     font-family: var(--font);
   }
-  .warn {
-    flex-direction: column;
-    align-items: stretch;
-  }
   .warn-toggle {
     display: flex;
     align-items: center;
@@ -437,9 +428,9 @@
     cursor: pointer;
     font-size: 12px;
   }
-  .warn ul {
+  .warn-list {
     margin: 6px 0 2px;
-    padding-left: 22px;
+    padding-left: 16px;
     max-height: 90px;
     overflow: auto;
     color: var(--text-2);

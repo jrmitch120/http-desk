@@ -3,6 +3,7 @@
   import { api, errorMessage } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import type { EnvironmentSet, EnvVar } from "../lib/types";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
 
@@ -207,10 +208,9 @@
       </div>
 
       {#if hasSecrets && set.privateFileIgnored === false}
-        <div class="banner warning">
-          <Icon name="alert" />
-          <span><span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.</span>
-        </div>
+        <Banner severity="warning">
+          <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
+        </Banner>
       {/if}
 
       <div class="table-wrap">

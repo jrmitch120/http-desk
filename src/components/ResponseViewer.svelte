@@ -10,6 +10,7 @@
   import { formatBytes, formatDuration, prettyJson, prettyXml, statusClass } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
+  import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
 
   let { tab }: { tab: Tab } = $props();
@@ -143,20 +144,15 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <div class="error">
-        <Icon name="alert" size={22} />
-        <div>
-          <div class="err-title">Could not send request</div>
-          <div class="err-msg selectable mono">{run.error}</div>
-          <div class="muted small">Check the URL, the selected environment, and that the server is reachable.</div>
-        </div>
-      </div>
+      <Banner severity="error" inline heading="Could not send request" class="send-error">
+        <div class="err-msg selectable mono">{run.error}</div>
+        <div class="muted">Check the URL, the selected environment, and that the server is reachable.</div>
+      </Banner>
     {:else if res}
       {#if res.warnings.length || res.truncated}
-        <div class="banner warning">
-          <Icon name="alert" />
+        <Banner severity="warning">
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
-        </div>
+        </Banner>
       {/if}
       <nav class="subtabs">
         <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
@@ -302,24 +298,12 @@
       transform: rotate(360deg);
     }
   }
-  .error {
-    display: flex;
-    gap: 14px;
+  .viewer :global(.send-error) {
     margin: 18px;
-    padding: 16px;
-    border-radius: var(--radius);
-    border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
-    background: color-mix(in srgb, var(--danger) 8%, transparent);
-    color: var(--danger);
-  }
-  .err-title {
-    font-weight: 600;
-    margin-bottom: 6px;
   }
   .err-msg {
     color: var(--text);
-    font-size: 12px;
-    margin-bottom: 8px;
+    margin: 4px 0 6px;
     word-break: break-word;
   }
   .toolbar {
