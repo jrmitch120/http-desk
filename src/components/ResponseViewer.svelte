@@ -10,14 +10,15 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
+  import { formatBytes, formatDuration, prettyXml } from "../lib/http";
   import { explainStatus } from "../lib/status";
   import { formatPhase, redirectNote, timingPhases } from "../lib/timing";
-  import TimingPanel from "./TimingPanel.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import HeadersPanel from "./HeadersPanel.svelte";
+  import TimingPanel from "./TimingPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -73,11 +74,25 @@
 
   const language = $derived<Language>(kind === "json" ? "json" : kind === "xml" ? "xml" : kind === "html" ? "html" : "text");
 
+  // Pretty JSON comes from the core (lossless: numbers stay as the server sent
+  // them), once per response. Raw text shows until it arrives, and stays if
+  // the body isn't valid JSON.
+  let formatted = $state<{ id: string; text: string } | null>(null);
+  $effect(() => {
+    if (!res || res.bodyText === null || kind !== "json" || effectiveMode !== "pretty") return;
+    const { id, bodyText: raw } = res;
+    if (untrack(() => formatted?.id) === id) return;
+    const keep = (text: string) => {
+      if (res?.id === id) formatted = { id, text }; // a newer response may have arrived
+    };
+    api.formatBody(raw, "json", "pretty").then(keep, () => keep(raw));
+  });
+
   const bodyText = $derived.by(() => {
     if (!res) return "";
     if (res.bodyText === null) return hexdump(res.bodyBase64);
     if (effectiveMode !== "pretty") return res.bodyText;
-    if (kind === "json") return prettyJson(res.bodyText) ?? res.bodyText;
+    if (kind === "json") return formatted?.id === res.id ? formatted.text : res.bodyText;
     if (kind === "xml" && res.bodyText.length < 5_000_000) return prettyXml(res.bodyText);
     return res.bodyText;
   });
@@ -152,7 +167,12 @@
   const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
 
   const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
-  const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
+  const sizeTitle = $derived.by(() => {
+    if (!res) return "";
+    const headers = `Headers ${formatBytes(res.headersSize)}`;
+    if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
+    return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
+  });
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
@@ -242,15 +262,7 @@
           {/if}
         </div>
       {:else if current === "headers"}
-        <div class="table-wrap">
-          <table>
-            <tbody>
-              {#each res.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <HeadersPanel headers={res.headers} />
       {:else if current === "timing"}
         <TimingPanel {res} />
       {:else}

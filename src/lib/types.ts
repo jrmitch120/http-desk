@@ -155,9 +155,14 @@ export interface HttpResponse {
   headers: [string, string][];
   timeMs: number;
   ttfbMs: number;
+  /** Decoded body size. */
   bodySize: number;
+  /** Body bytes as received on the wire, before Content-Encoding is undone. */
+  transferredSize: number;
   headersSize: number;
   contentType: string | null;
+  /** The response's Content-Encoding header, if any. */
+  contentEncoding: string | null;
   bodyText: string | null;
   bodyBase64: string | null;
   truncated: boolean;
@@ -180,6 +185,12 @@ export interface Timings {
   reused: boolean;
   redirects: number;
 }
+
+/** The syntax `format_body` formats (core `body_format::BodyKind`). */
+export type BodyKind = "json";
+
+/** Pretty: one member per line, two-space indent. Minify: no whitespace. */
+export type FormatMode = "pretty" | "minify";
 
 export interface ExecSettings {
   timeoutMs: number;
