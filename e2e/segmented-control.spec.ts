@@ -100,9 +100,11 @@ test("the response view and Settings switches are the same radiogroup", async ({
 
   await page.keyboard.press("ControlOrMeta+Comma");
   const settings = dialog(page, "Settings");
-  expect(await pick(settings.getByRole("radiogroup", { name: "Theme" }), "Light")).toBe(look);
+  // Settings apply live, so compare looks before switching to the light theme.
+  const theme = settings.getByRole("radiogroup", { name: "Theme" });
+  expect(await pick(theme, "Dark")).toBe(look);
   expect(await pick(settings.getByRole("radiogroup", { name: "Layout" }), "Response below")).toBe(look);
-  await settings.getByRole("button", { name: "Save" }).click();
+  await pick(theme, "Light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("separator", { name: "Resize request and response" })).toHaveAttribute(
     "aria-orientation",
