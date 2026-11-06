@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use httpdesk_core::env::SslConfig;
-use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
+use httpdesk_core::exec::{execute, execute_on, prepare, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::{method, path};
@@ -804,4 +804,189 @@ async fn progress_reports_are_rate_limited_however_small_the_chunks() {
     assert!(gaps.iter().all(|g| *g >= Duration::from_millis(90)), "more than ~10 reports a second: {gaps:?}");
     let window = Duration::from_millis(resp.time_ms as u64);
     assert!(reports.len() as u128 <= window.as_millis() / 100 + 1, "{} reports in {window:?}", reports.len());
+}
+
+// Timing. wiremock listens on 127.0.0.1; asking for `localhost` instead makes
+// the request look the host up, so the DNS phase is measured.
+fn by_name(server: &MockServer) -> String {
+    server.uri().replace("127.0.0.1", "localhost")
+}
+
+#[tokio::test]
+async fn a_fresh_request_times_each_phase_within_the_total() {
+    let server = MockServer::start().await;
+    Mock::given(path("/t"))
+        .respond_with(
+            ResponseTemplate::new(200).set_delay(Duration::from_millis(40)).set_body_string("x".repeat(200_000)),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/t\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&server))]), Path::new(".")).await.unwrap();
+
+    let t = &resp.timings;
+    let dns = t.dns.expect("a lookup of localhost is timed");
+    let connect = t.connect.expect("a new connection is timed");
+    assert!(!t.reused);
+    assert_eq!(t.redirects, 0);
+    assert!(dns >= 0.0 && connect > 0.0 && t.download >= 0.0, "{t:?}");
+    assert!(t.ttfb >= 40.0, "waiting covers the server's delay: {t:?}");
+    assert!(dns + connect + t.ttfb + t.download <= resp.time_ms, "{t:?} within {}", resp.time_ms);
+}
+
+#[tokio::test]
+async fn a_second_request_on_the_same_client_reuses_the_connection_and_skips_dns_and_connect() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &by_name(&server))]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared(), &settings, &SslConfig::default()).unwrap();
+
+    let first = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    assert!(!first.reused && first.dns.is_some() && first.connect.is_some(), "{first:?}");
+
+    let second = execute_on(&client, prepared(), &settings).await.unwrap().response.timings;
+    assert!(second.reused, "{second:?}");
+    assert_eq!((second.dns, second.connect), (None, None));
+    assert!(second.ttfb > 0.0, "{second:?}");
+}
+
+#[tokio::test]
+async fn a_redirect_chain_reports_its_length_and_times_the_final_hop() {
+    let server = MockServer::start().await;
+    for (from, to) in [("/a", "/b"), ("/b", "/c")] {
+        Mock::given(path(from))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", to))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/c")).respond_with(ResponseTemplate::new(200).set_body_string("c")).mount(&server).await;
+    let vars = env(&[("base", &by_name(&server))]);
+
+    let resp = send(&parse("GET {{base}}/a\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(resp.timings.redirects, 2);
+    // The first hop opened the connection; the final one went over it.
+    assert!(resp.timings.reused, "{:?}", resp.timings);
+    assert_eq!((resp.timings.dns, resp.timings.connect), (None, None));
+
+    let direct = send(&parse("GET {{base}}/c\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(direct.timings.redirects, 0);
+    let unfollowed = parse("# @no-redirect\nGET {{base}}/a\n").requests.remove(0);
+    assert_eq!(send(&unfollowed, vars, Path::new(".")).await.unwrap().timings.redirects, 0);
+}
+
+#[tokio::test]
+async fn a_redirect_to_another_server_times_the_final_hops_new_connection() {
+    let target = MockServer::start().await;
+    Mock::given(path("/end"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(40)))
+        .mount(&target)
+        .await;
+    let origin = MockServer::start().await;
+    Mock::given(path("/go"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .set_delay(Duration::from_millis(60))
+                .insert_header("location", format!("{}/end", by_name(&target)).as_str()),
+        )
+        .mount(&origin)
+        .await;
+
+    let req = parse("GET {{base}}/go\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&origin))]), Path::new(".")).await.unwrap();
+    let t = &resp.timings;
+    assert_eq!(t.redirects, 1);
+    assert!(!t.reused && t.dns.is_some() && t.connect.is_some(), "{t:?}");
+    assert!(t.ttfb >= 40.0 && t.ttfb < 100.0, "waiting is the final hop's, not the first: {t:?}");
+    assert!(resp.time_ms >= 100.0, "the total covers both hops: {}", resp.time_ms);
+}
+
+// Cookies.
+
+#[tokio::test]
+async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/home")
+                .insert_header("set-cookie", "a=1; Path=/; HttpOnly"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/home"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "b=2; Max-Age=60; SameSite=Lax")
+                .append_header("set-cookie", "not a cookie"),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/login\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert_eq!(resp.status, 200);
+
+    let got: Vec<_> = resp.cookies.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.url.as_str())).collect();
+    let (login, home) = (format!("{}/login", server.uri()), format!("{}/home", server.uri()));
+    assert_eq!(got, [("a", "1", login.as_str()), ("b", "2", home.as_str()), ("", "", home.as_str())]);
+    assert!(resp.cookies[0].http_only);
+    assert_eq!((resp.cookies[1].max_age, resp.cookies[1].same_site.as_deref()), (Some(60), Some("Lax")));
+    assert_eq!(resp.cookies[2].raw, "not a cookie");
+
+    let hops = server.received_requests().await.unwrap();
+    assert_eq!(hops.len(), 2);
+    assert!(hops.iter().all(|r| r.headers.get("cookie").is_none()), "a cookie was sent back");
+}
+
+#[tokio::test]
+async fn a_cookie_header_the_user_wrote_is_still_sent() {
+    let server = echo_server().await;
+    let req = parse("GET {{base}}/echo\nCookie: mine=1\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert!(resp.cookies.is_empty());
+    assert_eq!(header(&last_request(&server).await, "cookie"), Some("mine=1"));
+}
+
+#[tokio::test]
+async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
+    let server = MockServer::start().await;
+    for (route, cookie) in [("/one", "a=1"), ("/two", "b=2")] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", cookie))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/broken"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("set-cookie", "c=3")
+                .insert_header("content-encoding", "gzip")
+                .set_body_string("not gzip"),
+        )
+        .mount(&server)
+        .await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared("GET {{base}}/one\n"), &settings, &SslConfig::default()).unwrap();
+
+    let names = |r: &exec::HttpResponse| r.cookies.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&first), ["a"]);
+    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&second), ["b"], "the first request's cookie leaked into the second");
+    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&again), ["a"]);
+
+    // A request that fails after its headers arrive never takes its cookies;
+    // the next one on the client must not inherit them.
+    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings).await;
+    assert!(matches!(failed, Err(ExecError::Other(_))), "a bad gzip body fails the send");
+    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings).await.unwrap().response;
+    assert_eq!(names(&after), ["b"], "the failed request's cookie leaked into the next");
+
+    let sent = server.received_requests().await.unwrap();
+    assert_eq!(sent.len(), 5);
+    assert!(sent.iter().all(|r| r.headers.get("cookie").is_none()), "a reused client sent a cookie back");
 }

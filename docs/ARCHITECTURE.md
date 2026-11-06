@@ -14,7 +14,7 @@ and this document disagree, fix one of them. Terms in **bold** (**File variable*
 |---|---|
 | **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, saving a response body, formatting a body, a hex dump) is therefore an async command or runs on the blocking pool, so the window stays responsive. Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
 | **Rust core** | `.http` parsing, serialization, variable resolution, execution and OpenAPI generation all live in a plain library crate (`crates/httpdesk-core`) with **no Tauri dependency**. It can be tested with `cargo test` and no window, and could later be reused by a CLI. |
-| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. A new `Client` is built per execution because TLS and redirect settings can differ per request or environment. Building one costs microseconds next to the request itself. |
+| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. A new `Client` is built per execution because TLS and redirect settings can differ per request or environment. Building one costs microseconds next to the request itself. Each client carries timing hooks (a DNS resolver wrapper, a connector layer and a redirect-policy wrapper) that measure the final request's DNS, connect + TLS, waiting and download phases; `execute_on` sends on an existing `ExecClient`, which is how tests see a reused connection. |
 | **Svelte 5** | Runes (`$state`, `$derived`) handle the deeply nested request model without a separate store library. It compiles to small, fast bundles. Plain Vite SPA, without SvelteKit (no routing or SSR needed). |
 | **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) and the single-line URL editor (`{{variable}}` highlighting and autocompletion). |
 | **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. The UI uses HttpDesk's own controls and bundled fonts instead of native form widgets and system fonts, so it renders the same in every webview ([ADR-0002](adr/0002-owned-controls-over-native-widgets.md)); the controls are described in [controls.md](controls.md). |
@@ -34,6 +34,8 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   vars.rs               {{variable}} + dynamic variable resolution
   exec.rs               request execution via reqwest, send error classification
   exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
+  exec/timing.rs        phase timing hooks (DNS, connect + TLS, redirects) for the Timing tab
+  cookies.rs            Set-Cookie parsing, and the display-only cookie recorder plugged into reqwest
   body_format.rs        lossless JSON Beautify/Minify/Pretty: re-indents tokens, never re-parses numbers
   body_format/          xml.rs (XML formatter, same approach), hex.rs (Hex view dump)
   tls_probe.rs          why a server's certificate was rejected (self-signed, expired)
@@ -561,7 +563,12 @@ Decisions made during implementation, beyond the plan above:
   (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
-  (`src/lib/sendError.ts`) and always offers Retry. DNS errors are recognised by the
+  (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
+  the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
+  turns verification off), the timeouts open the request's Settings, and
+  `unresolvedVariable` opens the environment picker. They ask through one-shot store
+  fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
+  component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
   verifiers don't agree on reasons (macOS reports a self-signed or expired certificate
   as an opaque code), so after a certificate rejection the core fetches the certificate
@@ -619,19 +626,21 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported), transferred size, and rate-limited download progress |
+| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported), transferred size, rate-limited download progress, cookies set on redirect hops (recorded, never sent back), and a reused client listing only each request's own cookies. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | Env, vars, workspace | Unit tests in each module |
 | IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), and `send-progress` events for a trickled body |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings and hints by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings and hints by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |
 
 ### Known gaps / next steps
 
-* No cookie jar; responses' `Set-Cookie` is not replayed.
+* No cookie jar; responses' `Set-Cookie` is not replayed. The response viewer's Cookies
+  tab lists them (redirect hops included), but a recording store that never returns a
+  cookie is all reqwest gets.
 * Scripts (`< {% %}`, `> {% %}`) are preserved but not executed (out of scope).
 * Request-to-request variables (`{{login.response.body.token}}`) are not supported.
 * A Basic auth username containing `:` can't be represented (RFC 7617), so saving one is

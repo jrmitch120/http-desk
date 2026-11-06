@@ -1,4 +1,4 @@
-// The response viewer's Body / Headers / Request switch is the design-system
+// The response viewer's Body / Headers / (Cookies) / Timing / Request switch is the design-system
 // SegmentedControl, and a tab can show a count of what's inside it.
 import { expect, test, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
@@ -28,7 +28,7 @@ test("clicking a viewer tab shows its panel", async ({ page }) => {
 
   await tab("Request").click();
   await expect(tab("Request")).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("This is exactly what was sent")).toBeVisible();
+  await expect(page.getByText("A reconstruction of the final request")).toBeVisible();
   await expect(tabs.getByRole("radio", { checked: true })).toHaveCount(1);
 
   await tab("Body").click();
@@ -47,8 +47,12 @@ test("the arrow keys move between viewer tabs, showing each panel", async ({ pag
   await expect(page.getByRole("cell", { name: "x-powered-by" })).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
+  await expect(tab("Timing")).toBeFocused();
+  await expect(page.getByRole("list", { name: "Timing phases" })).toBeVisible();
+
+  await page.keyboard.press("ArrowRight");
   await expect(tab("Request")).toBeFocused();
-  await expect(page.getByText("This is exactly what was sent")).toBeVisible();
+  await expect(page.getByText("A reconstruction of the final request")).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
   await expect(tab("Body")).toBeFocused();
@@ -63,10 +67,11 @@ test("the Headers tab counts the response headers; tabs without a count show non
   await sendListPets(page);
   const tabs = viewerTabs(page);
   const radios = tabs.getByRole("radio");
-  await expect(radios).toHaveCount(3);
+  await expect(radios).toHaveCount(4);
   await expect(radios.nth(0)).toHaveAccessibleName("Body");
   await expect(radios.nth(1)).toHaveAccessibleName("Headers 4");
-  await expect(radios.nth(2)).toHaveAccessibleName("Request");
+  await expect(radios.nth(2)).toHaveAccessibleName("Timing");
+  await expect(radios.nth(3)).toHaveAccessibleName("Request");
   await expect(tabs.getByRole("radio", { name: "Headers" }).locator(".count")).toHaveText("4");
   await expect(tabs.locator(".count")).toHaveCount(1);
 
@@ -87,5 +92,5 @@ test("each editor tab remembers its viewer tab", async ({ page }) => {
 
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expect(tab("Request")).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("This is exactly what was sent")).toBeVisible();
+  await expect(page.getByText("A reconstruction of the final request")).toBeVisible();
 });

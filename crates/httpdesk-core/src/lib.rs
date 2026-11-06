@@ -2,6 +2,7 @@
 //! request execution and OpenAPI generation. No UI or Tauri dependencies.
 
 pub mod body_format;
+pub mod cookies;
 pub mod env;
 pub mod exec;
 pub mod model;
