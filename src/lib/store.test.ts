@@ -40,8 +40,9 @@ const {
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+const win = vi.hoisted(() => ({ setTheme: vi.fn(async (_theme: "light" | "dark" | null) => {}) }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}) }),
+  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}), setTheme: win.setTheme }),
 }));
 
 import { app } from "./store.svelte";
@@ -413,6 +414,90 @@ describe("saving settings", () => {
     await app.selectEnvironment("staging");
     expect(app.envName).toBe("staging");
     expect(app.toasts.map((t) => t.kind)).toEqual(["error"]);
+  });
+});
+
+describe("theme", () => {
+  /** A stand-in for the OS appearance as `matchMedia("(prefers-color-scheme: dark)")` reports it. */
+  function osAppearance(dark: boolean) {
+    const listeners = new Set<(e: { matches: boolean }) => void>();
+    const query = {
+      matches: dark,
+      addEventListener: (_: "change", f: (e: { matches: boolean }) => void) => listeners.add(f),
+      removeEventListener: (_: "change", f: (e: { matches: boolean }) => void) => listeners.delete(f),
+    };
+    vi.stubGlobal("matchMedia", (q: string) => (q === "(prefers-color-scheme: dark)" ? query : { matches: false, addEventListener() {}, removeEventListener() {} }));
+    return {
+      set(next: boolean) {
+        query.matches = next;
+        for (const f of listeners) f({ matches: next });
+      },
+    };
+  }
+  const applied = () => (document.documentElement.dataset as { theme?: string }).theme;
+  const start = async (theme: AppSettings["theme"] | undefined) => {
+    api.getSettings.mockResolvedValue({ theme, recentWorkspaces: [], environments: {} } as unknown as AppSettings);
+    await app.init();
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    win.setTheme.mockClear();
+    app.toasts = [];
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each(["dark", "light"] as const)("keeps a saved %s theme whatever the OS appearance is", async (theme) => {
+    osAppearance(theme === "light");
+    await start(theme);
+    expect(applied()).toBe(theme);
+    expect(app.effectiveTheme).toBe(theme);
+    expect(win.setTheme).toHaveBeenLastCalledWith(theme);
+  });
+
+  it.each([
+    [true, "dark"],
+    [false, "light"],
+  ])("resolves System through prefers-color-scheme (OS dark: %s)", async (dark, theme) => {
+    osAppearance(dark);
+    await start("system");
+    expect(applied()).toBe(theme);
+    expect(app.effectiveTheme).toBe(theme);
+    // The native window follows the OS too, so its title bar and scrollbars agree.
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+  });
+
+  it("switches live when the OS appearance changes while System is chosen", async () => {
+    const os = osAppearance(false);
+    await start("system");
+    os.set(true);
+    expect(applied()).toBe("dark");
+    os.set(false);
+    expect(applied()).toBe("light");
+  });
+
+  it("ignores OS appearance changes while a fixed theme is chosen", async () => {
+    const os = osAppearance(false);
+    await start("light");
+    os.set(true);
+    expect(applied()).toBe("light");
+  });
+
+  it("applies a theme picked later at once, and the native window with it", async () => {
+    osAppearance(true);
+    await start("light");
+    await app.updateSettings({ theme: "system" });
+    expect(applied()).toBe("dark");
+    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+    await app.updateSettings({ theme: "light" });
+    expect(applied()).toBe("light");
+    expect(win.setTheme).toHaveBeenLastCalledWith("light");
+  });
+
+  it("follows the OS when the settings have no theme", async () => {
+    osAppearance(false);
+    await start(undefined);
+    expect(applied()).toBe("light");
   });
 });
 

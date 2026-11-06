@@ -26,7 +26,26 @@
     ...(app.envSet?.environments.map((e) => ({ value: e.name, label: e.name })) ?? []),
   ]);
   const layout = $derived(app.settings?.layout ?? "horizontal");
-  const theme = $derived(app.settings?.theme ?? "dark");
+
+  // The theme menu: System / Light / Dark, the current choice checked.
+  let themeButton: HTMLButtonElement | undefined = $state();
+  const themes = [
+    { value: "system", label: "System", icon: "monitor" },
+    { value: "light", label: "Light", icon: "sun" },
+    { value: "dark", label: "Dark", icon: "moon" },
+  ] as const;
+  const themeTip = $derived(
+    app.themeChoice === "system" ? `Theme: System (${app.effectiveTheme === "dark" ? "Dark" : "Light"})` : `Theme: ${app.themeChoice === "dark" ? "Dark" : "Light"}`,
+  );
+
+  function themeMenu(e: MouseEvent) {
+    if (menu.isOpenFrom(themeButton)) return menu.close(false);
+    menu.show(
+      e,
+      themes.map((t) => ({ label: t.label, icon: t.icon, checked: app.themeChoice === t.value, action: () => app.updateSettings({ theme: t.value }) })),
+      { anchor: themeButton, align: "end", label: "Theme" },
+    );
+  }
 </script>
 
 <header class="topbar">
@@ -72,13 +91,42 @@
   >
     <Icon name={layout === "horizontal" ? "rows" : "columns"} />
   </button>
-  <button class="icon-btn" aria-label="Toggle theme" use:tooltip onclick={() => app.updateSettings({ theme: theme === "dark" ? "light" : "dark" })}>
-    <Icon name={theme === "dark" ? "sun" : "moon"} />
+  <button
+    class="icon-btn theme-btn"
+    bind:this={themeButton}
+    aria-label="Theme"
+    aria-haspopup="menu"
+    aria-expanded={menu.isOpenFrom(themeButton)}
+    use:tooltip={themeTip}
+    onclick={themeMenu}
+  >
+    <Icon name={app.effectiveTheme === "dark" ? "moon" : "sun"} />
+    {#if app.themeChoice === "system"}<span class="auto" aria-hidden="true">A</span>{/if}
   </button>
   <button class="icon-btn" aria-label="Settings" use:tooltip={"Settings (⌘/Ctrl ,)"} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
 </header>
 
 <style>
+  .theme-btn {
+    position: relative;
+  }
+  /* "Automatic": System is chosen, so the icon follows the OS. */
+  .auto {
+    position: absolute;
+    right: 1px;
+    bottom: 1px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 2px;
+    border-radius: 6px;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 11px;
+    text-align: center;
+    color: var(--panel);
+    background: var(--muted);
+    pointer-events: none;
+  }
   .update-pill {
     display: inline-flex;
     align-items: center;

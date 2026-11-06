@@ -406,6 +406,18 @@ fn settings_without_pane_sizes_load_with_defaults() {
     assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.3 }));
 }
 
+/// A theme chosen by an older version loads unchanged; a settings file without one follows the OS.
+#[test]
+fn saved_themes_load_unchanged_and_a_missing_theme_follows_the_system() {
+    for theme in ["dark", "light"] {
+        let old: super::AppSettings = serde_json::from_str(&format!(r#"{{"theme":"{theme}"}}"#)).unwrap();
+        assert_eq!(serde_json::to_value(&old).unwrap()["theme"], theme);
+    }
+    let fresh: super::AppSettings = serde_json::from_str(r#"{"layout":"vertical"}"#).unwrap();
+    assert_eq!(serde_json::to_value(&fresh).unwrap()["theme"], "system");
+    assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["theme"], "system");
+}
+
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.
 fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec<String> {
     let mut out = Vec::new();

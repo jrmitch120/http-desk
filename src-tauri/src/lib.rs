@@ -48,6 +48,7 @@ struct AppSettings {
     recent_workspaces: Vec<PathBuf>,
     /// Last selected environment per workspace.
     environments: HashMap<String, String>,
+    /// "system" (follow the OS appearance), "light" or "dark".
     theme: String,
     layout: String,
     /// Look for a new release on startup.
@@ -80,7 +81,7 @@ impl Default for AppSettings {
             exec: ExecSettings::default(),
             recent_workspaces: vec![],
             environments: HashMap::new(),
-            theme: "dark".into(),
+            theme: "system".into(),
             layout: "horizontal".into(),
             check_updates: true,
             show_descriptions: true,
