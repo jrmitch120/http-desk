@@ -3,8 +3,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, newRequest, uid } from "./http";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, TreeNode } from "./types";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -60,6 +60,9 @@ export type ModalKind = "env" | "openapi" | "settings" | null;
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
 }
+
+/** Identifies a request across reloads and searches: name + method + URL. */
+const signature = (name: string, method: string, url: string) => `${name}\u0000${method}\u0000${url}`;
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -313,7 +316,7 @@ class AppStore {
     if (old) {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
       const unused = new Map([...old.file.requests, ...old.orphans].map((r) => [r._key!, r]));
-      const sig = (r: Request) => `${r.name}\u0000${r.method}\u0000${r.url}`;
+      const sig = (r: Request) => signature(r.name, r.method, r.url);
       const byName = (r: Request) => r.name;
       for (const same of [sig, byName]) {
         for (const r of file.requests) {
@@ -342,7 +345,20 @@ class AppStore {
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
-  private async onExternalChange(paths: string[]) {
+  /** Whether `file`, fresh from disk, is still what the document was last loaded or saved as. */
+  private matchesSaved(doc: Doc, file: HttpFile): boolean {
+    const keys = doc.savedOrder ? doc.savedOrder.split(",") : [];
+    return (
+      JSON.stringify(file.header) === doc.savedHeader &&
+      file.trailing === doc.file.trailing &&
+      file.lineEnding === doc.file.lineEnding &&
+      file.requests.length === keys.length &&
+      file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
+    );
+  }
+
+  /** Handles a `workspace-changed` event from the watcher. */
+  async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p))) await this.loadEnvironments();
@@ -354,11 +370,54 @@ class AppStore {
         doc.missing = true;
       } else if (this.isDocDirty(p)) {
         doc.missing = false;
-        doc.externalChange = true;
+        // Our own rename or move (or a touch) leaves the content as loaded: nothing to warn about.
+        const disk = await api.readHttpFile(p).catch(() => null);
+        if (!disk || !this.matchesSaved(doc, disk)) doc.externalChange = true;
       } else {
         await this.reload(p);
       }
     }
+  }
+
+  // ---------------------------------------------------------------- search
+
+  /** Case-insensitive search over request names, methods, URLs and file names.
+   *  Open documents are searched as they are on screen (unsaved edits
+   *  included); every other file is searched on disk by the backend. */
+  async searchRequests(query: string): Promise<SearchHit[]> {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    const onDisk = await api.searchRequests(query);
+    const open = Object.values(this.docs).filter((d) => !d.missing);
+    const hits = onDisk.filter((h) => !open.some((d) => d.path === h.path));
+    for (const doc of open) {
+      const file = basename(doc.path).toLowerCase();
+      doc.file.requests.forEach((r, index) => {
+        const name = displayName(r);
+        if (terms.every((t) => `${name} ${r.method} ${r.url} ${file}`.toLowerCase().includes(t))) {
+          hits.push({ path: doc.path, index, name, method: r.method, url: r.url });
+        }
+      });
+    }
+    // Explorer order, as the backend returns them; files not in the tree go last.
+    const order = new Map<string, number>();
+    const walk = (n: TreeNode) => (n.kind === "file" ? order.set(n.path, order.size) : n.children?.forEach(walk));
+    if (this.tree) walk(this.tree);
+    const rank = (h: SearchHit) => order.get(h.path) ?? order.size;
+    return hits.sort((a, b) => rank(a) - rank(b) || (a.path === b.path ? a.index - b.index : 0));
+  }
+
+  /** Opens the request a search result points at. It is found by name + method
+   *  + URL, since unsaved edits may have moved it since the search; `index`
+   *  only breaks ties and is the fallback when nothing matches. */
+  async openSearchHit(hit: SearchHit) {
+    const doc = await this.loadDoc(hit.path);
+    if (!doc) return;
+    const want = signature(hit.name, hit.method, hit.url);
+    const reqs = doc.file.requests;
+    const same = (r: Request | undefined) => !!r && signature(displayName(r), r.method, r.url) === want;
+    const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
+    if (req) await this.openRequest(hit.path, { key: req._key });
   }
 
   // ---------------------------------------------------------------- tabs
@@ -482,7 +541,7 @@ class AppStore {
 
   async createFile(dir: string) {
     const name = await this.prompt("New .http file", "requests.http", "requests.http", true);
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     const file = name.match(/\.(http|rest)$/i) ? name : `${name}.http`;
     const path = joinPath(dir, file);
     const content = "### New request\nGET https://httpbin.org/get\nAccept: application/json\n";
@@ -499,7 +558,7 @@ class AppStore {
 
   async createFolder(dir: string) {
     const name = await this.prompt("New folder", "", "folder name");
-    if (!name) return;
+    if (!name || !this.validName(name)) return;
     try {
       await api.createDir(joinPath(dir, name));
       this.expanded[dir] = true;
@@ -510,9 +569,21 @@ class AppStore {
   }
 
   async renamePath(path: string) {
-    const name = await this.prompt("Rename", basename(path), undefined, true);
-    if (!name || name === basename(path)) return;
+    const old = basename(path);
+    const typed = await this.prompt("Rename", old, undefined, true);
+    if (!typed || !this.validName(typed)) return;
+    // A request file keeps its extension when the new name leaves it out.
+    const ext = old.match(/\.(http|rest)$/i)?.[0];
+    const name = ext && !/\.(http|rest)$/i.test(typed) ? typed + ext : typed;
+    if (name === old) return;
     await this.movePath(path, joinPath(dirname(path), name));
+  }
+
+  /** Shows why a typed file/folder name is invalid; true if it's fine. */
+  private validName(name: string): boolean {
+    const error = nameError(name);
+    if (error) this.toast("error", error);
+    return !error;
   }
 
   async movePath(from: string, to: string) {
