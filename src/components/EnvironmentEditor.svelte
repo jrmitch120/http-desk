@@ -21,7 +21,8 @@
   const initial: EnvironmentSet = app.envSet
     ? structuredClone($state.snapshot(app.envSet) as EnvironmentSet)
     : { shared: [], environments: [], privateFileIgnored: null };
-  const initialJson = JSON.stringify(clean(initial));
+  /** What's on disk, to tell unsaved edits apart. */
+  let savedJson = $state(JSON.stringify(clean(initial)));
 
   let set = $state<EnvironmentSet>(initial);
   let selected = $state<string>(
@@ -34,7 +35,7 @@
   let saving = $state(false);
 
   const vars = $derived(selected === SHARED ? set.shared : (set.environments.find((e) => e.name === selected)?.variables ?? set.shared));
-  const dirty = $derived(JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== initialJson || activeEnv !== app.envName);
+  const dirty = $derived(JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || activeEnv !== app.envName);
   const hasSecrets = $derived(set.shared.some((v) => v.secret) || set.environments.some((e) => e.variables.some((v) => v.secret)));
 
   // Keep a trailing blank row so typing into it creates a new variable.
@@ -98,28 +99,39 @@
     if (activeEnv === name) activeEnv = null;
   }
 
-  function useEnv(name: string) {
+  /** Whether an environment of this name is saved; sending only sees saved ones. */
+  const onDisk = (name: string) => !!app.envSet?.environments.some((e) => e.name === name);
+
+  /** Switches to the environment right away. One that isn't saved yet (new or
+   *  renamed) is saved first, along with the other edits, so it can be used. */
+  async function useEnv(name: string) {
+    if (!onDisk(name) && !(await persist())) return;
     activeEnv = name;
-    // Apply immediately when the environment already exists on disk under this name.
-    if (app.envSet?.environments.some((e) => e.name === name)) {
-      app.selectEnvironment(name);
+    await app.selectEnvironment(name);
+  }
+
+  async function persist(): Promise<boolean> {
+    saving = true;
+    try {
+      const cleaned = clean($state.snapshot(set) as EnvironmentSet);
+      const report = await api.saveEnvironments(cleaned);
+      savedJson = JSON.stringify(cleaned);
+      app.toast("success", "Environments saved");
+      if (report.gitignoreUpdated) app.toast("info", "Added http-client.private.env.json to .gitignore");
+      await app.loadEnvironments();
+      return true;
+    } catch (e) {
+      app.toast("error", `Could not save environments: ${errorMessage(e)}`);
+      return false;
+    } finally {
+      saving = false;
     }
   }
 
   async function save() {
-    saving = true;
-    try {
-      const report = await api.saveEnvironments(clean($state.snapshot(set) as EnvironmentSet));
-      app.toast("success", "Environments saved");
-      if (report.gitignoreUpdated) app.toast("info", "Added http-client.private.env.json to .gitignore");
-      await app.loadEnvironments();
-      if (activeEnv !== app.envName) await app.selectEnvironment(activeEnv);
-      app.modal = null;
-    } catch (e) {
-      app.toast("error", `Could not save environments: ${errorMessage(e)}`);
-    } finally {
-      saving = false;
-    }
+    if (!(await persist())) return;
+    if (activeEnv !== app.envName) await app.selectEnvironment(activeEnv);
+    app.modal = null;
   }
 
   async function requestClose() {
@@ -175,8 +187,14 @@
         </div>
         <div class="spacer"></div>
         {#if selected !== SHARED}
-          <button class="btn small" disabled={activeEnv === selected} onclick={() => useEnv(selected)} title="Select this environment for sending requests">
-            <Icon name="check" size={13} />{activeEnv === selected ? "In use" : "Use"}
+          {@const inUse = activeEnv === selected && app.envName === selected}
+          <button
+            class="btn small"
+            disabled={saving || inUse}
+            onclick={() => useEnv(selected)}
+            title={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
+          >
+            <Icon name="check" size={13} />{inUse ? "In use" : onDisk(selected) ? "Use" : "Save & use"}
           </button>
           <button class="icon-btn" title="Rename" onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
           <button class="icon-btn" title="Duplicate" onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
