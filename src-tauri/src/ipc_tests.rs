@@ -35,7 +35,7 @@ impl Harness {
     fn new() -> Self {
         let cfg = tempfile::tempdir().unwrap();
         let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
-        let app = super::with_commands(builder).build(mock_context(noop_assets())).unwrap();
+        let app = super::with_commands(builder, |_| Ok(())).build(mock_context(noop_assets())).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let trash_bin = tempfile::tempdir().unwrap();
         let bin = trash_bin.path().to_path_buf();

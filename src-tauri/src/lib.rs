@@ -21,6 +21,7 @@ mod deleting;
 mod paths;
 mod quit;
 mod self_writes;
+mod theme;
 mod watcher;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
@@ -511,18 +512,27 @@ fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> Cmd
 
 // ------------------------------------------------------------------ entry point
 
-/// Registers state and commands (shared by the app and the IPC tests).
-fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+/// Reads settings.json into the app state (keeping the defaults if it's missing or unreadable).
+fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(text) = settings_path(app).and_then(|p| std::fs::read_to_string(p).ok()) {
+        if let Ok(mut s) = serde_json::from_str::<AppSettings>(&text) {
+            s.recent_workspaces = simplified_recents(&s.recent_workspaces);
+            *app.state::<AppState>().settings.lock().unwrap() = s;
+        }
+    }
+}
+
+/// Runs at setup once settings are loaded.
+type AfterSetup<R> = fn(&mut tauri::App<R>) -> tauri::Result<()>;
+
+/// Registers state and commands and loads settings at setup, then runs
+/// `after_setup` (shared by the app and the IPC tests).
+fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: AfterSetup<R>) -> tauri::Builder<R> {
     builder
         .manage(AppState::default())
-        .setup(|app| {
-            if let Some(text) = settings_path(app.handle()).and_then(|p| std::fs::read_to_string(p).ok()) {
-                if let Ok(mut s) = serde_json::from_str::<AppSettings>(&text) {
-                    s.recent_workspaces = simplified_recents(&s.recent_workspaces);
-                    *app.state::<AppState>().settings.lock().unwrap() = s;
-                }
-            }
-            Ok(())
+        .setup(move |app| {
+            load_settings(app.handle());
+            Ok(after_setup(app)?)
         })
         .invoke_handler(tauri::generate_handler![
             open_workspace,
@@ -550,6 +560,12 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         ])
 }
 
+/// The app's only window, in the saved theme (the IPC tests make their own).
+fn create_main_window<R: tauri::Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
+    let choice = app.state::<AppState>().settings.lock().unwrap().theme.clone();
+    theme::create_main_window(app, &choice)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     with_commands(
@@ -558,6 +574,7 @@ pub fn run() {
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init()),
+        create_main_window,
     )
     .build(tauri::generate_context!())
     .expect("error while building HttpDesk")
