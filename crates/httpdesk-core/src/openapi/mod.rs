@@ -156,8 +156,7 @@ impl OpenApiDoc {
     }
 
     pub fn load_file(path: &Path) -> Result<OpenApiDoc, OpenApiError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| OpenApiError::Io(format!("{}: {e}", path.display())))?;
+        let text = std::fs::read_to_string(path).map_err(|e| OpenApiError::Io(format!("{}: {e}", path.display())))?;
         let dir: PathBuf = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let json = has_json_extension(path);
         Self::parse_as(&text, Some(&dir), json)
@@ -172,7 +171,10 @@ impl OpenApiDoc {
             .map_err(|e| OpenApiError::Http(e.to_string()))?;
         let resp = client
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.8")
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, application/yaml, application/x-yaml, text/yaml, */*;q=0.8",
+            )
             .send()
             .await
             .map_err(|e| OpenApiError::Http(e.to_string()))?;

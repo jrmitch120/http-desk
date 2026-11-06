@@ -121,7 +121,8 @@ mod macos {
                 return;
             }
             let cls = ffi::object_getClass(delegate) as *mut AnyClass;
-            let imp: Imp = std::mem::transmute(should_terminate as extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize);
+            let imp: Imp =
+                std::mem::transmute(should_terminate as extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize);
             // NSUInteger (id self, SEL _cmd, id sender). Fails (and changes
             // nothing) if tao ever implements the method itself.
             let added = ffi::class_addMethod(cls, sel!(applicationShouldTerminate:), imp, c"Q@:@".as_ptr());

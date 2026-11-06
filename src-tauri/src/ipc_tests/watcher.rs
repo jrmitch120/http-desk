@@ -37,7 +37,8 @@ fn churn_in_ignored_folders_and_unlisted_files_emits_no_events() {
     }
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     let info = h.ok("open_workspace", json!({ "path": root }));
-    let listed: Vec<&str> = info["tree"]["children"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
+    let listed: Vec<&str> =
+        info["tree"]["children"].as_array().unwrap().iter().map(|n| n["name"].as_str().unwrap()).collect();
     assert_eq!(listed, ["a.http"], "the explorer hides the ignored folders");
 
     let rx = events(&h, "workspace-changed");

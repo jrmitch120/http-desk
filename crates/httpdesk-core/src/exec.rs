@@ -196,7 +196,11 @@ fn default_content_type(mode: BodyMode) -> Option<&'static str> {
 
 fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
     let errors = resolver.errors();
-    if errors.is_empty() { Ok(()) } else { Err(ExecError::DynamicVariable(errors)) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ExecError::DynamicVariable(errors))
+    }
 }
 
 /// The URL without its query string and fragment, which may themselves contain `://`.
@@ -234,14 +238,27 @@ fn variable_names(text: &str) -> Vec<String> {
 fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
     let part = |text: &str, part: Part| {
         let written = query::escape(text, part);
-        if auto_encode { query::encode(&written, part, |r| resolver.resolve(r)) } else { resolver.resolve(&written) }
+        if auto_encode {
+            query::encode(&written, part, |r| resolver.resolve(r))
+        } else {
+            resolver.resolve(&written)
+        }
     };
     let name = part(&p.name, Part::Name);
-    if p.value.is_empty() && !p.equals { name } else { format!("{name}={}", part(&p.value, Part::Value)) }
+    if p.value.is_empty() && !p.equals {
+        name
+    } else {
+        format!("{name}={}", part(&p.value, Part::Value))
+    }
 }
 
 /// Resolves variables and applies enablement. Disabled components are never included.
-pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &ExecSettings) -> Result<PreparedRequest, ExecError> {
+pub fn prepare(
+    req: &Request,
+    resolver: &Resolver,
+    base_dir: &Path,
+    settings: &ExecSettings,
+) -> Result<PreparedRequest, ExecError> {
     let method = req.method.trim().to_ascii_uppercase();
     let method = if method.is_empty() { "GET".to_string() } else { method };
 
@@ -252,9 +269,14 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         match auth.kind {
             AuthKind::Basic => {
                 let creds = format!("{}:{}", resolver.resolve(&auth.username), resolver.resolve(&auth.password));
-                headers.push(("Authorization".into(), format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(creds))));
+                headers.push((
+                    "Authorization".into(),
+                    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(creds)),
+                ));
             }
-            AuthKind::Bearer => headers.push(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim())))),
+            AuthKind::Bearer => {
+                headers.push(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim()))))
+            }
             AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
                 headers.push((auth.key_name.clone(), resolver.resolve(&auth.key_value)));
             }
@@ -267,7 +289,11 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
     let mut url = resolver.resolve(req.url.trim());
     let auto_encode = req.directive("no-auto-encoding").is_none();
     let mut params: Vec<String> = req.query.active().map(|p| wire_param(p, resolver, auto_encode)).collect();
-    if auth.enabled && auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query && !auth.key_name.is_empty() {
+    if auth.enabled
+        && auth.kind == AuthKind::ApiKey
+        && auth.key_location == ApiKeyLocation::Query
+        && !auth.key_name.is_empty()
+    {
         params.push(wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode));
     }
     if !params.is_empty() {
@@ -276,9 +302,10 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
     }
     if !has_scheme(&url) {
         url = if url.starts_with('/') {
-            let host = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(|| {
-                ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() }
-            })?;
+            let host =
+                headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(
+                    || ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() },
+                )?;
             format!("http://{host}{url}")
         } else {
             format!("http://{url}")
@@ -309,14 +336,16 @@ pub fn prepare(req: &Request, resolver: &Resolver, base_dir: &Path, settings: &E
         warnings.push(format!("Unresolved variables: {}", unresolved.join(", ")));
     }
     if req.body.enabled && req.body.mode == BodyMode::Multipart {
-        let ct = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.as_str()).unwrap_or("");
+        let ct =
+            headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.as_str()).unwrap_or("");
         if !ct.contains("boundary=") {
             warnings.push("Multipart body without a boundary in Content-Type".into());
         }
     }
 
     let timeout_ms = req.directive("timeout").and_then(parse_duration_ms).unwrap_or(settings.timeout_ms);
-    let connect_timeout_ms = req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
+    let connect_timeout_ms =
+        req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
     let follow_redirects = settings.follow_redirects && req.directive("no-redirect").is_none();
 
     Ok(PreparedRequest { method, url, headers, body, follow_redirects, timeout_ms, connect_timeout_ms, warnings })
@@ -437,11 +466,14 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
 
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
     let client = build_client(&p, settings, ssl)?;
-    let method = reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
+    let method =
+        reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
     let mut builder = client.request(method, &p.url);
     for (n, v) in &p.headers {
-        let name = reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
-        let value = reqwest::header::HeaderValue::from_str(v).map_err(|_| ExecError::InvalidHeader(format!("{n}: {v}")))?;
+        let name =
+            reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
+        let value =
+            reqwest::header::HeaderValue::from_str(v).map_err(|_| ExecError::InvalidHeader(format!("{n}: {v}")))?;
         builder = builder.header(name, value);
     }
     if let Some(body) = &p.body {
@@ -467,7 +499,8 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
         .collect();
     let headers_size = headers.iter().map(|(n, v)| n.len() + v.len() + 4).sum::<usize>();
-    let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let content_type =
+        resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
 
     let mut body = Vec::new();
     let mut truncated = false;
@@ -492,7 +525,11 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         body_size: p.body.as_ref().map_or(0, Vec::len),
         body_preview: p.body.as_ref().map(|b| {
             let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
-            if b.len() > 64 * 1024 { format!("{s}\n… ({} bytes total)", b.len()) } else { s }
+            if b.len() > 64 * 1024 {
+                format!("{s}\n… ({} bytes total)", b.len())
+            } else {
+                s
+            }
         }),
     };
 

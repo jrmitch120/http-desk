@@ -73,7 +73,10 @@ fn delete_permanently_stays_inside_the_workspace() {
 
     let err = f.h.call("delete_permanently", json!({ "path": outside.join("x.http") })).unwrap_err();
     assert!(err.as_str().unwrap().contains("outside the workspace"), "{err}");
-    assert!(f.h.call("delete_permanently", json!({ "path": f.root })).is_err(), "the workspace itself can't be deleted");
+    assert!(
+        f.h.call("delete_permanently", json!({ "path": f.root })).is_err(),
+        "the workspace itself can't be deleted"
+    );
     assert!(f.root.join("a.http").exists() && outside.join("x.http").exists());
 
     // A symlinked folder pointing outside: only the link goes.

@@ -26,9 +26,7 @@ pub struct TreeNode {
 }
 
 pub fn is_http_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| HTTP_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| HTTP_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Whether the explorer skips a folder with this name: dot-folders (`.git`,
@@ -123,7 +121,13 @@ pub fn search(root: &Path, query: &str) -> Vec<SearchHit> {
             let name = req.display_name();
             let haystack = format!("{} {} {} {}", name, req.method, req.url, file_name).to_lowercase();
             if terms.iter().all(|t| haystack.contains(t)) {
-                hits.push(SearchHit { path: path.clone(), index, name, method: req.method.clone(), url: req.url.clone() });
+                hits.push(SearchHit {
+                    path: path.clone(),
+                    index,
+                    name,
+                    method: req.method.clone(),
+                    url: req.url.clone(),
+                });
             }
             if hits.len() >= 500 {
                 return hits;
@@ -195,7 +199,11 @@ mod tests {
         let root = dir.path();
         std::fs::create_dir_all(root.join("api/users")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
-        std::fs::write(root.join("api/users/users.http"), "### List users\nGET https://x/users\n\n### Create user\nPOST https://x/users\n").unwrap();
+        std::fs::write(
+            root.join("api/users/users.http"),
+            "### List users\nGET https://x/users\n\n### Create user\nPOST https://x/users\n",
+        )
+        .unwrap();
         std::fs::write(root.join("node_modules/x/a.http"), "GET https://ignored\n").unwrap();
         std::fs::write(root.join("readme.md"), "").unwrap();
         write_atomic(&root.join("a.rest"), b"GET https://x/a\n").unwrap();

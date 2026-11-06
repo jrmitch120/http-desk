@@ -266,10 +266,7 @@ impl Default for Request {
 
 impl Request {
     pub fn directive(&self, name: &str) -> Option<&str> {
-        self.directives
-            .iter()
-            .find(|d| d.name.eq_ignore_ascii_case(name))
-            .map(|d| d.value.as_str())
+        self.directives.iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.value.as_str())
     }
 
     /// Human-friendly label: `### name`, then `@name`, then `METHOD url`.

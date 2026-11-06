@@ -170,14 +170,16 @@ fn openapi_generate_output_is_confined() {
         // A single-file name typed by the user can't climb out either.
         let mut args = generate(f.root.clone(), dry_run);
         args["options"]["grouping"] = json!("single");
-        args["options"]["singleFileName"] = json!(format!("../{}/escape", f.outside.file_name().unwrap().to_string_lossy()));
+        args["options"]["singleFileName"] =
+            json!(format!("../{}/escape", f.outside.file_name().unwrap().to_string_lossy()));
         f.rejected("openapi_generate", args);
     }
     assert!(empty(&f.outside), "nothing is generated outside the workspace");
 }
 
 fn names(dir: &Path) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let mut v: Vec<String> =
+        std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     v.sort();
     v
 }
@@ -197,7 +199,8 @@ fn rename_never_replaces_another_file() {
     std::fs::write(f.root.join("b.http"), "GET https://b\n").unwrap();
     let case_insensitive = f.root.join("A.HTTP").exists();
 
-    let err = f.h.call("rename_path", json!({ "from": f.root.join("a.http"), "to": f.root.join("b.http") })).unwrap_err();
+    let err =
+        f.h.call("rename_path", json!({ "from": f.root.join("a.http"), "to": f.root.join("b.http") })).unwrap_err();
     assert!(err.as_str().unwrap().contains("already exists"), "{err}");
     let to_other_case = f.h.call("rename_path", json!({ "from": f.root.join("a.http"), "to": f.root.join("B.http") }));
     assert_eq!(to_other_case.is_err(), case_insensitive, "{to_other_case:?}");

@@ -17,7 +17,10 @@ pub(crate) enum Segment<'a> {
     Text(&'a str),
     /// `whole` is the reference as written, braces included; `name` is what's
     /// between the braces, trimmed.
-    Reference { whole: &'a str, name: &'a str },
+    Reference {
+        whole: &'a str,
+        name: &'a str,
+    },
 }
 
 /// Splits `text` into plain runs and `{{…}}` references, the way the resolver
@@ -28,7 +31,10 @@ pub(crate) fn segments(text: &str) -> Vec<Segment<'_>> {
     while let Some(start) = rest.find("{{") {
         let Some(len) = rest[start + 2..].find("}}") else { break };
         out.push(Segment::Text(&rest[..start]));
-        out.push(Segment::Reference { whole: &rest[start..start + 4 + len], name: rest[start + 2..start + 2 + len].trim() });
+        out.push(Segment::Reference {
+            whole: &rest[start..start + 4 + len],
+            name: rest[start + 2..start + 2 + len].trim(),
+        });
         rest = &rest[start + 4 + len..];
     }
     out.push(Segment::Text(rest));
@@ -135,7 +141,12 @@ impl Resolver {
             }
             "random.float" => {
                 let float = |i: usize, default: f64| {
-                    arg(i).map_or(Ok(default), |a| a.parse::<f64>().ok().filter(|f| f.is_finite()).ok_or_else(|| format!("\"{a}\" is not a number")))
+                    arg(i).map_or(Ok(default), |a| {
+                        a.parse::<f64>()
+                            .ok()
+                            .filter(|f| f.is_finite())
+                            .ok_or_else(|| format!("\"{a}\" is not a number"))
+                    })
                 };
                 let (lo, hi) = (float(0, 0.0)?, float(1, 1000.0)?);
                 if lo > hi {
@@ -335,8 +346,10 @@ mod tests {
 
     #[test]
     fn precedence_request_over_file_over_env() {
-        let env: HashMap<_, _> = [("x".to_string(), "env".to_string()), ("y".into(), "env".into()), ("z".into(), "env".into())].into();
-        let file = [Variable { name: "y".into(), value: "file".into() }, Variable { name: "z".into(), value: "file".into() }];
+        let env: HashMap<_, _> =
+            [("x".to_string(), "env".to_string()), ("y".into(), "env".into()), ("z".into(), "env".into())].into();
+        let file =
+            [Variable { name: "y".into(), value: "file".into() }, Variable { name: "z".into(), value: "file".into() }];
         let req = [Variable { name: "z".into(), value: "req".into() }];
         let r = Resolver::for_request(&env, &file, &req, None);
         assert_eq!(r.resolve("{{x}} {{y}} {{z}}"), "env file req");
@@ -393,7 +406,8 @@ mod tests {
     }
 
     fn matches_shape(value: &str, shape: &str) {
-        let ok = value.len() == shape.len() && value.chars().zip(shape.chars()).all(|(v, s)| if s == '9' { v.is_ascii_digit() } else { v == s });
+        let ok = value.len() == shape.len()
+            && value.chars().zip(shape.chars()).all(|(v, s)| if s == '9' { v.is_ascii_digit() } else { v == s });
         assert!(ok, "{value:?} does not look like {shape:?}");
     }
 

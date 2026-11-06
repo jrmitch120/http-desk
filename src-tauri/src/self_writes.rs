@@ -49,7 +49,11 @@ impl SelfWrites {
 
     /// Call before moving `from` (a file or folder) to `to`.
     pub fn moving(&self, from: &Path, to: &Path) {
-        let landed = if from.is_dir() { Some(Expect::Dir) } else { std::fs::read(from).ok().map(|b| Expect::Content(workspace::content_hash(&b))) };
+        let landed = if from.is_dir() {
+            Some(Expect::Dir)
+        } else {
+            std::fs::read(from).ok().map(|b| Expect::Content(workspace::content_hash(&b)))
+        };
         let mut map = self.0.lock().unwrap();
         map.insert(from.to_path_buf(), Expect::Absent);
         if let Some(e) = landed {

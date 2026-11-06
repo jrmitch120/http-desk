@@ -5,7 +5,6 @@ use httpdesk_core::*;
 const JETBRAINS: &str = include_str!("fixtures/jetbrains.http");
 const VSCODE: &str = include_str!("fixtures/vscode.http");
 
-
 /// Strips fields that only exist for lossless round-tripping.
 fn semantic(mut r: Request) -> Request {
     r.raw = None;
@@ -25,7 +24,13 @@ fn parses_jetbrains_fixture() {
     let names: Vec<_> = f.requests.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(
         names,
-        ["Get request with a header", "Post with JSON body", "Multi-line query", "Basic auth", "Send a form with the text and file fields"]
+        [
+            "Get request with a header",
+            "Post with JSON body",
+            "Multi-line query",
+            "Basic auth",
+            "Send a form with the text and file fields"
+        ]
     );
 
     let get = &f.requests[0];
@@ -51,7 +56,10 @@ fn parses_jetbrains_fixture() {
     assert_eq!(multi.query.items, vec![KeyValue::new("page", "2"), KeyValue::new("pageSize", "10")]);
 
     let basic = &f.requests[3];
-    assert_eq!((basic.auth.kind, basic.auth.username.as_str(), basic.auth.password.as_str()), (AuthKind::Basic, "user", "passwd"));
+    assert_eq!(
+        (basic.auth.kind, basic.auth.username.as_str(), basic.auth.password.as_str()),
+        (AuthKind::Basic, "user", "passwd")
+    );
 
     // The comment-only block is kept as leading text of the next request.
     let form = &f.requests[4];
@@ -74,7 +82,10 @@ fn parses_vscode_fixture() {
 
     let profile = &f.requests[1];
     assert_eq!(profile.directive("prompt"), Some("otp Your one-time password"));
-    assert_eq!((profile.auth.kind, profile.auth.username.as_str(), profile.auth.password.as_str()), (AuthKind::Basic, "user", "passwd"));
+    assert_eq!(
+        (profile.auth.kind, profile.auth.username.as_str(), profile.auth.password.as_str()),
+        (AuthKind::Basic, "user", "passwd")
+    );
 
     let form = &f.requests[2];
     assert_eq!(form.comments, vec!["Form URL encoded"]);
@@ -88,7 +99,9 @@ fn parses_vscode_fixture() {
 
 #[test]
 fn parses_url_only_and_custom_methods() {
-    let f = parse("https://example.com/a\n\n###\nPURGE https://example.com/cache\n\n### lower\nget https://example.com/b\n");
+    let f = parse(
+        "https://example.com/a\n\n###\nPURGE https://example.com/cache\n\n### lower\nget https://example.com/b\n",
+    );
     assert_eq!((f.requests[0].method.as_str(), f.requests[0].url.as_str()), ("GET", "https://example.com/a"));
     assert_eq!(f.requests[1].method, "PURGE");
     assert_eq!(f.requests[2].method, "GET");
@@ -131,7 +144,10 @@ fn plain_comments_are_not_treated_as_disabled_items() {
     let f = parse("GET https://x\n# Note: this is a comment\nAccept: */*\n");
     let r = &f.requests[0];
     assert_eq!(r.headers.items.len(), 1);
-    assert_eq!(r.extra_lines, vec![ExtraLine { text: "# Note: this is a comment".into(), before: Some("Accept".into()) }]);
+    assert_eq!(
+        r.extra_lines,
+        vec![ExtraLine { text: "# Note: this is a comment".into(), before: Some("Accept".into()) }]
+    );
 }
 
 // ---------------------------------------------------------------- lossless
@@ -224,7 +240,8 @@ fn item_level_disabled_components_round_trip() {
     );
     // Disabled query params come back after the enabled ones (documented).
     let mut expected = r.clone();
-    expected.query.items = vec![KeyValue::new("limit", "20"), KeyValue::new("q", ""), KeyValue::disabled("status", "sold")];
+    expected.query.items =
+        vec![KeyValue::new("limit", "20"), KeyValue::new("q", ""), KeyValue::disabled("status", "sold")];
     assert_eq!(back, expected);
 }
 
@@ -322,7 +339,8 @@ fn basic_auth_edge_cases_round_trip() {
 
 #[test]
 fn empty_section_toggle_persists() {
-    let r = Request { url: "https://x".into(), headers: KvSection { enabled: false, items: vec![] }, ..Default::default() };
+    let r =
+        Request { url: "https://x".into(), headers: KvSection { enabled: false, items: vec![] }, ..Default::default() };
     let (_, back) = round_trip(&r);
     assert!(!back.headers.enabled);
 }
@@ -570,7 +588,12 @@ fn file_header_layout_survives_variable_edits() {
 // ---------------------------------------------------------------- query escaping (ADR-0001)
 
 fn with_query(items: Vec<KeyValue>) -> Request {
-    Request { method: "GET".into(), url: "https://x/s".into(), query: KvSection { enabled: true, items }, ..Default::default() }
+    Request {
+        method: "GET".into(),
+        url: "https://x/s".into(),
+        query: KvSection { enabled: true, items },
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -635,10 +658,14 @@ fn multi_line_descriptions_save_as_one_comment_line_per_line() {
 #[test]
 fn description_lines_starting_with_at_reload_as_description() {
     let mut f = parse("### A\n# @name a\nGET https://x\n");
-    f.requests[0].comments = vec!["Uses:".into(), "@timeout 1".into(), "  @no-redirect".into(), "@ already safe".into(), "@".into()];
+    f.requests[0].comments =
+        vec!["Uses:".into(), "@timeout 1".into(), "  @no-redirect".into(), "@ already safe".into(), "@".into()];
     let out = try_serialize(&f).unwrap();
     // The same `@ ` spacing the OpenAPI generator uses.
-    assert_eq!(out, "### A\n# Uses:\n# @ timeout 1\n#   @ no-redirect\n# @ already safe\n# @\n# @name a\nGET https://x\n");
+    assert_eq!(
+        out,
+        "### A\n# Uses:\n# @ timeout 1\n#   @ no-redirect\n# @ already safe\n# @\n# @name a\nGET https://x\n"
+    );
     let back = &parse(&out).requests[0];
     assert_eq!(back.comments, ["Uses:", "@ timeout 1", "  @ no-redirect", "@ already safe", "@"]);
     let directives: Vec<_> = back.directives.iter().map(|d| d.name.as_str()).collect();
@@ -647,7 +674,8 @@ fn description_lines_starting_with_at_reload_as_description() {
 
 #[test]
 fn indented_description_lines_are_never_directives() {
-    let req = &parse("#   @timeout 5\n//  @no-redirect\n#\t@no-log\n# @name a\n#@no-cookie-jar\nGET https://x\n").requests[0];
+    let req =
+        &parse("#   @timeout 5\n//  @no-redirect\n#\t@no-log\n# @name a\n#@no-cookie-jar\nGET https://x\n").requests[0];
     assert_eq!(req.comments, ["  @timeout 5", " @no-redirect", "\t@no-log"]);
     let directives: Vec<_> = req.directives.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(directives, ["name", "no-cookie-jar"]);
@@ -682,17 +710,50 @@ fn save_refuses_line_breaks_in_single_line_fields() {
     assert_eq!(try_serialize(&parse(EDITABLE)).unwrap(), EDITABLE);
 
     let cases: Vec<(Edit, &str)> = vec![
-        (Box::new(|f| f.requests[0].name = "List\npets".into()), "Request \"List\\npets\": the name contains a line break"),
-        (Box::new(|f| f.requests[0].headers.items[0].value = "*/*\nX-Evil: 1".into()), "Request \"List pets\": the value of header \"Accept\" contains a line break"),
-        (Box::new(|f| f.requests[0].headers.items[0].name = "Acc\nept".into()), "Request \"List pets\": header name \"Acc\\nept\" contains a line break"),
-        (Box::new(|f| f.requests[0].query.items[0].value = "20\r".into()), "Request \"List pets\": the value of query param \"limit\" contains a line break"),
-        (Box::new(|f| f.requests[0].query.items[0].name = "li\nmit".into()), "Request \"List pets\": query param name \"li\\nmit\" contains a line break"),
-        (Box::new(|f| f.requests[0].url = "{{host}}\n/pets".into()), "Request \"List pets\": the URL contains a line break"),
-        (Box::new(|f| f.requests[0].method = "GET\n".into()), "Request \"List pets\": the method contains a line break"),
-        (Box::new(|f| f.requests[0].auth.token = "t\nX: 1".into()), "Request \"List pets\": the bearer token contains a line break"),
-        (Box::new(|f| f.requests[0].variables[0].value = "1\n2".into()), "Request \"List pets\": the value of variable \"id\" contains a line break"),
-        (Box::new(|f| f.requests[0].directives[0].value = "5\nGET https://evil".into()), "Request \"List pets\": directive @timeout contains a line break"),
-        (Box::new(|f| f.header.variables[0].value = "https://x\n### Injected".into()), "File variables: the value of variable \"host\" contains a line break"),
+        (
+            Box::new(|f| f.requests[0].name = "List\npets".into()),
+            "Request \"List\\npets\": the name contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].value = "*/*\nX-Evil: 1".into()),
+            "Request \"List pets\": the value of header \"Accept\" contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "Acc\nept".into()),
+            "Request \"List pets\": header name \"Acc\\nept\" contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].query.items[0].value = "20\r".into()),
+            "Request \"List pets\": the value of query param \"limit\" contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].query.items[0].name = "li\nmit".into()),
+            "Request \"List pets\": query param name \"li\\nmit\" contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].url = "{{host}}\n/pets".into()),
+            "Request \"List pets\": the URL contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].method = "GET\n".into()),
+            "Request \"List pets\": the method contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].auth.token = "t\nX: 1".into()),
+            "Request \"List pets\": the bearer token contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].variables[0].value = "1\n2".into()),
+            "Request \"List pets\": the value of variable \"id\" contains a line break",
+        ),
+        (
+            Box::new(|f| f.requests[0].directives[0].value = "5\nGET https://evil".into()),
+            "Request \"List pets\": directive @timeout contains a line break",
+        ),
+        (
+            Box::new(|f| f.header.variables[0].value = "https://x\n### Injected".into()),
+            "File variables: the value of variable \"host\" contains a line break",
+        ),
     ];
     for (edit, want) in cases {
         assert_eq!(save_error(edit), want);
@@ -707,30 +768,56 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
 
     let cases: Vec<(Edit, &str)> = vec![
         // `@my var = 1` isn't a variable line; in a request it would become the request line.
-        (Box::new(|f| f.requests[0].variables[0].name = "my id".into()), "Request \"List pets\": variable name \"my id\" can only use letters, digits, _, -, . and $"),
-        (Box::new(|f| f.header.variables[0].name = "base=url".into()), "File variables: variable name \"base=url\" can only use letters, digits, _, -, . and $"),
-        (Box::new(|f| f.requests[0].headers.items[0].name = "X Trace".into()), "Request \"List pets\": header name \"X Trace\" can't contain spaces"),
-        (Box::new(|f| f.requests[0].headers.items[0].name = "X:Trace".into()), "Request \"List pets\": header name \"X:Trace\" can't contain ':'"),
+        (
+            Box::new(|f| f.requests[0].variables[0].name = "my id".into()),
+            "Request \"List pets\": variable name \"my id\" can only use letters, digits, _, -, . and $",
+        ),
+        (
+            Box::new(|f| f.header.variables[0].name = "base=url".into()),
+            "File variables: variable name \"base=url\" can only use letters, digits, _, -, . and $",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "X Trace".into()),
+            "Request \"List pets\": header name \"X Trace\" can't contain spaces",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "X:Trace".into()),
+            "Request \"List pets\": header name \"X:Trace\" can't contain ':'",
+        ),
         // Read back as a comment, a disabled item or a disabled body line.
-        (Box::new(|f| f.requests[0].headers.items[0].name = "#Trace".into()), "Request \"List pets\": header name \"#Trace\" can't start with '#'"),
-        (Box::new(|f| f.requests[0].headers.items[0].name = "//Trace".into()), "Request \"List pets\": header name \"//Trace\" can't start with '//'"),
-        (Box::new(|f| f.requests[0].headers.items[0].name = "|Trace".into()), "Request \"List pets\": header name \"|Trace\" can't start with '|'"),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "#Trace".into()),
+            "Request \"List pets\": header name \"#Trace\" can't start with '#'",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "//Trace".into()),
+            "Request \"List pets\": header name \"//Trace\" can't start with '//'",
+        ),
+        (
+            Box::new(|f| f.requests[0].headers.items[0].name = "|Trace".into()),
+            "Request \"List pets\": header name \"|Trace\" can't start with '|'",
+        ),
         (
             Box::new(|f| {
                 let auth = &mut f.requests[0].auth;
-                (auth.kind, auth.key_name, auth.key_location) = (AuthKind::ApiKey, "X Key".into(), ApiKeyLocation::Header);
+                (auth.kind, auth.key_name, auth.key_location) =
+                    (AuthKind::ApiKey, "X Key".into(), ApiKeyLocation::Header);
             }),
             "Request \"List pets\": API key header name \"X Key\" can't contain spaces",
         ),
         (
             Box::new(|f| {
                 let auth = &mut f.requests[0].auth;
-                (auth.kind, auth.key_name, auth.key_location) = (AuthKind::ApiKey, "api key".into(), ApiKeyLocation::Query);
+                (auth.kind, auth.key_name, auth.key_location) =
+                    (AuthKind::ApiKey, "api key".into(), ApiKeyLocation::Query);
             }),
             "Request \"List pets\": the API key name \"api key\" can't contain spaces",
         ),
         // The request line splits at whitespace.
-        (Box::new(|f| f.requests[0].method = "GET X".into()), "Request \"List pets\": the method \"GET X\" can't contain spaces"),
+        (
+            Box::new(|f| f.requests[0].method = "GET X".into()),
+            "Request \"List pets\": the method \"GET X\" can't contain spaces",
+        ),
         // `# @param a:b: text` would attach the description to `a`.
         (
             Box::new(|f| {
@@ -743,7 +830,8 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
         (
             Box::new(|f| {
                 let auth = &mut f.requests[0].auth;
-                (auth.kind, auth.username, auth.password, auth.raw) = (AuthKind::Basic, "dom:ain".into(), "pw".into(), None);
+                (auth.kind, auth.username, auth.password, auth.raw) =
+                    (AuthKind::Basic, "dom:ain".into(), "pw".into(), None);
             }),
             "Request \"List pets\": the Basic auth username \"dom:ain\" can't contain ':'",
         ),

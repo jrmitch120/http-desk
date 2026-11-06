@@ -166,7 +166,12 @@ pub fn variables(set: &EnvironmentSet, env_name: Option<&str>) -> HashMap<String
     out
 }
 
-fn build_object(vars: &[EnvVar], old: Option<&Value>, write_secrets: bool, old_public: Option<&Value>) -> Map<String, Value> {
+fn build_object(
+    vars: &[EnvVar],
+    old: Option<&Value>,
+    write_secrets: bool,
+    old_public: Option<&Value>,
+) -> Map<String, Value> {
     let mut obj = Map::new();
     for v in vars.iter().filter(|v| !v.name.is_empty()) {
         if v.secret == write_secrets {
@@ -196,7 +201,8 @@ pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
 
     let mut public = Map::new();
     let mut private = Map::new();
-    let named = std::iter::once((SHARED, &set.shared)).chain(set.environments.iter().map(|e| (e.name.as_str(), &e.variables)));
+    let named =
+        std::iter::once((SHARED, &set.shared)).chain(set.environments.iter().map(|e| (e.name.as_str(), &e.variables)));
     for (name, vars) in named {
         let pub_obj = build_object(vars, old_public.get(name), false, old_public.get(name));
         let priv_obj = build_object(vars, old_private.get(name), true, None);
@@ -212,7 +218,8 @@ pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
 
     let write = |path: &Path, map: Map<String, Value>| -> Result<(), EnvError> {
         let text = serde_json::to_string_pretty(&Value::Object(map)).unwrap() + "\n";
-        crate::workspace::write_atomic(path, text.as_bytes()).map_err(|source| EnvError::Io { path: path.into(), source })
+        crate::workspace::write_atomic(path, text.as_bytes())
+            .map_err(|source| EnvError::Io { path: path.into(), source })
     };
 
     if !public.is_empty() || public_path.exists() {
@@ -228,7 +235,12 @@ pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
 
 /// Adds variables that don't exist yet to `env_name` (creating it if needed).
 /// Existing values are never overwritten.
-pub fn merge_variables(dir: &Path, env_name: &str, vars: &[(String, String)], secret: bool) -> Result<SaveReport, EnvError> {
+pub fn merge_variables(
+    dir: &Path,
+    env_name: &str,
+    vars: &[(String, String)],
+    secret: bool,
+) -> Result<SaveReport, EnvError> {
     let mut set = load(dir)?;
     if !set.environments.iter().any(|e| e.name == env_name) {
         set.environments.push(Environment { name: env_name.to_string(), variables: vec![] });
@@ -263,7 +275,8 @@ fn gitignore_rule(dir: &Path) -> Option<GitignoreRule> {
 
     let root = dir.ancestors().find(|d| d.join(".git").exists())?;
     // Deepest first: a deeper `.gitignore` overrides a shallower one.
-    let rules: Vec<Gitignore> = dir.ancestors().take_while(|d| d.starts_with(root)).map(|d| Gitignore::new(d.join(".gitignore")).0).collect();
+    let rules: Vec<Gitignore> =
+        dir.ancestors().take_while(|d| d.starts_with(root)).map(|d| Gitignore::new(d.join(".gitignore")).0).collect();
     let file = dir.join(PRIVATE_ENV_FILE);
     let parts: Vec<_> = file.strip_prefix(root).ok()?.components().collect();
     // Like git, walk down from the root: once a folder is ignored, everything in it is.
@@ -350,7 +363,10 @@ mod tests {
         let token = set.environments[0].variables.iter_mut().find(|v| v.name == "token").unwrap();
         token.value = "s3cret".into();
         token.secret = true;
-        set.environments.push(Environment { name: "prod".into(), variables: vec![EnvVar { name: "baseUrl".into(), value: "https://api".into(), ..Default::default() }] });
+        set.environments.push(Environment {
+            name: "prod".into(),
+            variables: vec![EnvVar { name: "baseUrl".into(), value: "https://api".into(), ..Default::default() }],
+        });
         let report = save(dir.path(), &set).unwrap();
         assert!(report.gitignore_updated);
 
@@ -378,12 +394,16 @@ mod tests {
     #[test]
     fn ticking_secret_moves_the_value_out_of_the_shared_file() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(ENV_FILE), r#"{ "dev": { "baseUrl": "http://localhost", "token": "s3cret" } }"#).unwrap();
+        std::fs::write(dir.path().join(ENV_FILE), r#"{ "dev": { "baseUrl": "http://localhost", "token": "s3cret" } }"#)
+            .unwrap();
         let mut set = load(dir.path()).unwrap();
         set.environments[0].variables.iter_mut().find(|v| v.name == "token").unwrap().secret = true;
         save(dir.path(), &set).unwrap();
 
-        assert_eq!(read_json(&dir.path().join(ENV_FILE)), serde_json::json!({ "dev": { "baseUrl": "http://localhost", "token": "" } }));
+        assert_eq!(
+            read_json(&dir.path().join(ENV_FILE)),
+            serde_json::json!({ "dev": { "baseUrl": "http://localhost", "token": "" } })
+        );
         assert_eq!(read_json(&dir.path().join(PRIVATE_ENV_FILE)), serde_json::json!({ "dev": { "token": "s3cret" } }));
         assert_eq!(variables(&load(dir.path()).unwrap(), Some("dev"))["token"], "s3cret");
     }
@@ -434,7 +454,10 @@ mod tests {
         assert_eq!(load(&ws).unwrap().private_file_ignored, Some(false));
 
         assert!(ensure_gitignored(&ws).unwrap());
-        assert_eq!(std::fs::read_to_string(ws.join(".gitignore")).unwrap(), format!("# HttpDesk: secrets\n{PRIVATE_ENV_FILE}\n"));
+        assert_eq!(
+            std::fs::read_to_string(ws.join(".gitignore")).unwrap(),
+            format!("# HttpDesk: secrets\n{PRIVATE_ENV_FILE}\n")
+        );
         assert_eq!(load(&ws).unwrap().private_file_ignored, Some(true));
         assert!(!ensure_gitignored(&ws).unwrap(), "second call changes nothing");
     }

@@ -18,9 +18,9 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 
 use serde_json::{json, Value};
-use tauri::Manager;
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
+use tauri::Manager;
 
 struct Harness {
     app: tauri::App<tauri::test::MockRuntime>,
@@ -39,9 +39,9 @@ impl Harness {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let trash_bin = tempfile::tempdir().unwrap();
         let bin = trash_bin.path().to_path_buf();
-        app.state::<super::AppState>().trash.replace(move |path| {
-            std::fs::rename(path, bin.join(path.file_name().unwrap())).map_err(|e| e.to_string())
-        });
+        app.state::<super::AppState>()
+            .trash
+            .replace(move |path| std::fs::rename(path, bin.join(path.file_name().unwrap())).map_err(|e| e.to_string()));
         Harness { app, webview, cfg, trash_bin }
     }
 
@@ -52,8 +52,10 @@ impl Harness {
 
     /// Names of the entries moved to the (fake) trash, sorted.
     fn trashed(&self) -> Vec<String> {
-        let mut names: Vec<String> =
-            std::fs::read_dir(self.trash_bin.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        let mut names: Vec<String> = std::fs::read_dir(self.trash_bin.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         names.sort();
         names
     }
@@ -103,7 +105,11 @@ fn capture_server() -> (String, mpsc::Receiver<String>) {
             }
         }
         let body = br#"{"ok":true}"#;
-        let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n", body.len());
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+            body.len()
+        );
         let _ = stream.write_all(body);
         tx.send(String::from_utf8_lossy(&buf).into_owned()).unwrap();
     });
@@ -157,7 +163,10 @@ fn vertical_slice_over_ipc() {
     assert_eq!(saved["requests"].as_array().unwrap().len(), 2);
     let text = std::fs::read_to_string(&file_path).unwrap();
     assert!(text.starts_with("### List\nGET {{baseUrl}}/items?page=1\n#~ &size=50\nAuthorization: Bearer {{token}}\nAccept: application/json\n#~ X-Debug: on\n"), "{text}");
-    assert!(text.ends_with("### Untouched\n// hand formatted\nGET   https://example.com\n"), "untouched request kept byte-for-byte: {text}");
+    assert!(
+        text.ends_with("### Untouched\n// hand formatted\nGET   https://example.com\n"),
+        "untouched request kept byte-for-byte: {text}"
+    );
 
     let reopened = h.ok("read_http_file", json!({ "path": path }));
     let r = &reopened["requests"][0];
@@ -436,7 +445,8 @@ fn saving_settings_reports_a_failed_write() {
     // A folder where the settings file should go: the write can't replace it.
     std::fs::remove_file(h.config_dir().join("settings.json")).unwrap();
     std::fs::create_dir(h.config_dir().join("settings.json")).unwrap();
-    let err = h.call("save_settings", json!({ "settings": settings })).expect_err("a failed write was reported as saved");
+    let err =
+        h.call("save_settings", json!({ "settings": settings })).expect_err("a failed write was reported as saved");
     assert!(err.as_str().unwrap().starts_with("Could not save settings to "), "{err}");
 }
 

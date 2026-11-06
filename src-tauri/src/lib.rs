@@ -109,7 +109,8 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     if let Some(dir) = app.try_state::<ConfigDir>() {
         return Some(dir.0.join("settings.json"));
     }
-    let dir = std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
+    let dir =
+        std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
 }
 
@@ -151,7 +152,11 @@ async fn open_workspace<R: tauri::Runtime>(app: AppHandle<R>, path: PathBuf) -> 
     off_main(app.clone(), move |state| open_workspace_blocking(&app, state, path)).await
 }
 
-fn open_workspace_blocking<R: tauri::Runtime>(app: &AppHandle<R>, state: &AppState, path: PathBuf) -> CmdResult<WorkspaceInfo> {
+fn open_workspace_blocking<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    path: PathBuf,
+) -> CmdResult<WorkspaceInfo> {
     let root = paths::canonicalize(&path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
@@ -357,7 +362,11 @@ fn get_settings(state: State<'_, AppState>) -> AppSettings {
 }
 
 #[tauri::command]
-fn save_settings<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>, settings: AppSettings) -> CmdResult<()> {
+fn save_settings<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> CmdResult<()> {
     // Applied either way: the UI already shows the new values for this session.
     let saved = persist_settings(&app, &settings);
     *state.settings.lock().unwrap() = settings;
@@ -437,7 +446,11 @@ fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> Cmd
         doc.generate(options)
     };
     let output_dir = state.confine(output_dir)?;
-    let files = output.files.iter().map(|f| state.confine_write(&output_dir.join(&f.relative_path))).collect::<CmdResult<Vec<_>>>()?;
+    let files = output
+        .files
+        .iter()
+        .map(|f| state.confine_write(&output_dir.join(&f.relative_path)))
+        .collect::<CmdResult<Vec<_>>>()?;
     let conflicts: Vec<PathBuf> = files.iter().filter(|p| p.exists()).cloned().collect();
     // Output is confined to the workspace, so environments always go to its root.
     let env_dir = state.root()?;
@@ -455,7 +468,11 @@ fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> Cmd
     }
 
     // Serialize everything first so a refused file leaves nothing half-written.
-    let texts = output.files.iter().map(|g| httpdesk_core::try_serialize(&g.file).map_err(err)).collect::<CmdResult<Vec<_>>>()?;
+    let texts = output
+        .files
+        .iter()
+        .map(|g| httpdesk_core::try_serialize(&g.file).map_err(err))
+        .collect::<CmdResult<Vec<_>>>()?;
     std::fs::create_dir_all(&output_dir).map_err(err)?;
     for (text, path) in texts.iter().zip(&report.files) {
         state.write_file(path, text)?;

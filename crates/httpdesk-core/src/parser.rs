@@ -22,9 +22,7 @@ pub const AUTH_DIRECTIVE: &str = "httpdesk-auth";
 pub const PARAM_DOC_DIRECTIVE: &str = "param";
 pub const HEADER_DOC_DIRECTIVE: &str = "header";
 
-const KNOWN_METHODS: &[&str] = &[
-    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT",
-];
+const KNOWN_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
 
 pub const BOM: char = '\u{FEFF}';
 
@@ -179,9 +177,7 @@ fn parse_request_line(t: &str) -> (String, String, Option<String>) {
         _ => ("GET".to_string(), &tokens[..]),
     };
     let (url_tokens, version) = match rest.split_last() {
-        Some((last, init)) if !init.is_empty() && last.starts_with("HTTP/") => {
-            (init, Some(last.to_string()))
-        }
+        Some((last, init)) if !init.is_empty() && last.starts_with("HTTP/") => (init, Some(last.to_string())),
         _ => (rest, None),
     };
     (method, url_tokens.join(" "), version)
@@ -283,7 +279,8 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
                     }
                 }
                 Some(d)
-                    if d.name.eq_ignore_ascii_case(PARAM_DOC_DIRECTIVE) || d.name.eq_ignore_ascii_case(HEADER_DOC_DIRECTIVE) =>
+                    if d.name.eq_ignore_ascii_case(PARAM_DOC_DIRECTIVE)
+                        || d.name.eq_ignore_ascii_case(HEADER_DOC_DIRECTIVE) =>
                 {
                     docs.push(d)
                 }
@@ -578,9 +575,10 @@ fn attach_docs(req: &mut Request, docs: Vec<Directive>) {
         let target = d.value.split_once(':').and_then(|(name, text)| {
             let name = name.trim();
             let items = if is_header { &mut req.headers.items } else { &mut req.query.items };
-            let item = items
-                .iter_mut()
-                .find(|kv| if is_header { kv.name.eq_ignore_ascii_case(name) } else { kv.name == name })?;
+            let item =
+                items
+                    .iter_mut()
+                    .find(|kv| if is_header { kv.name.eq_ignore_ascii_case(name) } else { kv.name == name })?;
             Some((item, text.trim().to_string()))
         });
         match target {

@@ -34,7 +34,10 @@ fn header<'a>(r: &'a Received, name: &str) -> Option<&'a str> {
 
 async fn echo_server() -> MockServer {
     let server = MockServer::start().await;
-    Mock::given(path("/echo")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))).mount(&server).await;
+    Mock::given(path("/echo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
     server
 }
 
@@ -115,7 +118,13 @@ async fn variables_and_auth_kinds() {
 
     // API key in query
     let mut req = req.clone();
-    req.auth = Auth { kind: AuthKind::ApiKey, key_name: "api_key".into(), key_value: "{{key}}".into(), key_location: ApiKeyLocation::Query, ..Default::default() };
+    req.auth = Auth {
+        kind: AuthKind::ApiKey,
+        key_name: "api_key".into(),
+        key_value: "{{key}}".into(),
+        key_location: ApiKeyLocation::Query,
+        ..Default::default()
+    };
     vars.insert("key".into(), "k1".into());
     send(&req, vars.clone(), Path::new(".")).await.unwrap();
     assert_eq!(last_request(&server).await.url.query(), Some("id=7&api_key=k1"));
@@ -137,7 +146,10 @@ async fn bodies_json_form_multipart_and_files() {
     let cases = [
         ("Content-Type: application/json\n\n{\"a\": {{v}}}", b"{\"a\": 42}".to_vec()),
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\n&v={{v}}", b"name=foo&v=42".to_vec()),
-        ("Content-Type: application/x-www-form-urlencoded\n\nname=foo\nv={{v}}\nlast=1", b"name=foo&v=42&last=1".to_vec()),
+        (
+            "Content-Type: application/x-www-form-urlencoded\n\nname=foo\nv={{v}}\nlast=1",
+            b"name=foo&v=42&last=1".to_vec(),
+        ),
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo&\nv={{v}}", b"name=foo&v=42".to_vec()),
         ("Content-Type: application/json\n\n< ./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
         ("Content-Type: application/json\n\n<@ ./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
@@ -181,9 +193,15 @@ async fn bodies_json_form_multipart_and_files() {
 #[tokio::test]
 async fn redirects_timeouts_and_methods() {
     let server = MockServer::start().await;
-    Mock::given(path("/old")).respond_with(ResponseTemplate::new(302).insert_header("location", "/new")).mount(&server).await;
+    Mock::given(path("/old"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/new"))
+        .mount(&server)
+        .await;
     Mock::given(path("/new")).respond_with(ResponseTemplate::new(200).set_body_string("new")).mount(&server).await;
-    Mock::given(path("/slow")).respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(3))).mount(&server).await;
+    Mock::given(path("/slow"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(3)))
+        .mount(&server)
+        .await;
     Mock::given(method("PURGE")).respond_with(ResponseTemplate::new(204)).mount(&server).await;
     let vars = env(&[("base", &server.uri())]);
 
@@ -232,7 +250,10 @@ fn trickle_server(parts: Vec<Vec<u8>>, gap: Duration) -> String {
 }
 
 fn response_head(content_length: usize) -> Vec<u8> {
-    format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n").into_bytes()
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes()
 }
 
 #[test]
@@ -290,7 +311,10 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
     let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
     assert!(matches!(err, ExecError::ConnectTimeout(300)), "{err:?}");
     let msg = err.to_string();
-    assert!(msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"), "{msg}");
+    assert!(
+        msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"),
+        "{msg}"
+    );
 
     let req = parse(&format!("# @connection-timeout 1\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
     let msg = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err().to_string();
@@ -301,9 +325,14 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
 #[tokio::test]
 async fn binary_responses_are_base64_and_text_is_decoded() {
     let server = MockServer::start().await;
-    Mock::given(path("/img")).respond_with(ResponseTemplate::new(200).set_body_raw(vec![0x89, b'P', b'N', b'G', 0, 1], "image/png")).mount(&server).await;
+    Mock::given(path("/img"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(vec![0x89, b'P', b'N', b'G', 0, 1], "image/png"))
+        .mount(&server)
+        .await;
     Mock::given(path("/latin1"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(vec![b'c', b'a', b'f', 0xE9], "text/plain; charset=iso-8859-1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(vec![b'c', b'a', b'f', 0xE9], "text/plain; charset=iso-8859-1"),
+        )
         .mount(&server)
         .await;
     let vars = env(&[("base", &server.uri())]);
@@ -325,7 +354,11 @@ fn prepare_rules() {
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/a");
 
     let req = parse("GET example.com/login?next=http://foo\n").requests.remove(0);
-    assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://example.com/login?next=http://foo", "scheme is looked for before `?` only");
+    assert_eq!(
+        prepare(&req, &r, Path::new("."), &s).unwrap().url,
+        "http://example.com/login?next=http://foo",
+        "scheme is looked for before `?` only"
+    );
 
     let req = parse("GET /path\nHost: api.local:8080\n").requests.remove(0);
     assert_eq!(prepare(&req, &r, Path::new("."), &s).unwrap().url, "http://api.local:8080/path");
@@ -358,7 +391,10 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
     let req = parse("GET {{baseUrl}}/users?id={{id}}\n").requests.remove(0);
     let err = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &s).unwrap_err();
     let msg = err.to_string();
-    assert!(matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["baseUrl"]), "only host variables are named: {msg}");
+    assert!(
+        matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["baseUrl"]),
+        "only host variables are named: {msg}"
+    );
     assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
 
     // A variable that resolves to a URL whose own host is unresolved names that inner variable.
@@ -388,7 +424,10 @@ async fn sent_query(text: &str, vars: &[(&str, &str)]) -> (Option<String>, Vec<(
     vars.insert("base".into(), server.uri());
     send(&parse(text).requests[0], vars, Path::new(".")).await.unwrap();
     let got = last_request(&server).await;
-    (got.url.query().map(str::to_string), got.url.query_pairs().map(|(n, v)| (n.into_owned(), v.into_owned())).collect())
+    (
+        got.url.query().map(str::to_string),
+        got.url.query_pairs().map(|(n, v)| (n.into_owned(), v.into_owned())).collect(),
+    )
 }
 
 fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -417,13 +456,18 @@ async fn existing_escapes_are_not_encoded_twice() {
 #[tokio::test]
 async fn the_rest_is_encoded_at_send() {
     let (raw, got) = sent_query("GET {{base}}/echo?ids[]=1|2&name=café&next=http://x/?a=1&sp=a+b\n", &[]).await;
-    assert_eq!(raw.as_deref(), Some("ids%5B%5D=1%7C2&name=caf%C3%A9&next=http://x/?a=1&sp=a+b"), "a written `+` is kept");
+    assert_eq!(
+        raw.as_deref(),
+        Some("ids%5B%5D=1%7C2&name=caf%C3%A9&next=http://x/?a=1&sp=a+b"),
+        "a written `+` is kept"
+    );
     assert_eq!(got, pairs(&[("ids[]", "1|2"), ("name", "café"), ("next", "http://x/?a=1"), ("sp", "a b")]));
 }
 
 #[tokio::test]
 async fn no_auto_encoding_sends_the_query_as_written() {
-    let (raw, _) = sent_query("# @no-auto-encoding\nGET {{base}}/echo?ids[]=1|2&q=a%2Bb&t={{t}}\n", &[("t", "x,y|z")]).await;
+    let (raw, _) =
+        sent_query("# @no-auto-encoding\nGET {{base}}/echo?ids[]=1|2&q=a%2Bb&t={{t}}\n", &[("t", "x,y|z")]).await;
     assert_eq!(raw.as_deref(), Some("ids[]=1|2&q=a%2Bb&t=x,y|z"));
 }
 

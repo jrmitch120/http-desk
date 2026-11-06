@@ -10,7 +10,9 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use httpdesk_core::{env, workspace};
-use notify_debouncer_mini::{new_debouncer, notify::RecommendedWatcher, notify::RecursiveMode, DebounceEventResult, Debouncer};
+use notify_debouncer_mini::{
+    new_debouncer, notify::RecommendedWatcher, notify::RecursiveMode, DebounceEventResult, Debouncer,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -88,7 +90,8 @@ pub fn start<R: tauri::Runtime>(app: &AppHandle<R>, self_writes: SelfWrites, roo
     if UNWATCHABLE.lock().unwrap().iter().any(|p| p == root) {
         return Err(failed(&"simulated failure"));
     }
-    let root_check = Arc::new(RootCheck { app: app.clone(), root: root.to_path_buf(), missing: AtomicBool::new(false) });
+    let root_check =
+        Arc::new(RootCheck { app: app.clone(), root: root.to_path_buf(), missing: AtomicBool::new(false) });
     let (app, watched, check) = (app.clone(), root.to_path_buf(), root_check.clone());
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: DebounceEventResult| {
         let events = match res {

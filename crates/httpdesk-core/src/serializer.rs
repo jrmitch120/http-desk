@@ -7,8 +7,10 @@
 use base64::Engine;
 
 use crate::model::*;
+use crate::parser::{
+    self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE,
+};
 use crate::query::{escape, Part};
-use crate::parser::{self, AUTH_DIRECTIVE, DISABLED_MARKER, HEADER_DOC_DIRECTIVE, PARAM_DOC_DIRECTIVE, SECTION_DIRECTIVE};
 
 /// A model field whose text would change the file's structure if written.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -70,10 +72,7 @@ fn header_name_problem(name: &str) -> Option<String> {
     if name.contains(':') {
         return Some("can't contain ':'".into());
     }
-    ["//", "#", "~", "|", "&", "?"]
-        .into_iter()
-        .find(|p| name.starts_with(p))
-        .map(|p| format!("can't start with '{p}'"))
+    ["//", "#", "~", "|", "&", "?"].into_iter().find(|p| name.starts_with(p)).map(|p| format!("can't start with '{p}'"))
 }
 
 fn check_header_name(context: &str, what: &str, name: &str) -> Result<(), InvalidField> {
@@ -285,10 +284,8 @@ fn render_header_in_place(h: &FileHeader, raw: &str) -> Option<String> {
         .collect();
     let mut fill = vars.iter().zip(&matched).filter(|(_, m)| **m).map(|(v, _)| *v);
     let mut added = vars.iter().zip(&matched).filter(|(_, m)| !**m).map(|(v, _)| *v).peekable();
-    let insert_after = lines
-        .iter()
-        .rposition(|(_, v)| v.is_some())
-        .or_else(|| lines.iter().rposition(|(l, _)| !l.trim().is_empty()));
+    let insert_after =
+        lines.iter().rposition(|(_, v)| v.is_some()).or_else(|| lines.iter().rposition(|(l, _)| !l.trim().is_empty()));
 
     let mut out = String::new();
     let mut push_added = |out: &mut String| {
@@ -341,7 +338,11 @@ fn marker(depth: usize) -> String {
 pub(crate) fn render_param(p: &KeyValue) -> String {
     let name = escape(&p.name, Part::Name);
     if p.value.is_empty() {
-        if p.equals { name + "=" } else { name }
+        if p.equals {
+            name + "="
+        } else {
+            name
+        }
     } else {
         format!("{name}={}", escape(&p.value, Part::Value))
     }
@@ -435,9 +436,8 @@ pub fn render_request(req: &Request) -> String {
 
     // Request line with enabled query params.
     let mut active: Vec<String> = req.query.active().map(render_param).collect();
-    let api_key_query = auth.kind == AuthKind::ApiKey
-        && auth.key_location == ApiKeyLocation::Query
-        && !auth.key_name.is_empty();
+    let api_key_query =
+        auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query && !auth.key_name.is_empty();
     if api_key_query && auth.enabled {
         active.push(render_param(&KeyValue::new(&auth.key_name, &auth.key_value)));
     }
