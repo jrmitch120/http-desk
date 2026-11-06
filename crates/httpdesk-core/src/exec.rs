@@ -3,11 +3,13 @@
 //! sends it with reqwest.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::cookies::{self, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
 use crate::parser::DISABLED_MARKER;
@@ -389,6 +391,9 @@ pub struct HttpResponse {
     pub truncated: bool,
     pub request: SentRequest,
     pub warnings: Vec<String>,
+    /// Every `Set-Cookie` received, redirect hops first, each with the URL
+    /// that set it. Shown only; never sent back.
+    pub cookies: Vec<ResponseCookie>,
 }
 
 pub struct ExecOutcome {
@@ -413,8 +418,14 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
-fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<reqwest::Client, ExecError> {
+fn build_client(
+    p: &PreparedRequest,
+    settings: &ExecSettings,
+    ssl: &SslConfig,
+    cookies: Arc<cookies::Recorder>,
+) -> Result<reqwest::Client, ExecError> {
     let mut b = reqwest::Client::builder()
+        .cookie_provider(cookies)
         .redirect(if p.follow_redirects {
             reqwest::redirect::Policy::limited(settings.max_redirects)
         } else {
@@ -471,7 +482,8 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
 }
 
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
-    let client = build_client(&p, settings, ssl)?;
+    let cookies = Arc::new(cookies::Recorder::default());
+    let client = build_client(&p, settings, ssl, cookies.clone())?;
     let method =
         reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
     let mut builder = client.request(method, &p.url);
@@ -557,6 +569,7 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
             truncated,
             request,
             warnings: p.warnings,
+            cookies: cookies.take(),
         },
         body,
     })

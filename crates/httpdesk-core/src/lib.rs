@@ -1,6 +1,7 @@
 //! HttpDesk core: `.http` parsing/serialization, variables, environments,
 //! request execution and OpenAPI generation. No UI or Tauri dependencies.
 
+pub mod cookies;
 pub mod env;
 pub mod exec;
 pub mod model;

@@ -530,3 +530,47 @@ async fn an_api_key_query_param_is_resolved_and_encoded() {
     let (_, got) = sent_query(text, &[("keyName", "api key"), ("key", "s3cr&t=/+")]).await;
     assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
 }
+
+#[tokio::test]
+async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/home")
+                .insert_header("set-cookie", "a=1; Path=/; HttpOnly"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/home"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "b=2; Max-Age=60; SameSite=Lax")
+                .append_header("set-cookie", "not a cookie"),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/login\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert_eq!(resp.status, 200);
+
+    let got: Vec<_> = resp.cookies.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.url.as_str())).collect();
+    let (login, home) = (format!("{}/login", server.uri()), format!("{}/home", server.uri()));
+    assert_eq!(got, [("a", "1", login.as_str()), ("b", "2", home.as_str()), ("", "", home.as_str())]);
+    assert!(resp.cookies[0].http_only);
+    assert_eq!((resp.cookies[1].max_age, resp.cookies[1].same_site.as_deref()), (Some(60), Some("Lax")));
+    assert_eq!(resp.cookies[2].raw, "not a cookie");
+
+    let hops = server.received_requests().await.unwrap();
+    assert_eq!(hops.len(), 2);
+    assert!(hops.iter().all(|r| r.headers.get("cookie").is_none()), "a cookie was sent back");
+}
+
+#[tokio::test]
+async fn a_cookie_header_the_user_wrote_is_still_sent() {
+    let server = echo_server().await;
+    let req = parse("GET {{base}}/echo\nCookie: mine=1\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert!(resp.cookies.is_empty());
+    assert_eq!(header(&last_request(&server).await, "cookie"), Some("mine=1"));
+}
