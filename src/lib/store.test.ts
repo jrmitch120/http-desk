@@ -1,6 +1,6 @@
 // Store behaviour that depends on async ordering (concurrent loads of the same
-// file, refreshing documents the app itself rewrote), Orphaned tabs, sending,
-// settings, toasts and startup.
+// file, refreshing documents the app itself rewrote), Orphaned tabs, search,
+// sending, settings, toasts and startup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, HttpFile, HttpResponse } from "./types";
 import { newRequest } from "./http";
@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   createDir: vi.fn(),
   renamePath: vi.fn(),
   pathExists: vi.fn(),
+  searchRequests: vi.fn(),
   sendRequest: vi.fn(),
   cancelRequest: vi.fn(),
   saveSettings: vi.fn(),
@@ -19,7 +20,7 @@ const api = vi.hoisted(() => ({
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
 }));
-const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists } = api;
+const { readHttpFile, saveHttpFile, createFile, createDir, renamePath, pathExists, searchRequests } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -60,6 +61,7 @@ beforeEach(() => {
   pathExists.mockResolvedValue(true);
   app.dialog = null;
   app.toasts = [];
+  app.tree = null;
   app.docs = {};
   app.tabs = [];
   app.activeTabId = null;
@@ -435,5 +437,68 @@ describe("startup", () => {
     expect(app.settings?.recentWorkspaces).toEqual(["/ws"]);
     expect(api.openWorkspace).not.toHaveBeenCalled(); // the last one is gone
     expect(app.starting).toBe(false);
+  });
+});
+
+describe("search", () => {
+  it("finds a request that was added but not saved, by its name", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2"; // unsaved, so adding doesn't save
+    await app.addRequest(PATH, { ...newRequest("Archive"), method: "POST", url: "https://x/archive" });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    searchRequests.mockResolvedValue([]); // the file on disk has no such request
+
+    const hits = await app.searchRequests("archive");
+
+    expect(hits).toEqual([{ path: PATH, index: 1, name: "Archive", method: "POST", url: "https://x/archive" }]);
+  });
+
+  it("opens the request that was clicked even after unsaved edits moved it from its disk position", async () => {
+    const onDisk = fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]);
+    searchRequests.mockResolvedValue([{ path: PATH, index: 1, name: "Get", method: "GET", url: "https://x/books/1" }]);
+    const [hit] = await app.searchRequests("get"); // file not open yet: found on disk
+
+    // Before clicking, the user opens the file and inserts a request above "Get" without saving.
+    const [list] = await openAll(onDisk);
+    app.requestFor(list)!.url = "https://x/books?page=2";
+    await app.duplicateRequest(PATH, list.key);
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "List copy", "Get"]);
+
+    await app.openSearchHit(hit);
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("Get");
+  });
+
+  it("lists results in workspace file order whether or not a file is open", async () => {
+    const OTHER = "/ws/zoo.http";
+    app.tree = {
+      name: "ws",
+      path: "/ws",
+      kind: "dir",
+      children: [
+        { name: "api", path: "/ws/api", kind: "dir", children: [{ name: "books.http", path: PATH, kind: "file" }] },
+        { name: "zoo.http", path: OTHER, kind: "file" },
+      ],
+    };
+    await openAll(fileOf(["GET", "List", "https://x/books"]));
+    searchRequests.mockResolvedValue([
+      { path: PATH, index: 0, name: "List", method: "GET", url: "https://x/books" },
+      { path: OTHER, index: 0, name: "List animals", method: "GET", url: "https://x/zoo" },
+    ]);
+
+    const hits = await app.searchRequests("list");
+
+    expect(hits.map((h) => h.path)).toEqual([PATH, OTHER]);
+  });
+
+  it("matches a result to its request by name + method + URL", async () => {
+    const [, , post] = await openAll(
+      fileOf(["GET", "Item", "https://x/items"], ["GET", "Item", "https://x/items/1"], ["POST", "Item", "https://x/items"]),
+    );
+    app.activeTabId = null;
+
+    await app.openSearchHit({ path: PATH, index: 0, name: "Item", method: "POST", url: "https://x/items" });
+
+    expect(app.activeTabId).toBe(post.id);
   });
 });

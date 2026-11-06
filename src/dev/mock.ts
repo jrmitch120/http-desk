@@ -38,6 +38,10 @@ let settings = {
   showDescriptions: true,
 };
 
+/** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
+const sent: unknown[] = [];
+(window as unknown as { __mock: unknown }).__mock = { sent };
+
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -70,9 +74,19 @@ mockIPC(
         const r = args.request;
         return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
       }
-      case "search_requests":
-        return [{ path: `${ROOT}/api/pets.http`, index: 0, name: "List pets", method: "GET", url: "{{baseUrl}}/pets" }];
+      case "search_requests": {
+        // Same matching as the backend: every term in name, method, URL or file name.
+        const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
+        return Object.entries(files).flatMap(([path, f]: [string, any]) =>
+          f.requests.flatMap((r: any, index: number) => {
+            const name = r.name.trim() || `${r.method} ${r.url}`;
+            const hay = `${name} ${r.method} ${r.url} ${path.split("/").pop()}`.toLowerCase();
+            return terms.every((t) => hay.includes(t)) ? [{ path, index, name, method: r.method, url: r.url }] : [];
+          }),
+        );
+      }
       case "send_request": {
+        sent.push(clone(args.request));
         await delay(450);
         const r = args.request;
         if (r.url.includes("png")) {
