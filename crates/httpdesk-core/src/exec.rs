@@ -8,11 +8,13 @@ mod timing;
 pub use timing::Timings;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::cookies::{self, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
 use crate::parser::DISABLED_MARKER;
@@ -482,6 +484,9 @@ pub struct HttpResponse {
     /// Phase timing of the final request (`time_ms` covers every hop).
     #[serde(default)]
     pub timings: Timings,
+    /// Every `Set-Cookie` received, redirect hops first, each with the URL
+    /// that set it. Shown only; never sent back.
+    pub cookies: Vec<ResponseCookie>,
 }
 
 pub struct ExecOutcome {
@@ -574,15 +579,17 @@ async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
 }
 
 /// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
-/// with the hooks that time its phases. [`execute`] builds one per send, so
-/// settings can differ per request; [`execute_on`] reuses one, which lets a
-/// later request go over a connection that is still open.
+/// with the hooks that time its phases and record the cookies its responses
+/// set. [`execute`] builds one per send, so settings can differ per request;
+/// [`execute_on`] reuses one, which lets a later request go over a connection
+/// that is still open.
 ///
-/// It times one request at a time: concurrent sends on one client would mix
-/// their phases.
+/// It times and records one request at a time: concurrent sends on one client
+/// would mix their phases and cookies.
 pub struct ExecClient {
     http: reqwest::Client,
     timing: timing::Recorder,
+    cookies: Arc<cookies::Recorder>,
 }
 
 impl ExecClient {
@@ -590,8 +597,9 @@ impl ExecClient {
     /// settings. Fails with [`ExecError::Tls`] if a certificate can't be read.
     pub fn new(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<Self, ExecError> {
         let timing = timing::Recorder::default();
-        let http = build_client(p, settings, ssl, &timing)?;
-        Ok(Self { http, timing })
+        let cookies = Arc::new(cookies::Recorder::default());
+        let http = build_client(p, settings, ssl, &timing, cookies.clone())?;
+        Ok(Self { http, timing, cookies })
     }
 }
 
@@ -600,6 +608,7 @@ fn build_client(
     settings: &ExecSettings,
     ssl: &SslConfig,
     timing: &timing::Recorder,
+    cookies: Arc<cookies::Recorder>,
 ) -> Result<reqwest::Client, ExecError> {
     let redirect = if p.follow_redirects {
         timing.redirects(reqwest::redirect::Policy::limited(settings.max_redirects))
@@ -613,6 +622,7 @@ fn build_client(
         .no_brotli()
         .no_deflate()
         .no_zstd()
+        .cookie_provider(cookies)
         .redirect(redirect)
         .dns_resolver(timing.resolver())
         .connector_layer(timing.layer())
@@ -721,6 +731,10 @@ async fn send_on(
     }
 
     client.timing.reset();
+    // Drop anything an earlier request on this client left behind (one that
+    // failed part-way never took its cookies), so this response lists only
+    // the cookies set while it was being fetched.
+    client.cookies.take();
     let start = Instant::now();
     let mut resp = match builder.send().await {
         Ok(resp) => resp,
@@ -770,6 +784,7 @@ async fn send_on(
     let end = Instant::now();
     let elapsed = end - start;
     let timings = client.timing.timings(start, headers_at, end);
+    let cookies = client.cookies.take();
     let mut warnings = p.warnings;
     warnings.extend(unsupported);
 
@@ -814,6 +829,7 @@ async fn send_on(
             request,
             warnings,
             timings,
+            cookies,
         },
         body,
     })

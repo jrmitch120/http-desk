@@ -19,6 +19,7 @@
   import Banner from "./Banner.svelte";
   import SendErrorPanel from "./SendErrorPanel.svelte";
   import HeadersPanel from "./HeadersPanel.svelte";
+  import CookiesPanel from "./CookiesPanel.svelte";
   import TimingPanel from "./TimingPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -161,6 +162,8 @@
   const tabs = $derived<SegmentedOption[]>([
     { value: "body", label: "Body" },
     { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    // Only when the response set any: an empty Cookies tab would be noise on most responses.
+    ...(res?.cookies.length ? [{ value: "cookies", label: "Cookies", count: res.cookies.length }] : []),
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
   ]);
@@ -264,6 +267,8 @@
         </div>
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />
+      {:else if current === "cookies"}
+        <CookiesPanel cookies={res.cookies} url={res.url} />
       {:else if current === "timing"}
         <TimingPanel {res} />
       {:else}
