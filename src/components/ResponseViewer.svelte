@@ -1,6 +1,8 @@
 <script module lang="ts">
   type BodyView = "pretty" | "raw" | "preview";
-  const viewByTab = new Map<string, { tab: string; mode: BodyView }>();
+  const viewByTab = new Map<string, { tab: string; mode: BodyView; wrap: boolean }>();
+  /** Above this many body bytes, copying a binary body as base64 asks first. */
+  const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
 
 <script lang="ts">
@@ -9,11 +11,13 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
   import { formatBytes, formatDuration, prettyJson, prettyXml } from "../lib/http";
+  import { explainStatus } from "../lib/status";
   import Editor from "../lib/codemirror/Editor.svelte";
   import type { Language } from "../lib/codemirror/setup";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
   import SendErrorPanel from "./SendErrorPanel.svelte";
+  import HeadersPanel from "./HeadersPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -26,10 +30,10 @@
   const saved = untrack(() => viewByTab.get(tab.id));
   let view = $state(saved?.tab ?? "body");
   let mode = $state<BodyView>(saved?.mode ?? "pretty");
-  let wrap = $state(false);
+  let wrap = $state(saved?.wrap ?? false);
   let editor: Editor | undefined = $state();
   $effect(() => {
-    viewByTab.set(tab.id, { tab: view, mode });
+    viewByTab.set(tab.id, { tab: view, mode, wrap });
   });
 
   // Elapsed time while loading.
@@ -96,8 +100,30 @@
 
   async function copyBody() {
     if (!res) return;
-    await navigator.clipboard.writeText(res.bodyText ?? "");
-    app.toast("success", "Response body copied");
+    if (res.bodyText !== null) {
+      await navigator.clipboard.writeText(res.bodyText);
+      app.toast("success", "Response body copied");
+      return;
+    }
+    const b64 = res.bodyBase64;
+    if (!b64) return;
+    const bytes = base64Bytes(b64);
+    if (bytes > BASE64_COPY_CONFIRM_BYTES) {
+      const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
+      const r = await app.choose("Copy as base64?", message, [
+        { label: "Cancel", value: "cancel" },
+        { label: "Copy", value: "copy", primary: true },
+      ]);
+      if (r.button !== "copy") return;
+    }
+    await navigator.clipboard.writeText(b64);
+    app.toast("success", "Response body copied as base64");
+  }
+
+  /** How many bytes a base64 string decodes to, without decoding it. */
+  function base64Bytes(b64: string): number {
+    const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+    return Math.floor((b64.length * 3) / 4) - pad;
   }
 
   async function saveBody() {
@@ -113,7 +139,18 @@
     }
   }
 
-  const statusTitle = $derived(res ? `${res.httpVersion} · final URL ${res.url}` : "");
+  // The viewer's tabs. Adding one is a line here plus its panel below. A
+  // `count` shows after the label; leave it out for none, and pass 0 only where
+  // an empty tab says something (no headers at all is worth knowing).
+  const tabs = $derived<SegmentedOption[]>([
+    { value: "body", label: "Body" },
+    { value: "headers", label: "Headers", count: res?.headers.length ?? 0 },
+    { value: "request", label: "Request" },
+  ]);
+  // A remembered tab that this response doesn't have falls back to Body.
+  const current = $derived(tabs.some((t) => t.value === view) ? view : "body");
+
+  const statusTitle = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
   const sizeTitle = $derived(res ? `Body ${formatBytes(res.bodySize)} · Headers ${formatBytes(res.headersSize)}` : "");
   const timeTitle = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
@@ -144,7 +181,7 @@
         <span class="metric" use:tooltip={timeTitle}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTitle}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
-        <button class="icon-btn" aria-label="Copy body" use:tooltip disabled={isBinary} onclick={copyBody}><Icon name="copy" /></button>
+        <button class="icon-btn" aria-label="Copy body" use:tooltip={isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
@@ -161,15 +198,11 @@
           <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
         </Banner>
       {/if}
-      <nav class="subtabs">
-        <button class="subtab" class:active={view === "body"} onclick={() => (view = "body")}><span class="label">Body</span></button>
-        <button class="subtab" class:active={view === "headers"} onclick={() => (view = "headers")}>
-          <span class="label">Headers</span><span class="count">{res.headers.length}</span>
-        </button>
-        <button class="subtab" class:active={view === "request"} onclick={() => (view = "request")}><span class="label">Request</span></button>
-      </nav>
+      <div class="tabs">
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view = t)} />
+      </div>
 
-      {#if view === "body"}
+      {#if current === "body"}
         <div class="toolbar">
           <SegmentedControl label="Response view" options={viewOptions} value={effectiveMode} onchange={(m) => (mode = m)} />
           {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
@@ -204,16 +237,8 @@
             <Editor bind:this={editor} value={bodyText} readonly {wrap} language={isBinary ? "text" : language} />
           {/if}
         </div>
-      {:else if view === "headers"}
-        <div class="table-wrap">
-          <table>
-            <tbody>
-              {#each res.headers as [k, v], i (i)}
-                <tr><td class="k">{k}</td><td class="v selectable">{v}</td></tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+      {:else if current === "headers"}
+        <HeadersPanel headers={res.headers} />
       {:else}
         <div class="table-wrap">
           <div class="sent-line selectable mono"><strong>{res.request.method}</strong> {res.request.url}</div>
@@ -292,6 +317,12 @@
   }
   .viewer :global(.send-error) {
     margin: 18px;
+  }
+  .tabs {
+    display: flex;
+    padding: 6px 10px 6px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
   }
   .toolbar {
     display: flex;
