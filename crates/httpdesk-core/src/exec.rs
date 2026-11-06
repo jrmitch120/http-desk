@@ -469,6 +469,11 @@ pub struct HttpResponse {
     pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
     pub body_text: Option<String>,
+    /// The Pretty view's text for a JSON or XML body (the raw text if it
+    /// doesn't parse). The shell fills it in for bodies small enough to send
+    /// twice; `None` means fetch it by response id when Pretty is opened.
+    #[serde(default)]
+    pub pretty_text: Option<String>,
     /// Base64 for binary content (only below the preview limit).
     pub body_base64: Option<String>,
     pub truncated: bool,
@@ -614,7 +619,10 @@ fn is_textual(content_type: &str) -> bool {
             .any(|t| ct.contains(t))
 }
 
-fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
+/// A body as text: in its `charset`, else UTF-8 for textual or unknown content
+/// types; `None` for binary. The shell re-decodes stored bodies with it, so
+/// they match the response's `body_text`.
+pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     let charset = content_type.and_then(|ct| {
         ct.split(';').find_map(|p| p.trim().strip_prefix("charset=").map(|c| c.trim_matches('"').to_string()))
     });
@@ -746,6 +754,7 @@ pub async fn execute_with_progress(
             content_type,
             content_encoding,
             body_text,
+            pretty_text: None,
             body_base64,
             truncated,
             request,
