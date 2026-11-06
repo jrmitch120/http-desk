@@ -3,7 +3,7 @@
   import type { HttpFile, KeyValue, Request } from "../lib/types";
   import { getDirective, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
-  import KeyValueTable from "./KeyValueTable.svelte";
+  import KeyValueGrid from "./KeyValueGrid.svelte";
 
   let { req, file }: { req: Request; file: HttpFile } = $props();
 
@@ -89,7 +89,7 @@
   <section>
     <h3>File variables</h3>
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
-    <KeyValueTable bind:items={fileVars} toggles={false} namePlaceholder="Variable" valuePlaceholder="Value" separator="=" nameError={variableNameError} />
+    <KeyValueGrid bind:items={fileVars} columns={["name", "value", "delete"]} namePlaceholder="Variable" valuePlaceholder="Value" separator="=" nameError={variableNameError} />
   </section>
 
   {#if otherDirectives.length || preserved.length}

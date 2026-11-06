@@ -213,30 +213,53 @@ export function applyUrlText(req: Request, text: string): void {
 
 // ------------------------------------------------------------------ bulk edit
 
-/** Key/value rows as bulk-edit text: one `name<sep> value` per line, `//` = disabled. */
-export function formatBulk(items: KeyValue[], separator: string, toggles: boolean): string {
+/** What bulk edit reads and writes of a row. Rows with an `enabled` flag can be disabled with `//`. */
+export interface BulkRow {
+  name: string;
+  value: string;
+  enabled?: boolean;
+}
+
+/** How `parseBulk` builds rows of a type other than `KeyValue`. */
+export interface BulkRows<R extends BulkRow> {
+  /** A new, empty row. If it has an `enabled` flag, a `//` prefix disables the line. */
+  blank: () => R;
+  /** Fields the text doesn't show, carried over from the previous row of the same name. */
+  carry: (keyof R)[];
+}
+
+const KEY_VALUE_ROWS: BulkRows<KeyValue> = { blank: () => ({ enabled: true, name: "", value: "" }), carry: ["description"] };
+
+/** Rows as bulk-edit text: one `name<sep> value` per line, `//` = disabled. */
+export function formatBulk(items: BulkRow[], separator: string, toggles: boolean): string {
   return items
     .filter((r) => r.name || r.value)
     .map((r) => `${toggles && !r.enabled ? "//" : ""}${r.name}${separator}${separator === ":" ? " " : ""}${r.value}`)
     .join("\n");
 }
 
-/** Bulk-edit text back to rows. Descriptions come from `previous` (matched by name),
- *  which should be the rows as they were when bulk editing started. */
-export function parseBulk(text: string, separator: string, previous: KeyValue[]): KeyValue[] {
-  const docs = [...previous];
+/** Bulk-edit text back to rows. Fields the text can't show (descriptions, by default) come
+ *  from `previous` (matched by name), which should be the rows as they were when bulk
+ *  editing started. `rows` describes rows other than `KeyValue`. */
+export function parseBulk(text: string, separator: string, previous: KeyValue[]): KeyValue[];
+export function parseBulk<R extends BulkRow>(text: string, separator: string, previous: R[], rows: BulkRows<R>): R[];
+export function parseBulk<R extends BulkRow>(text: string, separator: string, previous: R[], rows = KEY_VALUE_ROWS as unknown as BulkRows<R>): R[] {
+  const pool = [...previous];
   return text
     .split("\n")
     .filter((l) => l.trim())
     .map((l) => {
-      const disabled = l.trimStart().startsWith("//");
+      const row = rows.blank();
+      const disabled = "enabled" in row && l.trimStart().startsWith("//");
       const line = disabled ? l.trimStart().slice(2) : l;
       const idx = line.indexOf(separator);
-      const name = (idx < 0 ? line : line.slice(0, idx)).trim();
-      const value = idx < 0 ? "" : line.slice(idx + 1).trim();
-      const at = docs.findIndex((p) => p.name === name);
-      const description = at < 0 ? undefined : docs.splice(at, 1)[0].description;
-      return description ? { enabled: !disabled, name, value, description } : { enabled: !disabled, name, value };
+      row.name = (idx < 0 ? line : line.slice(0, idx)).trim();
+      row.value = idx < 0 ? "" : line.slice(idx + 1).trim();
+      if ("enabled" in row) row.enabled = !disabled;
+      const at = pool.findIndex((p) => p.name === row.name);
+      const match = at < 0 ? undefined : pool.splice(at, 1)[0];
+      for (const key of rows.carry) if (match?.[key]) row[key] = match[key];
+      return row;
     });
 }
 
