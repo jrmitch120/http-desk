@@ -4,8 +4,8 @@
   // the filter (in the core) and passes back the outcome. Keys complete from the
   // body's shape summary, which the owner loads when asked (`needshape`).
   import Icon from "./Icon.svelte";
+  import FilterField from "./FilterField.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { suggestions } from "../lib/popup/suggestions.svelte";
   import { keyCompletion } from "../lib/jsonpath";
   import type { JsonShape } from "../lib/types";
 
@@ -28,22 +28,18 @@
 
 <div class="filter-bar">
   <div class="row">
-    <span class="icon" aria-hidden="true"><Icon name="filter" size={13} /></span>
-    <input
-      class="input mono"
-      type="text"
-      spellcheck="false"
-      autocomplete="off"
-      placeholder="Filter: $.items[*].id"
-      aria-label="Filter with JSONPath"
-      aria-invalid={error ? "true" : undefined}
-      aria-describedby={error ? `${id}-error` : undefined}
+    <FilterField
       {value}
-      use:suggestions={{ label: "Key suggestions", source: shape ? (text, caret) => keyCompletion(text, caret, shape) : () => null }}
+      label="Filter with JSONPath"
+      placeholder="Filter: $.items[*].id"
+      mono
+      invalid={!!error}
+      describedby={error ? `${id}-error` : undefined}
+      suggest={{ label: "Key suggestions", source: shape ? (text, caret) => keyCompletion(text, caret, shape) : () => null }}
       onfocus={() => needshape?.()}
-      oninput={(e) => {
+      oninput={(v) => {
         needshape?.();
-        onchange(e.currentTarget.value);
+        onchange(v);
       }}
       onkeydown={(e) => {
         if (e.key === "Escape" && value) {
@@ -69,25 +65,9 @@
     gap: var(--space-1);
   }
   .row {
-    position: relative;
     display: flex;
     align-items: center;
     gap: var(--space-2);
-  }
-  .icon {
-    position: absolute;
-    left: 8px;
-    display: flex;
-    color: var(--faint);
-    pointer-events: none;
-  }
-  .input {
-    flex: 1;
-    height: var(--control-h-sm);
-    padding-left: 26px;
-  }
-  .input[aria-invalid="true"] {
-    border-color: var(--danger);
   }
   .count {
     font-size: 12px;

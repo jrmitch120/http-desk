@@ -70,7 +70,10 @@ control or the popup layer.
 ## Response viewer
 
 - [ ] Status badge colours (2xx, 4xx, 5xx), time and size metrics.
-- [ ] Body / Headers / Request segmented control, with the header count on Headers.
+- [ ] Body / Headers / Cookies / Timing / Request segmented control: the header count on
+      Headers, a cookie count on Cookies only when the response set cookies (and its
+      "This response set no cookies" empty state when it didn't), the Timing waterfall,
+      and the Request tab's reconstruction note.
 - [ ] Pretty / Raw / Preview segmented control; folding and search in Pretty.
 - [ ] An HTML preview, an image preview, and the hex view of a binary response.
 - [ ] A failed send (stop the server): the inline error banner.

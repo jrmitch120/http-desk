@@ -27,5 +27,5 @@ test("the Request tab lists the Accept-Encoding that was sent", async ({ page })
   await page.keyboard.press("ControlOrMeta+Enter");
 
   await page.getByRole("radiogroup", { name: "Response tabs" }).getByRole("radio", { name: /^Request\b/ }).click();
-  await expect(page.locator(".table-wrap tr", { hasText: "Accept-Encoding" })).toContainText("gzip, deflate, br, zstd");
+  await expect(page.getByRole("row", { name: /Accept-Encoding/ })).toContainText("gzip, deflate, br, zstd");
 });
