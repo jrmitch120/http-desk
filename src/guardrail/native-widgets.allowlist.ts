@@ -43,6 +43,5 @@ export const ALLOWLIST: Allowlist = {
     "src/components/Toggle.svelte",
     "src/components/TreeItem.svelte",
     "src/components/Welcome.svelte",
-    "src/lib/codemirror/setup.ts",
   ],
 };

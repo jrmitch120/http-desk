@@ -1,6 +1,6 @@
 // Styled tooltips (use:tooltip) replace native title= tooltips (#43, ADR 0002).
-import { expect, test } from "@playwright/test";
-import { openApp } from "./helpers";
+import { expect, test, type Locator } from "@playwright/test";
+import { openApp, openRequest, treeItem, urlBar } from "./helpers";
 
 test("hovering an icon-only button shows its tooltip after a short delay, and leaving hides it", async ({ page }) => {
   await openApp(page);
@@ -36,6 +36,45 @@ test("a tooltip stays inside the window", async ({ page }) => {
   const box = (await page.getByRole("tooltip").boundingBox())!;
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
+test("the context menu, tooltips and CodeMirror tooltips share one surface in the popup layer", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const surface = (l: Locator) =>
+    l.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        inLayer: !!el.closest(".popup-layer"),
+        background: s.backgroundColor,
+        border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`,
+        radius: s.borderTopLeftRadius,
+        shadow: s.boxShadow,
+      };
+    });
+
+  await page.getByRole("banner").getByRole("button", { name: "Settings", exact: true }).hover();
+  const tooltip = await surface(page.getByRole("tooltip"));
+  expect(tooltip.inLayer).toBe(true);
+
+  await treeItem(page, "List pets").click({ button: "right" });
+  expect(await surface(page.getByRole("menu"))).toEqual(tooltip);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+
+  await urlBar(page).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("?q={{");
+  expect(await surface(page.locator(".cm-tooltip-autocomplete"))).toEqual(tooltip);
+});
+
+test("Escape closes an open context menu without closing anything under it", async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, "api").click({ button: "right" });
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(treeItem(page, "api")).toBeFocused();
 });
 
 test("clicking a button hides its tooltip until the pointer leaves", async ({ page }) => {
