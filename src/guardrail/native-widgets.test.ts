@@ -17,7 +17,7 @@ it("the app uses owned controls, not native widgets", () => {
   const files = Object.entries(sources).map(([path, source]) => file(path.slice(1), source));
   expect(files.length).toBeGreaterThan(20);
   const problems = checkSources(files);
-  expect(problems, `Use the owned controls (ADR 0002) instead:\n${problems.join("\n")}\n`).toEqual([]);
+  expect(problems, `Use the owned controls instead (ADR 0002, docs/controls.md):\n${problems.join("\n")}\n`).toEqual([]);
 });
 
 describe("checkSources", () => {

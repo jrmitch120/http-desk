@@ -17,7 +17,7 @@ and this document disagree, fix one of them. Terms in **bold** (**File variable*
 | **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. A new `Client` is built per execution because TLS and redirect settings can differ per request or environment. Building one costs microseconds next to the request itself. |
 | **Svelte 5** | Runes (`$state`, `$derived`) handle the deeply nested request model without a separate store library. It compiles to small, fast bundles. Plain Vite SPA, without SvelteKit (no routing or SSR needed). |
 | **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) and the single-line URL editor (`{{variable}}` highlighting and autocompletion). |
-| **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. |
+| **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. The UI uses HttpDesk's own controls and bundled fonts instead of native form widgets and system fonts, so it renders the same in every webview ([ADR-0002](adr/0002-owned-controls-over-native-widgets.md)); the controls are described in [controls.md](controls.md). |
 
 Rejected alternatives: Electron (size, needs a Node backend), a sidecar HTTP service
 (the requirements forbid a separately managed backend), and SvelteKit (unnecessary).
@@ -443,7 +443,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview or a hex dump. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received. |
 | Huge OpenAPI specs (thousands of operations) | Generation is linear. The operation picker groups operations under collapsible headings and has a filter; it is not virtualized. |
 | External `$ref` to remote URLs | Not fetched (warning); relative-file refs are resolved for specs loaded from a file. |
-| Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand. |
+| Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand with the [manual OS rendering check](os-checklist.md). |
 | Secrets in env files | **Secrets** are written only to `http-client.private.env.json`; the shared file keeps at most an empty placeholder. If the workspace is inside a git repository (the nearest `.git` at or above it) and no `.gitignore` rule from the repo root down matches the private file at all, HttpDesk appends it to the workspace's `.gitignore` on open and on save, once a private file exists. An explicit `!` negation of the file is the user's choice and is left alone. The Environments editor warns when there are Secrets and the private file is still not ignored. Env values keep their JSON type (number, boolean, null) on save. |
 
 ---
@@ -549,10 +549,10 @@ Decisions made during implementation, beyond the plan above:
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Env, vars, workspace | Unit tests in each module |
 | IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, environments, OpenAPI generation, confinement, deleting, Windows paths, and the file watcher (including self-write suppression) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks) and `src/lib/store.test.ts` (the store against a mocked backend) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks) and `src/lib/store.test.ts` (the store against a mocked backend). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
-| Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`) |
+| Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |
 
 ### Known gaps / next steps
 
