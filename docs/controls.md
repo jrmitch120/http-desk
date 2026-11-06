@@ -72,7 +72,7 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 
 - Props: `options` (`{ value, label, color? }[]`), `value`, `onchange(value)`, `label`
   (accessible name of the trigger and the list, required), `create?`, `size?`, `mono?`,
-  `tooltip?`, `disabled?`, `class?`.
+  `tooltip?`, `class?`.
 - Variants:
   - `size="md"` (default, `--control-h`) for toolbars and forms; `size="sm"`
     (`--control-h-sm`) inside grid cells (multipart part type).
@@ -143,7 +143,7 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 spinners.
 
 - Props: `value`, `onchange(n)`, `label` (accessible name), `unit?` (suffix such as `s` or
-  `MB`), `min?`, `max?`, `integer?`, `disabled?`.
+  `MB`), `min?`, `integer?`, `disabled?`.
 - Applies on blur or Enter, never per keystroke. An invalid value shows an inline error
   (`role="alert"`, linked by `aria-describedby`) and isn't applied; leaving the field
   puts back the last valid value.
@@ -251,7 +251,7 @@ and only the colour changes.
 
 - Props: `method?` (colour from the method; the text unless children are given),
   `status?` (colour from the status class; pass the text as children), `tone?` (`neutral`
-  by default, `success`, `warning`, `danger`, `info`), `size?` (`sm` by default, `md`),
+  by default, `success`, `danger`), `size?` (`sm` by default, `md`),
   `class?`.
 - `sm` sits in lists and tabs (method badges, OFF on a section tab); `md` sits in headers
   (response status, Cancelled, spec version). Method badges are six letters wide, and
@@ -282,11 +282,12 @@ CodeMirror's tooltips and autocomplete all use it.
 
 To build a new popup, use the `use:popup` action (`popup.ts`) on an element with
 `class="popup-surface"`, inside an `{#if open}` block where it is the only top-level node.
-Options: `anchor` (an element, or a fixed rect such as a pointer position), `side`,
-`align`, `gap`, `matchWidth`, `onclose(reason)` with `"escape"`, `"outside"` or `"blur"`.
-It places the element, flips it to stay on screen, follows the anchor, and closes on
-Escape (only the most recently opened popup, and the modal underneath doesn't see the
-key), on a click outside, and when the window loses focus. The caller owns roles, ARIA,
+Options: `anchor` (an element, or a fixed rect such as a pointer position), `align`,
+`gap`, `matchWidth`, `onclose(reason)` with `"escape"`, `"outside"` or `"blur"`.
+It places the element below the anchor (above when only that fits), keeps it on
+screen, follows the anchor, and closes on Escape (only the most recently opened popup,
+and the modal underneath doesn't see the key), on a click outside, and when the window
+loses focus. The caller owns roles, ARIA,
 keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 `layer.ts`.
 

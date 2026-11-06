@@ -13,7 +13,7 @@
     method?: string;
     /** An HTTP status code (colour only; pass the text as `children`). */
     status?: number;
-    tone?: "neutral" | "success" | "warning" | "danger" | "info";
+    tone?: "neutral" | "success" | "danger";
     size?: "sm" | "md";
     class?: string;
     children?: Snippet;
@@ -61,13 +61,7 @@
   .success {
     color: var(--success);
   }
-  .warning {
-    color: var(--warning);
-  }
   .danger {
     color: var(--danger);
-  }
-  .info {
-    color: var(--info);
   }
 </style>

@@ -25,12 +25,6 @@ describe("place", () => {
     expect(place(low, size, viewport)).toEqual({ x: 100, y: 726, side: "top" });
   });
 
-  it("goes above when asked, and flips below when there's no room above", () => {
-    expect(place({ left: 100, top: 400, right: 130, bottom: 426 }, size, viewport, { side: "top" })).toEqual({ x: 100, y: 366, side: "top" });
-    const high = { left: 100, top: 20, right: 130, bottom: 46 };
-    expect(place(high, size, viewport, { side: "top" })).toEqual({ x: 100, y: 50, side: "bottom" });
-  });
-
   it("keeps it inside the viewport horizontally", () => {
     const right = { left: 980, top: 50, right: 1000, bottom: 76 };
     expect(place(right, size, viewport)).toEqual({ x: 914, y: 80, side: "bottom" });

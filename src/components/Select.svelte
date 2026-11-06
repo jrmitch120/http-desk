@@ -33,11 +33,10 @@
     mono?: boolean;
     /** Tooltip text (use:tooltip). */
     tooltip?: string;
-    disabled?: boolean;
     /** Extra class on the trigger; style it from the parent with `:global(.x)`. */
     class?: string;
   }
-  let { options, value, onchange, label, create, size = "md", mono = false, tooltip, disabled = false, class: className = "" }: Props = $props();
+  let { options, value, onchange, label, create, size = "md", mono = false, tooltip, class: className = "" }: Props = $props();
 
   type Item = SelectOption<T> & { created?: boolean };
 
@@ -66,7 +65,6 @@
   });
 
   function show(text = "") {
-    if (disabled) return;
     query = text;
     open = true;
     active = text ? 0 : Math.max(0, options.findIndex((o) => o.value === value));
@@ -132,7 +130,6 @@
   class="select-trigger {size} {className}"
   class:mono
   class:open
-  {disabled}
   aria-label={label}
   aria-haspopup="listbox"
   aria-expanded={open}
@@ -213,10 +210,6 @@
   }
   .select-trigger.open {
     border-color: var(--focus);
-  }
-  .select-trigger:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
   .select-trigger :global(svg) {
     flex: none;
