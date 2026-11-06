@@ -3,6 +3,7 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod confinement;
+mod paths;
 mod watcher;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
@@ -91,7 +92,7 @@ fn capture_server() -> (String, mpsc::Receiver<String>) {
 fn vertical_slice_over_ipc() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let (server, received) = capture_server();
     let file_path = root.join("api.http");
     std::fs::write(
@@ -170,7 +171,7 @@ fn opening_a_repo_subfolder_gitignores_its_private_env_file() {
 fn environments_and_openapi_over_ipc() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
     h.ok("open_workspace", json!({ "path": root }));
 
@@ -228,7 +229,7 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
     use tauri::Listener;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let path = root.join("a.http");
     std::fs::write(&path, "GET https://a\n").unwrap();
     h.ok("open_workspace", json!({ "path": root }));
@@ -256,7 +257,7 @@ fn watcher_reports_external_changes_but_not_our_own_writes() {
 fn saving_through_a_symlink_updates_the_target_and_keeps_the_link() {
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::create_dir(root.join("shared")).unwrap();
     let target = root.join("shared/real.http");
     std::fs::write(&target, "### R\nGET https://old\n").unwrap();
@@ -279,7 +280,7 @@ fn saving_keeps_the_file_mode() {
     use std::os::unix::fs::PermissionsExt;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     let path = root.join("private.http");
     std::fs::write(&path, "### R\nGET https://old\n").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -333,7 +334,7 @@ fn watcher_ignores_our_own_renames_moves_and_new_folders() {
     use tauri::Listener;
     let h = Harness::new();
     let ws = tempfile::tempdir().unwrap();
-    let root = ws.path().canonicalize().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::write(root.join("a.http"), "GET https://a\n").unwrap();
     std::fs::create_dir(root.join("old")).unwrap();
     std::fs::write(root.join("old/inner.http"), "GET https://inner\n").unwrap();
