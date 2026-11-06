@@ -44,6 +44,8 @@ export const api = {
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
+  /** Whether any open file has unsaved edits (macOS asks before quitting then). */
+  setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 
   openapiLoad: (source: string) => invoke<SpecSummary>("openapi_load", { source }),
   openapiGenerate: (args: {

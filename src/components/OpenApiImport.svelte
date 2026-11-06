@@ -3,7 +3,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { SvelteSet } from "svelte/reactivity";
   import { api, errorMessage } from "../lib/api";
-  import { basename, joinPath, methodClass, slugify } from "../lib/http";
+  import { joinPath, methodClass, slugify } from "../lib/http";
   import { app } from "../lib/store.svelte";
   import type { Grouping, OperationInfo, SpecSummary } from "../lib/types";
   import Icon from "./Icon.svelte";
@@ -125,27 +125,15 @@
     };
     try {
       const preview = await api.openapiGenerate({ source, options, outputDir: dir, overwrite: false, dryRun: true });
-      let overwrite = false;
-      if (preview.conflicts.length) {
-        const names = preview.conflicts.map(basename);
-        const list = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
-        const r = await app.choose(
-          "Overwrite existing files?",
-          `${preview.conflicts.length} file${preview.conflicts.length === 1 ? "" : "s"} already exist${preview.conflicts.length === 1 ? "s" : ""}: ${list}. Overwriting replaces their contents.`,
-          [
-            { label: "Cancel", value: "cancel" },
-            { label: "Overwrite", value: "overwrite", danger: true },
-          ],
-        );
-        if (r.button !== "overwrite") return;
-        overwrite = true;
-      }
+      const overwrite = preview.conflicts.length > 0;
+      if (overwrite && !(await app.confirmOverwrite(preview.conflicts))) return;
       const report = await api.openapiGenerate({ source, options, outputDir: dir, overwrite, dryRun: false });
       if (!report.written) {
         app.toast("error", "Nothing was written — the target files already exist.");
         return;
       }
       await app.refreshTree();
+      // Open documents among them (unsaved edits included, as confirmed) now show the new contents.
       await app.reloadOpen(report.files);
       await app.loadEnvironments();
       app.expanded[dir] = true;

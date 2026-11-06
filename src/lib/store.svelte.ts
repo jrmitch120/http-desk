@@ -109,22 +109,18 @@ class AppStore {
     }
     this.applyTheme();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
-    const win = getCurrentWindow();
-    await win.onCloseRequested(async (e) => {
-      const dirty = this.dirtyDocs();
-      if (!dirty.length) return;
-      e.preventDefault();
-      const r = await this.choose("Unsaved changes", `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`, [
-        { label: "Cancel", value: "cancel" },
-        { label: "Don't save", value: "discard", danger: true },
-        { label: "Save all", value: "save", primary: true },
-      ]);
-      if (r.button === "cancel") return;
-      if (r.button === "save") {
-        await this.saveAll();
-        if (this.dirtyDocs().length) return; // a save failed; stay open
-      }
-      await win.destroy();
+    // The window's close button, and on macOS ⌘Q / Dock Quit (the shell turns
+    // those into a close request while files are unsaved; see quit.rs).
+    await getCurrentWindow().onCloseRequested(async (e) => {
+      if (!(await this.confirmQuit())) e.preventDefault();
+    });
+    // Tells the shell whether quitting needs to ask first.
+    let unsaved = false;
+    $effect.root(() => {
+      $effect(() => {
+        const now = this.dirtyDocs().length > 0;
+        if (now !== unsaved) api.setUnsaved((unsaved = now)).catch(() => {});
+      });
     });
     const last = this.settings?.recentWorkspaces[0];
     if (last && (await api.pathExists(last).catch(() => false))) await this.openWorkspace(last);
@@ -141,14 +137,42 @@ class AppStore {
     await api.saveSettings($state.snapshot(this.settings) as AppSettings);
   }
 
-  async openWorkspace(path: string) {
-    if (this.dirtyDocs().length) {
-      const r = await this.choose("Unsaved changes", "Open another workspace and discard unsaved changes?", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Discard", value: "discard", danger: true },
-      ]);
-      if (r.button !== "discard") return;
+  /** The unsaved-changes flow for leaving the open documents behind (closing the
+   *  window, quitting, switching workspace). True to go ahead: nothing was
+   *  unsaved, the user chose Don't save, or Save all saved every file. */
+  async confirmUnsaved(question = ""): Promise<boolean> {
+    const dirty = this.dirtyDocs();
+    if (!dirty.length) return true;
+    const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
+    const r = await this.choose("Unsaved changes", question ? `${summary} ${question}` : summary, [
+      { label: "Cancel", value: "cancel" },
+      { label: "Don't save", value: "discard", danger: true },
+      { label: "Save all", value: "save", primary: true },
+    ]);
+    if (r.button === "cancel") return false;
+    if (r.button === "save") {
+      await this.saveAll();
+      if (this.dirtyDocs().length) return false; // a save failed; it was reported
     }
+    return true;
+  }
+
+  private quitting = false;
+
+  /** Whether the window may close (and the app quit). Asks about unsaved files;
+   *  a request made while one is already asking is turned down. */
+  async confirmQuit(): Promise<boolean> {
+    if (this.quitting) return false;
+    this.quitting = true;
+    try {
+      return await this.confirmUnsaved();
+    } finally {
+      this.quitting = false;
+    }
+  }
+
+  async openWorkspace(path: string) {
+    if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {
       const info = await api.openWorkspace(path);
       if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
@@ -356,6 +380,24 @@ class AppStore {
       file.requests.length === keys.length &&
       file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
     );
+  }
+
+  /** Asks before OpenAPI generation overwrites `conflicts` (existing files),
+   *  naming the open ones with unsaved edits, which the overwrite discards. */
+  async confirmOverwrite(conflicts: string[]): Promise<boolean> {
+    const names = conflicts.map(basename);
+    const list = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
+    const one = conflicts.length === 1;
+    let message = `${conflicts.length} file${one ? "" : "s"} already exist${one ? "s" : ""}: ${list}. Overwriting replaces their contents.`;
+    const unsaved = conflicts.filter((p) => this.isDocDirty(p)).map(basename);
+    if (unsaved.length) {
+      message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
+    }
+    const r = await this.choose("Overwrite existing files?", message, [
+      { label: "Cancel", value: "cancel" },
+      { label: "Overwrite", value: "overwrite", danger: true },
+    ]);
+    return r.button === "overwrite";
   }
 
   /** Handles a `workspace-changed` event from the watcher. */

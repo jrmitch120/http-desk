@@ -1769,6 +1769,7 @@ version = "0.1.3"
 dependencies = [
  "httpdesk-core",
  "notify-debouncer-mini",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",

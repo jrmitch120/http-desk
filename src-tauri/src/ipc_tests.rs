@@ -210,6 +210,21 @@ fn environments_and_openapi_over_ipc() {
 }
 
 #[test]
+fn quitting_goes_through_the_window_close_flow_only_while_files_are_unsaved() {
+    use tauri::Manager;
+    let h = Harness::new();
+    let app = h.webview.app_handle();
+    assert!(super::quit::on_quit_request(app), "nothing unsaved: quit at once");
+
+    h.ok("set_unsaved", json!({ "unsaved": true }));
+    assert!(!super::quit::on_quit_request(app), "unsaved: the window asks instead");
+    assert!(app.get_webview_window("main").is_some());
+
+    h.ok("set_unsaved", json!({ "unsaved": false }));
+    assert!(super::quit::on_quit_request(app));
+}
+
+#[test]
 fn errors_are_strings() {
     let h = Harness::new();
     let err = h.call("get_tree", json!({})).unwrap_err();

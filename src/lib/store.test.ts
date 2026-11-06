@@ -345,6 +345,178 @@ describe("opening a workspace", () => {
   });
 });
 
+describe("switching workspace with unsaved files", () => {
+  const other = { name: "other", path: "/other", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    openWorkspace.mockReset().mockResolvedValue({ root: "/other", tree: other, gitignoreUpdated: false });
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+  });
+
+  async function openEdited() {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2";
+  }
+
+  it("offers Save all, Don't save and Cancel", async () => {
+    await openEdited();
+    const switching = app.openWorkspace("/other");
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.title).toBe("Unsaved changes");
+    expect(app.dialog!.buttons.map((b) => b.label)).toEqual(["Cancel", "Don't save", "Save all"]);
+    app.closeDialog("cancel");
+    await switching;
+  });
+
+  it("Save all saves the files, then switches", async () => {
+    await openEdited();
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+
+    const switching = app.openWorkspace("/other");
+    await answer("save");
+    await switching;
+
+    expect(saveHttpFile).toHaveBeenCalledTimes(1);
+    expect(saveHttpFile.mock.calls[0][1].requests[0].url).toBe("https://x/books?page=2");
+    expect(saveHttpFile.mock.invocationCallOrder[0]).toBeLessThan(openWorkspace.mock.invocationCallOrder[0]);
+    expect(app.root).toBe("/other");
+    expect(app.tabs).toEqual([]);
+  });
+
+  it("stays in the current workspace when a save fails", async () => {
+    await openEdited();
+    saveHttpFile.mockRejectedValue("disk full");
+
+    const switching = app.openWorkspace("/other");
+    await answer("save");
+    await switching;
+
+    expect(openWorkspace).not.toHaveBeenCalled();
+    expect(app.tabs).toHaveLength(1);
+    expect(app.dirtyDocs()).toEqual([PATH]);
+  });
+
+  it("Don't save switches without saving; Cancel stays", async () => {
+    await openEdited();
+    const cancelled = app.openWorkspace("/other");
+    await answer("cancel");
+    await cancelled;
+    expect(openWorkspace).not.toHaveBeenCalled();
+    expect(app.dirtyDocs()).toEqual([PATH]);
+
+    const discarded = app.openWorkspace("/other");
+    await answer("discard");
+    await discarded;
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(app.root).toBe("/other");
+  });
+});
+
+describe("quitting or closing the window with unsaved files", () => {
+  async function openEdited() {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2";
+  }
+
+  it("quits at once when nothing is unsaved", async () => {
+    await openAll(fileOf(["GET", "List", "https://x/books"]));
+    expect(await app.confirmQuit()).toBe(true);
+    expect(app.dialog).toBeNull();
+  });
+
+  it("Cancel keeps the app open with the edits", async () => {
+    await openEdited();
+    const quitting = app.confirmQuit();
+    expect(await answer("cancel")).toBe("Unsaved changes");
+    expect(await quitting).toBe(false);
+    expect(app.dirtyDocs()).toEqual([PATH]);
+  });
+
+  it("Save all saves, then quits; Don't save quits without saving", async () => {
+    await openEdited();
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+    const saving = app.confirmQuit();
+    await answer("save");
+    expect(await saving).toBe(true);
+    expect(saveHttpFile).toHaveBeenCalledTimes(1);
+
+    app.requestFor(app.tabs[0])!.url = "https://x/books?page=3";
+    const discarding = app.confirmQuit();
+    await answer("discard");
+    expect(await discarding).toBe(true);
+    expect(saveHttpFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second quit request while the first is asking adds no second dialog", async () => {
+    await openEdited();
+    const first = app.confirmQuit();
+    const second = app.confirmQuit(); // ⌘Q again, or the window's close button
+    expect(await second).toBe(false);
+    await answer("cancel");
+    expect(await first).toBe(false);
+    expect(app.dialog).toBeNull();
+
+    const again = app.confirmQuit(); // asks again once the first was answered
+    await answer("discard");
+    expect(await again).toBe(true);
+  });
+});
+
+describe("OpenAPI Overwrite", () => {
+  const OTHER = "/ws/api/pets.http";
+
+  it("names open files with unsaved edits among the files it would replace", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2";
+
+    const asking = app.confirmOverwrite([PATH, OTHER]);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.title).toBe("Overwrite existing files?");
+    expect(app.dialog!.message).toBe(
+      "2 files already exist: books.http, pets.http. Overwriting replaces their contents. " +
+        "books.http is open with unsaved edits, which will be lost.",
+    );
+    app.closeDialog("overwrite");
+    expect(await asking).toBe(true);
+  });
+
+  it("doesn't mention open files without unsaved edits", async () => {
+    await openAll(fileOf(["GET", "List", "https://x/books"]));
+    const asking = app.confirmOverwrite([OTHER, PATH]);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.message).toBe("2 files already exist: pets.http, books.http. Overwriting replaces their contents.");
+    app.closeDialog("cancel");
+    expect(await asking).toBe(false);
+  });
+
+  it("Cancel leaves the open document and its edits alone", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2";
+
+    const asking = app.confirmOverwrite([PATH]);
+    expect(await answer("cancel")).toBe("Overwrite existing files?");
+    expect(await asking).toBe(false);
+
+    expect(app.requestFor(list)!.url).toBe("https://x/books?page=2");
+    expect(readHttpFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("only replaces the open document once the overwritten file is reloaded", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "https://x/books?page=2";
+    const asking = app.confirmOverwrite([PATH]);
+    await answer("overwrite");
+    expect(await asking).toBe(true);
+    expect(app.dirtyDocs()).toEqual([PATH]); // confirming alone changes nothing
+
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/generated"]));
+    await app.reloadOpen([PATH]);
+
+    expect(app.requestFor(list)!.url).toBe("https://x/generated");
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+});
+
 describe("search", () => {
   it("finds a request that was added but not saved, by its name", async () => {
     const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
