@@ -44,14 +44,10 @@ fn window_theme(choice: &str) -> Option<Theme> {
     }
 }
 
-/// A script that sets `data-theme` on `<html>` before the page first paints,
-/// resolving System the way `effectiveTheme` in src/lib/store.svelte.ts does.
+/// A script that sets `data-theme` on `<html>` before the page first paints
+/// (theme-boot.js, which the browser tests also run).
 fn page_script(choice: &str) -> String {
-    let theme = match choice {
-        "light" | "dark" => format!("\"{choice}\""),
-        _ => r#"matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light""#.into(),
-    };
-    format!("document.documentElement.dataset.theme = {theme};")
+    include_str!("theme-boot.js").replace("__THEME__", &serde_json::to_string(choice).unwrap())
 }
 
 #[cfg(test)]
@@ -66,18 +62,18 @@ mod tests {
         assert_eq!(window_theme("sepia"), None);
     }
 
+    // What the script does is checked in the browser (e2e/startup-theme.spec.ts).
     #[test]
-    fn the_page_script_sets_a_fixed_theme_as_is() {
-        assert_eq!(page_script("light"), r#"document.documentElement.dataset.theme = "light";"#);
-        assert_eq!(page_script("dark"), r#"document.documentElement.dataset.theme = "dark";"#);
+    fn the_page_script_is_given_the_theme_setting() {
+        assert!(page_script("light").trim_end().ends_with(r#"})("light");"#));
+        assert!(page_script("system").trim_end().ends_with(r#"})("system");"#));
+        assert!(!page_script("dark").contains("__THEME__"));
     }
 
     #[test]
-    fn the_page_script_resolves_system_like_the_store_does() {
-        // store.svelte.ts: dark unless the OS appearance says otherwise.
-        let expected = r#"document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";"#;
-        assert_eq!(page_script("system"), expected);
-        assert_eq!(page_script("sepia"), expected);
+    fn the_page_script_quotes_the_setting_safely() {
+        // A hand-edited settings file can hold anything; it must stay one JS string.
+        assert!(page_script(r#"x");alert(1);("#).trim_end().ends_with(r#"})("x\");alert(1);(");"#));
     }
 
     #[test]

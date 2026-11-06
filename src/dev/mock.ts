@@ -76,8 +76,13 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
+let settingsServed = false;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
+  /** Whether the app has been given its settings yet. */
+  get settingsServed() {
+    return settingsServed;
+  },
   get settings() {
     return clone(settings);
   },
@@ -126,6 +131,8 @@ const trashUnavailable = new URLSearchParams(location.search).get("trash") === "
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 // `?sendError=1`: every send fails as if the server were unreachable.
 const sendError = new URLSearchParams(location.search).get("sendError") === "1";
+// `?settingsDelay=<ms>`: settings arrive late, as on a slow start.
+const settingsDelay = Number(new URLSearchParams(location.search).get("settingsDelay") ?? 0);
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -135,6 +142,8 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "get_settings":
+        if (settingsDelay) await delay(settingsDelay);
+        settingsServed = true;
         return clone(settings);
       case "save_settings":
         settings = args.settings;
