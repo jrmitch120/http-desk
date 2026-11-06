@@ -29,6 +29,33 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
+type EnvMap = Record<string, Record<string, unknown>>;
+type MockEnvVar = { name: string; value: string; secret: boolean };
+/**
+ * What saving writes to http-client.env.json (`shared`) and
+ * http-client.private.env.json (`private`), like `env::save` in the Rust core:
+ * a Secret's value goes only to the private file; a Secret already listed in
+ * the shared file keeps an empty placeholder there.
+ */
+function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: EnvMap; private: EnvMap } {
+  const shared: EnvMap = {};
+  const priv: EnvMap = {};
+  const named: [string, MockEnvVar[]][] = [["$shared", set.shared], ...set.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
+  for (const [env, vars] of named) {
+    const pub: Record<string, unknown> = {};
+    const sec: Record<string, unknown> = {};
+    for (const v of vars.filter((v) => v.name)) {
+      if (v.secret) {
+        sec[v.name] = v.value;
+        if (old.shared[env] && v.name in old.shared[env]) pub[v.name] = "";
+      } else pub[v.name] = v.value;
+    }
+    if (env !== "$shared" || Object.keys(pub).length || old.shared[env]) shared[env] = pub;
+    if (Object.keys(sec).length) priv[env] = sec;
+  }
+  return { shared, private: priv };
+}
+let envFiles = splitEnvFiles(envSet, { shared: {} });
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   recentWorkspaces: [ROOT],
@@ -53,6 +80,10 @@ const sent: unknown[] = [];
   sent,
   get settings() {
     return clone(settings);
+  },
+  /** The two env files as last written (see `splitEnvFiles`). */
+  get envFiles() {
+    return clone(envFiles);
   },
 };
 
@@ -119,6 +150,7 @@ mockIPC(
         return clone(envSet);
       case "save_environments":
         envSet = args.set;
+        envFiles = splitEnvFiles(envSet, envFiles);
         return { gitignoreUpdated: false };
       case "read_http_file":
         return clone(files[args.path]);
