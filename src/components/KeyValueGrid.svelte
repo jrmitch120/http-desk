@@ -417,10 +417,10 @@
     -webkit-line-clamp: unset;
     line-clamp: unset;
     background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--focus);
     color: var(--text);
     resize: none;
-    outline: none;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
     overflow: hidden;
     white-space: pre-wrap;
   }
@@ -476,7 +476,8 @@
   }
   .kv :global(.cell:focus) {
     background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--focus);
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
   }
   .kv :global(.cell::placeholder) {
     color: var(--faint);

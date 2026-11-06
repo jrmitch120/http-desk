@@ -121,7 +121,7 @@
   }
   .tab:focus-visible {
     outline: var(--focus-ring);
-    outline-offset: -2px; /* tabs are flush with their neighbours */
+    outline-offset: var(--focus-ring-offset);
   }
   .tab.active {
     background: var(--bg);

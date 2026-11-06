@@ -81,6 +81,6 @@
   }
   .checkbox:focus-visible .box {
     outline: var(--focus-ring);
-    outline-offset: 1px;
+    outline-offset: var(--focus-ring-offset);
   }
 </style>

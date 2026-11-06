@@ -132,7 +132,7 @@
   .rest {
     flex: 1 1 0;
   }
-  /* A 1px line with a wider grab area; hover, drag and keyboard focus light it up. */
+  /* A 1px line with a wider grab area; hover and drag light it up, keyboard focus rings it. */
   .separator {
     flex: none;
     width: 1px;
@@ -156,14 +156,15 @@
     inset: -3px 0;
   }
   .separator:hover,
-  .separator.dragging,
-  .separator:focus-visible {
+  .separator.dragging {
     background: var(--focus);
-    outline: none;
   }
   .separator:hover::after,
-  .separator.dragging::after,
-  .separator:focus-visible::after {
+  .separator.dragging::after {
     background: color-mix(in srgb, var(--focus) 35%, transparent);
+  }
+  .separator:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
   }
 </style>
