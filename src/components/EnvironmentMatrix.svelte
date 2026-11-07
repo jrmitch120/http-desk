@@ -195,8 +195,8 @@
   {@const column = columnAt(id)}
   {@const actions = column === SHARED ? undefined : environmentActions}
   <!-- svelte-ignore a11y_no_static_element_interactions (the menu is also the header's actions button) -->
-  <div class="m-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
-    <span class="m-head-label ellipsis" data-fit>{columnLabel(column)}</span>
+  <div class="col-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
+    <span class="col-head-label ellipsis" data-fit>{columnLabel(column)}</span>
     {#if actions}
       <button
         class="icon-btn actions"
@@ -395,19 +395,19 @@
   /* Like the list's delete button: shown on hover, and while the row (or header cell) has focus. */
   .matrix :global(.kv-row:hover .actions),
   .matrix :global(.kv-row:focus-within .actions),
-  .m-head:hover .actions,
-  .m-head:focus-within .actions {
+  .col-head:hover .actions,
+  .col-head:focus-within .actions {
     opacity: 1;
   }
   /* An environment's header: its name, then its actions at the right edge. */
-  .m-head {
+  .col-head {
     flex: 1;
     min-width: 0;
     display: flex;
     align-items: center;
     align-self: stretch;
   }
-  .m-head-label {
+  .col-head-label {
     flex: 1;
     min-width: 0;
     padding-left: 7px;
