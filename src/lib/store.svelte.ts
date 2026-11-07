@@ -9,7 +9,20 @@ import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { envVariables } from "./vars";
 import type { Definition } from "./codemirror/setup";
-import type { AppSettings, EnvironmentSet, EnvironmentSettings, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
+import type {
+  AppSettings,
+  EnvironmentSet,
+  EnvironmentSettings,
+  HttpFile,
+  HttpResponse,
+  Request,
+  RequestPreview,
+  SearchHit,
+  SendError,
+  TreeNode,
+  Usage,
+  UsageField,
+} from "./types";
 
 export interface Doc {
   path: string;
@@ -146,6 +159,12 @@ class AppStore {
    *  (an Undefined variable's quick fix), an empty row is added first if there's none. */
   definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
+  /** Find usages results shown in the sidebar (`usages` null while searching); null when closed. */
+  usages = $state<{ name: string; usages: Usage[] | null } | null>(null);
+  private usagesSeq = 0;
+  /** A Find usages result asked to show this field of the tab's request: its
+   *  request editor switches to it and clears this. */
+  fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -622,6 +641,49 @@ class AppStore {
     const same = (r: Request | undefined) => !!r && signature(displayName(r), r.method, r.url) === want;
     const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
     if (req) await this.openRequest(hit.path, { key: req._key });
+  }
+
+  /** Find usages of `{{name}}` across the workspace, shown in the sidebar. Open
+   *  documents are searched as they are on screen (unsaved edits included); the
+   *  backend reads every other file, and the env files, from disk. */
+  async findUsages(name: string) {
+    const seq = ++this.usagesSeq;
+    this.usages = { name, usages: null };
+    const open = Object.values(this.docs)
+      .filter((d) => !d.missing)
+      .map((d) => ({ path: d.path, file: $state.snapshot(d.file) as HttpFile }));
+    try {
+      const usages = await api.findUsages(name, open);
+      if (seq === this.usagesSeq) this.usages = { name, usages };
+    } catch (e) {
+      if (seq === this.usagesSeq) this.usages = null;
+      this.toast("error", errorMessage(e));
+    }
+  }
+
+  closeUsages() {
+    this.usagesSeq++;
+    this.usages = null;
+  }
+
+  /** Shows where a Find usages result is: the request on the field holding it
+   *  (found as `openSearchHit` finds it), a File variable's row in its file's
+   *  request Settings, or an environment value's row in the Environments modal. */
+  async openUsage(usage: Usage) {
+    if (usage.kind === "environment") {
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name };
+      this.modal = "env";
+      return;
+    }
+    if (usage.kind === "fileVariable") {
+      const open = this.tabs.find((t) => t.path === usage.path && t.id === this.activeTabId) ?? this.tabs.find((t) => t.path === usage.path);
+      if (open) this.activeTabId = open.id;
+      else await this.openRequest(usage.path, { index: 0 });
+      if (this.activeTab?.path === usage.path) this.editDefinition(this.activeTab.id, { kind: "file", name: usage.name });
+      return;
+    }
+    await this.openSearchHit(usage);
+    if (this.activeTab?.path === usage.path) this.fieldWanted = { tabId: this.activeTab.id, field: usage.field };
   }
 
   // ---------------------------------------------------------------- tabs

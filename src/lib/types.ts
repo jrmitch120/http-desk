@@ -124,6 +124,32 @@ export interface SearchHit {
   url: string;
 }
 
+/**
+ * The field of a request a `{{reference}}` is in (core `workspace::RequestField`).
+ * `index` counts into `query.items`, `headers.items` or `variables`; `url` is the
+ * URL without its query string; `body` is `body.text` in any mode.
+ */
+export type UsageField =
+  | { kind: "url" }
+  | { kind: "param" | "header"; index: number; name: string; part: "name" | "value" }
+  | { kind: "auth"; part: "username" | "password" | "token" | "keyValue" }
+  | { kind: "body" }
+  | { kind: "variable"; index: number; name: string };
+
+/**
+ * One `{{name}}` reference found by Find usages (core `workspace::Usage`).
+ * `start`..`end` is where it sits in its field's text, braces included, in
+ * UTF-16 code units (so `text.slice(start, end)` is the reference as written).
+ * - `request`: in a request, identified as a `SearchHit` is; `disabled` when it isn't sent.
+ * - `fileVariable`: in the value of `file.header.variables[index]` (named `name`).
+ * - `environment`: in the value of variable `name` of `env` (`$shared` for the
+ *   shared variables); `path` is the env file holding it (the private one for a Secret).
+ */
+export type Usage =
+  | ({ kind: "request"; field: UsageField; disabled: boolean; start: number; end: number } & SearchHit)
+  | { kind: "fileVariable"; path: string; index: number; name: string; start: number; end: number }
+  | { kind: "environment"; path: string; env: string; name: string; secret: boolean; start: number; end: number };
+
 /** JSON type an env value was read with; saving writes it back with it (missing = string). */
 export type JsonType = "string" | "number" | "boolean" | "null";
 

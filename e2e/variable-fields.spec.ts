@@ -144,9 +144,9 @@ test("hovering a variable in a header value shows its card, with or without an e
 
   // The static rendering.
   await cell.locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
-  await expect(card).toHaveText(['baseUrlhttp://127.0.0.1:8765from environment "local"Edit']);
+  await expect(card).toHaveText(['baseUrlhttp://127.0.0.1:8765from environment "local"EditFind usages']);
   await cell.locator(".cm-var", { hasText: "{{token}}" }).hover();
-  await expect(card).toHaveText(['token•••••••• (secret)from environment "local"RevealEdit']);
+  await expect(card).toHaveText(['token•••••••• (secret)from environment "local"RevealEditFind usages']);
   await page.mouse.move(0, 0);
   await expect(card).toHaveCount(0);
 
@@ -154,5 +154,5 @@ test("hovering a variable in a header value shows its card, with or without an e
   await cell.click();
   await expect(editors(page)).toHaveCount(1);
   await cell.locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
-  await expect(card).toHaveText(['baseUrlhttp://127.0.0.1:8765from environment "local"Edit']);
+  await expect(card).toHaveText(['baseUrlhttp://127.0.0.1:8765from environment "local"EditFind usages']);
 });

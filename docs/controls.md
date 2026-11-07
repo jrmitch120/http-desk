@@ -218,7 +218,11 @@ paths), File variable values and environment values.
   (the request editor wires it to `app.editDefinition`; the Environments modal sets
   `app.definitionWanted`, so Edit switches to the supplying environment or the shared
   variables in place), and the info's `definition`;
-  a request's own `@name`, a dynamic or an Undefined variable has none. A press in the
+  a request's own `@name`, a dynamic or an Undefined variable has none. **Find usages**
+  (any name not starting with `$`, defined or not) comes from the provider's
+  `findUsages` (the request editor wires it to `app.findUsages`; the Environments modal
+  has none): it lists every reference in the workspace in the sidebar, see
+  [ARCHITECTURE.md](ARCHITECTURE.md#find-usages). A press in the
   card keeps focus where it was, so an editor (and its card) stays open.
 - Autocomplete lists the names in scope, each with its source (file, environment,
   shared, prompt; a Prompt variable takes the entry of a name it overrides) and a short preview of its resolved value ("secret" instead of a Secret's),

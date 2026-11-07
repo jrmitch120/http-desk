@@ -41,7 +41,7 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   json_filter.rs        RFC 9535 JSONPath filter bar: matches copied from the body's own text; shape summary for key completion
   tls_probe.rs          why a server's certificate was rejected (self-signed, expired)
   openapi/              OpenAPI 3.0/3.1 loading, validation, generation
-  workspace.rs          tree listing, search, ignore rule, atomic writes
+  workspace.rs          tree listing, search, find usages, ignore rule, atomic writes
 src-tauri/              thin Tauri shell: commands, app state
   confine.rs            workspace confinement for every path a command receives
   watcher.rs            file watcher
@@ -594,6 +594,25 @@ Decisions made during implementation, beyond the plan above:
   send, each chain is its own warning ("Circular variable reference: a → b → a"); one in
   the URL's scheme or host fails the send with kind `circularVariable`, unless an
   Undefined variable is also there, which is reported first.
+* <a id="find-usages"></a>**Find usages** (a hover card's button) lists every
+  `{{name}}` reference in the workspace in the sidebar, in place of the tree, until
+  closed. The search is the core's `workspace::usages(root, name, open)` behind the
+  `find_usages` command: each `.http`/`.rest` file the explorer lists (open documents as
+  the app has them, unsaved edits included, which `app.findUsages` sends), then the
+  values in the root's env files. It finds direct references only, as written:
+  a request's URL, param and header names and values, its auth fields (those of its
+  kind), its body text in any mode, its own `@name` values, the File variables at the
+  top of a file, and environment and shared values. A request that uses `{{base}}`,
+  whose value uses `{{host}}`, isn't listed under `host`; the `base` definition is. Each
+  result (`workspace::Usage`, `Usage` in `src/lib/types.ts`) says where the reference
+  is: file, request (as a search hit: index, name, method, URL), field (`RequestField`)
+  and its UTF-16 range in the field's text, so a rename can edit it; a reference that
+  isn't sent (disabled param, header, auth, body, section, or a `#~` form field or
+  multipart part line) is `disabled` and listed as such. Clicking a result
+  (`app.openUsage`) opens the request on its field (the URL bar, the row of a param or
+  header, the auth field, the Body section, or the `.http` source for a request's own
+  `@name`), a File variable's row in Settings, or an environment value's row in the
+  Environments modal.
 * **Prompt variables** (VS Code REST Client): `# @prompt name [description]` or
   `// @prompt …` in a request's comment lines asks for a value at send. They are kept
   as ordinary directives, so the file is written back unchanged; `Request::prompts()`
