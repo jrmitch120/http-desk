@@ -4,6 +4,8 @@
     label: string;
     /** CSS colour for the option's text, in the list and on the trigger (e.g. `var(--m-get)`). */
     color?: string;
+    /** A short remark after the option in the list, muted (the environment picker: "not defined for api/"). */
+    note?: string;
   }
 </script>
 
@@ -179,7 +181,7 @@
         >
           <span class="check">{#if !item.created && item.value === value}<Icon name="check" size={12} stroke={2.4} />{/if}</span><span class="label"
             >{item.label}</span
-          >
+          >{#if item.note}<span class="note">{item.note}</span>{/if}
         </div>
       {/each}
     </div>
@@ -284,6 +286,13 @@
   .label {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .note {
+    margin-left: auto;
+    padding-left: var(--space-3);
+    flex: none;
+    color: var(--muted);
+    font-size: 11.5px;
   }
   .empty {
     padding: var(--space-1) var(--space-2);

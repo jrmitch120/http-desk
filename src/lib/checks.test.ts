@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { quickFixes, undefinedVariables } from "./checks";
+import { quickFixes, requestChecks, undefinedVariables } from "./checks";
 import type { EnvironmentSet, Request } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
@@ -113,5 +113,29 @@ describe("quick fixes for an Undefined variable", () => {
   it("offers nothing for a name that can't be defined: an unknown dynamic variable, or one a variable line can't hold", () => {
     expect(quickFixes("$nope", set, "staging")).toEqual([]);
     expect(quickFixes("a b", set, "staging")).toEqual([]);
+  });
+});
+
+describe("an environment the request's folder doesn't define", () => {
+  // The request's own environments (its folder's): `qa` exists elsewhere in the workspace only.
+  const set: EnvironmentSet = {
+    shared: [],
+    environments: [{ name: "local", variables: [{ name: "baseUrl", value: "http://localhost", secret: false }] }],
+    privateFileIgnored: null,
+  };
+  const req = request((r) => (r.url = "{{baseUrl}}/users"));
+  const checks = (envName: string | null) => requestChecks(req, makeVarProvider(scope({ envName, env: {} })), set, envName, "api/users");
+
+  it("is listed first, naming the folder, with a way to choose another environment", () => {
+    expect(checks("qa")).toEqual([
+      { kind: "envMissing", env: "qa", dir: "api/users", fixes: [{ kind: "chooseEnvironment" }] },
+      // Nothing is offered to be added to an environment the folder doesn't have.
+      { kind: "undefined", name: "baseUrl", sections: ["url"], fixes: [{ kind: "addFileVariable" }, { kind: "selectEnvironment", env: "local" }] },
+    ]);
+  });
+
+  it("isn't listed when the folder defines it or no environment is selected", () => {
+    expect(checks("local").map((c) => c.kind)).toEqual(["undefined"]);
+    expect(checks(null).map((c) => c.kind)).toEqual(["undefined"]);
   });
 });

@@ -131,14 +131,60 @@ fn upsert(vars: &mut Vec<EnvVar>, name: &str, value: String, json_type: JsonType
     }
 }
 
+/// The environments in `dir`'s own pair of files (what the Environments modal edits).
 pub fn load(dir: &Path) -> Result<EnvironmentSet, EnvError> {
-    let public = read_map(&dir.join(ENV_FILE))?;
-    let private = read_map(&dir.join(PRIVATE_ENV_FILE))?;
-    let mut set = EnvironmentSet { private_file_ignored: gitignore_status(dir), ..Default::default() };
+    load_for(dir, dir)
+}
 
-    for (map, secret) in [(&public, false), (&private, true)] {
-        for (env_name, obj) in map {
-            let Some(obj) = obj.as_object() else { continue };
+/// The folders a request in `dir` looks in for env files, nearest first: `dir`, then each
+/// parent up to and including `root`. A `dir` outside `root` looks only in `root`.
+fn lookup_chain(root: &Path, dir: &Path) -> Vec<PathBuf> {
+    if !dir.starts_with(root) {
+        return vec![root.to_path_buf()];
+    }
+    dir.ancestors().take_while(|d| d.starts_with(root)).map(Path::to_path_buf).collect()
+}
+
+/// An environment (or `$shared`) as the nearest file of one kind defines it.
+struct Definition<'a> {
+    name: String,
+    /// The folder of the file it comes from.
+    dir: &'a Path,
+    obj: Map<String, Value>,
+}
+
+/// For one kind of env file (public or private): each environment name (and `$shared`)
+/// with what the nearest file along `chain` defines for it, in the order names first
+/// appear reading from the farthest file (the root) down.
+fn nearest_definitions<'a>(chain: &'a [PathBuf], file: &str) -> Result<Vec<Definition<'a>>, EnvError> {
+    let maps = chain.iter().map(|d| Ok((d.as_path(), read_map(&d.join(file))?))).collect::<Result<Vec<_>, _>>()?;
+    let mut found: Vec<Definition> = Vec::new();
+    for (dir, map) in maps.into_iter().rev() {
+        for (name, obj) in map {
+            let Value::Object(obj) = obj else { continue };
+            match found.iter_mut().find(|d| d.name == name) {
+                // A nearer file defines it too: that file supplies the whole environment.
+                Some(d) => (d.dir, d.obj) = (dir, obj),
+                None => found.push(Definition { name, dir, obj }),
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The environments a request in folder `dir` (inside workspace `root`) is sent with
+/// (ADR-0004). For each environment name, including `$shared`, the nearest folder whose
+/// file defines it supplies it, looking in `dir` and then each parent up to `root`. Public
+/// and private files are looked up separately; the private file's values override the
+/// public file's (and are Secrets). Files of the same kind are never merged.
+pub fn load_for(root: &Path, dir: &Path) -> Result<EnvironmentSet, EnvError> {
+    let chain = lookup_chain(root, dir);
+    let public = nearest_definitions(&chain, ENV_FILE)?;
+    let private = nearest_definitions(&chain, PRIVATE_ENV_FILE)?;
+    let mut set = EnvironmentSet { private_file_ignored: gitignore_status(&chain[0]), ..Default::default() };
+
+    for (defs, secret) in [(&public, false), (&private, true)] {
+        for Definition { name: env_name, obj, .. } in defs {
             let vars = if env_name == SHARED {
                 &mut set.shared
             } else {
@@ -155,6 +201,40 @@ pub fn load(dir: &Path) -> Result<EnvironmentSet, EnvError> {
         }
     }
     Ok(set)
+}
+
+/// The environments of the requests in a folder below the workspace root that has env
+/// files of its own (and in its subfolders that have none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FolderEnvironments {
+    /// Relative to the workspace root, `/`-separated (`api/users`).
+    pub dir: String,
+    /// What [`load_for`] gives for the folder.
+    pub set: EnvironmentSet,
+}
+
+/// [`FolderEnvironments`] for every folder below `root` with an env file, in explorer
+/// order, skipping the folders the explorer skips. A request in a folder without an entry
+/// uses its nearest parent's, or the root's own [`load`].
+pub fn load_folders(root: &Path) -> Result<Vec<FolderEnvironments>, EnvError> {
+    fn dirs(node: &crate::workspace::TreeNode, out: &mut Vec<PathBuf>) {
+        for child in node.children.iter().flatten().filter(|c| c.kind == crate::workspace::NodeKind::Dir) {
+            out.push(child.path.clone());
+            dirs(child, out);
+        }
+    }
+    let tree = crate::workspace::tree(root).map_err(|source| EnvError::Io { path: root.into(), source })?;
+    let mut all = Vec::new();
+    dirs(&tree, &mut all);
+    all.into_iter()
+        .filter(|d| d.join(ENV_FILE).is_file() || d.join(PRIVATE_ENV_FILE).is_file())
+        .map(|d| {
+            let rel = d.strip_prefix(root).unwrap_or(&d);
+            let dir = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            Ok(FolderEnvironments { dir, set: load_for(root, &d)? })
+        })
+        .collect()
 }
 
 /// Flattened variables for `env_name` (`$shared` first, then the environment).
@@ -322,13 +402,17 @@ pub fn ensure_gitignored(dir: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// Reads `SSLConfiguration` for an environment (private file overrides public).
-pub fn ssl_config(dir: &Path, env_name: &str) -> SslConfig {
+/// Reads `SSLConfiguration` for an environment of a request in folder `dir`, from the
+/// files that supply the environment (see [`load_for`]; private overrides public).
+/// Relative paths start from the folder of the file that holds them.
+pub fn ssl_config(root: &Path, dir: &Path, env_name: &str) -> SslConfig {
     let mut cfg = SslConfig::default();
+    let chain = lookup_chain(root, dir);
     for file in [ENV_FILE, PRIVATE_ENV_FILE] {
-        let Ok(map) = read_map(&dir.join(file)) else { continue };
-        let Some(ssl) = map.get(env_name).and_then(|e| e.get("SSLConfiguration")) else { continue };
-        let path = |key: &str| ssl.get(key).and_then(Value::as_str).map(|p| dir.join(p));
+        let Ok(defs) = nearest_definitions(&chain, file) else { continue };
+        let Some(def) = defs.into_iter().find(|d| d.name == env_name) else { continue };
+        let Some(ssl) = def.obj.get("SSLConfiguration") else { continue };
+        let path = |key: &str| ssl.get(key).and_then(Value::as_str).map(|p| def.dir.join(p));
         if let Some(p) = path("clientCertificate") {
             cfg.client_certificate = Some(p);
         }
@@ -384,7 +468,7 @@ mod tests {
         assert_eq!(vars["token"], "s3cret");
         assert_eq!(vars["v"], "1");
         assert_eq!(vars["port"], "8080");
-        assert_eq!(ssl_config(dir.path(), "dev").verify_host_certificate, Some(false));
+        assert_eq!(ssl_config(dir.path(), dir.path(), "dev").verify_host_certificate, Some(false));
     }
 
     fn read_json(path: &Path) -> Value {
@@ -519,5 +603,146 @@ mod tests {
         assert!(set.environments[0].variables.iter().find(|v| v.name == "token").unwrap().secret);
         assert!(dir.path().join(PRIVATE_ENV_FILE).exists());
         assert_eq!(set.private_file_ignored, None, "not a git repo, gitignore untouched");
+    }
+
+    /// Writes env file `file` (public or private) with `json` in folder `rel` under `root`.
+    fn write_env(root: &Path, rel: &str, file: &str, json: Value) {
+        let dir = root.join(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(file), json.to_string()).unwrap();
+    }
+
+    fn env_vars(set: &EnvironmentSet, env: &str) -> Vec<(String, String)> {
+        let mut vars: Vec<_> = variables(set, Some(env)).into_iter().collect();
+        vars.sort();
+        vars
+    }
+
+    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn the_nearest_folder_defining_an_environment_supplies_all_of_it() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write_env(
+            root,
+            "",
+            ENV_FILE,
+            serde_json::json!({ "dev": { "host": "root.dev", "port": "1" }, "prod": { "host": "root.prod" } }),
+        );
+        write_env(root, "api", ENV_FILE, serde_json::json!({ "dev": { "host": "api.dev" } }));
+
+        let set = load_for(root, &root.join("api/users")).unwrap();
+        // No merging with the root's `dev`: its `port` doesn't leak in.
+        assert_eq!(env_vars(&set, "dev"), pairs(&[("host", "api.dev")]));
+        // An environment only the root defines still comes from the root.
+        assert_eq!(env_vars(&set, "prod"), pairs(&[("host", "root.prod")]));
+        assert_eq!(env_vars(&load_for(root, root).unwrap(), "dev"), pairs(&[("host", "root.dev"), ("port", "1")]));
+    }
+
+    #[test]
+    fn public_and_private_files_are_looked_up_separately_and_private_wins() {
+        // The JetBrains docs' example: the root's public `host` with service1's private `key`.
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write_env(root, "", ENV_FILE, serde_json::json!({ "dev": { "host": "root.dev", "key": "" } }));
+        write_env(root, "", PRIVATE_ENV_FILE, serde_json::json!({ "dev": { "key": "root-key", "other": "x" } }));
+        write_env(root, "service1", PRIVATE_ENV_FILE, serde_json::json!({ "dev": { "key": "s1-key" } }));
+
+        let set = load_for(root, &root.join("service1")).unwrap();
+        assert_eq!(env_vars(&set, "dev"), pairs(&[("host", "root.dev"), ("key", "s1-key")]));
+        let dev = &set.environments[0].variables;
+        assert!(dev.iter().find(|v| v.name == "key").unwrap().secret);
+        assert!(!dev.iter().find(|v| v.name == "host").unwrap().secret);
+    }
+
+    #[test]
+    fn shared_variables_follow_the_same_nearest_wins_rule() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write_env(root, "", ENV_FILE, serde_json::json!({ "$shared": { "version": "v1", "region": "eu" } }));
+        write_env(root, "api", ENV_FILE, serde_json::json!({ "$shared": { "version": "v2" } }));
+
+        assert_eq!(env_vars(&load_for(root, &root.join("api")).unwrap(), "dev"), pairs(&[("version", "v2")]));
+        assert_eq!(
+            env_vars(&load_for(root, &root.join("web")).unwrap(), "dev"),
+            pairs(&[("region", "eu"), ("version", "v1")])
+        );
+    }
+
+    #[test]
+    fn the_lookup_stops_at_the_workspace_root() {
+        let outer = tempfile::tempdir().unwrap();
+        write_env(
+            outer.path(),
+            "",
+            ENV_FILE,
+            serde_json::json!({ "dev": { "host": "outside" }, "$shared": { "v": "1" } }),
+        );
+        let root = outer.path().join("workspace");
+        write_env(&root, "api", ENV_FILE, serde_json::json!({ "prod": { "host": "api.prod" } }));
+
+        let set = load_for(&root, &root.join("api")).unwrap();
+        assert_eq!(set.environments.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["prod"]);
+        assert!(set.shared.is_empty());
+    }
+
+    #[test]
+    fn an_environment_no_folder_in_the_chain_defines_gives_no_environment() {
+        // `staging` exists only in a sibling folder: it's never borrowed.
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write_env(root, "", ENV_FILE, serde_json::json!({ "$shared": { "v": "1" }, "dev": { "host": "root.dev" } }));
+        write_env(root, "billing", ENV_FILE, serde_json::json!({ "staging": { "host": "billing.staging" } }));
+
+        let set = load_for(root, &root.join("users")).unwrap();
+        assert!(!set.environments.iter().any(|e| e.name == "staging"));
+        assert_eq!(env_vars(&set, "staging"), pairs(&[("v", "1")]), "like No environment: only $shared");
+    }
+
+    #[test]
+    fn every_folder_below_the_root_with_env_files_gets_its_requests_environments() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write_env(root, "", ENV_FILE, serde_json::json!({ "dev": { "host": "root.dev" } }));
+        write_env(root, "api", ENV_FILE, serde_json::json!({ "dev": { "host": "api.dev" } }));
+        write_env(root, "api/users", PRIVATE_ENV_FILE, serde_json::json!({ "dev": { "token": "t" } }));
+        write_env(root, "web", ENV_FILE, serde_json::json!({ "qa": { "host": "web.qa" } }));
+        // Folders the explorer skips are skipped here too.
+        write_env(root, "node_modules/pkg", ENV_FILE, serde_json::json!({ "dev": {} }));
+        write_env(root, ".idea", ENV_FILE, serde_json::json!({ "dev": {} }));
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+
+        let folders = load_folders(root).unwrap();
+        let dirs: Vec<_> = folders.iter().map(|f| f.dir.as_str()).collect();
+        assert_eq!(dirs, ["api", "api/users", "web"]);
+        assert_eq!(env_vars(&folders[1].set, "dev"), pairs(&[("host", "api.dev"), ("token", "t")]));
+        assert_eq!(folders[2].set, load_for(root, &root.join("web")).unwrap());
+    }
+
+    #[test]
+    fn ssl_configuration_comes_from_the_files_that_supply_the_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let ssl = |cert: &str| serde_json::json!({ "SSLConfiguration": { "clientCertificate": cert, "verifyHostCertificate": false } });
+        write_env(root, "", ENV_FILE, serde_json::json!({ "dev": ssl("root.pem"), "prod": ssl("prod.pem") }));
+        write_env(root, "api", ENV_FILE, serde_json::json!({ "dev": ssl("api.pem") }));
+        write_env(
+            root,
+            "api",
+            PRIVATE_ENV_FILE,
+            serde_json::json!({ "prod": { "SSLConfiguration": { "clientCertificateKey": "k.pem" } } }),
+        );
+
+        let api = root.join("api/users");
+        let dev = ssl_config(root, &api, "dev");
+        assert_eq!(dev.client_certificate, Some(root.join("api").join("api.pem")));
+        assert_eq!(dev.verify_host_certificate, Some(false));
+        let prod = ssl_config(root, &api, "prod");
+        assert_eq!(prod.client_certificate, Some(root.join("prod.pem")));
+        assert_eq!(prod.client_certificate_key, Some(root.join("api").join("k.pem")));
+        assert_eq!(ssl_config(root, &api, "qa"), SslConfig::default());
     }
 }

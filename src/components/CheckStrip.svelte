@@ -1,9 +1,11 @@
 <script lang="ts">
   // The strip above a request's sections listing what the request would be sent
   // with (src/lib/checks.ts): each Undefined variable once, where it is used, and its
-  // quick fixes. It never blocks sending, and it isn't there when there's nothing
-  // to list. Each kind of check renders in its own branch below.
+  // quick fixes, and a selected environment the request's folder doesn't define. It
+  // never blocks sending, and it isn't there when there's nothing to list. Each kind
+  // of check renders in its own branch below.
   import { SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
+  import { folderLabel } from "../lib/envFolders";
   import Icon from "./Icon.svelte";
 
   let { checks, onfix }: { checks: Check[]; onfix: (check: Check, fix: QuickFix) => void } = $props();
@@ -17,10 +19,18 @@
 {#if checks.length}
   <section class="checks" aria-label="Pre-send checks">
     <ul>
-      {#each checks as check (check.kind + check.name)}
+      {#each checks as check (check.kind === "undefined" ? `undefined:${check.name}` : check.kind)}
         <li>
           <span class="icon"><Icon name="alert" size={13} /></span>
-          {#if check.kind === "undefined"}
+          {#if check.kind === "envMissing"}
+            <span class="message">
+              <strong>{check.env}</strong> isn't defined for {#if check.dir}<code class="folder">{folderLabel(check.dir)}</code>{:else}the workspace root{/if}, so this
+              request is sent with no environment
+            </span>
+            <span class="fixes">
+              <button class="btn small ghost" onclick={() => onfix(check, check.fixes[0])}>Choose environment</button>
+            </span>
+          {:else if check.kind === "undefined"}
             <span class="message">
               <code>{`{{${check.name}}}`}</code> is undefined, used in {list(check.sections.map((s) => SECTION_LABELS[s]))}
             </span>
@@ -31,7 +41,7 @@
                     Add <code>{check.name}</code> to {fix.env}
                   {:else if fix.kind === "addFileVariable"}
                     Add as File variable
-                  {:else}
+                  {:else if fix.kind === "selectEnvironment"}
                     Select environment {fix.env}, which defines it
                   {/if}
                 </button>
@@ -87,7 +97,14 @@
     font-size: 11.5px;
     color: var(--var-bad);
   }
-  .message code {
+  .message strong {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .message code.folder {
+    color: var(--text);
+  }
+  .message code:not(.folder) {
     text-decoration: underline wavy;
     text-decoration-skip-ink: none;
     text-underline-offset: 2px;

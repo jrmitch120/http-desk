@@ -79,7 +79,7 @@ pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 `Select.svelte`, with `type SelectOption` from its module script. A dropdown: the trigger
 is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 
-- Props: `options` (`{ value, label, color? }[]`), `value`, `onchange(value)`, `label`
+- Props: `options` (`{ value, label, color?, note? }[]`), `value`, `onchange(value)`, `label`
   (accessible name of the trigger and the list, required), `create?`, `size?`, `mono?`,
   `tooltip?`, `class?`.
 - Variants:
@@ -88,6 +88,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   - `mono` for code-like values (HTTP methods).
   - `color` per option colours the option and the trigger value (methods pass
     `var(--m-get)` and so on).
+  - `note` per option adds a short muted remark after it in the list (not on the
+    trigger). The environment picker marks names the active request's folder doesn't
+    define with "not defined for api/".
   - `create(query)` offers a `Use <value>` item when the typed text matches no option
     (the method dropdown's custom methods); return `null` to offer nothing.
   - Borderless (the top bar's environment picker): the caller sets `border-color` and

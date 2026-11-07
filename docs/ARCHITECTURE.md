@@ -30,7 +30,7 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   parser.rs             .http text → HttpFile
   serializer.rs         HttpFile → .http text (lossless for untouched requests)
   query.rs              query param escaping, unescaping and send-time encoding (ADR-0001)
-  env.rs                http-client.env.json / http-client.private.env.json, gitignore check
+  env.rs                http-client.env.json / http-client.private.env.json, per-directory lookup, gitignore check
   vars.rs               {{variable}} + dynamic variable resolution
   exec.rs               request preparation (shared by send and the resolved preview), execution via reqwest, send error classification
   exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
@@ -517,9 +517,31 @@ sync, WebSocket, GraphQL, mocks.
 
 Decisions made during implementation, beyond the plan above:
 
-* **Environment files live at the workspace root.** Every request in the workspace
-  uses `http-client.env.json` / `http-client.private.env.json` from the root.
-  Per-directory env files (which JetBrains also supports) are not merged yet.
+* **Per-directory environment files** ([ADR-0004](adr/0004-per-directory-environment-files.md),
+  research in [research/per-directory-env-files.md](research/per-directory-env-files.md)).
+  Any folder can hold an `http-client.env.json` / `http-client.private.env.json` pair. For
+  a request, each environment name (and `$shared`) comes from the nearest folder whose
+  file defines it, looking in the request's folder and then each parent up to the
+  workspace root; public and private files are looked up separately, the private file's
+  values override the public file's, and a farther file of the same kind is never merged
+  into a nearer one (`env::load_for(root, dir)`; `env::load(dir)` is one folder's own
+  pair). `SSLConfiguration` comes from the same files, with paths relative to the file's
+  folder. Send and the resolved preview load the request's folder's environments from
+  disk (`request_resolver`); the frontend gets the root's own set (`load_environments`)
+  and one effective set per folder below the root that has env files
+  (`load_folder_environments` → `env::load_folders`, the explorer's folders), and a
+  request takes the nearest one at or above its folder (`src/lib/envFolders.ts`,
+  `app.envSetFor(path)`), so highlighting, hover, autocomplete and the checks use the
+  request's own environments. The picker lists every name in the workspace
+  (`app.envNames`) and marks the ones the active request's folder doesn't define ("not
+  defined for api/"). A request whose folders don't define the selected environment is
+  sent with none (only `$shared`), never with another folder's: the checks strip says
+  "staging isn't defined for `api/users/`" (check kind `envMissing`, fix "Choose
+  environment") and the response and preview carry the warning `Environment "staging"
+  isn't defined for api/users/, so it's sent with no environment`. Environments reload
+  when the watcher reports an env file in any folder or a folder change (a folder holding
+  env files moved in or deleted), and after the app itself moves or deletes a folder. The
+  Environments modal still edits the root's pair.
 * **Production environments and colours.** An environment can be marked production and
   given a colour in the Environments modal. Both are stored in the app settings
   (`environmentSettings`, keyed by workspace root, then environment name), never in the
@@ -799,8 +821,8 @@ Decisions made during implementation, beyond the plan above:
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
-| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the Matrix | List choice surviving a restart), environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk, including folders below the root) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the Matrix | List choice surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning), environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
 | Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, adding to all environments, the row filter), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |

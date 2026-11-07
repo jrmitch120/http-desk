@@ -343,6 +343,13 @@ fn load_environments(state: State<'_, AppState>) -> CmdResult<EnvironmentSet> {
     env::load(&state.root()?).map_err(err)
 }
 
+/// The environments of the requests in each folder below the root that has env files
+/// (ADR-0004); a request uses its nearest folder's, or the root's (`load_environments`).
+#[tauri::command]
+async fn load_folder_environments<R: tauri::Runtime>(app: AppHandle<R>) -> CmdResult<Vec<env::FolderEnvironments>> {
+    off_main(app, |state| env::load_folders(&state.root()?).map_err(err)).await
+}
+
 #[tauri::command]
 fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResult<SaveReport> {
     let root = state.root()?;
@@ -366,10 +373,17 @@ struct SendProgress {
     received: usize,
 }
 
-/// The variables a request is sent with (the environment from disk, then File
-/// variables, then its own, then its answered Prompt variables), and the folder
-/// its relative paths start from.
+/// What a request is sent with: the variables (its folder's environment from disk,
+/// then File variables, then its own, then its answered Prompt variables), the folder
+/// its relative paths start from, and a warning when its folder doesn't define the
+/// selected environment (it's then sent with none: ADR-0004).
 /// Shared by send and preview so the two can't disagree.
+struct RequestScope {
+    resolver: Resolver,
+    base_dir: PathBuf,
+    env_warning: Option<String>,
+}
+
 fn request_resolver(
     root: Option<&Path>,
     request: &Request,
@@ -377,19 +391,40 @@ fn request_resolver(
     file_variables: &[Variable],
     environment: Option<&str>,
     prompt_values: &HashMap<String, String>,
-) -> Result<(Resolver, PathBuf), ExecError> {
+) -> Result<RequestScope, ExecError> {
     let base_dir = file_path
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .or_else(|| root.map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
     let env_set = match root {
-        Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
+        Some(r) => env::load_for(r, &base_dir).map_err(|e| ExecError::Other(e.to_string()))?,
         None => EnvironmentSet::default(),
+    };
+    let env_warning = match (root, environment) {
+        (Some(r), Some(name)) if !env_set.environments.iter().any(|e| e.name == name) => Some(format!(
+            "Environment \"{name}\" isn't defined for {}, so it's sent with no environment",
+            folder_label(r, &base_dir)
+        )),
+        _ => None,
     };
     let env_vars = env::variables(&env_set, environment);
     let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
         .with_prompts(&request.prompts(), prompt_values);
-    Ok((resolver, base_dir))
+    Ok(RequestScope { resolver, base_dir, env_warning })
+}
+
+/// A folder as the UI names it: relative to the workspace root with a trailing `/`
+/// (`api/users/`), or "the workspace root".
+fn folder_label(root: &Path, dir: &Path) -> String {
+    let parts: Vec<_> = dir
+        .strip_prefix(root)
+        .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy()).collect())
+        .unwrap_or_default();
+    if parts.is_empty() {
+        "the workspace root".into()
+    } else {
+        format!("{}/", parts.join("/"))
+    }
 }
 
 /// The resolved preview: what `send_request` would send, without sending it (see
@@ -405,7 +440,7 @@ async fn preview_request<R: tauri::Runtime>(
 ) -> CmdResult<exec::RequestPreview> {
     off_main(app, move |state| {
         let root = state.root.lock().unwrap().clone();
-        let (resolver, _) = request_resolver(
+        let scope = request_resolver(
             root.as_deref(),
             &request,
             file_path.as_deref(),
@@ -414,7 +449,9 @@ async fn preview_request<R: tauri::Runtime>(
             &prompt_values.unwrap_or_default(),
         )
         .map_err(err)?;
-        Ok(exec::preview(&request, resolver))
+        let mut preview = exec::preview(&request, scope.resolver);
+        preview.warnings.splice(0..0, scope.env_warning);
+        Ok(preview)
     })
     .await
 }
@@ -438,7 +475,7 @@ async fn send_request<R: tauri::Runtime>(
     let settings = state.settings.lock().unwrap().exec.clone();
 
     let (prepared, ssl) = {
-        let (resolver, base_dir) = request_resolver(
+        let scope = request_resolver(
             root.as_deref(),
             &request,
             file_path.as_deref(),
@@ -446,9 +483,10 @@ async fn send_request<R: tauri::Runtime>(
             environment.as_deref(),
             &prompt_values.unwrap_or_default(),
         )?;
-        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
+        let mut prepared = exec::prepare(&request, &scope.resolver, &scope.base_dir, &settings)?;
+        prepared.warnings.splice(0..0, scope.env_warning);
         let ssl = match (&root, &environment) {
-            (Some(r), Some(e)) => env::ssl_config(r, e),
+            (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
         (prepared, ssl)
@@ -770,6 +808,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             delete_permanently,
             path_exists,
             load_environments,
+            load_folder_environments,
             save_environments,
             send_request,
             preview_request,
