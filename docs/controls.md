@@ -194,8 +194,8 @@ editor generalised (both build on `singleLineExtensions` in
 - It sets no padding, font or border: the owner gives those through `class` (a grid
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
-  (Undefined variable), `cm-var-dyn` (dynamic), plus `cm-var-secret` on a defined
-  Secret. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
+  (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
+  reference), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
 - In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
   become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write

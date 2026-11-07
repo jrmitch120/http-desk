@@ -1110,3 +1110,112 @@ describe("deleting", () => {
     expect(app.docs[PATH]).toBeDefined();
   });
 });
+
+describe("production guard", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = {
+      theme: "dark",
+      recentWorkspaces: [],
+      environments: {},
+      environmentSettings: { "/ws": { prod: { production: true }, staging: { color: "blue" } } },
+    } as unknown as AppSettings;
+    app.envName = "prod";
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  async function tabFor(method: string) {
+    const [tab] = await openAll(fileOf([method, "Req", "https://api.example.com/books"]));
+    return tab;
+  }
+
+  it("asks before sending a POST with a production environment, naming the environment and method", async () => {
+    const tab = await tabFor("POST");
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.message).toMatch(/POST/);
+    expect(app.dialog!.message).toMatch(/"prod"/);
+    expect(app.dialog!.buttons.find((b) => b.focus)?.value).toBe("cancel");
+    app.closeDialog("send");
+    await sending;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't send when the confirmation is cancelled", async () => {
+    const tab = await tabFor("DELETE");
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.runs[tab.id]).toBeUndefined();
+  });
+
+  it.each(["PUT", "PATCH", "PURGE"])("asks for %s too", async (method) => {
+    const tab = await tabFor(method);
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it.each(["GET", "HEAD", "OPTIONS"])("sends %s without asking", async (method) => {
+    const tab = await tabFor(method);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't ask when the selected environment isn't production", async () => {
+    app.envName = "staging";
+    const tab = await tabFor("POST");
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks only once when Send is pressed again while it's asking", async () => {
+    const tab = await tabFor("POST");
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    const second = app.send(tab.id);
+    app.closeDialog("send");
+    await Promise.all([first, second]);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("environment settings", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.root = "/ws";
+    app.settings = {
+      theme: "dark",
+      recentWorkspaces: [],
+      environments: {},
+      environmentSettings: { "/other": { prod: { production: true } }, "/ws": { gone: { color: "red" } } },
+    } as unknown as AppSettings;
+    api.saveSettings.mockResolvedValue(undefined);
+  });
+
+  it("replace the workspace's, leaving out environments with nothing set and other workspaces alone", async () => {
+    expect(await app.saveEnvironmentSettings({ prod: { production: true, color: "red" }, dev: { production: false, color: null } })).toBe(true);
+    expect(app.environmentSettings("prod")).toEqual({ production: true, color: "red" });
+    expect(app.environmentSettings("dev")).toEqual({});
+    expect(app.environmentSettings("gone")).toEqual({});
+    expect(api.saveSettings.mock.lastCall![0].environmentSettings).toEqual({
+      "/other": { prod: { production: true } },
+      "/ws": { prod: { production: true, color: "red" } },
+    });
+  });
+
+  it("give the selected environment's colour, ignoring names outside the palette", () => {
+    app.settings!.environmentSettings["/ws"] = { a: { color: "green" }, b: { color: "#123456" } };
+    app.envName = "a";
+    expect(app.envColor).toBe("green");
+    app.envName = "b";
+    expect(app.envColor).toBeNull();
+    app.envName = null;
+    expect(app.envColor).toBeNull();
+  });
+});

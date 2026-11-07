@@ -2,9 +2,12 @@
   // Graphical editor for http-client.env.json / http-client.private.env.json.
   import { api, errorMessage } from "../lib/api";
   import { app } from "../lib/store.svelte";
-  import type { EnvironmentSet, EnvVar } from "../lib/types";
+  import type { EnvironmentSet, EnvironmentSettings, EnvVar } from "../lib/types";
+  import { ENV_COLORS, envColor, envColorShade } from "../lib/envColors";
   import Badge from "./Badge.svelte";
   import Banner from "./Banner.svelte";
+  import Checkbox from "./Checkbox.svelte";
+  import Select, { type SelectOption } from "./Select.svelte";
   import Icon from "./Icon.svelte";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import { SvelteSet } from "svelte/reactivity";
@@ -46,7 +49,30 @@
     if (selectedEnv) selectedEnv.variables = list;
     else set.shared = list;
   }
-  const dirty = $derived(JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || activeEnv !== app.envName);
+  /** Production and colour per environment name. Saved to the app settings, not
+   *  the env files; renames and deletes below carry or drop them. */
+  let meta = $state<Record<string, EnvironmentSettings>>(
+    Object.fromEntries(initial.environments.map((e) => [e.name, { ...app.environmentSettings(e.name) }])),
+  );
+  /** The settings to save: the environments in the list, with what's set. */
+  function cleanMeta(): Record<string, EnvironmentSettings> {
+    const out: Record<string, EnvironmentSettings> = {};
+    for (const { name } of set.environments) {
+      const m = meta[name];
+      const color = envColor(m?.color);
+      if (m?.production || color) out[name] = { production: !!m?.production, color };
+    }
+    return out;
+  }
+  let savedMetaJson = $state(JSON.stringify(cleanMeta()));
+  function setMeta(name: string, patch: EnvironmentSettings) {
+    meta[name] = { ...meta[name], ...patch };
+  }
+  const colorOptions: SelectOption[] = [{ value: "", label: "No colour" }, ...ENV_COLORS.map((c) => ({ value: c.value, label: c.label, color: envColorShade(c.value, app.effectiveTheme) }))];
+
+  const dirty = $derived(
+    JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || JSON.stringify(cleanMeta()) !== savedMetaJson || activeEnv !== app.envName,
+  );
   const hasSecrets = $derived(set.shared.some((v) => v.secret) || set.environments.some((e) => e.variables.some((v) => v.secret)));
 
   /** The filter matches names, and the values of shareable variables (never a Secret's). */
@@ -81,6 +107,10 @@
     const env = set.environments.find((e) => e.name === name);
     if (!env) return;
     env.name = next;
+    if (meta[name]) {
+      meta[next] = meta[name];
+      delete meta[name];
+    }
     if (selected === name) selected = next;
     if (activeEnv === name) activeEnv = next;
   }
@@ -91,6 +121,8 @@
     let copy = `${name} copy`;
     for (let n = 2; nameTaken(copy); n++) copy = `${name} copy ${n}`;
     set.environments.splice(set.environments.indexOf(env) + 1, 0, { name: copy, variables: structuredClone($state.snapshot(env.variables) as EnvVar[]) });
+    // A copy of production is production too, until the user says otherwise.
+    if (meta[name]) meta[copy] = { ...meta[name] };
     selected = copy;
   }
 
@@ -101,6 +133,7 @@
     ]);
     if (r.button !== "delete") return;
     set.environments = set.environments.filter((e) => e.name !== name);
+    delete meta[name];
     if (selected === name) selected = set.environments[0]?.name ?? SHARED;
     if (activeEnv === name) activeEnv = null;
   }
@@ -122,9 +155,13 @@
       const cleaned = clean($state.snapshot(set) as EnvironmentSet);
       const report = await api.saveEnvironments(cleaned);
       savedJson = JSON.stringify(cleaned);
-      app.toast("success", "Environments saved");
       if (report.gitignoreUpdated) app.toast("info", "Added http-client.private.env.json to .gitignore");
       await app.loadEnvironments();
+      // Production and colour go to the app settings (a failed save is reported there).
+      const settings = cleanMeta();
+      if (!(await app.saveEnvironmentSettings(settings))) return false;
+      savedMetaJson = JSON.stringify(settings);
+      app.toast("success", "Environments saved");
       return true;
     } catch (e) {
       app.toast("error", `Could not save environments: ${errorMessage(e)}`);
@@ -195,10 +232,12 @@
         </button>
         <div class="divider"></div>
         {#each set.environments as env (env.name)}
+          {@const color = envColor(meta[env.name]?.color)}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="env" class:selected={selected === env.name} onclick={() => (selected = env.name)} ondblclick={() => renameEnv(env.name)} role="button" tabindex="0">
-            <Icon name="layers" size={14} />
+            <span class="env-icon" style:color={color ? envColorShade(color, app.effectiveTheme) : null}><Icon name="layers" size={14} /></span>
             <span class="ellipsis grow">{env.name}</span>
+            {#if meta[env.name]?.production}<Badge tone="danger">Prod</Badge>{/if}
             {#if activeEnv === env.name}<Badge tone="success">Active</Badge>{/if}
             <span class="count">{countOf(env.variables)}</span>
           </div>
@@ -238,6 +277,29 @@
           <input class="input" placeholder="Filter variables" bind:value={filter} />
         </div>
       </div>
+
+      {#if selectedEnv}
+        {@const name = selectedEnv.name}
+        <div class="env-options">
+          <Checkbox
+            checked={!!meta[name]?.production}
+            onchange={(on) => setMeta(name, { production: on })}
+            tooltip="Ask before sending anything but GET, HEAD or OPTIONS with this environment"
+          >
+            Production
+          </Checkbox>
+          <span class="muted">Colour</span>
+          <Select
+            class="env-color"
+            options={colorOptions}
+            value={envColor(meta[name]?.color) ?? ""}
+            onchange={(v) => setMeta(name, { color: v || null })}
+            label="Colour"
+            tooltip="Tints the environment picker in the top bar"
+          />
+          <span class="hint muted">Kept in HttpDesk's settings, not in the env files</span>
+        </div>
+      {/if}
 
       {#if hasSecrets && set.privateFileIgnored === false}
         <Banner severity="warning">
@@ -323,9 +385,34 @@
     color: var(--muted);
     flex: none;
   }
+  /* Shows the environment's colour, when it has one. */
+  .env-icon {
+    display: flex;
+    flex: none;
+    color: var(--muted);
+  }
+  .env .env-icon :global(svg) {
+    color: inherit;
+  }
   .grow {
     flex: 1;
     min-width: 0;
+  }
+  .env-options {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .env-options > .muted {
+    margin-left: 10px;
+  }
+  .env-options :global(.env-color) {
+    min-width: 130px;
+  }
+  .env-options .hint {
+    margin-left: auto;
   }
   .count {
     font-size: 11px;

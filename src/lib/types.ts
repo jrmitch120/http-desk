@@ -259,6 +259,8 @@ export type SendError = { message: string } & (
   | { kind: "timeoutIdle" | "timeoutConnect"; details: { timeoutMs: number } }
   | { kind: "invalidUrl"; details: { url: string; reason: string } }
   | { kind: "unresolvedVariable"; details: { names: string[] } }
+  /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
+  | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
   | { kind: "other"; details: null }
 );
@@ -277,10 +279,21 @@ export interface ExecSettings {
   maxBodyBytes: number;
 }
 
+/** Settings of one environment that aren't variables. */
+export interface EnvironmentSettings {
+  /** Sending anything but GET, HEAD or OPTIONS asks for confirmation first. */
+  production?: boolean;
+  /** A colour name from `ENV_COLORS` (src/lib/envColors.ts) tinting the top bar. */
+  color?: string | null;
+}
+
 export interface AppSettings {
   exec: ExecSettings;
   recentWorkspaces: string[];
   environments: Record<string, string>;
+  /** Per workspace root, then per environment name. Kept here, never in the env
+   *  files, so other tools don't see extra keys they'd treat as variables. */
+  environmentSettings: Record<string, Record<string, EnvironmentSettings>>;
   /** "system" follows the OS appearance (prefers-color-scheme). */
   theme: "system" | "light" | "dark";
   layout: "horizontal" | "vertical";

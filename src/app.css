@@ -25,6 +25,7 @@
   --var-ok: #4fc08d;
   --var-bad: #f2706b;
   --var-dyn: #c3a6ff;
+  --var-circular: #f0954a;
   --var-secret: #5fc4d6;
 
   --m-get: #6bdd9a;
@@ -107,6 +108,7 @@
   --var-ok: #108a4c;
   --var-bad: #c8352b;
   --var-dyn: #7b4fc4;
+  --var-circular: #b35900;
   --var-secret: #0b7d8f;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
   --tok-key: #0451a5;
@@ -479,7 +481,15 @@ kbd {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
 }
-/* A defined Secret (cm-var-ok cm-var-secret). */
+/* A reference that leads back to itself (a → b → a): not the same as undefined. */
+.cm-var-circular {
+  color: var(--var-circular);
+  background: color-mix(in srgb, var(--var-circular) 12%, transparent);
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+/* A defined value with a Secret in it (cm-var-ok cm-var-secret): a Secret, or a
+   variable whose value references one. */
 .cm-var-secret {
   color: var(--var-secret);
   background: color-mix(in srgb, var(--var-secret) 12%, transparent);

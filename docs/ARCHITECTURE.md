@@ -520,10 +520,27 @@ Decisions made during implementation, beyond the plan above:
 * **Environment files live at the workspace root.** Every request in the workspace
   uses `http-client.env.json` / `http-client.private.env.json` from the root.
   Per-directory env files (which JetBrains also supports) are not merged yet.
+* **Production environments and colours.** An environment can be marked production and
+  given a colour in the Environments modal. Both are stored in the app settings
+  (`environmentSettings`, keyed by workspace root, then environment name), never in the
+  env files, so other tools don't see extra keys they'd read as variables. Renaming an
+  environment in the modal carries them over, deleting it drops them, and duplicating it
+  copies them. Sending anything but GET, HEAD or OPTIONS with a production environment
+  selected first asks through the shared Dialog (Cancel focused), naming the environment
+  and the method; Cancel doesn't send. The colour comes from a fixed palette
+  (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
+  bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
+  name keeps the text colour).
 * **Variable precedence:** File variables > selected environment > `$shared`. Within an
   environment, a value in the private file overrides one in the shared file. Among File
   variables, the request's own declaration wins over a same-named one elsewhere in the
-  file. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
+  file. Values are resolved recursively in that same scope, so an environment's
+  `baseUrl = {{host}}/api` picks up a File variable `host`. Two resolvers apply these
+  rules: the core's `vars::Resolver` at send, and the frontend's `makeVarProvider`
+  (`src/lib/vars.ts`) for highlighting, hover and autocomplete. They are kept in step by
+  one set of cases, `crates/httpdesk-core/tests/fixtures/resolution-cases.json`, which
+  `tests/resolution_parity.rs` and `src/lib/vars.test.ts` both run. The frontend leaves
+  dynamic variables as written. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
   `$random.*`, `$datetime`, `$localDatetime`, `$processEnv`, `$env.X`, `$dotenv`) are
   resolved at send time. A dynamic variable with invalid or out-of-range arguments stops
   the send with an error naming it.
@@ -532,6 +549,15 @@ Decisions made during implementation, beyond the plan above:
   with an error naming the variables and suggesting an environment that defines them.
   Anywhere else, unresolved variables are sent as written (in the query they are
   percent-encoded like any other text) and reported as a warning on the response.
+* **Circular references:** a reference that leads back to a name already being resolved
+  (`a → b → a`, or `@host = {{host}}/v2`) is its own state, not an Undefined variable.
+  Resolution stops at the repeated name, leaves that reference as written, and records
+  the chain followed from the reference as written (`Resolver::circular`). There is no
+  depth limit; a chain without a cycle resolves however long it is. The URL bar and body
+  editor colour it apart (`cm-var-circular`) and hover shows "Circular: a → b → a". At
+  send, each chain is its own warning ("Circular variable reference: a → b → a"); one in
+  the URL's scheme or host fails the send with kind `circularVariable`, unless an
+  Undefined variable is also there, which is reported first.
 * **Query encoding** follows [ADR-0001](adr/0001-query-encoding.md). The params table
   holds decoded names and values. In the file, only characters that would change the
   query's structure are percent-escaped: whitespace, `&`, `#`, `=` in names, and `%`
@@ -566,7 +592,8 @@ Decisions made during implementation, beyond the plan above:
   `src/lib/types.ts` is a union on it), unlike other commands, whose errors are strings.
   Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
   `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
-  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
+  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `circularVariable` (chains, each
+  a list of names), `file` (path,
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
@@ -648,9 +675,9 @@ Decisions made during implementation, beyond the plan above:
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
-| Env, vars, workspace | Unit tests in each module |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (a VarField's static rendering marks `{{variables}}` by state), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference shows, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

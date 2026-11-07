@@ -51,6 +51,15 @@ describe("send error hints", () => {
     );
   });
 
+  it("names a circular reference in the URL by the chain followed, not as undefined", () => {
+    const e = err({ kind: "circularVariable", details: { chains: [["baseUrl", "host", "api", "host"]] } });
+    expect(describeSendError(e)).toEqual({
+      heading: "Circular variable in the URL",
+      hint: "Change a value in baseUrl → host → api → host so the chain doesn't come back to host.",
+    });
+    expect(sendErrorFix(e)).toBeNull();
+  });
+
   it("adds nothing to an invalid URL or an unreadable file: the message says it all", () => {
     expect(describeSendError(err({ kind: "invalidUrl", details: { url: "http://[x", reason: "invalid IPv6" } })).hint).toBeNull();
     expect(describeSendError(err({ kind: "file", details: { path: "/a.json", reason: "not found" } })).hint).toBeNull();
@@ -71,6 +80,7 @@ describe("send error hints", () => {
       err({ kind: "timeoutConnect", details: { timeoutMs: 1 } }),
       err({ kind: "invalidUrl", details: { url: "u", reason: "r" } }),
       err({ kind: "unresolvedVariable", details: { names: ["a"] } }),
+      err({ kind: "circularVariable", details: { chains: [["a", "a"]] } }),
       err({ kind: "file", details: { path: "p", reason: "r" } }),
     ];
     for (const e of others) expect(describeSendError(e).hint ?? "", e.kind).not.toMatch(general);
