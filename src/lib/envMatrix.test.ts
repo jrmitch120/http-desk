@@ -3,7 +3,7 @@
 // environment set that `save_environments` writes.
 import { describe, expect, it } from "vitest";
 import type { EnvironmentSet, EnvVar } from "./types";
-import { addToAllEnvironments, matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell } from "./envMatrix";
+import { addToAllEnvironments, matrixCell, matrixColumns, matrixNames, nextSort, removeEverywhere, rowMatches, setCell, sortNames, unsetCell } from "./envMatrix";
 
 const v = (name: string, value: string, secret = false): EnvVar => ({ name, value, secret });
 
@@ -27,10 +27,53 @@ describe("rows and columns", () => {
     expect(matrixNames(sample())).toEqual(["version", "baseUrl", "token"]);
   });
 
+  it("keeps the rows where they were when filling a cell would change the order first seen", () => {
+    const set = sample();
+    const before = matrixNames(set);
+    setCell(set, "$shared", "token", { value: "t" }); // token is now first seen in Shared
+    setCell(set, "local", "version", { value: "v2" });
+    expect(matrixNames(set, before)).toEqual(["version", "baseUrl", "token"]);
+  });
+
+  it("adds a new variable at the end", () => {
+    const set = sample();
+    const before = matrixNames(set);
+    set.shared.unshift(v("apiKey", ""));
+    expect(matrixNames(set, before)).toEqual(["version", "baseUrl", "token", "apiKey"]);
+  });
+
+  it("keeps the row of a variable unset everywhere, so it doesn't vanish while being edited", () => {
+    const set = sample();
+    const before = matrixNames(set);
+    unsetCell(set, "local", "token");
+    expect(matrixNames(set, before)).toEqual(["version", "baseUrl", "token"]);
+    expect(matrixNames(set)).toEqual(["version", "baseUrl"]);
+  });
+
   it("leaves out rows still being named in the list view", () => {
     const set = sample();
     set.environments[1].variables.push(v("  ", "x"), v(" host ", "h"));
     expect(matrixNames(set)).toEqual(["version", "baseUrl", "token", "host"]);
+  });
+});
+
+describe("sorting by the Variable column", () => {
+  const names = ["token", "baseUrl", "Accept", "api_key", "version2", "version10"];
+
+  it("sorts by name A to Z, ignoring case and reading numbers as numbers", () => {
+    expect(sortNames(names, "asc")).toEqual(["Accept", "api_key", "baseUrl", "token", "version2", "version10"]);
+  });
+
+  it("sorts Z to A", () => {
+    expect(sortNames(names, "desc")).toEqual(["version10", "version2", "token", "baseUrl", "api_key", "Accept"]);
+  });
+
+  it("keeps the file order when not sorting", () => {
+    expect(sortNames(names, "none")).toEqual(names);
+  });
+
+  it("cycles file order, A to Z, Z to A, then file order again", () => {
+    expect([nextSort("none"), nextSort("asc"), nextSort("desc")]).toEqual(["asc", "desc", "none"]);
   });
 });
 
@@ -89,6 +132,31 @@ describe("editing a cell", () => {
     const set = sample();
     setCell(set, "staging", "token", { secret: true });
     expect(set.environments[1].variables[1]).toEqual(v("token", "", true));
+  });
+});
+
+describe("unsetting a cell", () => {
+  it("removes the variable from that environment only, leaving a gap when nothing supplies it", () => {
+    const set = sample();
+    unsetCell(set, "local", "token");
+    expect(set.environments[0].variables).toEqual([v("baseUrl", "http://localhost")]);
+    expect(matrixCell(set, "local", "token")).toEqual({ state: "gap" });
+  });
+
+  it("removes an empty value too, and every same-named row, so the shared one shows through", () => {
+    const set = sample();
+    set.environments[1].variables.push(v("version", ""), v(" version ", "v3"));
+    unsetCell(set, "staging", "version");
+    expect(set.environments[1].variables).toEqual([v("baseUrl", "https://staging")]);
+    expect(matrixCell(set, "staging", "version")).toEqual({ state: "shared" });
+  });
+
+  it("removes a shared variable from Shared, and environments without it get a gap", () => {
+    const set = sample();
+    unsetCell(set, "$shared", "version");
+    expect(set.shared).toEqual([]);
+    expect(matrixCell(set, "$shared", "version")).toEqual({ state: "unset" });
+    expect(matrixNames(set)).toEqual(["baseUrl", "token"]);
   });
 });
 

@@ -9,7 +9,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition, VarProvider } from "../lib/codemirror/setup";
-  import { matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell } from "../lib/envMatrix";
+  import { matrixCell, matrixColumns, matrixNames, nextSort, removeEverywhere, rowMatches, setCell, sortNames, unsetCell } from "../lib/envMatrix";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import Icon from "./Icon.svelte";
@@ -24,8 +24,10 @@
     rowActions?: (name: string) => MenuItem[];
     /** What else the values can refer to, under `set`'s own: below the root, the environments the folder's requests get (ADR-0004). */
     inherited?: EnvironmentSet | null;
+    /** The header's last cell, "+ Environment": adds an environment (a new column). */
+    onaddenvironment?: () => void;
   }
-  let { set, filter = "", rowActions = () => [], inherited = null }: Props = $props();
+  let { set, filter = "", rowActions = () => [], inherited = null, onaddenvironment }: Props = $props();
 
   /** A row: just the variable's name. Its cells are looked up in `set`. */
   interface MatrixRow {
@@ -41,7 +43,19 @@
     if (!row) rowObjects.set(name, (row = { name, value: "" }));
     return row;
   };
-  const rows = $derived(matrixNames(set).map(rowFor));
+  // The rows' order is kept here, not re-derived from `set` alone: filling or
+  // unsetting a cell changes where a name is first seen, and the row must not
+  // jump while it's being typed in. New names go at the end. A new set (another
+  // folder, or the files reloaded) starts from its own order.
+  let order: string[] = [];
+  let orderOf: EnvironmentSet | null = null;
+  const names = $derived.by(() => {
+    if (orderOf !== set) [order, orderOf] = [[], set];
+    return (order = matrixNames(set, order));
+  });
+  /** The Variable header's sort, for the app session. It compares names only, so typing a value never moves a row. */
+  const sort = $derived(app.envMatrixSort);
+  const rows = $derived(sortNames(names, sort).map(rowFor));
   const columns = $derived(matrixColumns(set));
   const columnLabel = (column: string) => (column === SHARED ? "Shared" : column);
   /** Grid column ids are positional (`m0`, `m1`…), since environment names can hold anything. */
@@ -66,11 +80,14 @@
   const revealed = new SvelteSet<string>();
   const key = (column: string, name: string) => JSON.stringify([column, name]);
 
+  const ariaSort = { none: "none", asc: "ascending", desc: "descending" } as const;
+  /** The last column: wide enough for its header's "+ Environment". */
+  const ACTIONS_WIDTH = 124;
   const gridColumns = $derived<Column<MatrixRow>[]>([
-    { id: "name", header: "Variable", width: "150px", cell: nameCell },
+    { id: "name", header: "Variable", width: "150px", cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort] },
     ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell })),
-    // "delete" keeps the last value column free of a divider, like the list's delete column.
-    { id: "delete", header: "", width: "34px", cell: actionsCell },
+    // Each row's actions button, under the header's "+ Environment".
+    { id: "actions", header: "", width: `${ACTIONS_WIDTH}px`, cell: actionsCell, headerCell: onaddenvironment && addEnvironmentHeader },
   ]);
 
   function menuFor(name: string): MenuItem[] {
@@ -78,8 +95,30 @@
     return [
       ...extra,
       ...(extra.length ? [{ separator: true }] : []),
-      { label: "Delete from all environments", icon: "trash", danger: true, action: () => removeEverywhere(set, name) },
+      {
+        label: "Delete from all environments",
+        icon: "trash",
+        danger: true,
+        action: () => {
+          order = order.filter((n) => n !== name);
+          removeEverywhere(set, name);
+        },
+      },
     ];
+  }
+
+  /** Unsets the cell (`el`): the column no longer defines the variable. Focus stays in
+   *  the cell, on its Secret lock, rather than in a field that would show the old text. */
+  function unset(column: string, name: string, el: HTMLElement) {
+    unsetCell(set, column, name);
+    el.querySelector<HTMLElement>(".lock")?.focus();
+  }
+
+  /** A set cell's context menu. A cell that isn't set keeps the webview's own menu. */
+  function cellMenu(e: MouseEvent, column: string, name: string) {
+    if (matrixCell(set, column, name).state !== "set") return;
+    const el = e.currentTarget as HTMLElement;
+    menu.show(e, [{ label: `Unset in ${columnLabel(column)}`, icon: "x", action: () => unset(column, name, el) }]);
   }
 
   let root: HTMLDivElement;
@@ -93,7 +132,28 @@
     target.focus();
     return true;
   }
+
+  /** Scrolls `column`'s header into view, then the "+ Environment" after it (a new environment's column, added at the end). */
+  export function revealColumn(column: string) {
+    for (const cls of [`c-m${columns.indexOf(column)}`, "c-actions"]) root.querySelector(`.kv-head > .${cls}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
 </script>
+
+{#snippet variableHeader()}
+  <button
+    class="head-btn sort"
+    use:tooltip={sort === "none" ? "Sort by name, A to Z" : sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for the file order"}
+    onclick={() => (app.envMatrixSort = nextSort(sort))}
+  >
+    Variable{#if sort !== "none"}<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />{/if}
+  </button>
+{/snippet}
+
+{#snippet addEnvironmentHeader()}
+  <button class="head-btn add-env" aria-label="New environment" use:tooltip={"Add an environment (a new column)"} onclick={onaddenvironment}>
+    <Icon name="plus" size={13} />Environment
+  </button>
+{/snippet}
 
 {#snippet nameCell({ row }: GridCell<MatrixRow>)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -106,7 +166,8 @@
   {@const variable = cell.state === "set" ? cell.variable : null}
   {@const shown = !variable?.secret || revealed.has(key(column, row.name))}
   {@const label = columnLabel(column)}
-  <div class="m-cell" class:gap={cell.state === "gap"} data-column={id} data-name={row.name}>
+  <!-- svelte-ignore a11y_no_static_element_interactions (the menu's command is also the cell's Unset button) -->
+  <div class="m-cell" class:gap={cell.state === "gap"} data-column={id} data-name={row.name} oncontextmenu={(e) => cellMenu(e, column, row.name)}>
     <VarField
       class="cell"
       value={variable?.value ?? ""}
@@ -120,6 +181,16 @@
       {@const k = key(column, row.name)}
       <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(k) : revealed.add(k))}>
         <Icon name={shown ? "eye-off" : "eye"} size={13} />
+      </button>
+    {/if}
+    {#if variable}
+      <button
+        class="icon-btn unset"
+        aria-label="Unset"
+        use:tooltip={`Unset in ${label}: remove it from ${column === SHARED ? "the shared variables" : "this environment"}`}
+        onclick={(e) => unset(column, row.name, e.currentTarget.closest<HTMLElement>(".m-cell")!)}
+      >
+        <Icon name="x" size={13} />
       </button>
     {/if}
     <button
@@ -143,7 +214,7 @@
   </button>
 {/snippet}
 
-<div class="matrix" bind:this={root} style:--matrix-min="{150 + 34 + columns.length * 170}px">
+<div class="matrix" bind:this={root} style:--matrix-min="{150 + ACTIONS_WIDTH + columns.length * 170}px">
   <KeyValueGrid
     items={rows}
     columns={gridColumns}
@@ -184,6 +255,7 @@
     box-shadow: inset 2px 0 0 var(--warning);
   }
   .reveal,
+  .unset,
   .lock {
     align-self: center;
     flex: none;
@@ -199,8 +271,47 @@
   .lock:focus-visible {
     opacity: 1;
   }
+  /* Like the row's actions: shown on hover, and while the cell has focus. */
+  .unset {
+    opacity: 0;
+  }
+  .m-cell:hover .unset,
+  .m-cell:focus-within .unset {
+    opacity: 1;
+  }
+  .unset:hover {
+    color: var(--danger);
+  }
+  /* Header cells that are buttons: the Variable sort and "+ Environment". */
+  .head-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: var(--control-h-sm);
+    padding: 0 var(--space-2) 0 7px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    font: inherit;
+    color: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .head-btn:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .head-btn:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
+  }
+  .sort {
+    flex: 1;
+    min-width: 0;
+    margin-right: var(--space-1);
+  }
   .actions {
-    margin: auto;
+    margin: auto 0 auto var(--space-1);
     width: var(--control-h-sm);
     height: var(--control-h-sm);
     opacity: 0;

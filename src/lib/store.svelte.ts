@@ -11,6 +11,7 @@ import { definesVariable, renameInEnvironments, renameInFile, renameScope } from
 import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
+import type { MatrixSort } from "./envMatrix";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -221,6 +222,8 @@ class AppStore {
    *  (an Undefined variable's quick fix), an empty row is added first if there's none. */
   definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
+  /** How the Environments matrix sorts its rows (its Variable header): for this app session only, never saved. */
+  envMatrixSort = $state<MatrixSort>("none");
   /** Find usages results shown in the sidebar (`usages` null while searching); null when closed. */
   usages = $state<{ name: string; usages: Usage[] | null } | null>(null);
   private usagesSeq = 0;
