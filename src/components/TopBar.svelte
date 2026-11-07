@@ -3,6 +3,7 @@
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
+  import { folderLabel, requestFolder } from "../lib/envFolders";
   import { THEMES, themeLabel } from "../lib/themes";
   import { envColorShade } from "../lib/envColors";
   import Icon from "./Icon.svelte";
@@ -23,10 +24,17 @@
     ]);
   }
 
-  const envOptions: SelectOption[] = $derived([
-    { value: "", label: "No environment" },
-    ...(app.envSet?.environments.map((e) => ({ value: e.name, label: e.name })) ?? []),
-  ]);
+  // Every environment in the workspace (ADR-0004). With a request open, names its folder
+  // doesn't define are marked: picking one sends that request with no environment.
+  const envOptions: SelectOption[] = $derived.by(() => {
+    const tab = app.activeTab;
+    const own = tab ? app.envSetFor(tab.path) : null;
+    const note = tab && app.root ? `not defined for ${folderLabel(requestFolder(app.root, tab.path))}` : "";
+    return [
+      { value: "", label: "No environment" },
+      ...app.envNames.map((name) => ({ value: name, label: name, note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined })),
+    ];
+  });
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an unresolved-variable error, open the picker.

@@ -42,8 +42,30 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
+// `?folderEnvs=1`: api/ has env files of its own (ADR-0004). Its public file defines `local`
+// with its own baseUrl (the root's private `local` token still applies: private files are
+// looked up separately) and `qa`, which no other folder defines.
+const folderEnvs = new URLSearchParams(location.search).get("folderEnvs") === "1";
+/** What `load_folder_environments` gives: each folder below the root with env files, with its requests' environments. */
+function folderEnvironments() {
+  if (!folderEnvs) return [];
+  const rootLocal = envSet.environments.find((e) => e.name === "local")?.variables ?? [];
+  const set = {
+    shared: envSet.shared,
+    environments: [
+      { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:9001", secret: false }, ...rootLocal.filter((v) => v.secret)] },
+      ...envSet.environments.filter((e) => e.name !== "local"),
+      { name: "qa", variables: [{ name: "baseUrl", value: "https://qa.example.com", secret: false }] },
+    ],
+    privateFileIgnored: envSet.privateFileIgnored,
+  };
+  return [{ dir: "api", set }];
+}
+/** The environments of a request in the file at `path`: its nearest folder's with env files, else the root's. */
+const envSetFor = (path: string | null) => folderEnvironments().find((f) => path?.startsWith(`${ROOT}/${f.dir}/`))?.set ?? envSet;
 type PreviewArgs = {
   request: Request;
+  filePath: string | null;
   fileVariables: { name: string; value: string }[];
   environment: string | null;
   promptValues?: Record<string, string>;
@@ -57,10 +79,11 @@ const GENERATED = /^\$(uuid|guid|random\.|randomInt|timestamp|isoTimestamp|datet
  * the body implies; the default headers. Prompt variables: remembered values over
  * everything (masked ones masked), unanswered ones kept as written.
  */
-function previewRequest({ request: r, fileVariables, environment, promptValues = {} }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, promptValues = {} }: PreviewArgs) {
   const prompts = r.directives.filter((d) => d.name.toLowerCase() === "prompt").map((d) => d.value.trim().split(/\s+/)[0]);
-  const env = envSet.environments.find((e) => e.name === environment)?.variables ?? [];
-  const vars = new Map([...envSet.shared, ...env, ...fileVariables, ...r.variables].map((v) => [v.name, v.value]));
+  const own = envSetFor(filePath);
+  const env = own.environments.find((e) => e.name === environment)?.variables ?? [];
+  const vars = new Map([...own.shared, ...env, ...fileVariables, ...r.variables].map((v) => [v.name, v.value]));
   const unresolved = new Set<string>();
   const resolve = (text: string, depth = 0): string =>
     text.replace(/\{\{\s*(.*?)\s*\}\}/g, (whole, name: string) => {
@@ -104,6 +127,10 @@ function previewRequest({ request: r, fileVariables, environment, promptValues =
     ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
     : null;
   const warnings = unresolved.size ? [`Unresolved variables: ${[...unresolved].sort().join(", ")}`] : [];
+  if (environment && !own.environments.some((e) => e.name === environment)) {
+    const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
+    warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
+  }
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
 }
 type EnvMap = Record<string, Record<string, unknown>>;
@@ -560,6 +587,8 @@ mockIPC(
         return tree;
       case "load_environments":
         return clone(envSet);
+      case "load_folder_environments":
+        return clone(folderEnvironments());
       case "save_environments":
         envSet = args.set;
         envFiles = splitEnvFiles(envSet, envFiles);

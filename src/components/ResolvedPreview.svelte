@@ -27,7 +27,7 @@
     const req = app.requestFor(tab);
     const doc = app.docs[tab.path];
     if (!show || !req || !doc) return null;
-    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSet, app.promptAnswers(tab)]);
+    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSetFor(tab.path), app.promptAnswers(tab)]);
   });
   let asked = 0;
   $effect(() => {

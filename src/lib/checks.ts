@@ -22,11 +22,22 @@ export interface UndefinedVariable {
  * the strip renders each kind its own way, so a new kind of check adds a variant
  * here, adds its entries in `requestChecks`, and a branch in CheckStrip.svelte.
  */
-export type Check = { kind: "undefined"; name: string; sections: Section[]; fixes: QuickFix[] };
+export type Check =
+  | { kind: "undefined"; name: string; sections: Section[]; fixes: QuickFix[] }
+  /** The selected environment `env` isn't defined for the request's folder `dir`, so it's sent with none (ADR-0004). */
+  | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] };
 
-/** Everything the strip lists for a request, in order. Empty: the strip is hidden. */
-export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null): Check[] {
-  return undefinedVariables(req, variables).map((u) => ({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, envName) }));
+/**
+ * Everything the strip lists for a request, in order. Empty: the strip is hidden.
+ * `set` is the request's own environments (its folder's) and `dir` its folder,
+ * relative to the workspace root.
+ */
+export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = ""): Check[] {
+  const missing = !!envName && !set?.environments.some((e) => e.name === envName);
+  const checks: Check[] = missing ? [{ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] }] : [];
+  const env = missing ? null : envName;
+  for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, env) });
+  return checks;
 }
 
 /**
@@ -92,10 +103,15 @@ export function undefinedVariables(req: Request, variables: VarProvider): Undefi
 }
 
 /**
- * A one-click fix for an Undefined variable: add an empty one to the selected
- * environment, add an empty File variable, or select an environment that defines it.
+ * A one-click fix: for an Undefined variable, add an empty one to the selected
+ * environment, add an empty File variable, or select an environment that defines it;
+ * for an environment the folder doesn't define, open the picker to choose another.
  */
-export type QuickFix = { kind: "addToEnvironment"; env: string } | { kind: "addFileVariable" } | { kind: "selectEnvironment"; env: string };
+export type QuickFix =
+  | { kind: "addToEnvironment"; env: string }
+  | { kind: "addFileVariable" }
+  | { kind: "selectEnvironment"; env: string }
+  | { kind: "chooseEnvironment" };
 
 /**
  * The fixes for Undefined variable `name` with environment `envName` selected (or

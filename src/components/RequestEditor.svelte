@@ -9,7 +9,8 @@
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
-  import { makeVarProvider } from "../lib/vars";
+  import { envVariables, makeVarProvider } from "../lib/vars";
+  import { requestFolder } from "../lib/envFolders";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
@@ -35,10 +36,13 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
+  // The request's own environments: its folder's (ADR-0004). An environment the folder
+  // doesn't define gives none, like the send.
+  const envSet = $derived(app.envSetFor(tab.path));
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = {
-      env: app.envVariables,
+      env: envVariables(envSet, app.envName),
       fileVars: fileVariables(doc.file),
       headerVars: doc.file.header.variables,
       requestVars: req?.variables ?? [],
@@ -50,12 +54,14 @@
   });
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, app.envSet, app.envName) : []);
+  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.root ? requestFolder(app.root, tab.path) : "") : []);
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
   function fix(check: Check, fix: QuickFix) {
     if (fix.kind === "selectEnvironment") app.selectEnvironment(fix.env);
+    else if (fix.kind === "chooseEnvironment") app.chooseEnvironment();
+    else if (check.kind !== "undefined") return;
     else if (fix.kind === "addToEnvironment") app.editDefinition(tab.id, { kind: "env", env: fix.env, name: check.name, add: true });
     else app.editDefinition(tab.id, { kind: "file", name: check.name, add: true });
   }

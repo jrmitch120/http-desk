@@ -7,9 +7,9 @@ import { basename, dirname, displayName, fileVariables, joinPath, nameError, new
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
-import { envVariables } from "./vars";
+import { environmentNames, environmentsFor, requestFolder } from "./envFolders";
 import type { Definition } from "./codemirror/setup";
-import type { AppSettings, EnvironmentSet, EnvironmentSettings, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
+import type { AppSettings, EnvironmentSet, EnvironmentSettings, FolderEnvironments, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -112,7 +112,10 @@ class AppStore {
   tabs = $state<Tab[]>([]);
   activeTabId = $state<string | null>(null);
   runs = $state<Record<string, RunState>>({});
+  /** The workspace root's own environments (what the Environments modal edits). */
   envSet = $state<EnvironmentSet | null>(null);
+  /** The environments of each folder below the root with env files (ADR-0004); see `envSetFor`. */
+  envFolders = $state<FolderEnvironments[]>([]);
   envName = $state<string | null>(null);
   settings = $state<AppSettings | null>(null);
   /** Whether the OS appearance is dark, which is what the System theme follows. */
@@ -155,8 +158,13 @@ class AppStore {
     this.root ? ["HttpDesk", basename(this.root), ...(this.envName ? [this.envName] : [])].join(" — ") : "HttpDesk",
   );
 
-  /** Variables of the selected environment (for highlighting/autocomplete). */
-  envVariables = $derived(envVariables(this.envSet, this.envName));
+  /** Every environment name in the workspace (the picker lists them all). */
+  envNames = $derived(environmentNames(this.envSet, this.envFolders));
+
+  /** The environments a request in the file at `path` is sent with: its nearest folder's (ADR-0004). */
+  envSetFor(path: string): EnvironmentSet | null {
+    return environmentsFor(this.envSet, this.envFolders, this.root ? requestFolder(this.root, path) : "");
+  }
 
   // ---------------------------------------------------------------- lifecycle
 
@@ -333,7 +341,7 @@ class AppStore {
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
-      this.envName = this.envSet?.environments.some((e) => e.name === saved) ? saved : null;
+      this.envName = saved && this.envNames.includes(saved) ? saved : null;
     } catch (e) {
       this.toast("error", errorMessage(e));
     }
@@ -553,7 +561,8 @@ class AppStore {
   async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
-    if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p))) await this.loadEnvironments();
+    // An env file anywhere, or a folder (which may hold env files: moved in, renamed, deleted).
+    if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p) || !/\.(http|rest)$/i.test(p))) await this.loadEnvironments();
     for (const p of paths) {
       const doc = this.docs[p];
       if (!doc) continue;
@@ -819,6 +828,12 @@ class AppStore {
     for (const t of this.tabs) t.path = remap(t.path);
     if (this.expanded[from]) this.expanded[to] = true;
     await this.refreshTree();
+    await this.reloadFolderEnvironments(from);
+  }
+
+  /** After the app moved or deleted `path` (no watcher event follows): a folder may have held env files. */
+  private async reloadFolderEnvironments(path: string) {
+    if (!/\.(http|rest)$/i.test(path)) await this.loadEnvironments();
   }
 
   async deletePath(path: string) {
@@ -844,6 +859,7 @@ class AppStore {
     for (const t of this.tabs.filter((t) => under(t.path))) this.removeTab(t.id);
     for (const p of Object.keys(this.docs).filter(under)) delete this.docs[p];
     await this.refreshTree();
+    await this.reloadFolderEnvironments(path);
   }
 
   // ---------------------------------------------------------------- execution
@@ -982,11 +998,17 @@ class AppStore {
     if (!this.root) return;
     try {
       this.envSet = await api.loadEnvironments();
-      if (this.envName && !this.envSet.environments.some((e) => e.name === this.envName)) this.envName = null;
     } catch (e) {
       this.envSet = { shared: [], environments: [], privateFileIgnored: null };
       this.toast("error", errorMessage(e));
     }
+    try {
+      this.envFolders = await api.loadFolderEnvironments();
+    } catch (e) {
+      this.envFolders = [];
+      this.toast("error", errorMessage(e));
+    }
+    if (this.envName && !this.envNames.includes(this.envName)) this.envName = null;
   }
 
   async selectEnvironment(name: string | null) {

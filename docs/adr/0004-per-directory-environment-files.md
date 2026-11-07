@@ -14,3 +14,5 @@ We follow the JetBrains HTTP Client's documented lookup ("tries to find it in th
 
 - The Environments modal edits one folder's pair of files at a time and opens on the active request's nearest folder.
 - Moving a `.http` file between folders can change which environment values it sends with.
+- An environment's `SSLConfiguration` comes from the same files as its variables, with paths relative to the folder of the file that holds them.
+- The research behind this is in [research/per-directory-env-files.md](../research/per-directory-env-files.md).

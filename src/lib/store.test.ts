@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
+  loadFolderEnvironments: vi.fn(),
   getTree: vi.fn(),
 }));
 const {
@@ -37,6 +38,7 @@ const {
   openWorkspace,
   getSettings,
   loadEnvironments,
+  loadFolderEnvironments,
   getTree,
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
@@ -79,6 +81,7 @@ beforeEach(() => {
   renamePath.mockResolvedValue(undefined);
   pathExists.mockResolvedValue(true);
   deletePath.mockResolvedValue("trashed");
+  loadFolderEnvironments.mockResolvedValue([]);
   app.dialog = null;
   app.toasts = [];
   app.tree = null;
@@ -1338,5 +1341,74 @@ describe("Prompt variables", () => {
     await app.send(app.activeTabId!);
     expect(app.dialog).toBeNull();
     expect(sentPrompts(1)).toEqual({});
+  });
+});
+
+describe("per-directory environments", () => {
+  const env = (...names: string[]) => names.map((name) => ({ name, variables: [{ name: "host", value: name, secret: false }] }));
+  const rootSet = { shared: [], environments: env("dev", "prod"), privateFileIgnored: null };
+  const apiSet = { shared: [], environments: env("dev", "prod", "qa"), privateFileIgnored: null };
+  const tree = { name: "ws", path: "/ws", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    app.root = "/ws";
+    app.envName = null;
+    app.envFolders = [];
+    loadEnvironments.mockResolvedValue(rootSet);
+    loadFolderEnvironments.mockResolvedValue([{ dir: "api", set: apiSet }]);
+  });
+
+  it("each request takes its own folder's environments, and the picker gets every name in the workspace", async () => {
+    await app.loadEnvironments();
+    expect(app.envSetFor("/ws/api/users/list.http")).toEqual(apiSet);
+    expect(app.envSetFor("/ws/web/home.http")).toEqual(rootSet);
+    expect(app.envNames).toEqual(["dev", "prod", "qa"]);
+  });
+
+  it("keeps a selected environment only a folder defines, also when the workspace opens", async () => {
+    app.envName = "qa";
+    await app.loadEnvironments();
+    expect(app.envName).toBe("qa");
+
+    getSettings.mockResolvedValue({ environments: { "/ws": "qa" } });
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: false });
+    await app.openWorkspace("/ws");
+    expect(app.envName).toBe("qa");
+
+    loadFolderEnvironments.mockResolvedValue([]);
+    await app.loadEnvironments();
+    expect(app.envName).toBeNull();
+  });
+
+  it("editing or adding a nested env file, or changing a folder, reloads them", async () => {
+    await app.onExternalChange(["/ws/api/users/http-client.private.env.json"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(1);
+    expect(app.envFolders).toEqual([{ dir: "api", set: apiSet }]);
+
+    // A folder holding env files that's moved in or deleted is reported as the folder.
+    await app.onExternalChange(["/ws/legacy"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+
+    await app.onExternalChange(["/ws/api/pets.http"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+  });
+
+  it("moving or deleting a folder in the app reloads them (the watcher ignores the app's own changes)", async () => {
+    await app.movePath("/ws/api.http", "/ws/v1.http");
+    expect(loadFolderEnvironments).not.toHaveBeenCalled();
+    await app.movePath("/ws/api", "/ws/v1");
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(1);
+
+    const deleting = app.deletePath("/ws/v1");
+    await answer("delete");
+    await deleting;
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+  });
+
+  it("a folder's env file that can't be read is reported, and the root's environments still load", async () => {
+    loadFolderEnvironments.mockRejectedValueOnce("api/http-client.env.json is not a valid environment file");
+    await app.loadEnvironments();
+    expect(app.envSet).toEqual(rootSet);
+    expect(app.envFolders).toEqual([]);
+    expect(app.toasts.map((t) => t.message)).toEqual(["api/http-client.env.json is not a valid environment file"]);
   });
 });
