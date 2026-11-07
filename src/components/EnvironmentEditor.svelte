@@ -17,8 +17,16 @@
   import VarField from "../lib/codemirror/VarField.svelte";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import type { Definition } from "../lib/codemirror/setup";
+  import SegmentedControl from "./SegmentedControl.svelte";
+  import EnvironmentMatrix from "./EnvironmentMatrix.svelte";
+  import { addToAllEnvironments, SHARED } from "../lib/envMatrix";
 
-  const SHARED = "$shared";
+  /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
+  const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
+  const viewOptions = [
+    { value: "matrix", label: "Matrix", icon: "columns" },
+    { value: "list", label: "List", icon: "rows" },
+  ] as const;
 
   function clean(s: EnvironmentSet): EnvironmentSet {
     const vars = (list: EnvVar[]) =>
@@ -189,16 +197,32 @@
     app.modal = null;
   }
 
-  // A hover card's Edit: show the environment that supplies the variable, and focus its row.
-  // "Add … to <environment>" (the Undefined-variable strip) adds an empty one first.
+  /** Adds a variable, empty, to every environment that doesn't have it, and focuses its first cell. */
+  async function addToAll() {
+    const name = (await app.prompt("Add variable to all environments", "", "Variable name"))?.trim();
+    if (!name) return;
+    if (!addToAllEnvironments(set, name)) return app.toast("info", `Every environment already has "${name}"`);
+    filter = "";
+    await tick();
+    matrix?.focusCell(set.environments[0].name, name);
+  }
+
+  // A hover card's Edit: show the environment that supplies the variable, and focus its row
+  // (or, in the matrix, its cell). "Add … to <environment>" (the Undefined-variable strip)
+  // adds an empty one first.
   let grid = $state<KeyValueGrid<EnvVar>>();
+  let matrix = $state<EnvironmentMatrix>();
   $effect(() => {
     const want = app.definitionWanted;
-    if (want?.kind !== "env" || !grid) return;
+    if (want?.kind !== "env" || !(grid || matrix)) return;
     app.definitionWanted = null;
     if (want.env !== SHARED && !set.environments.some((e) => e.name === want.env)) return;
-    selected = want.env;
     filter = "";
+    if (matrix) {
+      tick().then(() => matrix?.focusCell(want.env, want.name));
+      return;
+    }
+    selected = want.env;
     if (want.add && !vars.some((v) => v.name === want.name)) setVars([...vars, { name: want.name, value: "", secret: false }]);
     tick().then(() => {
       const row = vars.filter((v) => v.name === want.name).at(-1);
@@ -246,109 +270,138 @@
   {/if}
 {/snippet}
 
-<Modal title="Environments" width="860px" height="560px" onclose={requestClose}>
-  <div class="layout">
-    <aside>
-      <div class="side-head">
-        <span class="muted">Environments</span>
-        <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
-      </div>
-      <div class="list">
-        <button class="env" class:selected={selected === SHARED} onclick={() => (selected = SHARED)}>
-          <Icon name="globe" size={14} />
-          <span class="ellipsis grow">Shared variables</span>
-          <span class="count">{countOf(set.shared)}</span>
-        </button>
-        <div class="divider"></div>
-        {#each set.environments as env (env.name)}
-          {@const color = envColor(meta[env.name]?.color)}
-          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="env" class:selected={selected === env.name} onclick={() => (selected = env.name)} ondblclick={() => renameEnv(env.name)} role="button" tabindex="0">
-            <span class="env-icon" style:color={color ? envColorShade(color, app.effectiveTheme) : null}><Icon name="layers" size={14} /></span>
-            <span class="ellipsis grow">{env.name}</span>
-            {#if meta[env.name]?.production}<Badge tone="danger">Prod</Badge>{/if}
-            {#if activeEnv === env.name}<Badge tone="success">Active</Badge>{/if}
-            <span class="count">{countOf(env.variables)}</span>
-          </div>
-        {:else}
-          <div class="none muted">No environments yet.<br /><button class="link" onclick={addEnv}>Create one</button></div>
-        {/each}
-      </div>
-    </aside>
+{#snippet secretsWarning()}
+  {#if hasSecrets && set.privateFileIgnored === false}
+    <Banner severity="warning">
+      <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
+    </Banner>
+  {/if}
+{/snippet}
 
-    <section class="main">
-      <div class="main-head">
-        <div class="title">
-          {#if selected === SHARED}
-            <strong>Shared variables</strong>
-            <span class="muted">Available in every environment (<span class="mono">$shared</span>)</span>
-          {:else}
-            <strong class="ellipsis">{selected}</strong>
-          {/if}
-        </div>
+<Modal title="Environments" width="860px" height="560px" onclose={requestClose}>
+  <div class="frame">
+    <div class="view-bar">
+      <SegmentedControl options={viewOptions} value={view} onchange={(v) => app.updateSettings({ envView: v })} label="View" />
+      {#if view === "matrix"}
         <div class="spacer"></div>
-        {#if selected !== SHARED}
-          {@const inUse = activeEnv === selected && app.envName === selected}
-          <button
-            class="btn small"
-            disabled={saving || inUse}
-            onclick={() => useEnv(selected)}
-            use:tooltip={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
-          >
-            <Icon name="check" size={13} />{inUse ? "In use" : onDisk(selected) ? "Use" : "Save & use"}
-          </button>
-          <button class="icon-btn" aria-label="Rename" use:tooltip onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
-          <button class="icon-btn" aria-label="Duplicate" use:tooltip onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
-          <button class="icon-btn danger-hover" aria-label="Delete" use:tooltip onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
-        {/if}
+        <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
+        <button class="btn small" disabled={!set.environments.length} onclick={addToAll}>
+          <Icon name="plus" size={13} />Add variable to all environments
+        </button>
         <div class="filter">
           <Icon name="search" size={13} />
           <input class="input" placeholder="Filter variables" bind:value={filter} />
         </div>
-      </div>
-
-      {#if selectedEnv}
-        {@const name = selectedEnv.name}
-        <div class="env-options">
-          <Checkbox
-            checked={!!meta[name]?.production}
-            onchange={(on) => setMeta(name, { production: on })}
-            tooltip="Ask before sending anything but GET, HEAD or OPTIONS with this environment"
-          >
-            Production
-          </Checkbox>
-          <span class="muted">Colour</span>
-          <Select
-            class="env-color"
-            options={colorOptions}
-            value={envColor(meta[name]?.color) ?? ""}
-            onchange={(v) => setMeta(name, { color: v || null })}
-            label="Colour"
-            tooltip="Tints the environment picker in the top bar"
-          />
-          <span class="hint muted">Kept in HttpDesk's settings, not in the env files</span>
+      {/if}
+    </div>
+    {#if view === "matrix"}
+      <section class="matrix-pane">
+        {@render secretsWarning()}
+        <div class="vars">
+          <EnvironmentMatrix bind:this={matrix} {set} {filter} />
         </div>
-      {/if}
+      </section>
+    {:else}
+      <div class="layout">
+        <aside>
+          <div class="side-head">
+            <span class="muted">Environments</span>
+            <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
+          </div>
+          <div class="list">
+            <button class="env" class:selected={selected === SHARED} onclick={() => (selected = SHARED)}>
+              <Icon name="globe" size={14} />
+              <span class="ellipsis grow">Shared variables</span>
+              <span class="count">{countOf(set.shared)}</span>
+            </button>
+            <div class="divider"></div>
+            {#each set.environments as env (env.name)}
+              {@const color = envColor(meta[env.name]?.color)}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <div class="env" class:selected={selected === env.name} onclick={() => (selected = env.name)} ondblclick={() => renameEnv(env.name)} role="button" tabindex="0">
+                <span class="env-icon" style:color={color ? envColorShade(color, app.effectiveTheme) : null}><Icon name="layers" size={14} /></span>
+                <span class="ellipsis grow">{env.name}</span>
+                {#if meta[env.name]?.production}<Badge tone="danger">Prod</Badge>{/if}
+                {#if activeEnv === env.name}<Badge tone="success">Active</Badge>{/if}
+                <span class="count">{countOf(env.variables)}</span>
+              </div>
+            {:else}
+              <div class="none muted">No environments yet.<br /><button class="link" onclick={addEnv}>Create one</button></div>
+            {/each}
+          </div>
+        </aside>
 
-      {#if hasSecrets && set.privateFileIgnored === false}
-        <Banner severity="warning">
-          <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
-        </Banner>
-      {/if}
+        <section class="main">
+          <div class="main-head">
+            <div class="title">
+              {#if selected === SHARED}
+                <strong>Shared variables</strong>
+                <span class="muted">Available in every environment (<span class="mono">$shared</span>)</span>
+              {:else}
+                <strong class="ellipsis">{selected}</strong>
+              {/if}
+            </div>
+            <div class="spacer"></div>
+            {#if selected !== SHARED}
+              {@const inUse = activeEnv === selected && app.envName === selected}
+              <button
+                class="btn small"
+                disabled={saving || inUse}
+                onclick={() => useEnv(selected)}
+                use:tooltip={onDisk(selected) ? "Select this environment for sending requests" : "Save environments and select this one for sending requests"}
+              >
+                <Icon name="check" size={13} />{inUse ? "In use" : onDisk(selected) ? "Use" : "Save & use"}
+              </button>
+              <button class="icon-btn" aria-label="Rename" use:tooltip onclick={() => renameEnv(selected)}><Icon name="edit" size={14} /></button>
+              <button class="icon-btn" aria-label="Duplicate" use:tooltip onclick={() => duplicateEnv(selected)}><Icon name="copy" size={14} /></button>
+              <button class="icon-btn danger-hover" aria-label="Delete" use:tooltip onclick={() => deleteEnv(selected)}><Icon name="trash" size={14} /></button>
+            {/if}
+            <div class="filter">
+              <Icon name="search" size={13} />
+              <input class="input" placeholder="Filter variables" bind:value={filter} />
+            </div>
+          </div>
 
-      <div class="vars">
-        <KeyValueGrid
-          bind:this={grid}
-          bind:items={() => vars, setVars}
-          columns={[{ id: "name", width: "34%" }, valueColumn, lockColumn, "delete"]}
-          blank={blankVar}
-          label="Variables"
-          visible={matches}
-          bulkEdit={false}
-          namePlaceholder="Variable"
-        />
+          {#if selectedEnv}
+            {@const name = selectedEnv.name}
+            <div class="env-options">
+              <Checkbox
+                checked={!!meta[name]?.production}
+                onchange={(on) => setMeta(name, { production: on })}
+                tooltip="Ask before sending anything but GET, HEAD or OPTIONS with this environment"
+              >
+                Production
+              </Checkbox>
+              <span class="muted">Colour</span>
+              <Select
+                class="env-color"
+                options={colorOptions}
+                value={envColor(meta[name]?.color) ?? ""}
+                onchange={(v) => setMeta(name, { color: v || null })}
+                label="Colour"
+                tooltip="Tints the environment picker in the top bar"
+              />
+              <span class="hint muted">Kept in HttpDesk's settings, not in the env files</span>
+            </div>
+          {/if}
+
+          {@render secretsWarning()}
+
+          <div class="vars">
+            <KeyValueGrid
+              bind:this={grid}
+              bind:items={() => vars, setVars}
+              columns={[{ id: "name", width: "34%" }, valueColumn, lockColumn, "delete"]}
+              blank={blankVar}
+              label="Variables"
+              visible={matches}
+              bulkEdit={false}
+              namePlaceholder="Variable"
+            />
+          </div>
+        </section>
       </div>
-    </section>
+    {/if}
   </div>
 
   {#snippet footer()}
@@ -362,9 +415,28 @@
 </Modal>
 
 <style>
+  .frame {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .view-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .matrix-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .layout {
     display: flex;
-    height: 100%;
+    flex: 1;
     min-height: 0;
   }
   aside {

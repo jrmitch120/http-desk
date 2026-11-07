@@ -13,6 +13,8 @@
     index: number;
     ghost: boolean;
     set: (patch: Partial<R>) => void;
+    /** The id of the column being rendered, so one snippet can serve several columns. */
+    column: string;
   }
 
   /** The built-in columns. "description" isn't a track: it's a line under the row, wherever it's listed. */
@@ -74,6 +76,8 @@
     visible?: (row: R) => boolean;
     /** Offer bulk edit (the rows as text). */
     bulkEdit?: boolean;
+    /** Show the trailing ghost row that adds a row as you type in it. */
+    addRows?: boolean;
     /** Show the "description" column's line under each row (Settings' "Show parameter descriptions"). */
     showDescriptions?: boolean;
     /** Called after every edit made in the grid, with the rows. */
@@ -95,6 +99,7 @@
     nameError = () => null,
     visible = () => true,
     bulkEdit = true,
+    addRows = true,
     showDescriptions = true,
     onchange,
     variables,
@@ -127,7 +132,7 @@
   let addedUnder = $state.raw<Props["visible"]>();
   const shown = (row: R) => (addedUnder === visible && added.has(row)) || visible(row);
   /** Each shown row with its position in `items`, so hidden rows don't shift indexes. */
-  const rows = $derived([...items.map((row, i) => ({ row, i })).filter(({ row }) => shown(row)), { row: ghost, i: items.length }]);
+  const rows = $derived([...items.map((row, i) => ({ row, i })).filter(({ row }) => shown(row)), ...(addRows ? [{ row: ghost, i: items.length }] : [])]);
 
   function changed() {
     onchange?.(items);
@@ -283,7 +288,7 @@
             </span>
           {:else if t.cell}
             <div class="c-extra c-{t.id}" class:divider={divider(c)}>
-              {@render t.cell({ row, index: i, ghost: isGhost, set: (patch) => set(row, patch) })}
+              {@render t.cell({ row, index: i, ghost: isGhost, set: (patch) => set(row, patch), column: t.id })}
             </div>
           {:else if t.id === "name"}
             <input

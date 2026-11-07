@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, openApp, openRequest, selectedText, treeItem, treeMenu } from "./helpers";
+import { dialog, openApp, openRequest, selectedText, showEnvironmentList, treeItem, treeMenu } from "./helpers";
 
 // Every name prompt keeps everything typed: "ABC" stays "ABC", not "C".
 interface Case {
@@ -65,6 +65,7 @@ const cases: Case[] = [
     name: "new environment",
     open: async (page) => {
       await page.keyboard.press("ControlOrMeta+e");
+      await showEnvironmentList(page);
       await environments(page).getByRole("button", { name: "New environment" }).click();
       return "New environment";
     },
@@ -74,6 +75,7 @@ const cases: Case[] = [
     name: "rename environment",
     open: async (page) => {
       await page.keyboard.press("ControlOrMeta+e");
+      await showEnvironmentList(page);
       await environments(page).getByRole("button", { name: /^staging\b/ }).click();
       await environments(page).getByRole("button", { name: "Rename", exact: true }).click();
       return "Rename environment";

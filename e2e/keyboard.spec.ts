@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { activeTab, dialog, openApp, openRequest, tab, treeItem, treeMenu, urlBar } from "./helpers";
+import { activeTab, dialog, openApp, openRequest, showEnvironmentList, tab, treeItem, treeMenu, urlBar } from "./helpers";
 
 test("a confirm dialog focuses its primary button, keeps Tab inside and gives focus back on close", async ({ page }) => {
   await openApp(page);
@@ -205,6 +205,7 @@ test("icon-only buttons, including toast close buttons, have accessible labels",
   await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText("200 OK")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+E");
+  await showEnvironmentList(page);
   await dialog(page, "Environments").getByPlaceholder("Add variable").fill("apiKey");
   await dialog(page, "Environments").getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Environments saved")).toBeVisible();

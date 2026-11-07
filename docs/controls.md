@@ -316,13 +316,16 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - `columns` picks columns left to right: `"enable"`, `"name"`, `"value"`,
   `"description"`, `"delete"`, a built-in with a width (`{ id: "name", width: "34%" }`),
   or a custom column `{ id, header, width, cell }`, whose `cell` snippet gets
-  `{ row, index, ghost, set }`. Always write through `set(patch)`. Inputs given
+  `{ row, index, ghost, set, column }` (`column` is the column's id, so one snippet
+  can serve several columns). Write through `set(patch)`, unless the rows are a view
+  of other state that the cell edits directly (the Environments matrix). Inputs given
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
-  replaces the value input.
+  replaces the value input, and one with `id: "name"` replaces the name input.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`,
+  filter), `bulkEdit` (default on), `addRows` (the ghost row, default on),
+  `showDescriptions` (default on), `onchange(items)`,
   `variables` (makes the built-in value cells [VarFields](#varfield)). Through
   `bind:this`, `focusValue(row)` puts focus in a row's value cell (a hover card's Edit
   lands there).
@@ -339,6 +342,12 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     VarFields see the environment being edited, as edited, plus the shared variables
     (not the environment selected in the top bar). Bulk edit is off, because it would
     show Secret values as plain text.
+  - The Environments matrix (`EnvironmentMatrix.svelte`): one row per variable name,
+    a read-only name column, one VarField column per environment plus Shared (built
+    from the set, with positional ids `m0`, `m1`…), and a row actions button.
+    No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
+    lock (and a reveal button when it's a Secret), and a gap is tinted. Rows are
+    stable objects per name, so an edit doesn't remount the row and drop focus.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
