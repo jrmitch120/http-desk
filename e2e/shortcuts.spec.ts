@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { activeTab, bodyEditor, openApp, openRequest, sentRequests, urlBar } from "./helpers";
+import { activeTab, bodyEditor, openApp, openRequest, sentRequests, showEnvironmentList, urlBar } from "./helpers";
 
 test("⌘Enter in a JSON body sends once without editing the body", async ({ page }) => {
   await openApp(page);
@@ -21,6 +21,7 @@ test("⌘, with the Environments editor open and edited keeps the editor and its
   await openApp(page);
   await page.keyboard.press("ControlOrMeta+E");
   const envs = page.getByRole("dialog", { name: "Environments" });
+  await showEnvironmentList(page);
   await envs.getByPlaceholder("Add variable").fill("apiKey");
   await page.keyboard.press("ControlOrMeta+Comma");
 
@@ -52,6 +53,7 @@ test("Escape closes only the topmost dialog, leaving the modal under it open", a
   await openApp(page);
   await page.keyboard.press("ControlOrMeta+E");
   const envs = page.getByRole("dialog", { name: "Environments" });
+  await showEnvironmentList(page);
   await envs.getByPlaceholder("Add variable").fill("apiKey");
   await page.keyboard.press("Escape");
   const discard = page.getByRole("dialog", { name: "Discard changes?" });

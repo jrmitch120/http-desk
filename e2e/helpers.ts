@@ -72,6 +72,7 @@ export interface MockState {
     theme: string;
     exec: Record<string, unknown>;
     showResolved: boolean;
+    envView: "matrix" | "list";
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
   };
   /** `.http` file models by path, as last saved. */
@@ -127,6 +128,11 @@ export function tab(page: Page, name: string): Locator {
 /** A confirm/prompt dialog (or any modal) by its title. */
 export function dialog(page: Page, title: string): Locator {
   return page.getByRole("dialog", { name: title, exact: true });
+}
+
+/** Switches the open Environments modal to its list (one environment at a time); it opens on the matrix. */
+export async function showEnvironmentList(page: Page): Promise<void> {
+  await dialog(page, "Environments").getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" }).click();
 }
 
 /** Right-clicks a sidebar row and picks an item from its context menu. */
