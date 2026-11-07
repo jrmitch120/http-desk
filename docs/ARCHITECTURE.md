@@ -589,7 +589,8 @@ Decisions made during implementation, beyond the plan above:
   column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
   doesn't define the variable and Shared doesn't either; an environment cell Shared
   supplies says "Uses shared", and the Shared column is never a gap. A variable defined
-  with an empty value isn't a gap. Typing into a gap, or locking it, adds the variable
+  with an empty value isn't a gap: it reads "Empty" (dim and italic), so set-but-empty
+  and not set look different. Typing into a gap, or locking it, adds the variable
   to that environment only; each cell has its own Secret lock. A set cell's Unset
   button (shown on hover or focus) or its context menu ("Unset in local", "Unset in
   Shared") removes the variable from that column (`unsetCell`), so it's "Not set" there

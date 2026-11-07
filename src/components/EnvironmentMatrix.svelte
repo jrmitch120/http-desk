@@ -167,11 +167,11 @@
   {@const shown = !variable?.secret || revealed.has(key(column, row.name))}
   {@const label = columnLabel(column)}
   <!-- svelte-ignore a11y_no_static_element_interactions (the menu's command is also the cell's Unset button) -->
-  <div class="m-cell" class:gap={cell.state === "gap"} data-column={id} data-name={row.name} oncontextmenu={(e) => cellMenu(e, column, row.name)}>
+  <div class="m-cell" class:gap={cell.state === "gap"} class:set={cell.state === "set"} data-column={id} data-name={row.name} oncontextmenu={(e) => cellMenu(e, column, row.name)}>
     <VarField
       class="cell"
       value={variable?.value ?? ""}
-      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : ""}
+      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : "Empty"}
       label="{row.name} in {label}"
       masked={!shown}
       variables={providers.get(column)}
@@ -253,6 +253,11 @@
   .m-cell.gap {
     background: color-mix(in srgb, var(--warning) 14%, transparent);
     box-shadow: inset 2px 0 0 var(--warning);
+  }
+  /* Set to an empty value: "Empty", in italics, so it doesn't read as "Not set". */
+  .m-cell.set :global(.vf-static:empty::before),
+  .m-cell.set :global(.cm-placeholder) {
+    font-style: italic;
   }
   .reveal,
   .unset,

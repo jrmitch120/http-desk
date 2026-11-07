@@ -391,7 +391,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     a read-only name column, one VarField column per environment plus Shared (built
     from the set, with positional ids `m0`, `m1`…), and a row actions button.
     No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
-    lock (and a reveal button when it's a Secret), and a gap is tinted. A set cell
+    lock (and a reveal button when it's a Secret), and a gap is tinted. A set cell with an empty value shows a dim, italic
+    "Empty" placeholder, unlike a cell that isn't set ("Not set"). A set cell
     also has an Unset button (an `x` icon-btn named "Unset", shown on hover or
     focus, like the row actions) and a context menu ("Unset in <environment>" or
     "Unset in Shared"; a cell that isn't set keeps the webview's menu); unsetting

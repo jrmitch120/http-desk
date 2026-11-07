@@ -101,6 +101,15 @@ test("Add variable to all environments adds a row every environment saves", asyn
   await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["apiKey", "baseUrl", "token", "version"]);
   await expect(cell(modal, "apiKey", "local")).not.toHaveClass(/\bgap\b/);
   await expect(cell(modal, "apiKey", "staging")).not.toHaveClass(/\bgap\b/);
+  // Set but empty reads "Empty", unlike Shared, which doesn't define it ("Not set"),
+  // and looks different from it too.
+  const field = (column: string) => page.getByRole("textbox", { name: `apiKey in ${column}`, exact: true });
+  await expect(field("local")).toHaveAttribute("aria-placeholder", "Empty");
+  await expect(field("staging")).toHaveAttribute("aria-placeholder", "Empty");
+  await expect(field("Shared")).toHaveAttribute("aria-placeholder", "Not set");
+  const placeholderStyle = (column: string) => field(column).evaluate((el) => getComputedStyle(el, "::before").fontStyle);
+  expect(await placeholderStyle("staging")).toBe("italic"); // local has focus, so it shows its editor
+  expect(await placeholderStyle("Shared")).toBe("normal");
   await cell(modal, "apiKey", "staging").locator(".var-field").click();
   await page.keyboard.type("k-stg");
   await page.keyboard.press("Tab");
