@@ -1312,6 +1312,27 @@ describe("find usages", () => {
   });
 });
 
+describe("Edit on a File variable declared in a request", () => {
+  it("shows the declaring request's .http source at that @name line: the request's own, else the last one in the file", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"], ["GET", "Other", "https://x/o"]);
+    f.requests[0].variables = [{ name: "id", value: "1" }, { name: "page", value: "1" }];
+    f.requests[1].variables = [{ name: "page", value: "2" }];
+    f.requests[2].variables = [{ name: "page", value: "3" }, { name: "size", value: "9" }];
+    const [list] = await openAll(f);
+    app.activeTabId = list.id;
+
+    // List's own @page wins for List.
+    await app.editDefinition(list.id, { kind: "request", name: "page" });
+    expect(app.activeTabId).toBe(list.id);
+    expect(app.fieldWanted).toEqual({ tabId: list.id, field: { kind: "variable", index: 1, name: "page" } });
+
+    // @size is only Other's: its tab comes forward on that line.
+    await app.editDefinition(list.id, { kind: "request", name: "size" });
+    expect(app.requestFor(app.activeTab)?.name).toBe("Other");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "variable", index: 1, name: "size" } });
+  });
+});
+
 describe("renaming a variable", () => {
   const OTHER = "/ws/api/authors.http";
   const envSet = (): EnvironmentSet => ({

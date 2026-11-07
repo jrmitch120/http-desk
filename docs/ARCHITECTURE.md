@@ -667,7 +667,7 @@ Decisions made during implementation, beyond the plan above:
   isn't sent (disabled param, header, auth, body, section, or a `#~` form field or
   multipart part line) is `disabled` and listed as such. Clicking a result
   (`app.openUsage`) opens the request on its field (the URL bar, the row of a param or
-  header, the auth field, the Body section, or the `.http` source for a request's own
+  header, the auth field, the Body section, or the `.http` source, with the line selected, for a request's own
   `@name`), a File variable's row in Settings, or an environment value's cell in the
   Environments matrix (its row in the list view), on the folder of its env file; the
   list names that folder for values below the root (`Environment "dev" · api/`).

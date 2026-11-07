@@ -115,10 +115,10 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
     scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
   for (const v of fileVars) {
-    const definition: Definition | undefined = headerVars.includes(v) ? { kind: "file", name: v.name } : undefined;
+    const definition: Definition = { kind: headerVars.includes(v) ? "file" : "request", name: v.name };
     scope.set(v.name, { value: v.value, secret: false, source: "this file", origin: "file", definition });
   }
-  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file" });
+  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file", definition: { kind: "request", name: v.name } });
 
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();

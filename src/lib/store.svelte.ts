@@ -1165,13 +1165,30 @@ class AppStore {
   }
 
   /** Opens the row of a variable's definition (a hover card's Edit): a File
-   *  variable in the tab's Settings section, or an environment's variable in the
-   *  Environments modal, on that environment. With `add` (the Undefined-variable
-   *  strip's "Add …" fixes), an empty one is added there first. */
-  editDefinition(tabId: string, definition: WantedDefinition) {
+   *  variable at the top of the file in the tab's Settings section, one declared in a
+   *  request at its line in that request's `.http` source (`showDeclaration`), or an
+   *  environment's variable in the Environments modal, on that environment. With `add`
+   *  (the Undefined-variable strip's "Add …" fixes), an empty one is added there first. */
+  async editDefinition(tabId: string, definition: WantedDefinition) {
+    if (definition.kind === "request") return this.showDeclaration(tabId, definition.name);
     this.definitionWanted = definition;
     if (definition.kind === "file") this.showRequestSettings(tabId);
     else this.modal = "env";
+  }
+
+  /** Shows the `@name` line in use for the tab's request in its request's `.http` source:
+   *  the request's own (the last, if repeated), else the last request in the file declaring it. */
+  private async showDeclaration(tabId: string, name: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const doc = tab && this.docs[tab.path];
+    const own = this.requestFor(tab ?? null);
+    if (!tab || !doc || !own) return;
+    const declares = (r: Request) => r.variables.some((v) => v.name === name);
+    const req = declares(own) ? own : doc.file.requests.filter(declares).at(-1);
+    if (!req) return;
+    if (req !== own) await this.openRequest(tab.path, { key: req._key });
+    const index = req.variables.map((v) => v.name).lastIndexOf(name);
+    if (this.activeTab) this.fieldWanted = { tabId: this.activeTab.id, field: { kind: "variable", index, name } };
   }
 
   /** Switches the tab's request editor to its Settings section (timeouts). */

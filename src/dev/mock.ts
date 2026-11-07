@@ -24,6 +24,17 @@ if (promptsParam) {
   (withPrompts.requests[0] as { directives: unknown[] }).directives = promptsParam.split(";").map((value) => ({ name: "prompt", value }));
   files[`${ROOT}/api/pets.http`] = withPrompts;
 }
+// `?requestVars=1` declares File variables inside requests: List pets' own `@page = 2` and
+// `@size = 10`, and Create pet's `@kind = cat`.
+if (new URLSearchParams(location.search).get("requestVars") === "1") {
+  const withVars = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  (withVars.requests[0] as { variables: unknown[] }).variables = [
+    { name: "page", value: "2" },
+    { name: "size", value: "10" },
+  ];
+  (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
+  files[`${ROOT}/api/pets.http`] = withVars;
+}
 const tree = {
   name: "demo",
   path: ROOT,
@@ -733,7 +744,8 @@ mockIPC(
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request": {
         const r = args.request;
-        return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+        const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
+        return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.

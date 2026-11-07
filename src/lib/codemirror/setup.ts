@@ -135,13 +135,18 @@ export interface VarInfo {
 }
 
 /**
- * A variable's definition that has a row in the app: a File variable in the
- * request's Settings (the `@name` lines at the top of the file), or a variable of an
- * environment in the Environments modal (`env` is `$shared` for the shared variables),
- * in the pair of env files of folder `dir` (relative to the workspace root, `""` for
- * the root; without it, the folder the modal shows or would open on).
+ * Where a variable's definition can be edited: a File variable at the top of the
+ * file in the request's Settings (`file`); one declared in a request block (`request`:
+ * the request's own, else the last request in the file declaring it), at its line in
+ * that request's `.http` source; or a variable of an environment in the Environments
+ * modal (`env` is `$shared` for the shared variables), in the pair of env files of
+ * folder `dir` (relative to the workspace root, `""` for the root; without it, the
+ * folder the modal shows or would open on).
  */
-export type Definition = { kind: "file"; name: string } | { kind: "env"; env: string; name: string; dir?: string };
+export type Definition =
+  | { kind: "file"; name: string }
+  | { kind: "request"; name: string }
+  | { kind: "env"; env: string; name: string; dir?: string };
 
 /**
  * `text` with its references resolved, as the core's resolver does it; dynamic

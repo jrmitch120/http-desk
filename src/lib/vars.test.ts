@@ -117,9 +117,9 @@ describe("what hovering a reference shows", () => {
     expect(p.info("scheme").definition).toEqual({ kind: "env", env: "$shared", name: "scheme" });
     // The header's File variable beats the environment's host: its row is in the request's Settings.
     expect(p.info("host").definition).toEqual({ kind: "file", name: "host" });
-    // The request's own @id and another request's @page have no row to edit.
-    expect(p.info("id").definition).toBeUndefined();
-    expect(p.info("page").definition).toBeUndefined();
+    // The request's own @id and another request's @page are edited in their request's .http source.
+    expect(p.info("id").definition).toEqual({ kind: "request", name: "id" });
+    expect(p.info("page").definition).toEqual({ kind: "request", name: "page" });
     expect(p.info("a").definition).toEqual({ kind: "env", env: "dev", name: "a" });
     expect(p.info("nope").definition).toBeUndefined();
   });
