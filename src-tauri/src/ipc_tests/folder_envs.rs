@@ -78,3 +78,72 @@ fn an_environment_the_folder_doesnt_define_sends_with_no_environment_and_says_so
     received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert_eq!(sent["warnings"], json!([warning, "Unresolved variables: host"]));
 }
+
+/// #88: the Environments modal loads and saves one folder's own pair (`dir`, relative to
+/// the root). Saving a nested folder leaves the root's files untouched, keeps Secrets in
+/// that folder's private file (git-ignored there), and isn't reported back as an
+/// external change.
+#[test]
+fn saving_a_nested_folders_environments_leaves_the_root_alone_and_keeps_secrets_private() {
+    use tauri::Listener;
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    // Ignores only the root's private file, so api's needs a rule of its own.
+    std::fs::write(root.join(".gitignore"), "/http-client.private.env.json\n").unwrap();
+    std::fs::create_dir_all(root.join("api/users")).unwrap();
+    std::fs::write(root.join("http-client.env.json"), json!({ "dev": { "host": "root.dev" } }).to_string()).unwrap();
+    std::fs::write(root.join("http-client.private.env.json"), json!({ "dev": { "token": "root-tok" } }).to_string())
+        .unwrap();
+    std::fs::write(root.join("api/http-client.env.json"), json!({ "dev": { "host": "api.dev" } }).to_string()).unwrap();
+    let root_files = || {
+        ["http-client.env.json", "http-client.private.env.json", ".gitignore"]
+            .map(|f| std::fs::read_to_string(root.join(f)).unwrap_or_default())
+    };
+    h.ok("open_workspace", json!({ "path": root }));
+    let before = root_files();
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    h.webview.listen_any("workspace-changed", move |e| {
+        let _ = tx.send(e.payload().to_string());
+    });
+    super::changed_paths(&rx, std::time::Duration::from_millis(600));
+
+    // The folder's own pair, not what its requests get (no root token in it).
+    let mut set = h.ok("load_environments", json!({ "dir": "api" }));
+    assert_eq!(
+        set["environments"][0]["variables"],
+        json!([{ "name": "host", "value": "api.dev", "secret": false, "jsonType": "string" }])
+    );
+    set["environments"][0]["variables"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "token", "value": "api-tok", "secret": true }));
+    let report = h.ok("save_environments", json!({ "set": set, "dir": "api" }));
+    // A folder without env files gets its first pair the same way ("Add environment files here…").
+    let qa = json!({ "shared": [], "environments": [{ "name": "qa", "variables": [{ "name": "key", "value": "k", "secret": true }] }], "privateFileIgnored": null });
+    h.ok("save_environments", json!({ "set": qa, "dir": "api/users" }));
+
+    assert_eq!(root_files(), before, "the root's env files and .gitignore are untouched");
+    let read =
+        |rel: &str| -> Value { serde_json::from_str(&std::fs::read_to_string(root.join(rel)).unwrap()).unwrap() };
+    assert_eq!(read("api/http-client.env.json"), json!({ "dev": { "host": "api.dev" } }));
+    assert_eq!(read("api/http-client.private.env.json"), json!({ "dev": { "token": "api-tok" } }));
+    // No `"qa": {}` in a public file there: it would hide a farther folder's public qa.
+    assert!(!root.join("api/users/http-client.env.json").exists());
+    assert_eq!(read("api/users/http-client.private.env.json"), json!({ "qa": { "key": "k" } }));
+    assert_eq!(report["gitignoreUpdated"], true);
+    assert!(std::fs::read_to_string(root.join("api/.gitignore")).unwrap().contains("http-client.private.env.json"));
+    for dir in ["api", "api/users"] {
+        let set = h.ok("load_environments", json!({ "dir": dir }));
+        assert_eq!(set["privateFileIgnored"], true, "{dir}'s private file is git-ignored");
+    }
+
+    let own = super::changed_paths(&rx, std::time::Duration::from_secs(2));
+    assert!(!own.iter().any(|p| p.contains("env.json")), "own env file saves were reported: {own:?}");
+
+    // Only folders inside the workspace.
+    assert!(h.call("save_environments", json!({ "set": qa, "dir": "../outside" })).is_err());
+    assert!(h.call("load_environments", json!({ "dir": "../outside" })).is_err());
+}

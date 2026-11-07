@@ -338,9 +338,23 @@ fn path_exists(path: PathBuf) -> bool {
 
 // ------------------------------------------------------------------ environments
 
+/// The workspace folder `dir` names (relative to the root, `/`-separated; the root when
+/// missing or empty), confined to the workspace.
+fn env_folder(state: &AppState, dir: Option<&str>) -> CmdResult<PathBuf> {
+    let root = state.root()?;
+    let Some(dir) = dir.filter(|d| !d.is_empty()) else { return Ok(root) };
+    let path = state.confine(&dir.split('/').collect::<PathBuf>())?;
+    if !path.is_dir() {
+        return Err(format!("{dir} is not a folder of the workspace"));
+    }
+    Ok(path)
+}
+
+/// The environments in folder `dir`'s own pair of files (the root's by default): what
+/// the Environments modal edits.
 #[tauri::command]
-fn load_environments(state: State<'_, AppState>) -> CmdResult<EnvironmentSet> {
-    env::load(&state.root()?).map_err(err)
+fn load_environments(state: State<'_, AppState>, dir: Option<String>) -> CmdResult<EnvironmentSet> {
+    env::load(&env_folder(&state, dir.as_deref())?).map_err(err)
 }
 
 /// The environments of the requests in each folder below the root that has env files
@@ -350,13 +364,15 @@ async fn load_folder_environments<R: tauri::Runtime>(app: AppHandle<R>) -> CmdRe
     off_main(app, |state| env::load_folders(&state.root()?).map_err(err)).await
 }
 
+/// Saves `set` as folder `dir`'s own pair of files (the root's by default).
 #[tauri::command]
-fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResult<SaveReport> {
+fn save_environments(state: State<'_, AppState>, set: EnvironmentSet, dir: Option<String>) -> CmdResult<SaveReport> {
     let root = state.root()?;
+    let folder = env_folder(&state, dir.as_deref())?;
     // The core serializes, so the bytes are only known afterwards: mark both env files after saving.
-    let report = env::save(&root, &set).map_err(err)?;
+    let report = env::save_folder(&root, &folder, &set).map_err(err)?;
     for name in [env::ENV_FILE, env::PRIVATE_ENV_FILE] {
-        state.self_writes.wrote(&root.join(name));
+        state.self_writes.wrote(&folder.join(name));
     }
     Ok(report)
 }
