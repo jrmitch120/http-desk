@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AuthKind, BodyMode, HttpFile, KvSection, Request};
+use crate::model::{ApiKeyLocation, AuthKind, BodyMode, HttpFile, KvSection, Request};
 
 pub const HTTP_EXTENSIONS: &[&str] = &["http", "rest"];
 const IGNORED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "venv"];
@@ -205,6 +205,8 @@ pub enum AuthPart {
     Username,
     Password,
     Token,
+    /// An API key's name: only a query param's, which is resolved at send (a header's is sent as written).
+    KeyName,
     KeyValue,
 }
 
@@ -301,6 +303,9 @@ fn request_fields(req: &Request) -> Vec<(RequestField, &str, bool)> {
         AuthKind::None => &[],
         AuthKind::Basic => &[(AuthPart::Username, &auth.username), (AuthPart::Password, &auth.password)],
         AuthKind::Bearer => &[(AuthPart::Token, &auth.token)],
+        AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Query => {
+            &[(AuthPart::KeyName, &auth.key_name), (AuthPart::KeyValue, &auth.key_value)]
+        }
         AuthKind::ApiKey => &[(AuthPart::KeyValue, &auth.key_value)],
     };
     out.extend(auth_fields.iter().map(|(part, text)| (RequestField::Auth { part: *part }, *text, !auth.enabled)));
@@ -477,6 +482,24 @@ mod usage_tests {
                 ("Bearer".into(), RequestField::Auth { part: AuthPart::Token }, false),
                 ("Form".into(), RequestField::Body, false),
                 ("Form".into(), RequestField::Body, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_a_query_api_keys_name_which_is_resolved_at_send_but_not_a_header_keys() {
+        let dir = workspace(&[(
+            "a.http",
+            "### Query\n# @httpdesk-auth apikey query {{keyName}}\nGET https://x?{{keyName}}={{keyName}}\n\n\
+             ### Header\n# @httpdesk-auth apikey header {{keyName}}\nGET https://x\n{{keyName}}: {{keyName}}\n",
+        )]);
+        let got = fields(&usages(dir.path(), "keyName", &[]));
+        assert_eq!(
+            got,
+            [
+                ("Query".into(), RequestField::Auth { part: AuthPart::KeyName }, false),
+                ("Query".into(), RequestField::Auth { part: AuthPart::KeyValue }, false),
+                ("Header".into(), RequestField::Auth { part: AuthPart::KeyValue }, false),
             ]
         );
     }

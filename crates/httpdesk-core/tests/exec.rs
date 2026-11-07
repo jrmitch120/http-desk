@@ -129,10 +129,10 @@ async fn variables_and_auth_kinds() {
     send(&req, vars.clone(), Path::new(".")).await.unwrap();
     assert_eq!(last_request(&server).await.url.query(), Some("id=7&api_key=k1"));
 
-    // Unresolved variables produce a warning rather than silently disappearing.
+    // Undefined variables produce a warning rather than silently disappearing.
     vars.remove("id");
     let resp = send(&req, vars, Path::new(".")).await.unwrap();
-    assert_eq!(resp.warnings, vec!["Unresolved variables: id"]);
+    assert_eq!(resp.warnings, vec!["Undefined variables: id"]);
 }
 
 #[tokio::test]
@@ -507,7 +507,7 @@ fn a_circular_reference_outside_the_host_is_its_own_warning() {
     assert_eq!(
         prepared.warnings,
         [
-            "Unresolved variables: missing",
+            "Undefined variables: missing",
             "Circular variable reference: me → me",
             "Circular variable reference: a → b → a"
         ]

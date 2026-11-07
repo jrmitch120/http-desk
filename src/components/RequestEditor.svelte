@@ -10,8 +10,8 @@
   import type { KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
-  import { requestFolder } from "../lib/envFolders";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -59,7 +59,7 @@
   });
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.root ? requestFolder(app.root, tab.path) : "") : []);
+  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path)) : []);
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
@@ -85,14 +85,20 @@
 
   let showSource = $state(false);
   let source = $state("");
+  /** The request (as JSON) `source` was rendered from. */
+  let rendered = $state<string | null>(null);
+  let sourceEditor = $state<Editor>();
+  /** One of the request's own `@name` lines (index into `variables`) to select once the source shows it. */
+  let declaration = $state<number | null>(null);
 
-  // A Find usages result: show the field holding the reference. A request's own
-  // `@name` lines have no field of their own, so its .http source shows them.
+  // A Find usages result or a hover card's Edit: show the field holding the reference. A
+  // request's own `@name` lines have no field of their own, so its .http source shows them,
+  // with the line selected.
   let urlInput = $state<UrlInput>();
   let paramsGrid = $state<KeyValueGrid<KeyValue>>();
   let headersGrid = $state<KeyValueGrid<KeyValue>>();
   let panel = $state<HTMLElement>();
-  const AUTH_LABELS = { username: "Username", password: "Password", token: "Token", keyValue: "Value" };
+
   $effect(() => {
     const want = app.fieldWanted;
     if (want?.tabId !== tab.id || !req) return;
@@ -103,12 +109,15 @@
       tick().then(() => urlInput?.focus());
       return;
     }
-    if (field.kind === "variable") return;
+    if (field.kind === "variable") {
+      declaration = field.index;
+      return;
+    }
     section = field.kind === "param" ? "params" : field.kind === "header" ? "headers" : field.kind;
     tick().then(() => {
       if (field.kind === "param") paramsGrid?.focusValue(req.query.items[field.index]);
       else if (field.kind === "header") headersGrid?.focusValue(req.headers.items[field.index]);
-      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_LABELS[field.part]}"]`)?.focus();
+      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_FIELDS[field.part].label}"]`)?.focus();
     });
   });
   $effect(() => {
@@ -116,8 +125,18 @@
     const snap = JSON.stringify(req);
     const t = setTimeout(async () => {
       source = await api.renderRequest(JSON.parse(snap)).catch((e) => `# ${e}`);
+      rendered = snap;
     }, 120);
     return () => clearTimeout(t);
+  });
+  $effect(() => {
+    if (declaration === null || !showSource || !req || !sourceEditor || rendered !== JSON.stringify(req)) return;
+    // The source lists the request's named `@name` lines in order, before anything else starting with `@`.
+    const nth = req.variables.slice(0, declaration + 1).filter((v) => v.name).length;
+    let seen = 0;
+    const line = source.split("\n").findIndex((l) => l.startsWith("@") && ++seen === nth) + 1;
+    declaration = null;
+    tick().then(() => sourceEditor?.revealLine(line));
   });
 
   const HEADER_NAMES = [
@@ -217,7 +236,7 @@
     {#if showSource}
       <div class="source">
         <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor value={source} readonly language="text" /></div>
+        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="text" /></div>
       </div>
     {:else}
       {#snippet undefinedCount(s: Section)}
@@ -264,11 +283,11 @@
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
         {:else if section === "auth"}
-          <AuthEditor auth={req.auth} {variables} />
+          <AuthEditor bind:auth={req.auth} {variables} />
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} file={doc.file} {variables} />
+          <RequestSettings {req} bind:file={doc.file} {variables} />
         {/if}
       </div>
     {/if}

@@ -10,7 +10,7 @@
   // `{{name}}` once the store has written the definition.
   import { onMount } from "svelte";
   import { app } from "../lib/store.svelte";
-  import { extractConflict, extractNameError, type ExtractTarget } from "../lib/extract";
+  import { extractConflict, extractNameError, extractTargets, type ExtractTarget } from "../lib/extract";
   import { basename } from "../lib/http";
   import Modal from "./Modal.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -23,13 +23,8 @@
   const envName = app.envName;
   /** The environments the request gets (its folder's, ADR-0004): where env destinations write. */
   const envSet = tab ? app.envSetFor(tab.path) : null;
-  const envCount = envSet?.environments.length ?? 0;
-
-  const options: SegmentedOption<Where>[] = [
-    { value: "file", label: "File variable" },
-    ...(envName ? [{ value: "env" as const, label: `Environment "${envName}"` }] : []),
-    ...(envCount ? [{ value: "all" as const, label: "All environments" }] : []),
-  ];
+  const LABELS: Record<Where, string> = { file: "File variable", env: `Environment "${envName}"`, all: "All environments" };
+  const options: SegmentedOption<Where>[] = extractTargets(envName, envSet).map((t) => ({ value: t.kind, label: LABELS[t.kind] }));
   let where = $state<Where>(options.some((o) => o.value === lastWhere) ? lastWhere : "file");
   let name = $state("");
   let input: HTMLInputElement | undefined = $state();

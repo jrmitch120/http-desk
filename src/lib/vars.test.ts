@@ -117,9 +117,9 @@ describe("what hovering a reference shows", () => {
     expect(p.info("scheme").definition).toEqual({ kind: "env", env: "$shared", name: "scheme" });
     // The header's File variable beats the environment's host: its row is in the request's Settings.
     expect(p.info("host").definition).toEqual({ kind: "file", name: "host" });
-    // The request's own @id and another request's @page have no row to edit.
-    expect(p.info("id").definition).toBeUndefined();
-    expect(p.info("page").definition).toBeUndefined();
+    // The request's own @id and another request's @page are edited in their request's .http source.
+    expect(p.info("id").definition).toEqual({ kind: "request", name: "id" });
+    expect(p.info("page").definition).toEqual({ kind: "request", name: "page" });
     expect(p.info("a").definition).toEqual({ kind: "env", env: "dev", name: "a" });
     expect(p.info("nope").definition).toBeUndefined();
   });
@@ -247,6 +247,20 @@ describe("what hovering a Prompt variable shows", () => {
     expect(offered.find((c) => c.name === "user")).toEqual({ name: "user", source: "prompt", preview: "ann" });
     expect(offered.find((c) => c.name === "password")).toEqual({ name: "password", source: "prompt", secret: true });
     expect(JSON.stringify(offered)).not.toContain("s3cret");
+  });
+});
+
+describe("field marks", () => {
+  it("read references exactly as the resolver does, so a mark never disagrees with what's resolved", () => {
+    const provider = makeVarProvider({ env: {}, fileVars: [{ name: "a", value: "x" }], requestVars: [], envName: null });
+    const text = "{{a{b}} {{ a }} {{ unclosed";
+    const marked = varSegments(text, provider).filter((s) => s.name !== undefined);
+    expect(marked.map((s) => [s.text, s.cls])).toEqual([
+      ["{{a{b}}", "cm-var cm-var-bad"],
+      ["{{ a }}", "cm-var cm-var-ok"],
+    ]);
+    expect(provider.resolve(text).undefined).toEqual(marked.filter((s) => s.cls!.includes("bad")).map((s) => s.name));
+    expect(varSegments(text, provider).map((s) => s.text).join("")).toBe(text);
   });
 });
 

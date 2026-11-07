@@ -576,15 +576,17 @@ Decisions made during implementation, beyond the plan above:
   env files, so other tools don't see extra keys they'd read as variables. Renaming an
   environment in the modal carries them over, deleting it drops them, and duplicating it
   copies them. Sending anything but GET, HEAD or OPTIONS with a production environment
-  selected first asks through the shared Dialog (Cancel focused), naming the environment
-  and the method; Cancel doesn't send. The colour comes from a fixed palette
+  first asks through the shared Dialog (Cancel focused), naming the environment
+  and the method; Cancel doesn't send. What counts is the environment the request is
+  sent with (`app.sentEnvironment(path)`): a request whose folders don't define the
+  selected environment is sent with none (ADR-0004), so it isn't asked about. The colour comes from a fixed palette
   (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
   bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
   name keeps the text colour).
 * **Environments matrix.** The Environments modal opens on a matrix (a Matrix | List
   switch, remembered as the `envView` app setting): one row per variable name, a
   column for Shared and one per environment, each cell a VarField that sees its own
-  column's scope. A cell is a gap (tinted, placeholder "Missing") when the environment
+  column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
   doesn't define the variable and Shared doesn't either; an environment cell Shared
   supplies says "Uses shared", and the Shared column is never a gap. A variable defined
   with an empty value isn't a gap. Typing into a gap, or locking it, adds the variable
@@ -593,7 +595,10 @@ Decisions made during implementation, beyond the plan above:
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,
   since the search reads the env files from disk), Rename… (see
-  [Rename variable](#rename-variable)) and deletes the variable everywhere.
+  [Rename variable](#rename-variable)) and "Delete from all environments" (Shared and
+  every environment of the folder, unsaved until Save). A "Filter variables" box above
+  the matrix narrows the rows to names, or shareable values in any column, containing
+  the text (never matching a Secret's value; `rowMatches`).
   The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
   the private file. Environment-level actions (rename, duplicate, delete, Use,
@@ -615,11 +620,12 @@ Decisions made during implementation, beyond the plan above:
   resolvers. Autocomplete lists them from `crates/httpdesk-core/dynamic-variables.json`
   (with a description and an argument hint each), and a core test fails if that list
   and `DYNAMIC_VARIABLES` differ.
-* **Unresolved variables:** if the URL's scheme or host still contains an unresolved
-  `{{variable}}` (typically `{{baseUrl}}` with no environment selected), the send fails
+* **Undefined variables at send:** if the URL's scheme or host still contains an
+  Undefined variable (typically `{{baseUrl}}` with no environment selected), the send fails
   with an error naming the variables and suggesting an environment that defines them.
-  Anywhere else, unresolved variables are sent as written (in the query they are
-  percent-encoded like any other text) and reported as a warning on the response.
+  Anywhere else, Undefined variables are sent as written (in the query they are
+  percent-encoded like any other text) and reported as a warning on the response
+  ("Undefined variables: a, b", from `Resolver::undefined`).
 * **Undefined-variable checks** catch them before sending, without blocking it.
   `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
   the enabled auth's fields, an API key's name only as a query param; the enabled body
@@ -655,7 +661,8 @@ Decisions made during implementation, beyond the plan above:
   the app has them, unsaved edits included, which `app.findUsages` sends), then the
   values in every folder's env files (the root's, then each folder's in explorer order). It finds direct references only, as written:
   a request's URL, param and header names and values, its auth fields (those of its
-  kind), its body text in any mode, its own `@name` values, the File variables at the
+  kind, including a query API key's name, which is resolved at send; a header key's
+  name is sent as written), its body text in any mode, its own `@name` values, the File variables at the
   top of a file, and environment and shared values. A request that uses `{{base}}`,
   whose value uses `{{host}}`, isn't listed under `host`; the `base` definition is. Each
   result (`workspace::Usage`, `Usage` in `src/lib/types.ts`) says where the reference
@@ -664,22 +671,29 @@ Decisions made during implementation, beyond the plan above:
   isn't sent (disabled param, header, auth, body, section, or a `#~` form field or
   multipart part line) is `disabled` and listed as such. Clicking a result
   (`app.openUsage`) opens the request on its field (the URL bar, the row of a param or
-  header, the auth field, the Body section, or the `.http` source for a request's own
+  header, the auth field, the Body section, or the `.http` source, with the line selected, for a request's own
   `@name`), a File variable's row in Settings, or an environment value's cell in the
   Environments matrix (its row in the list view), on the folder of its env file; the
   list names that folder for values below the root (`Environment "dev" · api/`).
 * <a id="rename-variable"></a>**Rename variable** (a matrix row's Rename…) renames an
   environment variable in Shared and every environment of the folder the Environments
   modal shows (`app.renameVariable(name, dir)`) and, with "Update references"
-  (on by default), every reference Find usages finds. Renaming saves the env files, so
+  (on by default), the references that mean that variable. Which ones follows
+  ADR-0004's nearest-folder rule (`renameScope` in `src/lib/rename.ts`): renaming `old`
+  in folder D's env files rewrites `{{old}}` in D's own env values, and in the `.http`
+  files in D or below it, except those with a nearer folder (between the file and D)
+  whose own env files also define a variable named `old`: for those requests `{{old}}`
+  is that nearer folder's variable. Files outside D, and other folders' env files and
+  their same-named variables, are left alone. Renaming saves the env files, so
   unsaved edits in the Environments modal are saved first (the user is asked). The form
-  (`RenameVariable.svelte`, opened by `app.renameVariable(name)` through
-  `app.renaming`) refuses a name a reference can't use or one Shared or an environment
-  already has, and, since there is no undo beyond version control, shows the files that
-  will change with how many requests (File variables, environment values) in each
-  before anything is written. On Rename the store renames it in a copy of the saved
-  environment set of that folder, rewrites references in that folder's env values (other
-  folders' env files, and their same-named variables, are left alone), and saves it with the usual
+  (`RenameVariable.svelte`, opened by `app.renameVariable(name, dir)` through
+  `app.renaming`, which carries `dir`) gets D's pair and exactly the usages that will
+  change from `app.renamePlan(name, dir)`. It refuses a name a reference can't use or
+  one D's Shared or an environment already has, and, since there is no undo beyond
+  version control, shows the files that will change with how many requests (File
+  variables, environment values) in each before anything is written. On Rename the
+  store renames it in a copy of D's saved pair, rewrites the references in its values,
+  and saves it with the usual
   `save_environments` (a Secret stays in the private file); if that fails nothing else
   changes. Then each `.http` file with references is loaded, edited at the usages'
   ranges (`renameInFile` in `src/lib/rename.ts`: `{{ old }}` becomes `{{ new }}`, spacing
@@ -712,7 +726,9 @@ Decisions made during implementation, beyond the plan above:
   `@name = value` line at the top of the file (or a new value for the same-named File
   variable the request uses), an in-memory edit like any other, so it shows as unsaved
   and untouched requests still save byte-for-byte. An environment destination (the
-  selected one, or all of the request's environments with the same value) goes through
+  selected one, offered only when the request's folders define it, as the
+  "Add X to <env>" quick fix is: `extractTargets` in `src/lib/extract.ts`; or all of the
+  request's environments with the same value) goes through
   `save_environments` at once, since env files have no unsaved state outside the
   Environments modal, in the folder supplying each environment to the request (see
   [the Environments modal](#environment-folders)). The
@@ -787,7 +803,19 @@ Decisions made during implementation, beyond the plan above:
   from the body mode (`implied_content_type`). A request that couldn't be sent (an
   undefined or circular host, a relative URL without Host) is still shown, with the classified
   error a send would give. `$processEnv`, `$dotenv` and `$env.X` read existing values,
-  so they are resolved.
+  so they are resolved. Secrets are masked as in hover cards: `request_resolver` tells
+  the resolver which names are Secrets (`env::secret_names`, less any a File variable
+  replaces; `Resolver::with_secrets`), and in the preview every reference whose value a
+  Secret went into, directly or through other variables (`Authorization: {{auth}}` with
+  `auth = Bearer {{token}}`), resolves to its value between two private-use marks
+  (`vars::SECRET_MARKS`; query-encoded marks are turned back, Basic credentials holding
+  one are shown unencoded like a placeholder, and the scheme and URL checks read the
+  value). The preview shows each marked value as `••••••••` with one Reveal Secrets /
+  Hide Secrets button for the whole preview; an error message never reveals it (the
+  URL in it is masked). A masked Prompt variable stays `••••••••` with no reveal.
+  The header-origin notes beside each header (from Authorization, from Body, default)
+  and the "Can't be sent: …" line for a request that would fail before the network are
+  part of the preview too.
 * **The Request tab shows the final hop.** After redirects, the core rebuilds the request
   that reached the final server with reqwest's rules: 301/302 turn a POST into a GET
   and 303 anything but HEAD, dropping the body and its Content-* headers; a hop to
@@ -855,8 +883,8 @@ Decisions made during implementation, beyond the plan above:
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
 | Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk, including folders below the root) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the Matrix | List choice surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning; saving a nested folder's environments leaving the root's files untouched, keeping Secrets in that folder's git-ignored private file, and not being reported by the watcher), environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, adding to all environments, the row filter), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/` (`confinement.rs`, `deleting.rs`, `folder_envs.rs`, `paths.rs`, `preview.rs`, `renaming.rs`, `usages.rs`, `watcher.rs`): the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the Matrix | List choice surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning; saving a nested folder's environments leaving the root's files untouched, keeping Secrets in that folder's git-ignored private file, and not being reported by the watcher), environment settings (production, colour) surviving a restart without touching the env files, Find usages (`usages.rs`: references read from disk, from open documents with unsaved edits, and in env values), Rename variable (`renaming.rs`: the env and `.http` writes keep Secrets in the private file and untouched requests byte-for-byte, and aren't reported by the watcher), the preview marking every value a Secret went into (`preview.rs`), OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, adding to all environments, the row filter), `src/lib/envFolders.test.ts` (per-directory environments: a file's folder, the nearest folder's set, every environment name, which folder's files a write goes to), `src/lib/usages.test.ts` (Find usages rows: one per field, how each field, File variable and environment value is named, nested folders), `src/lib/rename.test.ts` (Rename variable: rewriting references in every field and in env values, the name check, the preview rows, and which usages a rename in a folder covers under ADR-0004), `src/lib/extract.test.ts` (Extract to variable: the name rule, conflicts, and the destinations offered), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

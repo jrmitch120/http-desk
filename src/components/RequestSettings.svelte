@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { tick } from "svelte";
   import { app } from "../lib/store.svelte";
-  import type { HttpFile, KeyValue, Request } from "../lib/types";
-  import { getDirective, setDirective, variableNameError } from "../lib/http";
+  import type { HttpFile, Request, Variable } from "../lib/types";
+  import { getDirective, lastNamed, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
   import KeyValueGrid from "./KeyValueGrid.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
 
-  let { req, file, variables = null }: { req: Request; file: HttpFile; variables?: VarProvider | null } = $props();
+  let { req, file = $bindable(), variables = null }: { req: Request; file: HttpFile; variables?: VarProvider | null } = $props();
 
   const followRedirects = $derived(getDirective(req, "no-redirect") === undefined);
   // JetBrains semantics: `@timeout` is the idle time between received data, `@connection-timeout` limits only connecting.
@@ -18,47 +18,21 @@
   const description = $derived(req.comments.join("\n"));
   const otherDirectives = $derived(req.directives.filter((d) => !["no-redirect", "timeout", "connection-timeout"].includes(d.name.toLowerCase())));
 
-  // File variables are edited as KeyValue rows (always enabled). Rows are re-read
-  // when the file object changes (e.g. reloaded from disk) and written back on edit.
-  const toRows = (f: HttpFile): KeyValue[] => f.header.variables.map((v) => ({ enabled: true, name: v.name, value: v.value }));
-  let fileVars = $state<KeyValue[]>(untrack(() => toRows(file)));
-  let boundFile = untrack(() => file);
-  $effect.pre(() => {
-    if (file !== boundFile) {
-      boundFile = file;
-      fileVars = toRows(file);
-    }
-  });
-  // A change made elsewhere (Extract to variable) updates the rows in place, so
-  // a row being edited keeps its field.
-  $effect.pre(() => {
-    const vars = file.header.variables.map((v) => ({ name: v.name, value: v.value }));
-    untrack(() => {
-      const named = fileVars.filter((v) => v.name);
-      vars.forEach((v, i) => {
-        const row = named[i];
-        if (!row) fileVars.push({ enabled: true, ...v });
-        else if (row.name !== v.name || row.value !== v.value) Object.assign(row, v);
-      });
-      for (const gone of named.slice(vars.length)) fileVars.splice(fileVars.indexOf(gone), 1);
-    });
-  });
-  $effect(() => {
-    const vars = fileVars.filter((v) => v.name).map((v) => ({ name: v.name, value: v.value }));
-    untrack(() => {
-      if (JSON.stringify(vars) !== JSON.stringify(file.header.variables)) file.header.variables = vars;
-    });
-  });
+  // The grid edits the File variables at the top of the file in place (bound through
+  // RequestEditor), so a change made elsewhere (Extract to variable, a reload) shows at
+  // once and a row being edited keeps its field. A row whose name is emptied isn't written.
+  const blankVariable = (): Variable => ({ name: "", value: "" });
 
   // A hover card's Edit on a File variable: focus its row. "Add as File variable" adds one first.
-  let grid = $state<KeyValueGrid<KeyValue>>();
+  let grid = $state<KeyValueGrid<Variable>>();
   $effect(() => {
     const want = app.definitionWanted;
     if (want?.kind !== "file" || !grid) return;
     app.definitionWanted = null;
-    if (want.add && !fileVars.some((v) => v.name === want.name)) fileVars.push({ enabled: true, name: want.name, value: "" });
+    const vars = file.header.variables;
+    if (want.add && !vars.some((v) => v.name === want.name)) vars.push({ name: want.name, value: "" });
     // The last of a repeated name is the one in use.
-    const row = fileVars.filter((v) => v.name === want.name).at(-1);
+    const row = lastNamed(vars, want.name);
     if (row) tick().then(() => grid?.focusValue(row));
   });
 
@@ -119,7 +93,9 @@
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
     <KeyValueGrid
       bind:this={grid}
-      bind:items={fileVars}
+      bind:items={file.header.variables}
+      blank={blankVariable}
+      carry={[]}
       columns={["name", "value", "delete"]}
       label="File variables"
       namePlaceholder="Variable"

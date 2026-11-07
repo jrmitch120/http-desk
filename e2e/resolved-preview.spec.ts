@@ -19,13 +19,20 @@ test("the Resolved toggle shows the final URL and headers without sending, and i
 
   await toggle(page).click();
   await expect(preview(page).locator(".target")).toHaveText("GET http://127.0.0.1:8765/pets?limit=20");
+  // The Secret token is masked, like in a hover card, until revealed.
   await expect(lines(page, "Headers")).toHaveText([
-    "Authorization: Bearer dev-token-123",
+    "Authorization: Bearer ••••••••",
     "Accept: application/json",
     /^User-Agent: HttpDesk\//,
     "Accept-Encoding: gzip, deflate, br, zstd",
   ]);
+  await expect(lines(page, "Authorization")).toHaveText(["Token: ••••••••"]);
+  await expect(preview(page)).not.toContainText("dev-token-123");
+  await preview(page).getByRole("button", { name: "Reveal Secrets" }).click();
+  await expect(lines(page, "Headers").first()).toHaveText("Authorization: Bearer dev-token-123");
   await expect(lines(page, "Authorization")).toHaveText(["Token: dev-token-123"]);
+  await preview(page).getByRole("button", { name: "Hide Secrets" }).click();
+  await expect(preview(page)).not.toContainText("dev-token-123");
   expect(await sentRequests(page)).toEqual([]);
   expect((await mockState(page, "settings")).showResolved).toBe(true);
 

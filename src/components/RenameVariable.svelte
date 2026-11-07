@@ -1,35 +1,40 @@
 <script lang="ts">
-  // The Rename variable form (app.renaming): a new name for an environment
-  // variable and, with "Update references", a preview of the files whose
-  // `{{name}}` references change (from Find usages). There is no undo beyond
-  // version control, so the preview is shown before anything is written.
+  // The Rename variable form (app.renaming): a new name for a variable of one
+  // folder's env files and, with "Update references", a preview of exactly the
+  // files the rename changes (`app.renamePlan`: that folder's env values, and the
+  // `.http` files in or below it that don't get the name from a nearer folder's
+  // env files). There is no undo beyond version control, so the preview is shown
+  // before anything is written.
   import { onMount } from "svelte";
   import { app } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
   import { relativePath } from "../lib/http";
+  import { folderLabel } from "../lib/envFolders";
   import { renameNameError, renamePreview } from "../lib/rename";
-  import type { Usage } from "../lib/types";
+  import type { EnvironmentSet, Usage } from "../lib/types";
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Banner from "./Banner.svelte";
 
-  const old = app.renaming!.name;
+  const { name: old, dir } = app.renaming!;
   let name = $state(old);
   let references = $state(true);
   let input: HTMLInputElement | undefined = $state();
-  /** What Find usages found: null while searching. */
+  /** The folder's own env files, where the new name must be free: null while reading. */
+  let pair = $state<EnvironmentSet | null>(null);
+  /** The usages the rename rewrites: null while searching. */
   let usages = $state<Usage[] | null>(null);
   let searchError = $state<string | null>(null);
 
-  const error = $derived(renameNameError(name.trim(), old, app.envSet));
+  const error = $derived(renameNameError(name.trim(), old, pair));
   const preview = $derived(usages ? renamePreview(usages) : []);
-  const ready = $derived(!!name.trim() && name.trim() !== old && !error && (!references || usages !== null));
+  const ready = $derived(!!name.trim() && name.trim() !== old && !error && pair !== null && (!references || usages !== null));
   const where = (path: string) => (app.root ? relativePath(app.root, path) : path);
 
   onMount(() => {
     input?.select();
-    app.searchUsages(old).then(
-      (found) => (usages = found),
+    app.renamePlan(old, dir).then(
+      (plan) => ([pair, usages] = [plan.pair, plan.usages]),
       (e) => (searchError = errorMessage(e)),
     );
   });
@@ -60,7 +65,7 @@
         }}
       />
       {#if error}<span class="field-error" id="rename-name-error" role="alert">{error}</span>{/if}
-      <span class="help">Renamed in Shared and every environment that has it.</span>
+      <span class="help">Renamed in Shared and every environment that has it, in the env files of {folderLabel(dir)}.</span>
     </div>
     <div class="field">
       <Checkbox checked={references} onchange={(on) => (references = on)}>Update references</Checkbox>

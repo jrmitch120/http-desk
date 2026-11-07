@@ -1,7 +1,7 @@
 // Extract to variable: turns selected text in a field into `{{name}}`, defining
 // `name` as a File variable or in environments. The field replaces its own
 // selection; this module decides where the definition goes and writes it.
-import { variableNameError } from "./http";
+import { joinAnd, lastNamed, variableNameError } from "./http";
 import type { EnvironmentSet, HttpFile, Request } from "./types";
 
 /** Where an extracted variable is defined. */
@@ -14,7 +14,7 @@ export type ExtractTarget = { kind: "file" } | { kind: "env"; env: string } | { 
  */
 export function extractToFile(file: HttpFile, request: Request | undefined, name: string, value: string) {
   // A request's own declaration wins over the file's (GLOSSARY: File variable); the last of a repeated name is in use.
-  const existing = request?.variables.filter((v) => v.name === name).at(-1) ?? file.header.variables.filter((v) => v.name === name).at(-1);
+  const existing = lastNamed(request?.variables ?? [], name) ?? lastNamed(file.header.variables, name);
   if (existing) existing.value = value;
   else file.header.variables.push({ name, value });
 }
@@ -43,7 +43,7 @@ export function extractConflict(target: ExtractTarget, name: string, { file, req
   if (!envSet) return null;
   const envs = targetEnvironments(target, envSet);
   const having = envSet.environments.filter((e) => envs.includes(e.name)).flatMap((e) => {
-    const v = e.variables.filter((v) => v.name === name).at(-1);
+    const v = lastNamed(e.variables, name);
     return v ? [{ env: e.name, secret: v.secret }] : [];
   });
   if (!having.length) return null;
@@ -52,7 +52,23 @@ export function extractConflict(target: ExtractTarget, name: string, { file, req
     return `${env} already has ${name}${secret ? " (a Secret)" : ""}; its value will be replaced.`;
   }
   const names = having.map((h) => h.env);
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} already have ${name}; their values will be replaced.`;
+  return `${joinAnd(names)} already have ${name}; their values will be replaced.`;
+}
+
+/**
+ * Where the form offers to define the variable, for a request getting the
+ * environments `envSet` (its folders', ADR-0004) with `envName` selected: a File
+ * variable; the selected environment, only if `envSet` defines it (a request whose
+ * folders don't is sent with no environment, so a value there would be another
+ * folder's); and all of `envSet`'s environments, if it has any.
+ */
+export function extractTargets(envName: string | null, envSet: EnvironmentSet | null): ExtractTarget[] {
+  const envs = envSet?.environments ?? [];
+  return [
+    { kind: "file" },
+    ...(envName && envs.some((e) => e.name === envName) ? [{ kind: "env" as const, env: envName }] : []),
+    ...(envs.length ? [{ kind: "all" as const }] : []),
+  ];
 }
 
 /** The environments `target` puts a variable in. */
@@ -70,7 +86,7 @@ export function targetEnvironments(target: ExtractTarget, set: EnvironmentSet): 
 export function extractToEnvironments(set: EnvironmentSet, envs: string[], name: string, value: string) {
   for (const env of set.environments) {
     if (!envs.includes(env.name)) continue;
-    const existing = env.variables.filter((v) => v.name === name).at(-1);
+    const existing = lastNamed(env.variables, name);
     if (existing) {
       existing.value = value;
       delete existing.jsonType;

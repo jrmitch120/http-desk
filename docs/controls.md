@@ -219,13 +219,15 @@ paths), File variable values and environment values.
   unanswered Prompt variable shows "Asked when sent". A Secret, a masked prompted
   value, or a value either went into, is masked until **Reveal**, in that card only. **Edit** opens the
   definition's row when the app has one: a File variable at the top of the file in
-  the request's Settings section, an environment's variable in the Environments modal
+  the request's Settings section, one declared in a request block at its line in that
+  request's `.http` source (the request's own, else the last request declaring it; its
+  tab comes forward), an environment's variable in the Environments modal
   on that environment (or the shared variables), in the folder whose env files supply
   the value (`Definition.dir`; the modal switches folders for an inherited value). It comes from the provider's `edit`
   (the request editor wires it to `app.editDefinition`; the Environments modal sets
   `app.definitionWanted`, so Edit switches to the supplying environment or the shared
   variables in place), and the info's `definition`;
-  a request's own `@name`, a dynamic or an Undefined variable has none. **Find usages**
+  a dynamic or an Undefined variable has none. **Find usages**
   (any name not starting with `$`, defined or not) comes from the provider's
   `findUsages` (the request editor wires it to `app.findUsages`; the Environments modal
   has none): it lists every reference in the workspace in the sidebar, see
@@ -243,9 +245,11 @@ paths), File variable values and environment values.
   variable form (`ExtractVariable.svelte`, from `app.extractVariable`). It asks for a
   name (the File variable name rule, and no leading `$`) and where it goes: a File
   variable (`@name = value` at the top of the file, or a new value for the File
-  variable of that name the request uses), the selected environment, or all
-  environments (same value in each; a same-named variable gets the new value and a
-  Secret stays a Secret). It warns when the destination already has the name. Env
+  variable of that name the request uses), the selected environment (offered only when
+  the request's folders define it), or all environments (same value in each; a
+  same-named variable gets the new value and a Secret stays a Secret). The destination
+  picked last is offered first next time, for the rest of the session. It warns when
+  the destination already has the name. Env
   files are written at once; the field then puts `{{name}}` in place of the selection,
   an ordinary edit that shows as unsaved. It comes from the provider's `extract` (the
   request editor wires it; the Environments modal has none, so it isn't offered there),

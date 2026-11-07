@@ -20,6 +20,8 @@ test("a request resolves with its own folder's environment", async ({ page }) =>
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.getByRole("switch", { name: "Resolved" }).click();
   await expect(preview(page).locator(".target")).toHaveText("GET http://127.0.0.1:9001/pets?limit=20");
+  // The root's Secret token still applies (masked until revealed).
+  await preview(page).getByRole("button", { name: "Reveal Secrets" }).click();
   await expect(preview(page).getByRole("group", { name: "Authorization" }).locator(".line")).toHaveText(["Token: dev-token-123"]);
 
   // Hovering the URL bar's reference shows the same folder's value.

@@ -8,7 +8,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
   import { fileVariables, methodClass, requestPrompts } from "../lib/http";
-  import { isDynamic } from "../lib/vars";
+  import { isDynamic, MASK, SECRET_OPEN, SECRET_RE } from "../lib/vars";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Toggle from "./Toggle.svelte";
@@ -52,20 +52,29 @@
     return { remembered: all.filter((n) => Object.hasOwn(answers, n)), asked: new Set(all.filter((n) => !Object.hasOwn(answers, n))) };
   });
 
-  type Kind = "dynamic" | "undefined" | "circular" | "prompt";
+  type Kind = "dynamic" | "undefined" | "circular" | "prompt" | "secret";
   type Part = { text: string; kind?: Kind };
   /** Names a circular reference stops at (left as written), from the preview's warnings. */
   const circular = $derived(
     new Set((preview?.warnings ?? []).flatMap((w) => (w.startsWith("Circular variable reference: ") ? [w.split(" → ").at(-1)!] : []))),
   );
-  /** Splits shown text so `{{$uuid}}` placeholders and `{{name}}`s left unresolved can be marked. */
+  /** Whether values Secrets went into are shown, for this preview only (like a hover card's Reveal). */
+  let reveal = $state(false);
+  const hasSecrets = $derived(!!preview && [preview.url, ...[...preview.headers, ...preview.auth].flat()].some((t) => t.includes(SECRET_OPEN)));
+  /**
+   * Splits shown text so values Secrets went into (between the shell's marks), `{{$uuid}}`
+   * placeholders and `{{name}}`s left unresolved can be marked.
+   */
   function parts(text: string): Part[] {
-    return text.split(/(\{\{.*?\}\})/).flatMap((text, i): Part[] => {
-      if (!text) return [];
-      if (i % 2 === 0) return [{ text }];
-      const name = text.slice(2, -2).trim();
-      const kind = isDynamic(name) ? "dynamic" : prompts.asked.has(name) ? "prompt" : circular.has(name) ? "circular" : "undefined";
-      return [{ text, kind }];
+    return text.split(SECRET_RE).flatMap((text, i): Part[] => {
+      if (i % 2) return [{ text, kind: "secret" }];
+      return text.split(/(\{\{.*?\}\})/).flatMap((text, i): Part[] => {
+        if (!text) return [];
+        if (i % 2 === 0) return [{ text }];
+        const name = text.slice(2, -2).trim();
+        const kind = isDynamic(name) ? "dynamic" : prompts.asked.has(name) ? "prompt" : circular.has(name) ? "circular" : "undefined";
+        return [{ text, kind }];
+      });
     });
   }
   const NOTES: Record<Kind, string> = {
@@ -73,6 +82,7 @@
     undefined: "Undefined variable: sent as written",
     circular: "Circular reference: sent as written",
     prompt: "Prompt variable: asked when sent",
+    secret: "A Secret went into this value",
   };
 
   /** Where a header the request doesn't list itself comes from. */
@@ -91,7 +101,9 @@
 
 {#snippet value(text: string)}
   {#each parts(text) as part}
-    {#if part.kind}
+    {#if part.kind === "secret"}
+      <span class="var secret" use:tooltip={NOTES.secret}>{reveal ? part.text : MASK}</span>
+    {:else if part.kind}
       <span class="var {part.kind}" use:tooltip={NOTES[part.kind]}>{part.text}</span>
     {:else}{part.text}{/if}
   {/each}
@@ -118,6 +130,12 @@
       {#each preview.warnings as warning}
         <div class="problem warning">{warning}</div>
       {/each}
+      {#if hasSecrets}
+        <div class="prompted">
+          <span class="muted">Values Secrets went into are masked.</span>
+          <button class="btn small" aria-pressed={reveal} onclick={() => (reveal = !reveal)}>{reveal ? "Hide Secrets" : "Reveal Secrets"}</button>
+        </div>
+      {/if}
       {#if prompts.remembered.length}
         <div class="prompted">
           <span class="muted">Prompted values remembered: {prompts.remembered.join(", ")}</span>
@@ -211,6 +229,9 @@
   }
   .var.dynamic {
     color: var(--var-dyn);
+  }
+  .var.secret {
+    color: var(--var-secret);
   }
   .var.prompt {
     color: var(--var-prompt);

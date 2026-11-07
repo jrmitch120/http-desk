@@ -16,11 +16,12 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
-  import { envVariables, makeVarProvider } from "../lib/vars";
+  import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition } from "../lib/codemirror/setup";
   import SegmentedControl from "./SegmentedControl.svelte";
   import EnvironmentMatrix from "./EnvironmentMatrix.svelte";
-  import { addToAllEnvironments, setCell, SHARED } from "../lib/envMatrix";
+  import { addToAllEnvironments, setCell } from "../lib/envMatrix";
+  import { lastNamed } from "../lib/http";
   import type { MenuItem } from "../lib/menu.svelte";
   import { environmentsFor, folderLabel, workspaceFolders } from "../lib/envFolders";
 
@@ -81,12 +82,7 @@
   /** What the values being edited can refer to: the environment shown (as edited, saved or not) and the shared variables.
    *  A hover card's Edit focuses the defining row here (e.g. a shared variable used in an environment's value). */
   const variables = $derived({
-    ...makeVarProvider({
-      env: { ...envVariables(inherited, selectedEnv?.name ?? null), ...envVariables(set, selectedEnv?.name ?? null) },
-      fileVars: [],
-      requestVars: [],
-      envName: selected,
-    }),
+    ...envValueProvider(set, inherited, selected),
     edit: (d: Definition) => {
       app.definitionWanted = d;
     },
@@ -198,19 +194,14 @@
     saving = true;
     try {
       const cleaned = clean($state.snapshot(set) as EnvironmentSet);
-      const report = await api.saveEnvironments(cleaned, folder);
+      if (!(await app.writeEnvironments(cleaned, folder))) return false;
       savedJson = JSON.stringify(cleaned);
-      if (report.gitignoreUpdated) app.toast("info", `Added ${filePrefix}http-client.private.env.json to .gitignore`);
-      await app.loadEnvironments();
       // Production and colour go to the app settings (a failed save is reported there).
       const settings = cleanMeta();
       if (!(await app.saveEnvironmentSettings(settings))) return false;
       savedMetaJson = JSON.stringify(settings);
       app.toast("success", "Environments saved");
       return true;
-    } catch (e) {
-      app.toast("error", `Could not save environments: ${errorMessage(e)}`);
-      return false;
     } finally {
       saving = false;
     }
@@ -264,7 +255,7 @@
     selected = want.env;
     if (want.add && !vars.some((v) => v.name === want.name)) setVars([...vars, { name: want.name, value: "", secret: false }]);
     tick().then(() => {
-      const row = vars.filter((v) => v.name === want.name).at(-1);
+      const row = lastNamed(vars, want.name);
       if (row) grid?.focusValue(row);
     });
   });

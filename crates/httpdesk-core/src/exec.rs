@@ -58,7 +58,7 @@ pub enum ExecError {
     /// Any other failure, as its error chain.
     #[error("{0}")]
     Other(String),
-    /// Unresolved variables in the URL's scheme or host.
+    /// Undefined variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
     /// Circular references in the URL's scheme or host, each as the chain followed.
@@ -405,9 +405,17 @@ fn implied_content_type(body: &Body) -> Option<&'static str> {
 }
 
 /// The method, URL and headers of a request: everything [`prepare`] and [`preview`]
-/// share except the body. A relative URL without a `Host` header is the one
-/// failure; it comes back alongside the URL as written so the preview can show it.
-fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, String)>, Option<ExecError>) {
+/// share except the body.
+struct Head {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    /// A relative URL without a `Host` header, the one failure: it comes alongside
+    /// the URL as written so the preview can show it.
+    error: Option<ExecError>,
+}
+
+fn head(req: &Request, resolver: &Resolver) -> Head {
     let method = req.method.trim().to_ascii_uppercase();
     let method = if method.is_empty() { "GET".to_string() } else { method };
 
@@ -431,7 +439,9 @@ fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, Str
     }
     let mut error = None;
     // One still starting with an undefined `{{base}}` can't be sent; it's shown as written.
-    if !has_scheme(&url) && !url.starts_with("{{") {
+    // (In the preview a Secret's value is marked: the check reads the value.)
+    let plain = resolver.unmarked(&url);
+    if !has_scheme(&plain) && !plain.starts_with("{{") {
         if !url.starts_with('/') {
             url = format!("http://{url}");
         } else if let Some((_, host)) = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")) {
@@ -440,7 +450,7 @@ fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, Str
             error = Some(ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() });
         }
     }
-    (method, url, headers, error)
+    Head { method, url, headers, error }
 }
 
 /// The header that enabled Basic, Bearer or header API-key auth adds.
@@ -501,9 +511,9 @@ fn add_default_headers(body: &Body, headers: &mut Vec<(String, String)>) {
 
 fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) -> Vec<String> {
     let mut warnings = Vec::new();
-    let unresolved = resolver.unresolved();
-    if !unresolved.is_empty() {
-        warnings.push(format!("Unresolved variables: {}", unresolved.join(", ")));
+    let undefined = resolver.undefined();
+    if !undefined.is_empty() {
+        warnings.push(format!("Undefined variables: {}", undefined.join(", ")));
     }
     for chain in resolver.circular() {
         warnings.push(format!("Circular variable reference: {}", chain.join(" → ")));
@@ -525,7 +535,7 @@ pub fn prepare(
     base_dir: &Path,
     settings: &ExecSettings,
 ) -> Result<PreparedRequest, ExecError> {
-    let (method, url, mut headers, error) = head(req, resolver);
+    let Head { method, url, mut headers, error } = head(req, resolver);
     if let Some(e) = error {
         return Err(e);
     }
@@ -577,29 +587,29 @@ fn auth_fields(auth: &Auth, resolver: &Resolver) -> Vec<(String, String)> {
 
 /// The request as [`prepare`] would make it, without sending it. Dynamic variables
 /// that generate a new value on every send are shown as written, not generated.
-/// The body isn't shown and no file is read, but the Content-Type it implies is.
+/// Each value a Secret went into is between [`crate::vars::SECRET_MARKS`], for the UI
+/// to mask (never in `error`, which masks it). The body isn't shown and no file is
+/// read, but the Content-Type it implies is.
 pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let resolver = resolver.previewing();
-    let (method, url, mut headers, error) = head(req, &resolver);
+    let Head { method, url, mut headers, error } = head(req, &resolver);
     // A placeholder stands for a plain value, so check the URL with one in its place.
-    let error = error.or_else(|| url_error(&resolver.replace_placeholders(&url, |_| "0".into()), &resolver));
+    let checked = resolver.unmarked(&resolver.replace_placeholders(&url, |_| "0".into()));
+    // The message names the URL as shown, with any Secret in it masked.
+    let error = error.or_else(|| url_error(&checked, &resolver)).map(|e| match e {
+        ExecError::InvalidUrl { reason, .. } => {
+            ExecError::InvalidUrl { url: resolver.masked(&resolver.shown(&url)), reason }
+        }
+        e => e,
+    });
     // Built only so its undefined variables are reported as at send; files read as empty.
     let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
     add_default_headers(&req.body, &mut headers);
     let auth = auth_fields(&req.auth, &resolver);
     let warnings = warnings(req, &resolver, &headers);
-    let shown = |pairs: &[(String, String)]| {
-        let shown = |text: &str| resolver.replace_placeholders(text, str::to_string);
-        pairs.iter().map(|(n, v)| (shown(n), shown(v))).collect()
-    };
-    RequestPreview {
-        method,
-        url: resolver.replace_placeholders(&url, str::to_string),
-        headers: shown(&headers),
-        auth: shown(&auth),
-        warnings,
-        error,
-    }
+    let shown =
+        |pairs: &[(String, String)]| pairs.iter().map(|(n, v)| (resolver.shown(n), resolver.shown(v))).collect();
+    RequestPreview { method, url: resolver.shown(&url), headers: shown(&headers), auth: shown(&auth), warnings, error }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

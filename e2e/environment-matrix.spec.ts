@@ -32,7 +32,7 @@ test("shows every variable across Shared and the environments, with gaps highlig
   await expect(grid.locator(".m-cell.gap")).toHaveCount(1);
   await expect(cell(modal, "token", "staging")).toHaveClass(/\bgap\b/);
   const field = (name: string, column: string) => page.getByRole("textbox", { name: `${name} in ${column}`, exact: true });
-  await expect(field("token", "staging")).toHaveAttribute("aria-placeholder", "Missing");
+  await expect(field("token", "staging")).toHaveAttribute("aria-placeholder", "Not set");
   await expect(cell(modal, "token", "Shared")).not.toHaveClass(/\bgap\b/);
   await expect(field("token", "Shared")).toHaveAttribute("aria-placeholder", "Not set");
   await expect(field("version", "local")).toHaveAttribute("aria-placeholder", "Uses shared");

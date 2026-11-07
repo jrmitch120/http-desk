@@ -1130,7 +1130,19 @@ describe("production guard", () => {
       environmentSettings: { "/ws": { prod: { production: true }, staging: { color: "blue" } } },
     } as unknown as AppSettings;
     app.envName = "prod";
+    const env = (name: string) => ({ name, variables: [] });
+    app.envSet = { shared: [], environments: [env("prod"), env("staging")], privateFileIgnored: null };
+    app.envFolders = [];
     api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("doesn't ask when the request's folder doesn't define the selected production environment (it's sent with none)", async () => {
+    // books.http is in api/, whose env files define only dev (ADR-0004).
+    app.envFolders = [{ dir: "api", set: { shared: [], environments: [{ name: "dev", variables: [] }], privateFileIgnored: null } }];
+    const tab = await tabFor("POST");
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
   });
 
   async function tabFor(method: string) {
@@ -1300,6 +1312,27 @@ describe("find usages", () => {
   });
 });
 
+describe("Edit on a File variable declared in a request", () => {
+  it("shows the declaring request's .http source at that @name line: the request's own, else the last one in the file", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"], ["GET", "Other", "https://x/o"]);
+    f.requests[0].variables = [{ name: "id", value: "1" }, { name: "page", value: "1" }];
+    f.requests[1].variables = [{ name: "page", value: "2" }];
+    f.requests[2].variables = [{ name: "page", value: "3" }, { name: "size", value: "9" }];
+    const [list] = await openAll(f);
+    app.activeTabId = list.id;
+
+    // List's own @page wins for List.
+    await app.editDefinition(list.id, { kind: "request", name: "page" });
+    expect(app.activeTabId).toBe(list.id);
+    expect(app.fieldWanted).toEqual({ tabId: list.id, field: { kind: "variable", index: 1, name: "page" } });
+
+    // @size is only Other's: its tab comes forward on that line.
+    await app.editDefinition(list.id, { kind: "request", name: "size" });
+    expect(app.requestFor(app.activeTab)?.name).toBe("Other");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "variable", index: 1, name: "size" } });
+  });
+});
+
 describe("renaming a variable", () => {
   const OTHER = "/ws/api/authors.http";
   const envSet = (): EnvironmentSet => ({
@@ -1409,6 +1442,60 @@ describe("renaming a variable", () => {
       ],
     ]);
     expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment of api/.");
+  });
+
+  describe("with env files in folders below (ADR-0004: the nearest folder wins)", () => {
+    const pair = (token: boolean): EnvironmentSet => ({
+      shared: [],
+      environments: [{ name: "dev", variables: token ? [{ name: "token", value: "own", secret: true }] : [{ name: "host", value: "h", secret: false }] }],
+      privateFileIgnored: true,
+    });
+    const files: Record<string, HttpFile> = {
+      "/ws/a.http": fileOf(["GET", "A", "{{token}}/a"]),
+      "/ws/api/b.http": fileOf(["GET", "B", "{{token}}/b"]),
+      "/ws/api/v2/c.http": fileOf(["GET", "C", "{{token}}/c"]),
+      "/ws/web/d.http": fileOf(["GET", "D", "{{token}}/d"]),
+    };
+    const usages = Object.entries(files).map(([path, f]) => inUrl(path, 0, f.requests[0].name, f.requests[0].url));
+
+    beforeEach(() => {
+      // api/ has env files defining token, web/ has some that don't.
+      app.envFolders = [
+        { dir: "api", set: pair(true) },
+        { dir: "web", set: pair(false) },
+      ];
+      loadEnvironments.mockImplementation(async (dir?: string) =>
+        dir === "api" ? pair(true) : dir === "web" ? pair(false) : structuredClone(saveEnvironments.mock.lastCall?.[0] ?? envSet()),
+      );
+      readHttpFile.mockImplementation(async (path: string) => structuredClone(files[path]));
+      findUsages.mockResolvedValue(usages);
+    });
+
+    it("renaming the root's variable rewrites only files that don't get the name from a nearer folder", async () => {
+      expect(await rename(usages)).toBe(true);
+      expect(saveHttpFile.mock.calls.map(([path, f]) => [path, f.requests[0].url])).toEqual([
+        ["/ws/a.http", "{{apiToken}}/a"],
+        ["/ws/web/d.http", "{{apiToken}}/d"],
+      ]);
+    });
+
+    it("renaming a folder's variable rewrites only files in or below it", async () => {
+      const done = app.renameVariable("token", "api");
+      app.closeRenaming({ name: "apiToken", usages });
+      expect(await done).toBe(true);
+      expect(saveEnvironments.mock.calls.map(([, dir]) => dir)).toEqual(["api"]);
+      expect(saveHttpFile.mock.calls.map(([path]) => path)).toEqual(["/ws/api/b.http", "/ws/api/v2/c.http"]);
+    });
+
+    it("the form is given that folder's env files (for the name check) and exactly the references that change", async () => {
+      const done = app.renameVariable("token", "web");
+      expect(app.renaming).toMatchObject({ name: "token", dir: "web" });
+      const plan = await app.renamePlan("token", "web");
+      expect(plan.pair).toEqual(pair(false));
+      expect(plan.usages.map((u) => u.path)).toEqual(["/ws/web/d.http"]);
+      app.closeRenaming(null);
+      await done;
+    });
   });
 
   it("cancelling the form changes nothing", async () => {
@@ -1621,7 +1708,7 @@ describe("Extract to variable", () => {
     app.settings = null;
     app.envName = null;
     app.envSet = { shared: [], environments: [], privateFileIgnored: true };
-    app.extraction = null;
+    app.closeExtraction(null);
   });
 
   it("to a File variable: adds an @name line at the top of the file, unsaved, and returns the name", async () => {

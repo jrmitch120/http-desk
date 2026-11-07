@@ -3,12 +3,12 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinAnd, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
-import { renameInEnvironments, renameInFile } from "./rename";
-import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, requestFolder, writeFolder } from "./envFolders";
+import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
+import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type {
@@ -107,10 +107,10 @@ export interface RenameChoice {
   usages: Usage[] | null;
 }
 
-/** A Rename variable form, for environment variable `name`. */
+/** A Rename variable form, for environment variable `name` of folder `dir`'s env files. */
 export interface Renaming {
   name: string;
-  resolve: (choice: RenameChoice | null) => void;
+  dir: string;
 }
 
 /** The user's answer to the Extract to variable form. */
@@ -123,7 +123,32 @@ export interface ExtractChoice {
 export interface Extraction {
   tabId: string;
   value: string;
-  resolve: (choice: ExtractChoice | null) => void;
+}
+
+/**
+ * A form on screen that the store waits on (Rename variable, Extract to variable):
+ * `shown` is what it shows, null when there is none; `answer` closes it with the
+ * user's choice (null: cancelled). Asking again cancels one still showing.
+ */
+class PendingForm<S, C> {
+  shown = $state<S | null>(null);
+  private resolve: ((choice: C | null) => void) | null = null;
+
+  /** Shows the form and waits for its answer. */
+  ask(shown: S): Promise<C | null> {
+    this.answer(null);
+    return new Promise((resolve) => {
+      this.shown = shown;
+      this.resolve = resolve;
+    });
+  }
+
+  answer(choice: C | null) {
+    const resolve = this.resolve;
+    this.shown = null;
+    this.resolve = null;
+    resolve?.(choice);
+  }
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | null;
@@ -176,8 +201,11 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  private extractForm = new PendingForm<Extraction, ExtractChoice>();
   /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
-  extraction = $state<Extraction | null>(null);
+  get extraction(): Extraction | null {
+    return this.extractForm.shown;
+  }
   /** True until `init` has finished reopening the last workspace, so the
    *  Welcome screen doesn't flash first. */
   starting = $state(true);
@@ -199,8 +227,11 @@ class AppStore {
   /** A Find usages result asked to show this field of the tab's request: its
    *  request editor switches to it and clears this. */
   fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
+  private renameForm = new PendingForm<Renaming, RenameChoice>();
   /** The Rename variable form on screen (`RenameVariable.svelte`), if any. */
-  renaming = $state<Renaming | null>(null);
+  get renaming(): Renaming | null {
+    return this.renameForm.shown;
+  }
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -215,7 +246,12 @@ class AppStore {
 
   /** The environments a request in the file at `path` is sent with: its nearest folder's (ADR-0004). */
   envSetFor(path: string): EnvironmentSet | null {
-    return environmentsFor(this.envSet, this.envFolders, this.root ? requestFolder(this.root, path) : "");
+    return environmentsFor(this.envSet, this.envFolders, this.folderOf(path));
+  }
+
+  /** The folder holding the file at `path`, relative to the workspace root ("" at the root, or with no workspace). */
+  folderOf(path: string): string {
+    return this.root ? folderOf(this.root, path) : "";
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -382,7 +418,7 @@ class AppStore {
     try {
       const info = await api.openWorkspace(path);
       this.missingRoot = null;
-      if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+      if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
@@ -719,7 +755,7 @@ class AppStore {
    *  the folder of the env file holding it). */
   async openUsage(usage: Usage) {
     if (usage.kind === "environment") {
-      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.root ? requestFolder(this.root, usage.path) : "" };
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.folderOf(usage.path) };
       this.modal = "env";
       return;
     }
@@ -1034,7 +1070,8 @@ class AppStore {
         this.confirmingSend.delete(tabId);
       }
     }
-    if (this.guardsMethod(req.method) && !(await this.confirmProductionSend(tabId, req.method))) return;
+    const env = this.sentEnvironment(tab.path);
+    if (env && this.guardsMethod(env, req.method) && !(await this.confirmProductionSend(tabId, env, req.method))) return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
@@ -1054,15 +1091,21 @@ class AppStore {
   /** Tabs whose send is waiting on the prompt form or the production confirmation. */
   private confirmingSend = new Set<string>();
 
-  /** Whether sending `method` needs confirming: a production environment is
-   *  selected and the method isn't GET, HEAD or OPTIONS. */
-  private guardsMethod(method: string): boolean {
-    return !!this.envName && !!this.environmentSettings(this.envName).production && !SAFE_METHODS.has(verbOf(method));
+  /** The environment a request in the file at `path` is sent with: the selected one if
+   *  the request's folders define it, else none (ADR-0004; the send warns about it). */
+  sentEnvironment(path: string): string | null {
+    const name = this.envName;
+    return name && this.envSetFor(path)?.environments.some((e) => e.name === name) ? name : null;
   }
 
-  /** Asks before sending to the selected (production) environment. True to go ahead. */
-  private async confirmProductionSend(tabId: string, method: string): Promise<boolean> {
-    const env = this.envName;
+  /** Whether sending `method` with environment `env` needs confirming: `env` is a
+   *  production environment and the method isn't GET, HEAD or OPTIONS. */
+  private guardsMethod(env: string, method: string): boolean {
+    return !!this.environmentSettings(env).production && !SAFE_METHODS.has(verbOf(method));
+  }
+
+  /** Asks before sending with production environment `env`. True to go ahead. */
+  private async confirmProductionSend(tabId: string, env: string, method: string): Promise<boolean> {
     const verb = verbOf(method);
     this.confirmingSend.add(tabId);
     try {
@@ -1152,13 +1195,30 @@ class AppStore {
   }
 
   /** Opens the row of a variable's definition (a hover card's Edit): a File
-   *  variable in the tab's Settings section, or an environment's variable in the
-   *  Environments modal, on that environment. With `add` (the Undefined-variable
-   *  strip's "Add …" fixes), an empty one is added there first. */
-  editDefinition(tabId: string, definition: WantedDefinition) {
+   *  variable at the top of the file in the tab's Settings section, one declared in a
+   *  request at its line in that request's `.http` source (`showDeclaration`), or an
+   *  environment's variable in the Environments modal, on that environment. With `add`
+   *  (the Undefined-variable strip's "Add …" fixes), an empty one is added there first. */
+  async editDefinition(tabId: string, definition: WantedDefinition) {
+    if (definition.kind === "request") return this.showDeclaration(tabId, definition.name);
     this.definitionWanted = definition;
     if (definition.kind === "file") this.showRequestSettings(tabId);
     else this.modal = "env";
+  }
+
+  /** Shows the `@name` line in use for the tab's request in its request's `.http` source:
+   *  the request's own (the last, if repeated), else the last request in the file declaring it. */
+  private async showDeclaration(tabId: string, name: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const doc = tab && this.docs[tab.path];
+    const own = this.requestFor(tab ?? null);
+    if (!tab || !doc || !own) return;
+    const declares = (r: Request) => r.variables.some((v) => v.name === name);
+    const req = declares(own) ? own : doc.file.requests.filter(declares).at(-1);
+    if (!req) return;
+    if (req !== own) await this.openRequest(tab.path, { key: req._key });
+    const index = req.variables.map((v) => v.name).lastIndexOf(name);
+    if (this.activeTab) this.fieldWanted = { tabId: this.activeTab.id, field: { kind: "variable", index, name } };
   }
 
   /** Switches the tab's request editor to its Settings section (timeouts). */
@@ -1171,13 +1231,18 @@ class AppStore {
     this.envPickerWanted = true;
   }
 
-  /** Saves an environment set the store changed as folder `dir`'s own pair (env files
-   *  have no unsaved state of their own) and reloads the environments. False if the save
-   *  failed (it was reported). */
-  private async writeEnvironments(set: EnvironmentSet, dir = ""): Promise<boolean> {
+  /** Tells the user that folder `dir`'s private env file was added to `.gitignore` (a save or an import did it). */
+  gitignoreUpdated(dir: string) {
+    this.toast("info", `Added ${dir ? `${dir}/` : ""}http-client.private.env.json to .gitignore`);
+  }
+
+  /** Saves an environment set as folder `dir`'s own pair (the Environments modal's Save, and
+   *  the store's own changes: env files have no unsaved state of their own) and reloads the
+   *  environments. False if the save failed (it was reported). */
+  async writeEnvironments(set: EnvironmentSet, dir = ""): Promise<boolean> {
     try {
       const report = await api.saveEnvironments(set, dir);
-      if (report.gitignoreUpdated) this.toast("info", `Added ${dir ? `${dir}/` : ""}http-client.private.env.json to .gitignore`);
+      if (report.gitignoreUpdated) this.gitignoreUpdated(dir);
     } catch (e) {
       this.toast("error", `Could not save environments: ${errorMessage(e)}`);
       return false;
@@ -1204,28 +1269,26 @@ class AppStore {
    * Rename variable on environment variable `name` of folder `dir`'s env files (the
    * Environments modal's folder; the root's by default): asks for the new name and
    * whether to update references (`RenameVariable.svelte`), then renames it in
-   * every environment of that folder's pair through the normal environment save
-   * (references in that pair's values too; other folders' env files are left alone),
-   * and edits each file
-   * holding a reference Find usages found. A file with no unsaved edits is saved
-   * at once; one with unsaved edits gets the rename in memory only and stays
-   * unsaved, so the user's pending work isn't saved without them. The env files
-   * are saved first; if that fails, nothing else changes. False if cancelled or
-   * the env files couldn't be saved.
+   * every environment of that folder's pair through the normal environment save,
+   * and rewrites the references the rename covers (`renameTargets`): values in that
+   * pair, and `.http` files in or below `dir` that don't get the name from a nearer
+   * folder's env files (ADR-0004). A file with no unsaved edits is saved at once; one
+   * with unsaved edits gets the rename in memory only and stays unsaved, so the
+   * user's pending work isn't saved without them. The env files are saved first; if
+   * that fails, nothing else changes. False if cancelled or the env files couldn't be saved.
    */
   async renameVariable(name: string, dir = ""): Promise<boolean> {
-    const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, resolve }));
+    const choice = await this.renameForm.ask({ name, dir });
     if (!choice) return false;
-    const { name: next, usages } = choice;
+    const { name: next } = choice;
+    const usages = choice.usages ? await this.renameTargets(name, dir, choice.usages) : [];
     const set = await this.folderPair(dir);
     if (!set) return false;
-    // Find usages lists every folder's env values; only this folder's pair is renamed here.
-    const inPair = (usages ?? []).filter((u) => u.kind === "environment" && (this.root ? requestFolder(this.root, u.path) : "") === dir);
-    renameInEnvironments(set, inPair, name, next);
+    renameInEnvironments(set, usages, name, next);
     if (!(await this.writeEnvironments(set, dir))) return false;
 
     const byFile = new Map<string, Usage[]>();
-    for (const u of usages ?? []) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
+    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
     let edited = 0;
     const unsaved: string[] = [];
     for (const [path, list] of byFile) {
@@ -1242,17 +1305,34 @@ class AppStore {
     let message = `Renamed ${name} to ${next} in every environment${dir ? ` of ${dir}/` : ""}`;
     if (edited) message += ` and ${edited} file${edited === 1 ? "" : "s"}`;
     message += ".";
-    if (unsaved.length === 1) message += ` ${unsaved[0]} had unsaved edits, so it was left unsaved.`;
-    else if (unsaved.length) message += ` ${unsaved.slice(0, -1).join(", ")} and ${unsaved.at(-1)} had unsaved edits, so they were left unsaved.`;
+    if (unsaved.length) message += ` ${joinAnd(unsaved)} had unsaved edits, so ${unsaved.length === 1 ? "it was" : "they were"} left unsaved.`;
     this.toast("success", message);
     return true;
   }
 
+  /** What the Rename variable form shows for `name` in folder `dir`'s env files: that pair
+   *  (for the name check) and the usages renaming it would rewrite (`renameTargets`). */
+  async renamePlan(name: string, dir: string): Promise<{ pair: EnvironmentSet; usages: Usage[] }> {
+    const [pair, usages] = await Promise.all([this.folderPair(dir), this.searchUsages(name)]);
+    if (!pair) throw new Error(`Could not read the environments of ${folderLabel(dir)}`);
+    return { pair, usages: await this.renameTargets(name, dir, usages) };
+  }
+
+  /** The usages of `name` a rename in folder `dir`'s env files rewrites (`renameScope`):
+   *  folders below `dir` whose own env files define `name` too keep theirs. */
+  private async renameTargets(name: string, dir: string, usages: Usage[]): Promise<Usage[]> {
+    const shadowing: string[] = [];
+    for (const { dir: below } of this.envFolders) {
+      if (below === dir || !within(below, dir)) continue;
+      const pair = await this.folderPair(below);
+      if (pair && definesVariable(pair, name)) shadowing.push(below);
+    }
+    return renameScope(usages, { root: this.root ?? "", dir, shadowing });
+  }
+
   /** Answers the Rename variable form on screen (null: cancelled). */
   closeRenaming(choice: RenameChoice | null) {
-    const r = this.renaming;
-    this.renaming = null;
-    r?.resolve(choice);
+    this.renameForm.answer(choice);
   }
 
   // ---------------------------------------------------------------- extract to variable
@@ -1264,7 +1344,7 @@ class AppStore {
    * the user cancelled or the definition couldn't be written.
    */
   async extractVariable(tabId: string, value: string): Promise<string | null> {
-    const choice = await new Promise<ExtractChoice | null>((resolve) => (this.extraction = { tabId, value, resolve }));
+    const choice = await this.extractForm.ask({ tabId, value });
     if (!choice) return null;
     const { name, target } = choice;
     const tab = this.tabs.find((t) => t.id === tabId);
@@ -1308,14 +1388,12 @@ class AppStore {
 
   /** The nearest folder with env files at or above the file at `path`'s ("" for the root). */
   envFolderFor(path: string): string {
-    return nearestEnvFolder(this.envFolders, this.root ? requestFolder(this.root, path) : "");
+    return nearestEnvFolder(this.envFolders, this.folderOf(path));
   }
 
   /** Answers the Extract to variable form on screen (null: cancelled). */
   closeExtraction(choice: ExtractChoice | null) {
-    const x = this.extraction;
-    this.extraction = null;
-    x?.resolve(choice);
+    this.extractForm.answer(choice);
   }
 
   // ---------------------------------------------------------------- feedback

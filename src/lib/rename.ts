@@ -1,8 +1,10 @@
 // Rename variable: renames a variable in every environment and, optionally, every
 // `{{name}}` reference Find usages found. This module edits the models in place;
 // the store saves them.
-import { displayName } from "./http";
+import { displayName, lastNamed } from "./http";
+import { envVarsOf } from "./vars";
 import { extractNameError } from "./extract";
+import { folderOf, within } from "./envFolders";
 import type { EnvironmentSet, EnvVar, HttpFile, Request, Usage, UsageField } from "./types";
 
 type At = { start: number; end: number };
@@ -76,11 +78,6 @@ export function renameInFile(file: HttpFile, usages: Usage[], old: string, next:
   for (const { text, at } of edits.values()) text[1](renameAt(text[0], at, old, next));
 }
 
-/** The variables of `env` (`$shared` for the shared ones). */
-function varsOf(set: EnvironmentSet, env: string): EnvVar[] {
-  return env === "$shared" ? set.shared : (set.environments.find((e) => e.name === env)?.variables ?? []);
-}
-
 /**
  * Renames `old` to `next` in the shared variables and every environment (in place;
  * a Secret stays a Secret), and rewrites `{{old}}` at the environment usages found
@@ -90,7 +87,7 @@ export function renameInEnvironments(set: EnvironmentSet, usages: Usage[], old: 
   const edits = new Map<EnvVar, At[]>();
   for (const u of usages) {
     if (u.kind !== "environment") continue;
-    const v = varsOf(set, u.env).filter((v) => v.name === u.name).at(-1);
+    const v = lastNamed(envVarsOf(set, u.env) ?? [], u.name);
     if (v) edits.set(v, [...(edits.get(v) ?? []), u]);
   }
   for (const [v, at] of edits) v.value = renameAt(v.value, at, old, next);
@@ -109,6 +106,34 @@ export function renameNameError(next: string, old: string, set: EnvironmentSet |
   if (set?.shared.some((v) => v.name === next)) return `The shared variables already have a variable named ${next}`;
   const env = set?.environments.find((e) => e.variables.some((v) => v.name === next));
   return env ? `${env.name} already has a variable named ${next}` : null;
+}
+
+/** Where a rename of a variable in folder `dir`'s env files applies (folders relative to `root`). */
+export interface RenameScope {
+  root: string;
+  /** The folder whose own env files are renamed in ("" for the root). */
+  dir: string;
+  /** Folders below `dir` whose own env files also define the name. */
+  shadowing: string[];
+}
+
+/**
+ * The usages a rename in folder `dir`'s env files changes. Env values: those in
+ * `dir`'s own files. `.http` files: those in `dir` or below it, except where a
+ * folder between the file and `dir` has env files defining the name too: the
+ * nearest folder wins (ADR-0004), so there `{{name}}` doesn't mean this variable.
+ */
+export function renameScope(usages: Usage[], { root, dir, shadowing }: RenameScope): Usage[] {
+  return usages.filter((u) => {
+    const folder = folderOf(root, u.path);
+    if (u.kind === "environment") return folder === dir;
+    return within(folder, dir) && !shadowing.some((s) => s !== dir && within(s, dir) && within(folder, s));
+  });
+}
+
+/** Whether `set` (one folder's own env files) defines `name`, in the shared variables or any environment. */
+export function definesVariable(set: EnvironmentSet, name: string): boolean {
+  return [set.shared, ...set.environments.map((e) => e.variables)].some((vars) => vars.some((v) => v.name === name));
 }
 
 /** A file a rename edits, and what in it. */

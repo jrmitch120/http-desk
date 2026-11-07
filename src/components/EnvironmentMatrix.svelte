@@ -7,9 +7,9 @@
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { envVariables, makeVarProvider } from "../lib/vars";
+  import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition, VarProvider } from "../lib/codemirror/setup";
-  import { matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell, SHARED } from "../lib/envMatrix";
+  import { matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell } from "../lib/envMatrix";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import Icon from "./Icon.svelte";
@@ -53,12 +53,7 @@
       columns.map((column) => [
         column,
         {
-          ...makeVarProvider({
-            env: { ...envVariables(inherited, column === SHARED ? null : column), ...envVariables(set, column === SHARED ? null : column) },
-            fileVars: [],
-            requestVars: [],
-            envName: column,
-          }),
+          ...envValueProvider(set, inherited, column),
           edit: (d: Definition) => {
             app.definitionWanted = d;
           },
@@ -115,7 +110,7 @@
     <VarField
       class="cell"
       value={variable?.value ?? ""}
-      placeholder={cell.state === "gap" ? "Missing" : cell.state === "shared" ? "Uses shared" : cell.state === "unset" ? "Not set" : ""}
+      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : ""}
       label="{row.name} in {label}"
       masked={!shown}
       variables={providers.get(column)}
@@ -196,7 +191,7 @@
     height: 22px;
   }
   .lock {
-    margin-right: 4px;
+    margin-right: var(--space-1);
     opacity: 0.55;
   }
   .lock.active,
@@ -206,8 +201,8 @@
   }
   .actions {
     margin: auto;
-    width: 24px;
-    height: 24px;
+    width: var(--control-h-sm);
+    height: var(--control-h-sm);
     opacity: 0;
   }
   /* Like the list's delete button: shown on hover, and while the row has focus. */
@@ -216,7 +211,7 @@
     opacity: 1;
   }
   .empty {
-    padding: 14px 4px;
+    padding: 14px var(--space-1);
     font-size: 12px;
   }
 </style>

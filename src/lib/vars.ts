@@ -3,7 +3,7 @@
 // (src/lib/vars.test.ts drives both through the same cases), except that dynamic
 // variables are left as written: they're generated at send time.
 import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
-import { promptMasked, VAR_RE } from "./http";
+import { promptMasked, segments } from "./http";
 import type { EnvironmentSet, EnvSource, EnvVar, Prompt, Variable } from "./types";
 import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
 
@@ -23,6 +23,15 @@ export interface DynamicVariable {
 
 export const DYNAMIC_VARIABLES: DynamicVariable[] = catalogue.variables;
 
+/** How a masked value is shown (the core's `vars::MASK`). */
+export const MASK = "••••••••";
+
+/** Bracket each value a Secret went into in the resolved preview (the core's `vars::SECRET_MARKS`). */
+export const SECRET_OPEN = "";
+export const SECRET_CLOSE = "";
+/** Splits text so every odd part is a value between the Secret marks. */
+export const SECRET_RE = /(.*?)/s;
+
 /**
  * Whether `{{reference}}` (the trimmed text between the braces) is a dynamic
  * variable: its name, before `(` or a space, is one the core generates.
@@ -33,7 +42,15 @@ export function isDynamic(reference: string): boolean {
   return DYNAMIC_VARIABLES.some((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
 }
 
-export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string; dir?: string }>;
+/** The env files' key for the shared variables, which stands for them wherever an environment is named. */
+export const SHARED = "$shared";
+
+/** The variables of environment `env` in `set` (`SHARED`: the shared ones); undefined if the set doesn't have it. */
+export function envVarsOf(set: EnvironmentSet, env: string): EnvVar[] | undefined {
+  return env === SHARED ? set.shared : set.environments.find((e) => e.name === env)?.variables;
+}
+
+export type EnvVarMap =Record<string, { value: string; secret: boolean; source: string; dir?: string }>;
 
 /**
  * The variables of environment `envName`: the shared variables, then the
@@ -49,7 +66,7 @@ export function envVariables(set: EnvironmentSet | null, envName: string | null)
     const dir = (v.secret ? from?.private : from?.public) ?? undefined;
     return { value: v.value, secret: v.secret, source, ...(dir !== undefined ? { dir } : {}) };
   };
-  for (const v of set.shared) out[v.name] = entry(v, "$shared", set.sharedSource);
+  for (const v of set.shared) out[v.name] = entry(v, SHARED, set.sharedSource);
   const env = set.environments.find((e) => e.name === envName);
   for (const v of env?.variables ?? []) out[v.name] = entry(v, env!.name, env!.source);
   return out;
@@ -82,25 +99,6 @@ interface Entry {
   definition?: Definition;
 }
 
-/** A run of text, or a `{{…}}` reference with its trimmed name. Mirrors the core's `vars::segments`. */
-type Segment = { text: string } | { whole: string; name: string };
-
-function segments(text: string): Segment[] {
-  const out: Segment[] = [];
-  let rest = text;
-  for (;;) {
-    const start = rest.indexOf("{{");
-    if (start < 0) break;
-    const len = rest.indexOf("}}", start + 2) - (start + 2);
-    if (len < 0) break;
-    out.push({ text: rest.slice(0, start) });
-    out.push({ whole: rest.slice(start, start + 4 + len), name: rest.slice(start + 2, start + 2 + len).trim() });
-    rest = rest.slice(start + 4 + len);
-  }
-  out.push({ text: rest });
-  return out;
-}
-
 export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {} }: Scope): VarProvider {
   // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
   const prompted = new Map<string, { value: string; masked: boolean } | null>();
@@ -109,16 +107,16 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   // Later wins: environment, then the file, then the request's own declarations.
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
-    const source = e.source === "$shared" ? "shared variables" : `environment "${e.source}"`;
-    const origin = e.source === "$shared" ? "shared" : "environment";
+    const source = e.source === SHARED ? "shared variables" : `environment "${e.source}"`;
+    const origin = e.source === SHARED ? "shared" : "environment";
     const definition: Definition = { kind: "env", env: e.source, name, ...(e.dir !== undefined ? { dir: e.dir } : {}) };
     scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
   for (const v of fileVars) {
-    const definition: Definition | undefined = headerVars.includes(v) ? { kind: "file", name: v.name } : undefined;
+    const definition: Definition = { kind: headerVars.includes(v) ? "file" : "request", name: v.name };
     scope.set(v.name, { value: v.value, secret: false, source: "this file", origin: "file", definition });
   }
-  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file" });
+  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file", definition: { kind: "request", name: v.name } });
 
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();
@@ -127,35 +125,35 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
     let secret = false;
     const walk = (text: string, chain: string[]): string =>
       segments(text)
-        .map((s) => {
-          if ("text" in s) return s.text;
+        .map(({ text: whole, ref: name }) => {
+          if (name === undefined) return whole;
           // A `$name` is generated at send time, or (unknown to the core) undefined; never looked up.
-          if (isDynamic(s.name)) return s.whole;
-          if (s.name.startsWith("$")) {
-            undefinedNames.add(s.name);
-            return s.whole;
+          if (isDynamic(name)) return whole;
+          if (name.startsWith("$")) {
+            undefinedNames.add(name);
+            return whole;
           }
-          const prompt = prompted.get(s.name);
+          const prompt = prompted.get(name);
           if (prompt) {
             secret ||= prompt.masked;
             return prompt.value;
           }
           if (prompt === null) {
-            asked.add(s.name);
-            return s.whole;
+            asked.add(name);
+            return whole;
           }
-          if (chain.includes(s.name)) {
-            const cycle = [...chain, s.name];
+          if (chain.includes(name)) {
+            const cycle = [...chain, name];
             if (!circular.some((c) => c.join("\0") === cycle.join("\0"))) circular.push(cycle);
-            return s.whole;
+            return whole;
           }
-          const entry = scope.get(s.name);
+          const entry = scope.get(name);
           if (!entry) {
-            undefinedNames.add(s.name);
-            return s.whole;
+            undefinedNames.add(name);
+            return whole;
           }
           secret ||= entry.secret;
-          return walk(entry.value, [...chain, s.name]);
+          return walk(entry.value, [...chain, name]);
         })
         .join("");
     const value = walk(text, []);
@@ -198,6 +196,17 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   return { resolve, info, completions };
 }
 
+/**
+ * What a value of environment `env` (`SHARED`: a shared variable) in the
+ * Environments modal can refer to: that environment over the shared variables as
+ * edited in `set`, over `inherited` (below the root, what the folder's requests get
+ * from farther folders' files, ADR-0004).
+ */
+export function envValueProvider(set: EnvironmentSet, inherited: EnvironmentSet | null, env: string): VarProvider {
+  const name = env === SHARED ? null : env;
+  return makeVarProvider({ env: { ...envVariables(inherited, name), ...envVariables(set, name) }, fileVars: [], requestVars: [], envName: env });
+}
+
 const PREVIEW_LENGTH = 40;
 const shorten = (value: string) => (value.length > PREVIEW_LENGTH ? value.slice(0, PREVIEW_LENGTH - 1) + "…" : value);
 
@@ -214,18 +223,11 @@ export interface VarSegment {
 }
 
 /**
- * The text split into plain runs and `{{name}}` references, marked the way the
- * editor marks them, for rendering a field without an editor.
+ * The text split into plain runs and `{{name}}` references (as `segments` reads them,
+ * like the resolver), marked the way the editor marks them, for rendering a field
+ * without an editor.
  */
 export function varSegments(text: string, provider: VarProvider | null): VarSegment[] {
   if (!provider) return text ? [{ text }] : [];
-  const out: VarSegment[] = [];
-  let at = 0;
-  for (const m of text.matchAll(VAR_RE)) {
-    if (m.index > at) out.push({ text: text.slice(at, m.index) });
-    out.push({ text: m[0], name: m[1], cls: varClass(provider.info(m[1])) });
-    at = m.index + m[0].length;
-  }
-  if (at < text.length) out.push({ text: text.slice(at) });
-  return out;
+  return segments(text).map(({ text, ref }) => (ref === undefined ? { text } : { text, name: ref, cls: varClass(provider.info(ref)) }));
 }

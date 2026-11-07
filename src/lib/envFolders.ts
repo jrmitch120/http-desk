@@ -4,12 +4,15 @@
 // of those at or above its own folder, or the root's own set. Each environment in
 // those sets says which folders supply it (`source`), so edits can go to that
 // folder's own pair of files (`load_environments` / `save_environments` with `dir`).
+import { lastNamed } from "./http";
+import { SHARED } from "./vars";
 import type { EnvironmentSet, EnvSource, FolderEnvironments, TreeNode } from "./types";
 
 const parts = (p: string) => p.split(/[\\/]/).filter(Boolean);
 
-/** The folder of the file at `path`, relative to workspace `root`, `/`-separated ("" at the root). */
-export function requestFolder(root: string, path: string): string {
+/** The folder holding the file at `path` (a request's, or an env file's), relative to
+ *  workspace `root`, `/`-separated ("" at the root). */
+export function folderOf(root: string, path: string): string {
   const r = parts(root);
   const p = parts(path).slice(0, -1);
   return r.every((x, i) => p[i] === x) ? p.slice(r.length).join("/") : "";
@@ -20,12 +23,16 @@ export function folderLabel(dir: string): string {
   return dir ? `${dir}/` : "the workspace root";
 }
 
+/** Whether relative folder `dir` is `folder` or inside it (everything is within the root, ""). */
+export function within(dir: string, folder: string): boolean {
+  return folder === "" || dir === folder || dir.startsWith(`${folder}/`);
+}
+
 /** The `folders` entry nearest at or above `dir`, if any. */
 function nearest(folders: FolderEnvironments[], dir: string): FolderEnvironments | undefined {
   let best: FolderEnvironments | undefined;
   for (const f of folders) {
-    const inside = dir === f.dir || dir.startsWith(`${f.dir}/`);
-    if (inside && (!best || f.dir.length > best.dir.length)) best = f;
+    if (within(dir, f.dir) && (!best || f.dir.length > best.dir.length)) best = f;
   }
   return best;
 }
@@ -74,13 +81,13 @@ export function writeFolder(set: EnvironmentSet | null, env: string, name: strin
   if (!set) return undefined;
   let source: EnvSource | null | undefined;
   let vars;
-  if (env === "$shared") [source, vars] = [set.sharedSource, set.shared];
+  if (env === SHARED) [source, vars] = [set.sharedSource, set.shared];
   else {
     const e = set.environments.find((e) => e.name === env);
     [source, vars] = [e?.source, e?.variables ?? []];
   }
   if (!source) return undefined;
-  const existing = vars.filter((v) => v.name === name).at(-1);
+  const existing = lastNamed(vars, name);
   const dir = existing ? (existing.secret ? source.private : source.public) : (source.public ?? source.private);
   return dir ?? undefined;
 }

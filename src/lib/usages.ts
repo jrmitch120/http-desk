@@ -1,7 +1,8 @@
 // Find usages results as the sidebar lists them.
-import { requestFolder } from "./envFolders";
+import { folderOf } from "./envFolders";
 import { basename } from "./http";
-import type { Usage, UsageField } from "./types";
+import { SHARED } from "./vars";
+import type { AuthPart, Usage, UsageField } from "./types";
 
 /** A line of the Find usages list: one field holding the reference (however many times). */
 export interface UsageRow {
@@ -18,7 +19,14 @@ export interface UsageRow {
   usage: Usage;
 }
 
-const AUTH = { username: "username", password: "password", token: "token", keyValue: "API key value" };
+/** Each auth field: its textbox's label in the Authorization section, and how a list names it. */
+export const AUTH_FIELDS: Record<AuthPart, { label: string; noun: string }> = {
+  username: { label: "Username", noun: "username" },
+  password: { label: "Password", noun: "password" },
+  token: { label: "Token", noun: "token" },
+  keyName: { label: "Key", noun: "API key name" },
+  keyValue: { label: "Value", noun: "API key value" },
+};
 
 function fieldLabel(f: UsageField): string {
   switch (f.kind) {
@@ -29,7 +37,7 @@ function fieldLabel(f: UsageField): string {
     case "header":
       return `Header ${f.name}`;
     case "auth":
-      return `Auth ${AUTH[f.part]}`;
+      return `Auth ${AUTH_FIELDS[f.part].noun}`;
     case "body":
       return "Body";
     case "variable":
@@ -50,8 +58,8 @@ export function usageRows(usages: Usage[], root = ""): UsageRow[] {
     } else if (u.kind === "fileVariable") {
       row = { key: `${u.path}\0@${u.index}`, title: `@${u.name}`, where: `${basename(u.path)} · File variable`, disabled: false };
     } else {
-      const dir = root ? requestFolder(root, u.path) : "";
-      const where = [u.env === "$shared" ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
+      const dir = root ? folderOf(root, u.path) : "";
+      const where = [u.env === SHARED ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
       row = { key: `${dir}\0${u.env}\0${u.name}`, title: u.name, where: where.join(" · "), disabled: false };
     }
     if (!rows.has(row.key)) rows.set(row.key, { ...row, usage: u });

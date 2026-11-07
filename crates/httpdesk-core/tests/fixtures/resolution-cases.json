@@ -201,6 +201,13 @@
       "text": "{{host}}/{{version}}",
       "value": "{{host}}/v1",
       "undefined": ["host"]
+    },
+    {
+      "case": "a reference runs from {{ to the next }}, braces inside included",
+      "file": [{ "name": "a", "value": "x" }],
+      "text": "{{a{b}} {{ a }}",
+      "value": "{{a{b}} x",
+      "undefined": ["a{b"]
     }
   ]
 }

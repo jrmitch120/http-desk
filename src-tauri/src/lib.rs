@@ -69,9 +69,26 @@ struct AppSettings {
     split_ratio: SplitRatio,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
-    /// How the Environments modal shows variables: "matrix" (every environment
-    /// side by side) or "list" (one environment at a time).
-    env_view: String,
+    /// How the Environments modal shows variables.
+    #[serde(deserialize_with = "or_default")]
+    env_view: EnvView,
+}
+
+/// How the Environments modal shows variables (`envView` in the settings file).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum EnvView {
+    /// Every environment side by side.
+    #[default]
+    Matrix,
+    /// One environment at a time.
+    List,
+}
+
+/// Reads a settings field, taking the default for a value this version doesn't know
+/// (a hand-edited file, or a newer version's), so one odd field doesn't drop the rest.
+fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).unwrap_or_default())
 }
 
 /// Settings of one environment (see `AppSettings::environment_settings`).
@@ -112,7 +129,7 @@ impl Default for AppSettings {
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
             show_resolved: false,
-            env_view: "matrix".into(),
+            env_view: EnvView::Matrix,
         }
     }
 }
@@ -424,7 +441,12 @@ fn request_resolver(
         _ => None,
     };
     let env_vars = env::variables(&env_set, environment);
+    // A File variable of a Secret's name replaces it, so it's no Secret.
+    let secrets = env::secret_names(&env_set, environment)
+        .into_iter()
+        .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
     let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
+        .with_secrets(secrets)
         .with_prompts(&request.prompts(), prompt_values);
     Ok(RequestScope { resolver, base_dir, env_warning })
 }
@@ -432,14 +454,9 @@ fn request_resolver(
 /// A folder as the UI names it: relative to the workspace root with a trailing `/`
 /// (`api/users/`), or "the workspace root".
 fn folder_label(root: &Path, dir: &Path) -> String {
-    let parts: Vec<_> = dir
-        .strip_prefix(root)
-        .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy()).collect())
-        .unwrap_or_default();
-    if parts.is_empty() {
-        "the workspace root".into()
-    } else {
-        format!("{}/", parts.join("/"))
+    match env::relative_dir(root, dir) {
+        rel if rel.is_empty() => "the workspace root".into(),
+        rel => format!("{rel}/"),
     }
 }
 

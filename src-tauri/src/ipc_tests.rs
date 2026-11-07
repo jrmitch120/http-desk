@@ -160,7 +160,7 @@ fn vertical_slice_over_ipc() {
     );
     assert_eq!(resp["status"], 200);
     assert_eq!(resp["bodyText"], r#"{"ok":true}"#);
-    assert_eq!(resp["warnings"][0], "Unresolved variables: token");
+    assert_eq!(resp["warnings"][0], "Undefined variables: token");
     let raw = received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(raw.starts_with("GET /items?page=1 HTTP/1.1"), "{raw}");
     assert!(raw.to_lowercase().contains("accept: application/json"));
@@ -781,6 +781,11 @@ fn the_environments_view_defaults_to_the_matrix_and_is_remembered() {
     *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
     super::load_settings(h.app.handle());
     assert_eq!(h.ok("get_settings", json!({}))["envView"], "list");
+
+    // A hand-edited value the app doesn't know opens the matrix, keeping the other settings.
+    let odd: super::AppSettings = serde_json::from_str(r#"{"envView":"grid","theme":"light"}"#).unwrap();
+    let json = serde_json::to_value(&odd).unwrap();
+    assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("matrix"), Some("light")));
 }
 
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.

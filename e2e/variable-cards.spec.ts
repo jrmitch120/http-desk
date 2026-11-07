@@ -115,7 +115,29 @@ test("Edit on a File variable opens the request's Settings with its row focused"
   await expect.poll(() => focusedRow(page)).toEqual({ name: "petId", value: "7" });
 });
 
-test("a variable with no row to edit, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
+test("Edit on a File variable declared in a request shows its line in that request's .http source", async ({ page }) => {
+  await openApp(page, "?requestVars=1");
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const cell = await headerValue(page, "{{size}} {{kind}}");
+  const selection = () => page.evaluate(() => getSelection()?.toString());
+
+  // List pets' own @size.
+  await cell.locator(".cm-var", { hasText: "{{size}}" }).hover();
+  await expect(card(page)).toContainText("from this request");
+  await card(page).getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator(".source-code")).toContainText("@size = 10");
+  await expect.poll(selection).toBe("@size = 10");
+
+  // Create pet's @kind: its tab comes forward on that line.
+  await page.locator(".btn", { hasText: ".http" }).click();
+  await cell.locator(".cm-var", { hasText: "{{kind}}" }).hover();
+  await expect(card(page)).toContainText("from this file");
+  await card(page).getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator(".crumbs .name-input")).toHaveValue("Create pet");
+  await expect.poll(selection).toBe("@kind = cat");
+});
+
+test("an undefined variable, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
   await openSection(page, "Headers");
   const cell = await headerValue(page, "{{nope}} {{$uuid}}");
   for (const [name, buttons] of [

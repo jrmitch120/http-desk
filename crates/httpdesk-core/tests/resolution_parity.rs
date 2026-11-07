@@ -111,7 +111,7 @@ fn the_core_resolver_gives_the_shared_answers() {
             c.case,
             c.value
         );
-        assert_eq!(r.unresolved(), c.undefined, "{}: undefined", c.case);
+        assert_eq!(r.undefined(), c.undefined, "{}: undefined", c.case);
         assert_eq!(r.circular(), c.circular, "{}: circular", c.case);
         assert_eq!(r.unanswered(), c.asked, "{}: asked", c.case);
         assert!(r.errors().is_empty(), "{}: {:?}", c.case, r.errors());
