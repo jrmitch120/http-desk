@@ -1,7 +1,8 @@
 // Rename variable: renames a variable in every environment and, optionally, every
 // `{{name}}` reference Find usages found. This module edits the models in place;
 // the store saves them.
-import { displayName, variableNameError } from "./http";
+import { displayName } from "./http";
+import { extractNameError } from "./extract";
 import type { EnvironmentSet, EnvVar, HttpFile, Request, Usage, UsageField } from "./types";
 
 type At = { start: number; end: number };
@@ -103,8 +104,7 @@ export function renameInEnvironments(set: EnvironmentSet, usages: Usage[], old: 
  */
 export function renameNameError(next: string, old: string, set: EnvironmentSet | null): string | null {
   if (next === "" || next === old) return null;
-  if (next.startsWith("$")) return "A name starting with $ is read as a dynamic variable";
-  const bad = variableNameError(next);
+  const bad = extractNameError(next);
   if (bad) return bad;
   if (set?.shared.some((v) => v.name === next)) return `The shared variables already have a variable named ${next}`;
   const env = set?.environments.find((e) => e.variables.some((v) => v.name === next));

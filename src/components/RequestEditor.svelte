@@ -46,7 +46,12 @@
       prompts: req ? requestPrompts(req) : [],
       answers: app.promptAnswers(tab),
     };
-    return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d), findUsages: (name: string) => app.findUsages(name) };
+    return {
+      ...makeVarProvider(scope),
+      edit: (d: Definition) => app.editDefinition(tab.id, d),
+      findUsages: (name: string) => app.findUsages(name),
+      extract: (value: string) => app.extractVariable(tab.id, value),
+    };
   });
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
