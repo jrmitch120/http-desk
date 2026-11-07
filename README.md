@@ -72,7 +72,7 @@ Requests you don't edit are saved byte-for-byte as they were.
 | Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
 | Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
 | Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
-| Find usages of a variable | Hover a `{{variable}}` → *Find usages*; results open in the explorer |
+| Find usages of a variable | Hover a `{{variable}}` → *Find usages*, or a variable's menu in the Environments matrix; results open in the explorer |
 | Switch environment | Top-right selector, or `⌘⌥E` (macOS) / `Ctrl Alt E` (Windows, Linux), then type to filter and `Enter`; the window title names the active one |
 | Edit environments | Layers icon next to the selector, or `⌘/Ctrl E` |
 | Settings | Gear icon in the top bar, or `⌘/Ctrl ,` |

@@ -20,6 +20,7 @@
   import SegmentedControl from "./SegmentedControl.svelte";
   import EnvironmentMatrix from "./EnvironmentMatrix.svelte";
   import { addToAllEnvironments, setCell, SHARED } from "../lib/envMatrix";
+  import type { MenuItem } from "../lib/menu.svelte";
 
   /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
   const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
@@ -232,16 +233,33 @@
     });
   });
 
-  async function requestClose() {
-    if (app.dialog) return; // a nested prompt/confirm is handling this keypress
+  /** Closes the modal, asking first about unsaved changes; false if it stays open. */
+  async function requestClose(): Promise<boolean> {
+    if (app.dialog) return false; // a nested prompt/confirm is handling this keypress
     if (dirty) {
       const r = await app.choose("Discard changes?", "You have unsaved environment changes.", [
         { label: "Cancel", value: "cancel" },
         { label: "Discard", value: "discard", danger: true },
       ]);
-      if (r.button !== "discard") return;
+      if (r.button !== "discard") return false;
     }
     app.modal = null;
+    return true;
+  }
+
+  /** A matrix row's own actions. Find usages lists, in the sidebar behind this modal, what
+   *  references the variable, so it closes the modal (the search reads env files from disk,
+   *  so unsaved edits are asked about first). */
+  function rowActions(name: string): MenuItem[] {
+    return [
+      {
+        label: "Find usages",
+        icon: "search",
+        action: async () => {
+          if (await requestClose()) void app.findUsages(name);
+        },
+      },
+    ];
   }
 </script>
 
@@ -300,7 +318,7 @@
       <section class="matrix-pane">
         {@render secretsWarning()}
         <div class="vars">
-          <EnvironmentMatrix bind:this={matrix} {set} {filter} />
+          <EnvironmentMatrix bind:this={matrix} {set} {filter} {rowActions} />
         </div>
       </section>
     {:else}

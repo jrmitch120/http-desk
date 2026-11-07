@@ -541,7 +541,9 @@ Decisions made during implementation, beyond the plan above:
   to that environment only; each cell has its own Secret lock. "Add variable to all
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
-  button) deletes the variable everywhere. The matrix edits the modal's unsaved set
+  button) offers Find usages (which closes the modal, asking about unsaved edits first,
+  since the search reads the env files from disk) and deletes the variable everywhere.
+  The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
   the private file. Environment-level actions (rename, duplicate, delete, Use,
   production, colour) stay in the list.
@@ -594,7 +596,8 @@ Decisions made during implementation, beyond the plan above:
   send, each chain is its own warning ("Circular variable reference: a → b → a"); one in
   the URL's scheme or host fails the send with kind `circularVariable`, unless an
   Undefined variable is also there, which is reported first.
-* <a id="find-usages"></a>**Find usages** (a hover card's button) lists every
+* <a id="find-usages"></a>**Find usages** (a hover card's button, or a row's menu in the
+  Environments matrix) lists every
   `{{name}}` reference in the workspace in the sidebar, in place of the tree, until
   closed. The search is the core's `workspace::usages(root, name, open)` behind the
   `find_usages` command: each `.http`/`.rest` file the explorer lists (open documents as
@@ -611,8 +614,8 @@ Decisions made during implementation, beyond the plan above:
   multipart part line) is `disabled` and listed as such. Clicking a result
   (`app.openUsage`) opens the request on its field (the URL bar, the row of a param or
   header, the auth field, the Body section, or the `.http` source for a request's own
-  `@name`), a File variable's row in Settings, or an environment value's row in the
-  Environments modal.
+  `@name`), a File variable's row in Settings, or an environment value's cell in the
+  Environments matrix (its row in the list view).
 * **Prompt variables** (VS Code REST Client): `# @prompt name [description]` or
   `// @prompt …` in a request's comment lines asks for a value at send. They are kept
   as ordinary directives, so the file is written back unchanged; `Request::prompts()`

@@ -1,9 +1,9 @@
 // Find usages (#84): a hover card's Find usages lists, in the sidebar, every place
 // in the workspace that references the variable (requests, File variables,
 // environment values), marks the ones that aren't sent, and opens each on the
-// field that holds it.
+// field that holds it. A row of the Environments matrix offers it too.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, urlBar } from "./helpers";
+import { dialog, openApp, openRequest, showEnvironmentList, urlBar } from "./helpers";
 
 const card = (page: Page) => page.locator(".popup-layer .var-card");
 const usages = (page: Page) => page.getByRole("region", { name: /^Usages of / });
@@ -67,27 +67,75 @@ test("unsaved edits are searched, a disabled header is marked, and clicking show
   await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".kv-row")?.querySelector<HTMLInputElement>(".c-name")?.value)).toBe("X-Debug");
 });
 
-test("references inside environment values are listed and open the variable's row", async ({ page }) => {
+/** The matrix's value field of `name` in `column` ("Shared" or an environment). */
+const matrixField = (page: Page, name: string, column: string) => page.getByRole("textbox", { name: `${name} in ${column}`, exact: true });
+
+test("references inside environment values are listed and open the variable's cell, or row in the list", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
-  const dialog = page.getByRole("dialog", { name: "Environments" });
-  await dialog.locator(".env").filter({ has: page.getByText("staging", { exact: true }) }).click();
-  const grid = dialog.getByRole("group", { name: "Variables" });
-  await grid.getByPlaceholder("Add variable").click();
-  await page.keyboard.type("api");
-  await page.keyboard.press("Tab");
+  const modal = dialog(page, "Environments");
+  // staging has no token: fill its gap with a reference to baseUrl.
+  await matrixField(page, "token", "staging").click();
   await page.keyboard.type("{{baseUrl}}/v1");
   await page.keyboard.press("Tab");
-  await dialog.getByRole("button", { name: "Save" }).click();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
+  await modal.getByRole("button", { name: "Save" }).click();
+  await expect(modal).toHaveCount(0);
 
   await openRequest(page, ["api", "pets.http"], "List pets");
   await findUsages(page, page.locator(".url-input"), "baseUrl");
-  await expect.poll(() => rows(page)).toContain('api | Environment "staging"');
+  await expect.poll(() => rows(page)).toContain('token | Environment "staging"');
 
-  await usages(page).locator(".usage", { hasText: 'Environment "staging"' }).click();
-  await expect(dialog).toBeVisible();
-  await expect(dialog.locator(".main-head .title")).toHaveText("staging");
-  await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".kv-row")?.querySelector<HTMLInputElement>(".c-name")?.value)).toBe("api");
+  // The matrix (the default view) focuses the variable's cell in that environment.
+  const result = usages(page).locator(".usage", { hasText: 'Environment "staging"' });
+  await result.click();
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole("group", { name: "Environments matrix" })).toBeVisible();
+  await expect(matrixField(page, "token", "staging")).toBeFocused();
+
+  // The list shows that environment and focuses the variable's row.
+  await showEnvironmentList(page);
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  await result.click();
+  await expect(modal).toBeVisible();
+  await expect(modal.locator(".main-head .title")).toHaveText("staging");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".kv-row")?.querySelector<HTMLInputElement>(".c-name")?.value)).toBe("token");
+});
+
+test("a matrix row's Find usages closes the Environments modal and lists the variable's usages", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  const modal = dialog(page, "Environments");
+  const matrix = modal.getByRole("group", { name: "Environments matrix" });
+
+  // From the name's context menu.
+  await matrix.locator(".m-name", { hasText: "baseUrl" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Find usages", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(usages(page)).toContainText("Usages of {{baseUrl}}");
+  await expect.poll(() => rows(page)).toEqual([
+    "List pets | pets.http · URL",
+    "Create pet | pets.http · URL",
+    "Get pet image | pets.http · URL",
+  ]);
+
+  // From the row's Actions button, with an unsaved edit: Cancel keeps the modal (and the edit).
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  await matrixField(page, "token", "staging").click();
+  await page.keyboard.type("x");
+  await page.keyboard.press("Tab");
+  await matrix.locator(".kv-row").filter({ hasText: "token" }).getByRole("button", { name: "Actions for token" }).click();
+  await page.getByRole("menuitem", { name: "Find usages", exact: true }).click();
+  const discard = dialog(page, "Discard changes?");
+  await discard.getByRole("button", { name: "Cancel" }).click();
+  await expect(modal).toBeVisible();
+  await expect(matrixField(page, "token", "staging")).toHaveText("x");
+  await expect(usages(page)).toContainText("Usages of {{baseUrl}}");
+
+  // Discard closes it and searches.
+  await matrix.locator(".kv-row").filter({ hasText: "token" }).getByRole("button", { name: "Actions for token" }).click();
+  await page.getByRole("menuitem", { name: "Find usages", exact: true }).click();
+  await dialog(page, "Discard changes?").getByRole("button", { name: "Discard" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(usages(page)).toContainText("Usages of {{token}}");
 });
