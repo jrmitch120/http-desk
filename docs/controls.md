@@ -208,7 +208,7 @@ paths), File variable values and environment values.
 - It sets no padding, font or border: the owner gives those through `class` (a grid
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
-  (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
+  (Undefined variable, red with a wavy underline), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
   reference), `cm-var-prompt` (an unanswered Prompt variable), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
 - The hover card shows the resolved value and where it comes from ("this file",
@@ -336,13 +336,16 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - `columns` picks columns left to right: `"enable"`, `"name"`, `"value"`,
   `"description"`, `"delete"`, a built-in with a width (`{ id: "name", width: "34%" }`),
   or a custom column `{ id, header, width, cell }`, whose `cell` snippet gets
-  `{ row, index, ghost, set }`. Always write through `set(patch)`. Inputs given
+  `{ row, index, ghost, set, column }` (`column` is the column's id, so one snippet
+  can serve several columns). Write through `set(patch)`, unless the rows are a view
+  of other state that the cell edits directly (the Environments matrix). Inputs given
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
-  replaces the value input.
+  replaces the value input, and one with `id: "name"` replaces the name input.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`,
+  filter), `bulkEdit` (default on), `addRows` (the ghost row, default on),
+  `showDescriptions` (default on), `onchange(items)`,
   `variables` (makes the built-in value cells [VarFields](#varfield)). Through
   `bind:this`, `focusValue(row)` puts focus in a row's value cell (a hover card's Edit
   lands there).
@@ -359,6 +362,12 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     VarFields see the environment being edited, as edited, plus the shared variables
     (not the environment selected in the top bar). Bulk edit is off, because it would
     show Secret values as plain text.
+  - The Environments matrix (`EnvironmentMatrix.svelte`): one row per variable name,
+    a read-only name column, one VarField column per environment plus Shared (built
+    from the set, with positional ids `m0`, `m1`…), and a row actions button.
+    No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
+    lock (and a reveal button when it's a Secret), and a gap is tinted. Rows are
+    stable objects per name, so an edit doesn't remount the row and drop focus.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
@@ -426,6 +435,21 @@ private env file isn't git-ignored, TLS checks are off, a send failed.
 - Errors are `role="alert"`; warnings and info are `role="status"`.
 - For the outcome of an action ("Saved", "Could not save settings"), use a toast
   instead.
+
+### CheckStrip
+
+`CheckStrip.svelte`. The pre-send checks above a request's sections: one entry per
+problem the request would be sent with, each with its quick fixes as `.btn.small.ghost`
+buttons under the message. Today every entry is an Undefined variable ("`{{token}}` is
+undefined, used in Headers and Authorization"; ARCHITECTURE §10).
+
+- Props: `checks` (`Check[]` from `src/lib/checks.ts`; empty renders nothing) and
+  `onfix(check, fix)`. It is a `region` named "Pre-send checks", with a list item per
+  entry. It never blocks sending.
+- Warning-toned and boxed like an inline [Banner](#banner), but a list: a Banner is one
+  message with one set of actions. More than three entries scroll inside it.
+- A new kind of check is a new `Check` variant, rendered in its own `{#if check.kind}`
+  branch, with its own fixes.
 
 ## Floating UI
 

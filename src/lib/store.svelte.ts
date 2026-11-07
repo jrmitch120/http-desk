@@ -63,6 +63,9 @@ export interface DialogButton {
   focus?: boolean;
 }
 
+/** A definition's row to open; with `add`, one with an empty value is added if there's none. */
+export type WantedDefinition = Definition & { add?: boolean };
+
 /** One field of a dialog form: a labelled text input, masked (with a reveal button) if asked. */
 export interface DialogField {
   label: string;
@@ -155,8 +158,9 @@ class AppStore {
   settingsSection = $state<SettingsSection | null>(null);
   requestSettingsFor = $state<string | null>(null);
   /** A variable definition whose row a hover card's Edit asked for: the request's
-   *  Settings or the Environments modal focuses it and clears this. */
-  definitionWanted = $state<Definition | null>(null);
+   *  Settings or the Environments modal focuses it and clears this. With `add`
+   *  (an Undefined variable's quick fix), an empty row is added first if there's none. */
+  definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
@@ -1042,8 +1046,9 @@ class AppStore {
 
   /** Opens the row of a variable's definition (a hover card's Edit): a File
    *  variable in the tab's Settings section, or an environment's variable in the
-   *  Environments modal, on that environment. */
-  editDefinition(tabId: string, definition: Definition) {
+   *  Environments modal, on that environment. With `add` (the Undefined-variable
+   *  strip's "Add …" fixes), an empty one is added there first. */
+  editDefinition(tabId: string, definition: WantedDefinition) {
     this.definitionWanted = definition;
     if (definition.kind === "file") this.showRequestSettings(tabId);
     else this.modal = "env";

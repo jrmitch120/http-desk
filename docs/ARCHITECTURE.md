@@ -531,6 +531,20 @@ Decisions made during implementation, beyond the plan above:
   (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
   bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
   name keeps the text colour).
+* **Environments matrix.** The Environments modal opens on a matrix (a Matrix | List
+  switch, remembered as the `envView` app setting): one row per variable name, a
+  column for Shared and one per environment, each cell a VarField that sees its own
+  column's scope. A cell is a gap (tinted, placeholder "Missing") when the environment
+  doesn't define the variable and Shared doesn't either; an environment cell Shared
+  supplies says "Uses shared", and the Shared column is never a gap. A variable defined
+  with an empty value isn't a gap. Typing into a gap, or locking it, adds the variable
+  to that environment only; each cell has its own Secret lock. "Add variable to all
+  environments" adds it, empty, to every environment that lacks it (not to Shared), so
+  every environment saves the key. A row's menu (right-click its name, or its actions
+  button) deletes the variable everywhere. The matrix edits the modal's unsaved set
+  (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
+  the private file. Environment-level actions (rename, duplicate, delete, Use,
+  production, colour) stay in the list.
 * **Variable precedence:** File variables > selected environment > `$shared`. Within an
   environment, a value in the private file overrides one in the shared file. Among File
   variables, the request's own declaration wins over a same-named one elsewhere in the
@@ -553,6 +567,24 @@ Decisions made during implementation, beyond the plan above:
   with an error naming the variables and suggesting an environment that defines them.
   Anywhere else, unresolved variables are sent as written (in the query they are
   percent-encoded like any other text) and reported as a warning on the response.
+* **Undefined-variable checks** catch them before sending, without blocking it.
+  `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
+  the enabled auth's fields, an API key's name only as a query param; the enabled body
+  without `#~` lines or a form's comment lines) through the frontend resolver, so the
+  checks follow every edit synchronously. A name missing behind a defined one counts
+  where the outer reference is written; Circular references and unanswered Prompt
+  variables don't count. Every editor underlines an Undefined variable (`cm-var-bad`);
+  a masked field marks nothing, so its references are counted from the request, not
+  the field. The Params, Headers, Authorization and Body tabs show how many Undefined
+  variables each uses, and a strip above the sections (`CheckStrip.svelte`, hidden
+  when empty) lists each once with where it is used and its quick fixes: add an empty
+  variable to the selected environment, add an empty File variable at the top of the
+  file (each opens its row with the value focused, through `app.editDefinition` with
+  `add`), and select the first other environment that defines it. A `{{$name}}` the
+  core doesn't generate, or a name a `@name =` line can't hold, has no fixes. The strip
+  takes a list of `Check`s, one variant per kind of problem, so a new check (such as
+  an environment a request's folder doesn't define) adds a variant, its entries in
+  `requestChecks`, and a branch in the strip.
 * **Circular references:** a reference that leads back to a name already being resolved
   (`a → b → a`, or `@host = {{host}}/v2`) is its own state, not an Undefined variable.
   Resolution stops at the repeated name, leaves that reference as written, and records
@@ -726,8 +758,8 @@ Decisions made during implementation, beyond the plan above:
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
 | Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the Matrix | List choice surviving a restart), environment settings (production, colour) surviving a restart without touching the env files, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, adding to all environments, the row filter), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

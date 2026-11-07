@@ -3,7 +3,7 @@
 // Both live in the app settings, keyed by workspace + environment name, never in
 // the env files. The mocked workspace (`/demo`) starts with `local` selected.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, sentRequests } from "./helpers";
+import { dialog, mockState, openApp, openRequest, sentRequests, showEnvironmentList } from "./helpers";
 
 const environments = (page: Page) => dialog(page, "Environments");
 const envSettings = async (page: Page) => (await mockState(page, "settings")).environmentSettings["/demo"];
@@ -11,9 +11,10 @@ const send = (page: Page) => page.getByRole("button", { name: "Send", exact: tru
 /** The top bar's environment indicator. */
 const indicator = (page: Page) => page.locator(".topbar .env");
 
-/** Opens the Environments modal on `local`, applies `edit`, and saves. */
+/** Opens the Environments list on `local`, applies `edit`, and saves. */
 async function editLocal(page: Page, edit: () => Promise<void>) {
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentList(page);
   await edit();
   await environments(page).getByRole("button", { name: "Save", exact: true }).click();
   await expect(environments(page)).toBeHidden();

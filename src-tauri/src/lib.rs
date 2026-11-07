@@ -69,6 +69,9 @@ struct AppSettings {
     split_ratio: SplitRatio,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
+    /// How the Environments modal shows variables: "matrix" (every environment
+    /// side by side) or "list" (one environment at a time).
+    env_view: String,
 }
 
 /// Settings of one environment (see `AppSettings::environment_settings`).
@@ -109,6 +112,7 @@ impl Default for AppSettings {
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
             show_resolved: false,
+            env_view: "matrix".into(),
         }
     }
 }
