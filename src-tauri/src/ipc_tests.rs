@@ -6,6 +6,7 @@ mod confinement;
 mod deleting;
 mod paths;
 mod preview;
+mod renaming;
 mod usages;
 mod watcher;
 

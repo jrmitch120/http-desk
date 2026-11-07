@@ -235,7 +235,7 @@
 
   /** Closes the modal, asking first about unsaved changes; false if it stays open. */
   async function requestClose(): Promise<boolean> {
-    if (app.dialog) return false; // a nested prompt/confirm is handling this keypress
+    if (app.dialog || app.renaming) return false; // a nested prompt/confirm/form is handling this keypress
     if (dirty) {
       const r = await app.choose("Discard changes?", "You have unsaved environment changes.", [
         { label: "Cancel", value: "cancel" },
@@ -245,6 +245,22 @@
     }
     app.modal = null;
     return true;
+  }
+
+  /** Rename variable: renaming saves the env files (and the files referencing it), so
+   *  unsaved edits here are saved first, if the user agrees. Afterwards the modal shows
+   *  the environments as saved, with the new name. */
+  async function renameVariable(name: string) {
+    if (dirty) {
+      const r = await app.choose("Save changes first?", "Renaming a variable saves the environments. Your unsaved changes to them will be saved too.", [
+        { label: "Cancel", value: "cancel" },
+        { label: "Save", value: "save", primary: true },
+      ]);
+      if (r.button !== "save" || !(await persist())) return;
+    }
+    if (!(await app.renameVariable(name)) || !app.envSet) return;
+    set = structuredClone($state.snapshot(app.envSet) as EnvironmentSet);
+    savedJson = JSON.stringify(clean(set));
   }
 
   /** A matrix row's own actions. Find usages lists, in the sidebar behind this modal, what
@@ -259,6 +275,7 @@
           if (await requestClose()) void app.findUsages(name);
         },
       },
+      { label: "Rename…", icon: "edit", action: () => void renameVariable(name) },
     ];
   }
 </script>

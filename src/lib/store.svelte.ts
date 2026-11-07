@@ -8,6 +8,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { envVariables } from "./vars";
+import { renameInEnvironments, renameInFile } from "./rename";
 import type { Definition } from "./codemirror/setup";
 import type {
   AppSettings,
@@ -97,6 +98,19 @@ export interface DialogState {
   resolve: (r: { button: string; value: string; values: string[] }) => void;
 }
 
+/** The user's answer to the Rename variable form: the new name, and the usages
+ *  whose references to update (null: rename it in the environments only). */
+export interface RenameChoice {
+  name: string;
+  usages: Usage[] | null;
+}
+
+/** A Rename variable form, for environment variable `name`. */
+export interface Renaming {
+  name: string;
+  resolve: (choice: RenameChoice | null) => void;
+}
+
 export type ModalKind = "env" | "openapi" | "settings" | null;
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
@@ -165,6 +179,8 @@ class AppStore {
   /** A Find usages result asked to show this field of the tab's request: its
    *  request editor switches to it and clears this. */
   fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
+  /** The Rename variable form on screen (`RenameVariable.svelte`), if any. */
+  renaming = $state<Renaming | null>(null);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -649,16 +665,21 @@ class AppStore {
   async findUsages(name: string) {
     const seq = ++this.usagesSeq;
     this.usages = { name, usages: null };
-    const open = Object.values(this.docs)
-      .filter((d) => !d.missing)
-      .map((d) => ({ path: d.path, file: $state.snapshot(d.file) as HttpFile }));
     try {
-      const usages = await api.findUsages(name, open);
+      const usages = await this.searchUsages(name);
       if (seq === this.usagesSeq) this.usages = { name, usages };
     } catch (e) {
       if (seq === this.usagesSeq) this.usages = null;
       this.toast("error", errorMessage(e));
     }
+  }
+
+  /** Usages of `{{name}}`: open documents as they are on screen, everything else from disk. */
+  searchUsages(name: string): Promise<Usage[]> {
+    const open = Object.values(this.docs)
+      .filter((d) => !d.missing)
+      .map((d) => ({ path: d.path, file: $state.snapshot(d.file) as HttpFile }));
+    return api.findUsages(name, open);
   }
 
   closeUsages() {
@@ -1103,6 +1124,64 @@ class AppStore {
   /** Switches the tab's request editor to its Settings section (timeouts). */
   showRequestSettings(tabId: string) {
     this.requestSettingsFor = tabId;
+  }
+
+  // ---------------------------------------------------------------- rename variable
+
+  /**
+   * Rename variable on environment variable `name`: asks for the new name and
+   * whether to update references (`RenameVariable.svelte`), then renames it in
+   * every environment through the normal environment save, and edits each file
+   * holding a reference Find usages found. A file with no unsaved edits is saved
+   * at once; one with unsaved edits gets the rename in memory only and stays
+   * unsaved, so the user's pending work isn't saved without them. The env files
+   * are saved first; if that fails, nothing else changes. False if cancelled or
+   * the env files couldn't be saved.
+   */
+  async renameVariable(name: string): Promise<boolean> {
+    const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, resolve }));
+    if (!choice || !this.envSet) return false;
+    const { name: next, usages } = choice;
+    const set = $state.snapshot(this.envSet) as EnvironmentSet;
+    renameInEnvironments(set, usages ?? [], name, next);
+    try {
+      const report = await api.saveEnvironments(set);
+      if (report.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+    } catch (e) {
+      this.toast("error", `Could not save environments: ${errorMessage(e)}`);
+      return false;
+    }
+    await this.loadEnvironments();
+
+    const byFile = new Map<string, Usage[]>();
+    for (const u of usages ?? []) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
+    let edited = 0;
+    const unsaved: string[] = [];
+    for (const [path, list] of byFile) {
+      const doc = await this.loadDoc(path);
+      if (!doc || doc.missing) continue;
+      const wasClean = !this.isDocDirty(path);
+      renameInFile(doc.file, list, name, next);
+      edited++;
+      if (!wasClean) unsaved.push(basename(path));
+      else await this.save(path); // a failure is reported; the rename stays on screen, unsaved
+    }
+    if (this.usages?.name === name) this.closeUsages();
+
+    let message = `Renamed ${name} to ${next} in every environment`;
+    if (edited) message += ` and ${edited} file${edited === 1 ? "" : "s"}`;
+    message += ".";
+    if (unsaved.length === 1) message += ` ${unsaved[0]} had unsaved edits, so it was left unsaved.`;
+    else if (unsaved.length) message += ` ${unsaved.slice(0, -1).join(", ")} and ${unsaved.at(-1)} had unsaved edits, so they were left unsaved.`;
+    this.toast("success", message);
+    return true;
+  }
+
+  /** Answers the Rename variable form on screen (null: cancelled). */
+  closeRenaming(choice: RenameChoice | null) {
+    const r = this.renaming;
+    this.renaming = null;
+    r?.resolve(choice);
   }
 
   /** Opens the environment picker in the top bar. */

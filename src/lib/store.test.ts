@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, HttpFile, HttpResponse, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Usage } from "./types";
 import { newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
+  saveEnvironments: vi.fn(),
   getTree: vi.fn(),
 }));
 const {
@@ -39,6 +40,7 @@ const {
   openWorkspace,
   getSettings,
   loadEnvironments,
+  saveEnvironments,
   getTree,
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
@@ -1286,6 +1288,102 @@ describe("find usages", () => {
 
     expect(app.modal).toBe("env");
     expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
+  });
+});
+
+describe("renaming a variable", () => {
+  const OTHER = "/ws/api/authors.http";
+  const envSet = (): EnvironmentSet => ({
+    shared: [],
+    environments: [
+      { name: "dev", variables: [{ name: "token", value: "t", secret: true }, { name: "auth", value: "Bearer {{token}}", secret: false }] },
+    ],
+    privateFileIgnored: true,
+  });
+  const inUrl = (path: string, index: number, name: string, url: string): Usage => ({
+    kind: "request",
+    path,
+    index,
+    name,
+    method: "GET",
+    url,
+    field: { kind: "url" },
+    disabled: false,
+    start: 0,
+    end: 9,
+  });
+
+  beforeEach(() => {
+    app.root = "/ws";
+    app.envSet = envSet();
+    saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockImplementation(async () => structuredClone(saveEnvironments.mock.lastCall![0]));
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+  });
+
+  /** Renames `token` to `apiToken` through the form, as the user would. */
+  async function rename(usages: Usage[] | null) {
+    const done = app.renameVariable("token");
+    expect(app.renaming?.name).toBe("token");
+    app.closeRenaming({ name: "apiToken", usages });
+    return done;
+  }
+
+  it("without updating references, renames it in every environment and touches no .http file", async () => {
+    expect(await rename(null)).toBe(true);
+
+    expect(saveEnvironments).toHaveBeenCalledWith({
+      ...envSet(),
+      environments: [
+        { name: "dev", variables: [{ name: "apiToken", value: "t", secret: true }, { name: "auth", value: "Bearer {{token}}", secret: false }] },
+      ],
+    });
+    expect(app.envSet?.environments[0].variables[0].name).toBe("apiToken");
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(readHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("updating references saves files that had no unsaved edits, and only renames in memory in one that had", async () => {
+    // books.http is open with an unsaved edit; authors.http isn't open.
+    const [list] = await openAll(fileOf(["GET", "List", "{{token}}/books"], ["GET", "Get", "https://x/1"]));
+    app.requestFor(list)!.name = "List all"; // unsaved
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Authors", "{{token}}/authors"]));
+
+    expect(
+      await rename([
+        inUrl(PATH, 0, "List all", "{{token}}/books"),
+        inUrl(OTHER, 0, "Authors", "{{token}}/authors"),
+        { kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "auth", secret: false, start: 7, end: 16 },
+      ]),
+    ).toBe(true);
+
+    expect(saveEnvironments.mock.lastCall![0].environments[0].variables).toEqual([
+      { name: "apiToken", value: "t", secret: true },
+      { name: "auth", value: "Bearer {{apiToken}}", secret: false },
+    ]);
+    expect(saveHttpFile).toHaveBeenCalledTimes(1);
+    const [path, saved] = saveHttpFile.mock.lastCall!;
+    expect(path).toBe(OTHER);
+    expect(saved.requests[0].url).toBe("{{apiToken}}/authors");
+    expect(app.isDocDirty(OTHER)).toBe(false);
+    // The open file has the rename on screen, and is still unsaved.
+    expect(app.docs[PATH].file.requests.map((r) => r.url)).toEqual(["{{apiToken}}/books", "https://x/1"]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment and 2 files. books.http had unsaved edits, so it was left unsaved.");
+  });
+
+  it("cancelling the form changes nothing", async () => {
+    const done = app.renameVariable("token");
+    app.closeRenaming(null);
+    expect(await done).toBe(false);
+    expect(saveEnvironments).not.toHaveBeenCalled();
+  });
+
+  it("stops before touching any file if the environments can't be saved", async () => {
+    saveEnvironments.mockRejectedValue("disk full");
+    expect(await rename([inUrl(OTHER, 0, "Authors", "{{token}}/authors")])).toBe(false);
+    expect(readHttpFile).not.toHaveBeenCalled();
+    expect(app.toasts.at(-1)?.message).toBe("Could not save environments: disk full");
   });
 });
 
