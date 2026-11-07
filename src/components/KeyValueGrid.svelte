@@ -414,10 +414,10 @@
               onblur={commitEdit}
             ></textarea>
           {:else if row.description}
-            <button class="desc" style:grid-column="{subStart} / -1" use:tooltip={row.description} onclick={() => startEdit(row)}>{row.description}</button>
+            <button class="desc" style:grid-column="{subStart} / -1" use:tooltip={row.description} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>{row.description}</button>
           {:else}
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
-            <button class="desc add" style:grid-column="{subStart} / -1" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(row)}>Add description</button>
+            <button class="desc add" style:grid-column="{subStart} / -1" onmousedown={(e) => e.preventDefault()} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>Add description</button>
           {/if}
         {/if}
         {#if error}
@@ -548,10 +548,15 @@
     background: var(--panel-2);
     color: var(--text);
     resize: none;
-    outline: var(--focus-ring);
-    outline-offset: var(--focus-ring-offset);
     overflow: hidden;
     white-space: pre-wrap;
+  }
+  /* The line runs to the grid's right edge, which clips: inset the ring so all
+     of it shows. */
+  .desc:focus-visible,
+  .desc-edit {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-inset);
   }
   .desc-edit::placeholder {
     color: var(--faint);
