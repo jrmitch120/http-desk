@@ -7,7 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength } from "../lib/http";
-import type { JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import type { AuthPart, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been evicted. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -206,7 +206,8 @@ function findUsages(name: string, open: { path: string; file: any }[]) {
           for (const part of ["name", "value"] as const) fields.push([{ kind, index: i, name: kv.name, part }, kv[part], !s.enabled || !kv.enabled]);
         });
       const a = r.auth;
-      const auth = { none: [], basic: ["username", "password"], bearer: ["token"], apiKey: ["keyValue"] }[a.kind] as ("username" | "password" | "token" | "keyValue")[];
+      const apiKey: AuthPart[] = a.keyLocation === "query" ? ["keyName", "keyValue"] : ["keyValue"];
+      const auth = ({ none: [], basic: ["username", "password"], bearer: ["token"], apiKey } as Record<string, AuthPart[]>)[a.kind];
       for (const part of auth) fields.push([{ kind: "auth", part }, a[part], !a.enabled]);
       if (r.body.mode !== "none") fields.push([{ kind: "body" }, r.body.text, !r.body.enabled]);
       for (const [field, text, off] of fields)

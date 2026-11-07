@@ -24,6 +24,7 @@ describe("usageRows", () => {
       inRequest({ kind: "param", index: 1, name: "debug", part: "value" }, { disabled: true }),
       inRequest({ kind: "header", index: 0, name: "Authorization", part: "value" }),
       inRequest({ kind: "auth", part: "token" }),
+      inRequest({ kind: "auth", part: "keyName" }),
       inRequest({ kind: "body" }),
       inRequest({ kind: "variable", index: 0, name: "me" }),
     ]);
@@ -32,6 +33,7 @@ describe("usageRows", () => {
       ["List users", "GET", "users.http · Param debug", true],
       ["List users", "GET", "users.http · Header Authorization", false],
       ["List users", "GET", "users.http · Auth token", false],
+      ["List users", "GET", "users.http · Auth API key name", false],
       ["List users", "GET", "users.http · Body", false],
       ["List users", "GET", "users.http · File variable @me", false],
     ]);

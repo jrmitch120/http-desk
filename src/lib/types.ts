@@ -124,6 +124,10 @@ export interface SearchHit {
   url: string;
 }
 
+/** An auth field that can hold references (core `workspace::AuthPart`): the `Auth`
+ *  property of that name. `keyName` only for a query API key, whose name is resolved at send. */
+export type AuthPart = "username" | "password" | "token" | "keyName" | "keyValue";
+
 /**
  * The field of a request a `{{reference}}` is in (core `workspace::RequestField`).
  * `index` counts into `query.items`, `headers.items` or `variables`; `url` is the
@@ -132,7 +136,7 @@ export interface SearchHit {
 export type UsageField =
   | { kind: "url" }
   | { kind: "param" | "header"; index: number; name: string; part: "name" | "value" }
-  | { kind: "auth"; part: "username" | "password" | "token" | "keyValue" }
+  | { kind: "auth"; part: AuthPart }
   | { kind: "body" }
   | { kind: "variable"; index: number; name: string };
 

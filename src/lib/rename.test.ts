@@ -58,6 +58,13 @@ describe("renameInFile", () => {
     expect(f.requests[0]).toEqual(newRequest("Other"));
   });
 
+  it("renames a query API key's name (resolved at send) as well as its value", () => {
+    const req: Request = { ...newRequest("Key"), auth: { ...newRequest().auth, kind: "apiKey", keyLocation: "query", keyName: "{{host}}", keyValue: "{{host}}" } };
+    const f = fileWith(req);
+    renameInFile(f, [inRequest(req, 0, { kind: "auth", part: "keyName" }, 0, 8), inRequest(req, 0, { kind: "auth", part: "keyValue" }, 0, 8)], "host", "h2");
+    expect([f.requests[0].auth.keyName, f.requests[0].auth.keyValue]).toEqual(["{{h2}}", "{{h2}}"]);
+  });
+
   it("rewrites File variables at the top of the file", () => {
     const f = fileWith(newRequest("A"));
     f.header.variables = [

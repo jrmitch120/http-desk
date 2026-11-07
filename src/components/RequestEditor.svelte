@@ -11,6 +11,7 @@
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -91,7 +92,7 @@
   let paramsGrid = $state<KeyValueGrid<KeyValue>>();
   let headersGrid = $state<KeyValueGrid<KeyValue>>();
   let panel = $state<HTMLElement>();
-  const AUTH_LABELS = { username: "Username", password: "Password", token: "Token", keyValue: "Value" };
+
   $effect(() => {
     const want = app.fieldWanted;
     if (want?.tabId !== tab.id || !req) return;
@@ -107,7 +108,7 @@
     tick().then(() => {
       if (field.kind === "param") paramsGrid?.focusValue(req.query.items[field.index]);
       else if (field.kind === "header") headersGrid?.focusValue(req.headers.items[field.index]);
-      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_LABELS[field.part]}"]`)?.focus();
+      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_FIELDS[field.part].label}"]`)?.focus();
     });
   });
   $effect(() => {

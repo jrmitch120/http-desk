@@ -657,7 +657,8 @@ Decisions made during implementation, beyond the plan above:
   the app has them, unsaved edits included, which `app.findUsages` sends), then the
   values in every folder's env files (the root's, then each folder's in explorer order). It finds direct references only, as written:
   a request's URL, param and header names and values, its auth fields (those of its
-  kind), its body text in any mode, its own `@name` values, the File variables at the
+  kind, including a query API key's name, which is resolved at send; a header key's
+  name is sent as written), its body text in any mode, its own `@name` values, the File variables at the
   top of a file, and environment and shared values. A request that uses `{{base}}`,
   whose value uses `{{host}}`, isn't listed under `host`; the `base` definition is. Each
   result (`workspace::Usage`, `Usage` in `src/lib/types.ts`) says where the reference
