@@ -74,6 +74,7 @@ Requests you don't edit are saved byte-for-byte as they were.
 | Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
 | Switch environment | Top-right selector, or `⌘⌥E` (macOS) / `Ctrl Alt E` (Windows, Linux), then type to filter and `Enter`; the window title names the active one |
 | Edit environments | Layers icon next to the selector, or `⌘/Ctrl E` |
+| Extract to variable | Select text in the URL bar or a value field, then right-click → *Extract to variable…* or `⌘⌥V` (macOS) / `Ctrl Alt V` (Windows, Linux); name it and pick File variable, the selected environment or all environments |
 | Settings | Gear icon in the top bar, or `⌘/Ctrl ,` |
 | Import OpenAPI | Top bar → *Import OpenAPI* |
 | See the `.http` text | `.http` button above the URL bar |

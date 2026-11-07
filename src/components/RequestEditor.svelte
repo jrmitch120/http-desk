@@ -44,7 +44,11 @@
       prompts: req ? requestPrompts(req) : [],
       answers: app.promptAnswers(tab),
     };
-    return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d) };
+    return {
+      ...makeVarProvider(scope),
+      edit: (d: Definition) => app.editDefinition(tab.id, d),
+      extract: (value: string) => app.extractVariable(tab.id, value),
+    };
   });
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");

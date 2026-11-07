@@ -29,6 +29,20 @@
       fileVars = toRows(file);
     }
   });
+  // A change made elsewhere (Extract to variable) updates the rows in place, so
+  // a row being edited keeps its field.
+  $effect.pre(() => {
+    const vars = file.header.variables.map((v) => ({ name: v.name, value: v.value }));
+    untrack(() => {
+      const named = fileVars.filter((v) => v.name);
+      vars.forEach((v, i) => {
+        const row = named[i];
+        if (!row) fileVars.push({ enabled: true, ...v });
+        else if (row.name !== v.name || row.value !== v.value) Object.assign(row, v);
+      });
+      for (const gone of named.slice(vars.length)) fileVars.splice(fileVars.indexOf(gone), 1);
+    });
+  });
   $effect(() => {
     const vars = fileVars.filter((v) => v.name).map((v) => ({ name: v.name, value: v.value }));
     untrack(() => {

@@ -3,6 +3,7 @@
 // sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, HttpFile, HttpResponse } from "./types";
+import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
+  saveEnvironments: vi.fn(),
   getTree: vi.fn(),
 }));
 const {
@@ -1338,5 +1340,115 @@ describe("Prompt variables", () => {
     await app.send(app.activeTabId!);
     expect(app.dialog).toBeNull();
     expect(sentPrompts(1)).toEqual({});
+  });
+});
+
+describe("Extract to variable", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = { shared: [], environments: [], privateFileIgnored: true };
+    app.extraction = null;
+  });
+
+  it("to a File variable: adds an @name line at the top of the file, unsaved, and returns the name", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+    const extracting = app.extractVariable(tab.id, "https://api.example.com");
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    expect(app.extraction!.value).toBe("https://api.example.com");
+    app.closeExtraction({ name: "baseUrl", target: { kind: "file" } });
+
+    expect(await extracting).toBe("baseUrl");
+    expect(app.docs[PATH].file.header.variables).toEqual([{ name: "baseUrl", value: "https://api.example.com" }]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(app.extraction).toBeNull();
+  });
+
+  /** Two environments; `staging` already has a Secret. */
+  const twoEnvs = () => ({
+    shared: [{ name: "version", value: "v1", secret: false }],
+    environments: [
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "s3cret", secret: true }] },
+    ],
+    privateFileIgnored: true,
+  });
+  /** Extracts `value` from the tab's request with `choice` and returns what the store returned. */
+  async function extract(tabId: string, value: string, choice: ExtractChoice | null) {
+    const extracting = app.extractVariable(tabId, value);
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    app.closeExtraction(choice);
+    return extracting;
+  }
+
+  it("to the selected environment: saves it in that environment's env file and reloads the environments", async () => {
+    app.envSet = twoEnvs();
+    app.envName = "staging";
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "staging" } })).toBe("baseUrl");
+
+    const saved = api.saveEnvironments.mock.calls[0][0];
+    expect(saved.environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      {
+        name: "staging",
+        variables: [
+          { name: "token", value: "s3cret", secret: true },
+          { name: "baseUrl", value: "https://api.example.com", secret: false },
+        ],
+      },
+    ]);
+    expect(saved.shared).toEqual([{ name: "version", value: "v1", secret: false }]);
+    expect(loadEnvironments).toHaveBeenCalled();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+  });
+
+  it("to all environments: sets the same value in each, replacing a same-named one in place (a Secret stays a Secret)", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+
+    expect(api.saveEnvironments.mock.calls[0][0].environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "abc", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "abc", secret: true }] },
+    ]);
+    expect(app.toasts.map((t) => t.message)).toContain("Added token to every environment");
+  });
+
+  it("returns null when the env files can't be written, or when cancelled, so the field keeps its text", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockRejectedValue("disk full");
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "local" } })).toBeNull();
+    expect(app.toasts.map((t) => t.message)).toContain("Could not save environments: disk full");
+
+    expect(await extract(tab.id, "https://api.example.com", null)).toBeNull();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("to a File variable that exists: replaces the value of the definition the request uses, adding no line", async () => {
+    const f = fileOf(["GET", "A", "https://a.example.com/x"], ["GET", "B", "https://b.example.com/y"]);
+    f.header.variables = [{ name: "host", value: "old" }, { name: "id", value: "1" }];
+    f.requests[1].variables = [{ name: "host", value: "own" }];
+    const [a, b] = await openAll(f);
+    const file = () => app.docs[PATH].file;
+
+    await extract(a.id, "https://a.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().header.variables).toEqual([{ name: "host", value: "https://a.example.com" }, { name: "id", value: "1" }]);
+
+    // B declares its own @host, which wins over the file's, so that one changes.
+    await extract(b.id, "https://b.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().requests[1].variables).toEqual([{ name: "host", value: "https://b.example.com" }]);
+    expect(file().header.variables[0]).toEqual({ name: "host", value: "https://a.example.com" });
   });
 });

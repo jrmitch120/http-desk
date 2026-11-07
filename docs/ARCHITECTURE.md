@@ -581,6 +581,15 @@ Decisions made during implementation, beyond the plan above:
   shows it as written (a placeholder, so a prompted host isn't a URL error), shows a
   masked value as `••••••••`, and offers "Forget prompted values", after which the
   next send asks again.
+* **Extract to variable** writes no new syntax. A File variable is a standard
+  `@name = value` line at the top of the file (or a new value for the same-named File
+  variable the request uses), an in-memory edit like any other, so it shows as unsaved
+  and untouched requests still save byte-for-byte. An environment destination (the
+  selected one, or all of them with the same value) goes through `save_environments`
+  at once, since env files have no unsaved state outside the Environments modal. The
+  field puts `{{name}}` in place of its selection itself (`src/lib/codemirror/extract.ts`),
+  so every field owner sees an ordinary edit; the store (`app.extractVariable`) only
+  asks and writes the definition. See [controls.md](controls.md#varfield).
 * **Query encoding** follows [ADR-0001](adr/0001-query-encoding.md). The params table
   holds decoded names and values. In the file, only characters that would change the
   query's structure are percent-escaped: whitespace, `&`, `#`, `=` in names, and `%`
