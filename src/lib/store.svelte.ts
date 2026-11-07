@@ -5,7 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import { legacyPaneSizes } from "./panes";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, TreeNode } from "./types";
+import { toSendError } from "./sendError";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -32,9 +33,12 @@ export interface RunState {
   loading: boolean;
   startedAt: number;
   response?: HttpResponse;
-  error?: string;
+  /** Why the last send failed (Retry is `send` again). */
+  error?: SendError;
   /** The last send was cancelled; `response` is still the one before it. */
   cancelled?: boolean;
+  /** Body bytes received on the wire so far, while loading (`send-progress` events). */
+  received?: number;
 }
 
 export interface Toast {
@@ -64,6 +68,8 @@ export interface DialogState {
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | null;
+/** A section of the Settings modal that can be opened scrolled into view. */
+export type SettingsSection = "tls";
 
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
@@ -108,6 +114,12 @@ class AppStore {
   starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
+  /** Fix-it requests from the error panel, each cleared by the component that
+   *  acts on it: the Settings section to scroll to when the modal opens, the tab
+   *  whose request editor should show its Settings, and the environment picker. */
+  settingsSection = $state<SettingsSection | null>(null);
+  requestSettingsFor = $state<string | null>(null);
+  envPickerWanted = $state(false);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -145,6 +157,9 @@ class AppStore {
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
     await listen<{ message: string }>("workspace-watch-error", (e) => this.onWatchError(e.payload.message));
+    await listen<{ runId: string; received: number }>("send-progress", (e) =>
+      this.onSendProgress(e.payload.runId, e.payload.received),
+    );
     // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
     // turns those into a close request; see quit.rs). With nothing unsaved the
     // window closes at once, which quits the app.
@@ -832,10 +847,17 @@ class AppStore {
       if (this.runs[tabId]?.runId !== runId) return;
       this.runs[tabId] = this.cancelled.delete(runId)
         ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
-        : { runId, loading: false, startedAt: 0, error: errorMessage(e) };
+        : { runId, loading: false, startedAt: 0, error: toSendError(e) };
     } finally {
       this.cancelled.delete(runId);
     }
+  }
+
+  /** Records the bytes received so far for a send that is still loading; a
+   *  late event for a finished or replaced run is ignored. */
+  onSendProgress(runId: string, received: number) {
+    const run = Object.values(this.runs).find((r) => r.runId === runId);
+    if (run?.loading) run.received = received;
   }
 
   /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */
@@ -869,6 +891,22 @@ class AppStore {
       else delete envs[this.root];
       await this.updateSettings({ environments: envs });
     }
+  }
+
+  /** Opens the Settings modal, scrolled to `section` if given. */
+  openSettings(section: SettingsSection | null = null) {
+    this.settingsSection = section;
+    this.modal = "settings";
+  }
+
+  /** Switches the tab's request editor to its Settings section (timeouts). */
+  showRequestSettings(tabId: string) {
+    this.requestSettingsFor = tabId;
+  }
+
+  /** Opens the environment picker in the top bar. */
+  chooseEnvironment() {
+    this.envPickerWanted = true;
   }
 
   // ---------------------------------------------------------------- feedback

@@ -4,20 +4,23 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
-use httpdesk_core::exec::{self, ExecSettings, HttpResponse};
+use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
+use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 mod bodies;
 mod confine;
 mod deleting;
+mod json_docs;
 mod paths;
 mod quit;
 mod self_writes;
@@ -25,6 +28,7 @@ mod theme;
 mod watcher;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
+use json_docs::JsonDocs;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -100,8 +104,12 @@ struct AppState {
     self_writes: SelfWrites,
     trash: Trash,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
+    clients: exec::ClientPool,
     /// Recent response bodies by response id (for "save to file").
     bodies: Mutex<RecentBodies>,
+    /// Recent bodies parsed as JSON, by response id (for the filter bar).
+    json_docs: Mutex<JsonDocs>,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
@@ -312,15 +320,28 @@ fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResu
 
 // ------------------------------------------------------------------ execution
 
+/// Payload of the `send-progress` event: body bytes received so far on the
+/// wire for an in-flight send. Emitted at most ~10 times a second (see
+/// `exec::PROGRESS_INTERVAL`) and never after the send returns.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendProgress {
+    run_id: String,
+    received: usize,
+}
+
+/// Unlike other commands, a failed send is a classified `{ kind, message, details }`
+/// object (see `ExecError`), so the viewer can explain it and offer the fix.
 #[tauri::command]
-async fn send_request(
+async fn send_request<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     run_id: String,
     request: Request,
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
-) -> CmdResult<HttpResponse> {
+) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
     let base_dir = file_path
         .as_ref()
@@ -331,12 +352,12 @@ async fn send_request(
 
     let (prepared, ssl) = {
         let env_set = match &root {
-            Some(r) => env::load(r).map_err(err)?,
+            Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
             None => EnvironmentSet::default(),
         };
         let env_vars = env::variables(&env_set, environment.as_deref());
         let resolver = Resolver::for_request(&env_vars, &file_variables, &request.variables, Some(&base_dir));
-        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings).map_err(err)?;
+        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, e),
             _ => Default::default(),
@@ -344,19 +365,26 @@ async fn send_request(
         (prepared, ssl)
     };
 
-    let task = tokio::spawn(async move { exec::execute(prepared, &settings, &ssl).await });
+    let progress_id = run_id.clone();
+    let on_progress = move |received| {
+        let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
+    };
+    // Each send gets a client no other send is using (see ClientPool).
+    let client = state.clients.checkout(&prepared, &settings, &ssl)?;
+    let task = tokio::spawn(async move { exec::execute_on(&client, prepared, &settings, on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
 
     match result {
         Ok(Ok(outcome)) => {
-            state.bodies.lock().unwrap().push(outcome.response.id.clone(), outcome.body);
-            Ok(outcome.response)
+            let response = outcome.response;
+            state.bodies.lock().unwrap().push(response.id.clone(), outcome.body, response.content_type.clone());
+            Ok(with_pretty_text(response).await)
         }
-        Ok(Err(e)) => Err(e.to_string()),
-        Err(e) if e.is_cancelled() => Err("Request cancelled".into()),
-        Err(e) => Err(e.to_string()),
+        Ok(Err(e)) => Err(e),
+        Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
+        Err(e) => Err(ExecError::Other(e.to_string())),
     }
 }
 
@@ -367,13 +395,117 @@ fn cancel_request(state: State<'_, AppState>, run_id: String) {
     }
 }
 
+/// The error for a response id whose body has been evicted (or never stored).
+const RESPONSE_GONE: &str = "Response is no longer available";
+
+/// The stored body of `response_id`, or [`RESPONSE_GONE`].
+fn stored_body(state: &AppState, response_id: &str) -> CmdResult<Arc<[u8]>> {
+    state.bodies.lock().unwrap().get(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+}
+
+/// The stored body of `response_id` with its content type, or [`RESPONSE_GONE`].
+fn stored_body_with_type(state: &AppState, response_id: &str) -> CmdResult<(Arc<[u8]>, Option<String>)> {
+    state.bodies.lock().unwrap().get_with_type(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+}
+
 #[tauri::command]
 async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String, path: PathBuf) -> CmdResult<()> {
     off_main(app, move |state| {
-        let body = state.bodies.lock().unwrap().get(&response_id).ok_or("Response is no longer available")?;
+        let body = stored_body(state, &response_id)?;
         std::fs::write(&path, body).map_err(err)
     })
     .await
+}
+
+/// Beautify and Minify: re-lays out a request body without changing any token
+/// (`body_format`). On the blocking pool, since bodies can be large.
+#[tauri::command]
+async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || body_format::format_body(&text, kind, mode).map_err(err))
+        .await
+        .map_err(err)?
+}
+
+/// The Hex view of a binary response: a dump of the start of the stored body
+/// (`body_format::hexdump`), so it works even for bodies too big to send to
+/// the UI as base64.
+#[tauri::command]
+async fn hexdump<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
+    off_main(app, move |state| {
+        let body = stored_body(state, &response_id)?;
+        Ok(body_format::hexdump(&body))
+    })
+    .await
+}
+
+/// The stored body of `response_id` parsed as JSON, parsed on first use and
+/// then kept (see `json_docs`). The lock isn't held while parsing, so a large
+/// body doesn't hold up queries on other responses.
+fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>> {
+    if let Some(parsed) = state.json_docs.lock().unwrap().get(response_id) {
+        return parsed;
+    }
+    let (body, content_type) = stored_body_with_type(state, response_id)?;
+    // Decoded the way the response's `bodyText` was (its charset, else UTF-8).
+    let text = exec::decode_text(&body, content_type.as_deref()).ok_or("The body isn't text")?;
+    let parsed = JsonDocument::parse(&text).map(Arc::new).map_err(err);
+    state.json_docs.lock().unwrap().insert(response_id.to_owned(), parsed.clone());
+    parsed
+}
+
+/// The filter bar: evaluates a JSONPath expression against a stored response
+/// body, returning the match count and the matches as lossless pretty JSON.
+#[tauri::command]
+async fn filter_response<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    response_id: String,
+    expression: String,
+) -> CmdResult<FilterResult> {
+    off_main(app, move |state| json_doc(state, &response_id)?.filter(&expression).map_err(err)).await
+}
+
+/// Text bodies up to this size arrive with their Pretty text, so Pretty view
+/// shows at once. Larger ones are formatted only when Pretty is opened
+/// (`pretty_response`), so a big body isn't formatted, nor sent twice, unasked.
+const PRETTY_INLINE_BYTES: usize = 1024 * 1024;
+
+/// Fills in `pretty_text` for a small JSON or XML response (its raw text if it
+/// doesn't parse, which is what Pretty view shows then), on the blocking pool.
+async fn with_pretty_text(mut response: HttpResponse) -> HttpResponse {
+    let Some(text) = response.body_text.clone().filter(|t| t.len() <= PRETTY_INLINE_BYTES) else {
+        return response;
+    };
+    let content_type = response.content_type.clone();
+    let pretty = tauri::async_runtime::spawn_blocking(move || {
+        let pretty = body_format::pretty_response(content_type.as_deref(), &text);
+        pretty.map(|r| r.unwrap_or(text))
+    });
+    // If formatting failed outright, the viewer asks for it again when needed.
+    response.pretty_text = pretty.await.ok().flatten();
+    response
+}
+
+/// The response Pretty view of a stored body, for bodies too large to arrive
+/// with their Pretty text. Rejects when the body isn't JSON or XML, doesn't
+/// parse, or has been evicted; the viewer shows the raw body then.
+#[tauri::command]
+async fn pretty_response<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
+    off_main(app, move |state| {
+        let (body, content_type) = stored_body_with_type(state, &response_id)?;
+        let text = exec::decode_text(&body, content_type.as_deref()).ok_or("Response body isn't text")?;
+        body_format::pretty_response(content_type.as_deref(), &text)
+            .ok_or("Response body isn't JSON or XML")?
+            .map_err(err)
+    })
+    .await
+}
+
+/// Key completion for the filter bar: the keys reachable at each place in a
+/// stored JSON response body. Built once per parsed document and kept with it,
+/// so the frontend fetches it once per response and completes locally.
+#[tauri::command]
+async fn response_shape<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<Shape> {
+    off_main(app, move |state| Ok(json_doc(state, &response_id)?.shape().clone())).await
 }
 
 // ------------------------------------------------------------------ settings
@@ -552,6 +684,11 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             send_request,
             cancel_request,
             save_response_body,
+            format_body,
+            hexdump,
+            filter_response,
+            pretty_response,
+            response_shape,
             get_settings,
             save_settings,
             set_unsaved,

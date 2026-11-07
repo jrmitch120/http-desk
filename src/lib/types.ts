@@ -155,15 +155,115 @@ export interface HttpResponse {
   headers: [string, string][];
   timeMs: number;
   ttfbMs: number;
+  /** Decoded body size. */
   bodySize: number;
+  /** Body bytes as received on the wire, before Content-Encoding is undone. */
+  transferredSize: number;
   headersSize: number;
   contentType: string | null;
+  /** What the body is, decided by the core from the content type (else the text). */
+  bodyKind: ResponseKind;
+  /** The response's Content-Encoding header, if any. */
+  contentEncoding: string | null;
   bodyText: string | null;
+  /**
+   * The Pretty view's text, formatted by the shell, for a small JSON or XML
+   * body (its raw text if it doesn't parse). Null for other bodies, and for
+   * large ones: fetch those with `api.prettyResponse` when Pretty is opened.
+   */
+  prettyText: string | null;
   bodyBase64: string | null;
   truncated: boolean;
   request: SentRequest;
   warnings: string[];
+  timings: Timings;
+  /** Every Set-Cookie received, redirect hops first. Shown only; never sent back. */
+  cookies: ResponseCookie[];
 }
+
+/**
+ * Phase timing of the final request after redirects, in ms (`timeMs` covers
+ * every hop). A phase that wasn't measured is absent, not zero: DNS and
+ * connect on a reused connection, DNS for an IP address.
+ */
+export interface Timings {
+  dns?: number;
+  /** TCP connect plus the TLS handshake for https. */
+  connect?: number;
+  ttfb: number;
+  download: number;
+  reused: boolean;
+  redirects: number;
+}
+
+/** One Set-Cookie header, parsed in the core (`httpdesk_core::cookies::ResponseCookie`). */
+export interface ResponseCookie {
+  name: string;
+  value: string;
+  /** Without a leading dot; null means host-only. */
+  domain: string | null;
+  path: string | null;
+  /** RFC 3339 UTC. */
+  expires: string | null;
+  /** Seconds; wins over `expires` when both are set. */
+  maxAge: number | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: "Strict" | "Lax" | "None" | null;
+  /** The URL of the response that set it (a redirect hop or the final one). */
+  url: string;
+  /** The header value as received. */
+  raw: string;
+  /** Set when the header couldn't be read as a cookie; the other fields are then empty. */
+  parseError: string | null;
+}
+
+/** The syntax `format_body` formats (core `body_format::BodyKind`). */
+export type BodyKind = "json" | "xml";
+
+/** What a response body is (core `body_format::ResponseKind`): its views, highlighting and Save extension. */
+export type ResponseKind = "json" | "html" | "xml" | "image" | "pdf" | "media" | "text" | "binary";
+
+/** Pretty: one member per line, two-space indent. Minify: no whitespace. */
+export type FormatMode = "pretty" | "minify";
+
+/** What a JSONPath filter selected (core `json_filter::FilterResult`). */
+export interface FilterResult {
+  matches: number;
+  /** The matches as a pretty-printed JSON array, numbers as the server sent them. */
+  text: string;
+}
+
+/**
+ * The keys reachable at each place in a JSON body (core `json_filter::Shape`),
+ * for filter key completion. `keys` are `[name, shape]` pairs in document
+ * order; `items` is the merged shape of array elements (present for any array).
+ */
+export interface JsonShape {
+  keys?: [string, JsonShape][];
+  items?: JsonShape;
+}
+
+/** Why a send failed; mirrors the core's `ExecError` kinds. */
+export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
+
+/**
+ * A failed send as `send_request` rejects with it (core `ExecError`, kinds
+ * from `exec::ErrorKind`). `message` is the core's explanation (for transport
+ * errors, the full error chain); `details` depends on `kind`.
+ */
+export type SendError = { message: string } & (
+  | { kind: "dns"; details: { host: string } }
+  | { kind: "refused" | "reset"; details: { host: string; port: number } }
+  | { kind: "tls"; details: { reason: TlsReason } }
+  | { kind: "timeoutIdle" | "timeoutConnect"; details: { timeoutMs: number } }
+  | { kind: "invalidUrl"; details: { url: string; reason: string } }
+  | { kind: "unresolvedVariable"; details: { names: string[] } }
+  | { kind: "file"; details: { path: string; reason: string } }
+  | { kind: "other"; details: null }
+);
+
+export type SendErrorKind = SendError["kind"];
 
 export interface ExecSettings {
   timeoutMs: number;

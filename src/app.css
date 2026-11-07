@@ -63,6 +63,11 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  /* the inset of the bars above the response body (its toolbar, the JSONPath
+     filter row and the editor's find bar), so their edges line up */
+  --bar-pad-y: 6px;
+  --bar-pad-start: 16px;
+  --bar-pad-end: 10px;
 
   /* the one floating surface: context menu, tooltips, selects, suggestion
      lists and CodeMirror tooltips (.popup-surface below) */
@@ -184,6 +189,9 @@ textarea,
 .input::placeholder {
   color: var(--faint);
 }
+.input.small {
+  height: var(--control-h-sm);
+}
 .input.mono {
   font-family: var(--mono);
   font-size: 12.5px;
@@ -197,6 +205,7 @@ textarea.input {
 .btn:focus-visible,
 .icon-btn:focus-visible,
 .link:focus-visible,
+.copyable:focus-visible,
 .subtab:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
@@ -274,6 +283,11 @@ textarea.input {
 .icon-btn.active {
   color: var(--accent);
 }
+/* A short text glyph instead of an icon (the find bar's Aa, .*, ab toggles). */
+.icon-btn.glyph {
+  font-family: var(--mono);
+  font-size: 12px;
+}
 
 .link {
   color: var(--focus);
@@ -284,6 +298,66 @@ textarea.input {
 }
 .link:hover {
   text-decoration: underline;
+}
+/* A scrolling table of rows in a response tab (headers, cookies, the sent
+   request). `.k` is a bold name column sized to its content, `.v` a monospace
+   value column; `th` heads columns where a table has them. */
+.data-table {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+}
+.data-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.data-table th {
+  padding: 6px var(--space-2);
+  border-bottom: 1px solid var(--border-strong);
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 6px var(--space-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.data-table .k {
+  font-weight: 600;
+  white-space: nowrap;
+  width: 1%;
+  padding-right: var(--space-6);
+  color: var(--text-2);
+}
+.data-table .v {
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+/* A value shown as text that copies itself on click (use:copyable, src/lib/copyable.ts).
+   Its text stays selectable, so a part can still be copied by hand. */
+.copyable {
+  display: block;
+  width: calc(100% + 8px);
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.copyable:hover {
+  background: var(--hover);
 }
 
 .muted {

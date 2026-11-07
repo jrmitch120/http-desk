@@ -70,7 +70,11 @@ control or the popup layer.
 ## Response viewer
 
 - [ ] Status badge colours (2xx, 4xx, 5xx), time and size metrics.
-- [ ] Pretty / Raw / Preview segmented control; folding and search in Pretty.
+- [ ] Body / Headers / Cookies / Timing / Request segmented control: the header count on
+      Headers, a cookie count on Cookies only when the response set cookies (and its
+      "This response set no cookies" empty state when it didn't), the Timing waterfall,
+      and the Request tab's reconstruction note.
+- [ ] Pretty / Raw / Preview segmented control (Pretty only for JSON and XML; no switch for plain text); folding, and the find bar (⌘/Ctrl F) in Pretty.
 - [ ] An HTML preview, an image preview, and the hex view of a binary response.
 - [ ] A failed send (stop the server): the inline error banner.
 - [ ] Toasts: copy the response body, save it to a file.

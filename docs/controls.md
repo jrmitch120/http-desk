@@ -38,6 +38,7 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 | A number with limits and a unit | [NumberField](#numberfield) |
 | Free text, paths, or values with their own syntax (`30s`) | [`.input`](#buttons-inputs-and-links) |
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
+| A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A short label next to an item (method, status, OFF, version) | [Badge](#badge) |
@@ -54,14 +55,21 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 `SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
 pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
-- Props: `options` (`{ value, label, icon? }[]`), `value`, `onchange(value)`, `label` (the
-  group's accessible name, required).
-- One look and one size, on purpose: every switch in the app (body type, response view,
-  Settings theme and layout, OpenAPI source and grouping) must match.
+- Props: `options` (`{ value, label, icon?, count? }[]`), `value`, `onchange(value)`,
+  `label` (the group's accessible name, required), `disabled?`.
+- `count` shows a number after the label and is part of the option's name ("Headers 4").
+  Leave it out and nothing shows; pass `0` only where an empty option says something
+  (a response with no headers), so empty tabs don't fill up with zeros.
+- One look and one size, on purpose: every switch in the app (body type, the response
+  viewer's tabs, response view, Settings theme and layout, OpenAPI source and grouping)
+  must match.
   `e2e/segmented-control.spec.ts` compares their computed styles, so don't restyle one
   from its parent.
 - Keyboard: Tab reaches the checked option; arrows and Home/End move and select (wrapping).
 - Controlled: it never changes `value`; set it in `onchange`.
+- `disabled` shows the choice but doesn't let it change: the options are dimmed and
+  skip clicks and keys. The response view uses it while filter matches are showing,
+  since they're always pretty-printed. Put a tooltip on a wrapper to say why.
 - It wraps onto a second row when narrow. Past about eight options, or with long labels,
   use a Select.
 
@@ -85,6 +93,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
     `background` to `transparent` through `class`.
 - Width belongs to the caller: pass `class="x"` and style `.parent :global(.x)`. Don't
   target Select's internal class names.
+- `openList()` (through `bind:this`) opens the list from code, focusing the trigger as a
+  click would. The send error panel's "Choose environment" uses it, through the store's
+  `app.chooseEnvironment()`.
 - Keyboard: Enter, Space or the arrows open it; typing filters (case-insensitive, anywhere
   in the label); arrows, Home/End and PageUp/PageDown move; Enter picks; Escape and Tab
   close without a change. Focus stays on the trigger throughout.
@@ -101,6 +112,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 - Variants:
   - Context menu: call `menu.show(e, items)` from `oncontextmenu`; it opens at the
     pointer, or under the element when opened from the keyboard (Shift+F10).
+    Editors keep the webview's own menu, except the response body editor for JSON
+    bodies (Copy, Select all, Copy path). It uses the Editor's `caretForMenu(e)`, and
+    Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`).
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
@@ -163,8 +177,33 @@ spinners.
 - Keyboard: typing opens it; Up/Down move; Enter or Tab accept (Tab still moves focus on);
   Escape dismisses; Ctrl+Space opens it on demand. Accepting fires an `input` event, so
   the owner sees it as typing.
+- For text with structure, pass `source(value, caret)` instead of `options`. It returns
+  `{ from, matches }` (or null), each match `{ value, from, to, insert }`; accepting one
+  replaces the text from `from` up to the caret with its `insert`. The filter bar's key
+  completion uses it (`keyCompletion` in `src/lib/jsonpath.ts`). With a source, the
+  input is always a combobox; when a new source arrives while the input is focused, the
+  list opens for what's already typed.
 - Suggestions are free text: the user can type anything. If only listed values are
   allowed, use a Select.
+
+### FilterField
+
+`FilterField.svelte`. A text field with a filter icon inside it, for narrowing what a
+panel shows: the Headers tab's name filter and the Body tab's JSONPath filter bar. With
+`icon="search"` it is the Find field of the editors' find bar
+(`src/lib/codemirror/FindBar.svelte`), which replaces CodeMirror's default search panel
+because that one builds native checkboxes at runtime. An invalid regular expression there
+gets `invalid` plus an inline message named by `describedby`, like the JSONPath bar.
+
+- Props: `value`, `oninput(value)` (the owner keeps the value and decides what typing
+  does), `label` (accessible name), `placeholder?`, `icon?` (`filter`, the default, or
+  `search`), `mono?` (for expressions),
+  `invalid?` with `describedby?` (a danger border, and the id of the inline error),
+  `suggest?` (`use:suggestions` options, making it a combobox), `onfocus?`, `onkeydown?`.
+- Height `--control-h-sm`. It fills the space its owner gives it (`flex: 1`), so the
+  owner sets the width by layout, not a literal size.
+- Escape doesn't clear it by itself; an owner that wants that (the JSONPath bar) does it
+  in `onkeydown`.
 
 ### Buttons, inputs and links
 
@@ -176,8 +215,20 @@ Global classes in `src/app.css`, not components:
   (`--control-h-sm`, for rows and banners).
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
+  `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
+  conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
 - `.link`: a button that reads as a link.
-- `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
+- `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
+  toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
+  accessible name is the value. The click is the `use:copyable={{ value, copied }}`
+  action (`src/lib/copyable.ts`; `copied` is the toast). The text stays selectable; the
+  action skips the copy when the click ended a drag that selected part of it.
+- `.data-table`: the scrolling wrapper of a table of rows in a response tab (headers,
+  cookies, the sent request). Inside it, `td.k` is a bold name column sized to its
+  content, `td.v` a monospace value column, and `th` heads columns where a table has
+  them.
+- `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
+  `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
   Focus shows `--focus-ring`.
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.
   Icons are `aria-hidden`, so the button around them carries the name.
@@ -302,6 +353,8 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 - `<button class="icon-btn" aria-label="Refresh" use:tooltip>`: the text is the
   aria-label.
 - `<span use:tooltip={text}>`: explicit text, linked as the element's description.
+  A `\n` in the text starts a new line (e.g. the status pill: explanation, then version
+  and final URL).
 - `use:tooltip={null}` or `""`: none. A component forwarding an optional tooltip prop
   passes `prop ?? null`, because `undefined` means "use the aria-label".
 - Components can't take `use:`, so owned controls that wrap a button expose a prop
@@ -317,7 +370,9 @@ New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `--control-h` (30px), `--control-h-sm` (24px) and `--control-h-icon` (26px) for heights;
 `--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
 also for the size of small fixed elements that are not controls (a badge's height, a
-Toggle's track); `--radius` and `--radius-sm`;
+Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared
+by the bars above the response body (its toolbar, the JSONPath filter row, the editor's
+find bar), so their edges line up; `--radius` and `--radius-sm`;
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
 `:focus-visible` for focus (a control flush against an edge that clips, such as a tab
 in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of

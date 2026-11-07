@@ -21,13 +21,13 @@ test("a warning banner in Settings is exposed as a status", async ({ page }) => 
 });
 
 test("an error banner in the response viewer is exposed as an alert", async ({ page }) => {
-  await openApp(page, "?sendError=1");
+  await openApp(page, "?sendError=refused");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("ControlOrMeta+Enter");
 
-  const alert = page.getByRole("alert").filter({ hasText: "Could not send request" });
+  const alert = page.getByRole("alert").filter({ hasText: "Connection refused" });
   await expect(alert).toBeVisible();
-  await expect(alert).toContainText("Connection refused");
+  await expect(alert).toContainText("Nothing is listening on 127.0.0.1:8765. Is the server running?");
 });
 
 test("the OpenAPI importer's warnings banner is exposed as a status", async ({ page }) => {

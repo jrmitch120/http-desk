@@ -35,7 +35,8 @@ jobs:
       - run: pnpm build
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # --no-fail-fast: a failing test binary doesn't hide the results of the rest.
+      - run: cargo test --workspace --no-fail-fast
 
   # Playwright drives the real UI under the Vite dev server with the mocked
   # backend (src/dev/mock.ts). No Rust or WebKitGTK needed; one OS is enough.

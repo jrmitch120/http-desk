@@ -393,6 +393,27 @@ describe("cancelling a request", () => {
   });
 });
 
+describe("download progress", () => {
+  it("counts bytes received for the in-flight send and drops the count when it completes", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    let resolve!: (r: HttpResponse) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const sending = app.send(tab.id);
+    const runId = app.runs[tab.id].runId;
+
+    app.onSendProgress(runId, 1200);
+    expect(app.runs[tab.id].received).toBe(1200);
+    app.onSendProgress("some-other-run", 99);
+    expect(app.runs[tab.id].received).toBe(1200);
+
+    resolve({ id: "r1", status: 200 } as HttpResponse);
+    await sending;
+    expect(app.runs[tab.id].received).toBeUndefined();
+    app.onSendProgress(runId, 5000);
+    expect(app.runs[tab.id].received).toBeUndefined();
+  });
+});
+
 describe("saving settings", () => {
   const settings = () => ({ theme: "dark", recentWorkspaces: [], environments: {} }) as unknown as AppSettings;
 

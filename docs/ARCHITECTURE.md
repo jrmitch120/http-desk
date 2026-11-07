@@ -12,9 +12,9 @@ and this document disagree, fix one of them. Terms in **bold** (**File variable*
 
 | Concern | Assessment |
 |---|---|
-| **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, saving a response body) is therefore an async command or runs on the blocking pool, so the window stays responsive. Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
+| **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, saving a response body, formatting a body, a hex dump) is therefore an async command or runs on the blocking pool, so the window stays responsive. Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
 | **Rust core** | `.http` parsing, serialization, variable resolution, execution and OpenAPI generation all live in a plain library crate (`crates/httpdesk-core`) with **no Tauri dependency**. It can be tested with `cargo test` and no window, and could later be reused by a CLI. |
-| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. A new `Client` is built per execution because TLS and redirect settings can differ per request or environment. Building one costs microseconds next to the request itself. |
+| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. TLS and redirect settings can differ per request or environment, so a client is built for its settings, and the shell keeps idle ones in an `exec::ClientPool` keyed by everything a client is built from (redirects, timeouts, TLS verification, CA and client certificate files by path, size and modification time, and the proxy environment variables). Each send checks out a client no other send is using, or a new one when none is idle (at most 8 are kept idle), so a later send can go over a connection an earlier one left open and the Timing tab can say "reused". Each client carries timing hooks (a DNS resolver wrapper, a connector layer and a redirect-policy wrapper) that measure the final request's DNS, connect + TLS, waiting and download phases, and a cookie recorder; both are cleared at the start of each send. |
 | **Svelte 5** | Runes (`$state`, `$derived`) handle the deeply nested request model without a separate store library. It compiles to small, fast bundles. Plain Vite SPA, without SvelteKit (no routing or SSR needed). |
 | **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) and the single-line URL editor (`{{variable}}` highlighting and autocompletion). |
 | **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. The UI uses HttpDesk's own controls and bundled fonts instead of native form widgets and system fonts, so it renders the same in every webview ([ADR-0002](adr/0002-owned-controls-over-native-widgets.md)); the controls are described in [controls.md](controls.md). |
@@ -32,7 +32,14 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   query.rs              query param escaping, unescaping and send-time encoding (ADR-0001)
   env.rs                http-client.env.json / http-client.private.env.json, gitignore check
   vars.rs               {{variable}} + dynamic variable resolution
-  exec.rs               request execution via reqwest
+  exec.rs               request execution via reqwest, send error classification
+  exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
+  exec/timing.rs        phase timing hooks (DNS, connect + TLS, redirects) for the Timing tab
+  cookies.rs            Set-Cookie parsing, and the display-only cookie recorder plugged into reqwest
+  body_format.rs        lossless JSON Beautify/Minify/Pretty: re-indents tokens, never re-parses numbers
+  body_format/          xml.rs (XML formatter, same approach), hex.rs (Hex view dump)
+  json_filter.rs        RFC 9535 JSONPath filter bar: matches copied from the body's own text; shape summary for key completion
+  tls_probe.rs          why a server's certificate was rejected (self-signed, expired)
   openapi/              OpenAPI 3.0/3.1 loading, validation, generation
   workspace.rs          tree listing, search, ignore rule, atomic writes
 src-tauri/              thin Tauri shell: commands, app state
@@ -40,11 +47,13 @@ src-tauri/              thin Tauri shell: commands, app state
   watcher.rs            file watcher
   self_writes.rs        self-write suppression for the watcher
   deleting.rs           trash, and the confirmed permanent delete
-  bodies.rs             recent response bodies kept for "save to file"
+  bodies.rs             recent response bodies kept for "save to file" and the Hex view
+  json_docs.rs          recent bodies parsed as JSON (each with its shape summary), by response id, for the filter bar
   quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
   theme.rs              creates the main window in the saved theme (no dark flash at start-up)
   theme-boot.js         the window's initialization script: sets data-theme before first paint
 src/                    Svelte 5 frontend
+vendor/serde_json_path_core/  patched copy (exact number comparisons in filters; see its PATCHED file)
 ```
 
 ---
@@ -477,7 +486,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Disabled query params and multipart parts reorder after the enabled ones | Documented; deterministic. |
 | `@httpdesk-*` directives might trigger an "unknown tag" hint in JetBrains | They are plain comments to both parsers, and only written when needed (section off, API key auth). |
 | Environment file conventions differ (VS Code uses `settings.json`) | Use the JetBrains env files, which are plain JSON in the repo. VS Code users can use the `vscode-restclient` env-file setting or keep both. |
-| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview or a hex dump. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received. |
+| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. The limit counts decoded bytes, after `Content-Encoding` is undone. Text bodies go to the UI as text. Other bodies go as base64 only up to 25 MB, for an image preview. The shell keeps recent bodies (up to 20, and 256 MB in total, oldest evicted first) so "save to file" writes the bytes received, and the Hex view is the core's dump of the first 64 KB of the stored body (`hexdump` by response id), so it works at any size. Pretty is offered only for JSON and XML (for HTML or text it would show the raw text, so those get Raw, plus Preview for HTML); the Pretty view is formatted by the shell on the blocking pool: up to 1 MB of text it arrives with the response (`prettyText`), larger bodies are formatted from the stored body when Pretty is opened (`pretty_response` by response id), with a loading state meanwhile. If the body doesn't parse or has been evicted, Pretty shows the raw text. Copy body copies a binary body as its base64 text, asking first above 1 MB. The JSONPath filter bar (whole JSON bodies only, not truncated ones) runs `filter_response` by response id on the blocking pool; the shell keeps the last 3 bodies parsed as JSON, so typing doesn't re-parse. Key completion comes from `response_shape`: the keys reachable at each place (array items merged, at most 1000 keys per place), built once per parsed document and kept with it; the webview fetches it once per response and completes locally on every keystroke. serde_json's `arbitrary_precision` isn't enabled: it would still rewrite `1e3` as `1e+3`, and would switch on for Tauri too. Instead the parsed value only decides what matches, and each match is copied from the body's text by its location. Filter comparisons (`==`, `<`, ...) compare numbers exactly: integers as integers (19-digit ids, values past 2^53), and an integer against a decimal or exponent by value (`10.50 == 10.5`, `1e3 == 1000`); serde_json_path compares through f64, so `vendor/serde_json_path_core` patches that. A decimal with more digits than an f64 holds compares as its nearest f64. A body nested deeper than serde_json's 128 levels says "This body is nested too deeply to filter" (the formatter allows 1000). |
 | Huge OpenAPI specs (thousands of operations) | Generation is linear. The operation picker groups operations under collapsible headings and has a filter; it is not virtualized. |
 | External `$ref` to remote URLs | Not fetched (warning); relative-file refs are resolved for specs loaded from a file. |
 | Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand with the [manual OS rendering check](os-checklist.md). |
@@ -544,6 +553,51 @@ Decisions made during implementation, beyond the plan above:
   0 turns a timeout off. A timeout error names which timeout fired and its value. The
   idle timeout also runs while connecting, so an `@timeout` shorter than the connect
   time is reported as a read timeout.
+* **Content encoding:** reqwest's decompression is off; the core decodes bodies itself
+  so it can count the bytes on the wire (`transferredSize`) as well as the decoded size
+  (`bodySize`). A request without `Accept-Encoding` gets `gzip, deflate, br, zstd` added
+  at prepare time, so the Request tab shows it. A user-set `Accept-Encoding` is sent
+  unchanged. A response in an encoding we can't decode, or whose body fails to decode,
+  is shown as received (binary), with a warning ("Couldn't decode the gzip body (…);
+  showing the bytes as received"); status, headers and cookies are kept. While a body
+  decodes, its raw bytes are kept too (up to the size limit) for that fallback.
+* **Send errors are classified.** `send_request` rejects with `{ kind, message,
+  details }` (the core's `ExecError`; `kind` is `exec::ErrorKind`, and `SendError` in
+  `src/lib/types.ts` is a union on it), unlike other commands, whose errors are strings.
+  Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
+  `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
+  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
+  reason), and `other` (no details). The core owns `message` (the error chain for
+  transport errors); the response viewer picks the heading and hint by kind
+  (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
+  the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
+  turns verification off), the timeouts open the request's Settings, and
+  `unresolvedVariable` opens the environment picker. They ask through one-shot store
+  fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
+  component acting on them clears. DNS errors are recognised by the
+  text of hyper-util's and reqwest's private resolver errors. The platform certificate
+  verifiers don't agree on reasons (macOS reports a self-signed or expired certificate
+  as an opaque code), so after a certificate rejection the core fetches the certificate
+  once more with a handshake that records it and aborts, and checks it itself
+  (`tls_probe.rs`). That probe connects directly, so it's skipped when reqwest would
+  use a proxy for the URL (the same hyper-util matcher over HTTP_PROXY, HTTPS_PROXY,
+  ALL_PROXY and NO_PROXY), and the reason stays the verifier's.
+* **The Request tab shows the final hop.** After redirects, the core rebuilds the request
+  that reached the final server with reqwest's rules: 301/302 turn a POST into a GET
+  and 303 anything but HEAD, dropping the body and its Content-* headers; a hop to
+  another origin leaves out Authorization, Cookie, Proxy-Authorization and
+  WWW-Authenticate; and a Referer names the previous URL (not from https to http). It's
+  labelled a reconstruction: headers reqwest adds itself aren't listed.
+* **A response's kind is the core's call.** `HttpResponse.bodyKind` (`json`, `html`,
+  `xml`, `image`, `pdf`, `media`, `text`, `binary`) comes from
+  `body_format::response_kind`: the content type when it names one, else the body's
+  first character. The viewer's views, highlighting and Save extension follow it, and
+  the shell's Pretty text uses the same rule.
+* **Download progress:** while a body downloads, the shell emits `send-progress`
+  events (`{runId, received}`, raw bytes on the wire so far) for the in-flight send. The
+  core reports at most once per 100 ms (`exec::PROGRESS_INTERVAL`) however small the
+  chunks, and never after the send returns. The viewer shows the count next to the
+  loading spinner; it goes away when the response completes, fails or is cancelled.
 * **Auto Content-Type:** choosing a body mode sets the `Content-Type` header (an
   ordinary, visible header). It replaces a type HttpDesk itself sets for some mode but
   keeps a custom one, except that multipart always sets `multipart/form-data;
@@ -590,18 +644,22 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, query encoding, send errors, custom methods, binary and text responses |
+| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported, bodies that fail to decode), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (recorded, never sent back), and a reused client listing only each request's own cookies. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
+| Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
+| JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
 | Env, vars, workspace | Unit tests in each module |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, environments, OpenAPI generation, confinement, deleting, Windows paths, and the file watcher (including self-write suppression) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |
 
 ### Known gaps / next steps
 
-* No cookie jar; responses' `Set-Cookie` is not replayed.
+* No cookie jar; responses' `Set-Cookie` is not replayed. The response viewer's Cookies
+  tab lists them (redirect hops included), but a recording store that never returns a
+  cookie is all reqwest gets.
 * Scripts (`< {% %}`, `> {% %}`) are preserved but not executed (out of scope).
 * Request-to-request variables (`{{login.response.body.token}}`) are not supported.
 * A Basic auth username containing `:` can't be represented (RFC 7617), so saving one is

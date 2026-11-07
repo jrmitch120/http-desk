@@ -87,6 +87,11 @@ impl Harness {
 
 /// One-shot HTTP server on a background thread; returns (url, received raw request).
 fn capture_server() -> (String, mpsc::Receiver<String>) {
+    json_server(r#"{"ok":true}"#)
+}
+
+/// Like [`capture_server`], answering with `body` as JSON.
+fn json_server(body: &'static str) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
@@ -104,7 +109,7 @@ fn capture_server() -> (String, mpsc::Receiver<String>) {
                 break;
             }
         }
-        let body = br#"{"ok":true}"#;
+        let body = body.as_bytes();
         let _ = write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
@@ -274,10 +279,261 @@ fn quitting_always_asks_the_window_and_only_logout_trusts_the_unsaved_flag() {
 }
 
 #[test]
+fn format_body_keeps_numbers_exact_and_reports_invalid_json_as_a_string() {
+    let h = Harness::new();
+    let input = r#"{"id": 9007199254740993, "price": 10.50, "e": 1e3}"#;
+    let pretty = h.ok("format_body", json!({ "text": input, "kind": "json", "mode": "pretty" }));
+    assert_eq!(pretty, json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3\n}"));
+    let minified = h.ok("format_body", json!({ "text": pretty, "kind": "json", "mode": "minify" }));
+    assert_eq!(minified, json!(r#"{"id":9007199254740993,"price":10.50,"e":1e3}"#));
+
+    let err =
+        h.call("format_body", json!({ "text": "{\"id\": {{id}}}", "kind": "json", "mode": "pretty" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1, column 9: expected a quoted key"), "{err}");
+}
+
+#[test]
+fn a_beautified_body_is_saved_to_the_http_file_with_its_numbers_as_written() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let file_path = root.join("api.http");
+    std::fs::write(
+        &file_path,
+        "### Create\nPOST https://example.com/items\nContent-Type: application/json\n\n{\"id\": 9007199254740993, \"price\": 10.50, \"e\": 1e3}\n",
+    )
+    .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+
+    // What Beautify does: format the body text and write the result back into the model.
+    let mut file = h.ok("read_http_file", json!({ "path": path }));
+    let text = file["requests"][0]["body"]["text"].clone();
+    file["requests"][0]["body"]["text"] =
+        h.ok("format_body", json!({ "text": text, "kind": "json", "mode": "pretty" }));
+    h.ok("save_http_file", json!({ "path": path, "file": file }));
+
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    assert!(
+        saved.ends_with("\n{\n  \"id\": 9007199254740993,\n  \"price\": 10.50,\n  \"e\": 1e3\n}\n"),
+        "numbers saved as written: {saved}"
+    );
+}
+
+#[test]
+fn format_body_beautifies_xml_and_rejects_xml_that_doesnt_nest() {
+    let h = Harness::new();
+    let pretty = h.ok("format_body", json!({ "text": "<a><b>1</b></a>", "kind": "xml", "mode": "pretty" }));
+    assert_eq!(pretty, json!("<a>\n  <b>1</b>\n</a>"));
+    let err = h.call("format_body", json!({ "text": "<a><b></a>", "kind": "xml", "mode": "pretty" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid XML at line 1, column 7"), "{err}");
+}
+
+#[test]
+fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
+    let h = Harness::new();
+    // What send_request does with a response's body.
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
+        "resp-1".into(),
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        Some("image/png".into()),
+    );
+
+    let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
+    assert_eq!(dump, json!(format!("00000000  89 50 4e 47 0d 0a 1a 0a{}  .PNG....", " ".repeat(24))));
+
+    let err = h.call("hexdump", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+/// Serves one response with `content_type` and `body`; returns the URL.
+fn serve_once(content_type: &'static str, body: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\n\r\n", body.len());
+        let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(&body));
+    });
+    url
+}
+
+/// Sends `GET {url}/` from a fresh workspace and returns the response.
+fn send_get(h: &Harness, url: &str) -> Value {
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let path = root.join("get.http");
+    std::fs::write(&path, format!("GET {url}/\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    h.ok(
+        "send_request",
+        json!({ "runId": "p1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    )
+}
+
+#[test]
+fn a_small_json_response_arrives_with_its_pretty_text_numbers_as_sent() {
+    let h = Harness::new();
+    let url = serve_once("application/json", br#"{"id":9007199254740993,"price":10.50}"#.to_vec());
+    let resp = send_get(&h, &url);
+    assert_eq!(resp["prettyText"], json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50\n}"));
+}
+
+#[test]
+fn a_small_response_that_doesnt_parse_has_its_raw_body_as_pretty_text() {
+    let h = Harness::new();
+    let url = serve_once("application/json", br#"{"id": 1, oops}"#.to_vec());
+    assert_eq!(send_get(&h, &url)["prettyText"], json!(r#"{"id": 1, oops}"#));
+}
+
+#[test]
+fn a_plain_text_response_has_no_pretty_text() {
+    let h = Harness::new();
+    let url = serve_once("text/plain", b"hello".to_vec());
+    assert_eq!(send_get(&h, &url)["prettyText"], Value::Null);
+}
+
+#[test]
+fn a_large_json_response_is_formatted_only_when_asked_for_by_response_id() {
+    let h = Harness::new();
+    let items: Vec<String> = (0..60_000).map(|i| format!(r#"{{"id":1{i:05}0000000001,"n":"item"}}"#)).collect();
+    let body = format!("[{}]", items.join(","));
+    assert!(body.len() > super::PRETTY_INLINE_BYTES);
+    let url = serve_once("application/json; charset=utf-8", body.into_bytes());
+
+    let resp = send_get(&h, &url);
+    assert_eq!(resp["prettyText"], Value::Null);
+
+    let pretty = h.ok("pretty_response", json!({ "responseId": resp["id"] }));
+    let pretty = pretty.as_str().unwrap();
+    assert!(
+        pretty.starts_with("[\n  {\n    \"id\": 1000000000000001,\n    \"n\": \"item\"\n  },\n"),
+        "{}",
+        &pretty[..80]
+    );
+    assert!(pretty.ends_with("    \"id\": 1599990000000001,\n    \"n\": \"item\"\n  }\n]"));
+}
+
+#[test]
+fn pretty_response_rejects_an_evicted_id_and_a_body_that_doesnt_parse() {
+    let h = Harness::new();
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
+        "bad".into(),
+        br#"{"id": 1, oops}"#.to_vec(),
+        Some("application/json".into()),
+    );
+    let err = h.call("pretty_response", json!({ "responseId": "bad" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
+
+    let err = h.call("pretty_response", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+#[test]
+fn a_sent_response_is_filtered_by_id_with_numbers_as_the_server_sent_them() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let (server, _received) = json_server(
+        r#"{"items":[{"id":1234567890123456789,"status":"sold","price":1e3},{"id":2,"status":"available"}]}"#,
+    );
+    let file_path = root.join("api.http");
+    std::fs::write(&file_path, format!("GET {server}/items\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+    let id = resp["id"].clone();
+
+    let result = h.ok("filter_response", json!({ "responseId": id, "expression": r#"$.items[?(@.status=="sold")]"# }));
+    assert_eq!(
+        result,
+        json!({ "matches": 1, "text": "[\n  {\n    \"id\": 1234567890123456789,\n    \"status\": \"sold\",\n    \"price\": 1e3\n  }\n]" })
+    );
+    // Typing on re-uses the parsed body.
+    assert_eq!(h.ok("filter_response", json!({ "responseId": id, "expression": "$.items[*].id" }))["matches"], 2);
+
+    let err = h.call("filter_response", json!({ "responseId": id, "expression": "$.items[" })).unwrap_err();
+    assert!(err.as_str().unwrap().starts_with("Invalid JSONPath at position "), "{err}");
+    let err = h.call("filter_response", json!({ "responseId": "gone", "expression": "$" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+#[test]
+fn a_sent_response_has_a_shape_summary_for_key_completion() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let (server, _received) = json_server(r#"{"items":[{"id":1,"name":"Rex"},{"id":2,"tags":["a"]}],"total":2}"#);
+    let file_path = root.join("api.http");
+    std::fs::write(&file_path, format!("GET {server}/items\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+
+    let shape = h.ok("response_shape", json!({ "responseId": resp["id"] }));
+    assert_eq!(
+        shape,
+        json!({ "keys": [
+            ["items", { "items": { "keys": [["id", {}], ["name", {}], ["tags", { "items": {} }]] } }],
+            ["total", {}],
+        ] })
+    );
+    let err = h.call("response_shape", json!({ "responseId": "gone" })).unwrap_err();
+    assert_eq!(err, json!("Response is no longer available"));
+}
+
+#[test]
 fn errors_are_strings() {
     let h = Harness::new();
     let err = h.call("get_tree", json!({})).unwrap_err();
     assert_eq!(err, json!("No workspace is open"));
+}
+
+#[test]
+fn send_errors_arrive_classified() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    std::fs::write(root.join("a.http"), format!("GET http://127.0.0.1:{port}/x\n\n###\nGET {{{{baseUrl}}}}/x\n"))
+        .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let file = h.ok("read_http_file", json!({ "path": root.join("a.http") }));
+    let send = |i: usize| {
+        h.call(
+            "send_request",
+            json!({ "runId": "r1", "request": file["requests"][i], "filePath": root.join("a.http"), "fileVariables": [], "environment": null }),
+        )
+        .unwrap_err()
+    };
+
+    let err = send(0);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("refused"), &json!({ "host": "127.0.0.1", "port": port })));
+    // The message is the error chain, in the OS's own words ("Connection refused" on
+    // Linux and macOS, "actively refused it" on Windows); the UI's heading and hint
+    // come from `kind`, so only check that it's about this request.
+    assert!(err["message"].as_str().unwrap().contains(&format!("http://127.0.0.1:{port}/x")), "{err}");
+
+    // Errors found before sending are classified too.
+    let err = send(1);
+    assert_eq!((&err["kind"], &err["details"]), (&json!("unresolvedVariable"), &json!({ "names": ["baseUrl"] })));
 }
 
 #[test]
@@ -490,4 +746,97 @@ fn harness_keeps_settings_in_its_own_temp_dir_and_removes_it() {
     assert!(cfg.join("settings.json").is_file(), "settings were not written to {}", cfg.display());
     drop(h);
     assert!(!cfg.exists(), "{} was left behind", cfg.display());
+}
+
+/// One-shot HTTP server that sends a `len`-byte text body in `chunks` pieces, `gap` apart.
+fn trickle_server(len: usize, chunks: usize, gap: std::time::Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (mut head, mut buf) = (Vec::new(), [0u8; 4096]);
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => head.extend_from_slice(&buf[..n]),
+            }
+        }
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {len}\r\n\r\n");
+        for _ in 0..chunks {
+            std::thread::sleep(gap);
+            if stream.write_all(&vec![b'x'; len / chunks]).and_then(|_| stream.flush()).is_err() {
+                return;
+            }
+        }
+    });
+    url
+}
+
+#[test]
+fn a_downloading_body_emits_growing_progress_for_its_run_until_the_send_returns() {
+    use tauri::Listener;
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let file_path = root.join("dl.http");
+    let server = trickle_server(4000, 4, std::time::Duration::from_millis(150));
+    std::fs::write(&file_path, format!("GET {server}/download\n")).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+
+    let (tx, rx) = mpsc::channel::<Value>();
+    h.webview.listen_any("send-progress", move |e| {
+        let _ = tx.send(serde_json::from_str(e.payload()).unwrap());
+    });
+    let resp = h.ok(
+        "send_request",
+        json!({ "runId": "dl-1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
+    );
+    assert_eq!(resp["bodySize"], 4000);
+
+    let events: Vec<Value> = rx.try_iter().collect();
+    assert!(events.len() >= 2, "too few progress events: {events:?}");
+    assert!(events.iter().all(|e| e["runId"] == "dl-1"), "{events:?}");
+    let received: Vec<u64> = events.iter().map(|e| e["received"].as_u64().unwrap()).collect();
+    assert!(received.windows(2).all(|w| w[0] < w[1]), "counts must grow: {received:?}");
+    assert!(*received.last().unwrap() <= 4000, "{received:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(rx.try_iter().count(), 0, "progress was emitted after the send returned");
+}
+
+/// Serves `count` responses over one kept-alive connection; returns the URL.
+/// A second connection is never accepted.
+fn keep_alive_server(count: usize) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        for _ in 0..count {
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => buf.push(byte[0]),
+                }
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\n\r\nok");
+        }
+    });
+    url
+}
+
+#[test]
+fn a_second_send_reuses_the_connection_the_first_left_open() {
+    let h = Harness::new();
+    let url = keep_alive_server(2);
+
+    let first = send_get(&h, &url);
+    let second = send_get(&h, &url);
+
+    assert_eq!(first["timings"]["reused"], false, "{}", first["timings"]);
+    assert_eq!(second["timings"]["reused"], true, "{}", second["timings"]);
+    assert_eq!(second["bodyText"], "ok");
 }

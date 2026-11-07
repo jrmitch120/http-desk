@@ -2,6 +2,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
+  BodyKind,
+  FilterResult,
+  FormatMode,
+  JsonShape,
   EnvironmentSet,
   GenerateOptions,
   GenerateReport,
@@ -44,6 +48,29 @@ export const api = {
   }) => invoke<HttpResponse>("send_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
+  /**
+   * Re-lays out a body in the core without changing any token (numbers and
+   * strings stay exactly as written). Rejects with a message for invalid input.
+   */
+  formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
+  /**
+   * The Hex view of a binary response: a dump of the first 64 KB of the body
+   * the shell stored for it. Rejects once the body has been evicted.
+   */
+  hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
+  /**
+   * Runs an RFC 9535 JSONPath expression against a stored response body in the
+   * core. Rejects with a message for an invalid expression or a non-JSON body.
+   */
+  filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
+  /**
+   * The Pretty view of a response too large to arrive with its `prettyText`,
+   * formatted from the body the shell stored. Rejects when it doesn't parse or
+   * has been evicted.
+   */
+  prettyResponse: (responseId: string) => invoke<string>("pretty_response", { responseId }),
+  /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
+  responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),

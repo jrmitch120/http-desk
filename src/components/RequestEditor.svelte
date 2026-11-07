@@ -37,6 +37,13 @@
   $effect(() => {
     sectionByTab.set(tab.id, section);
   });
+  // "Open request Settings" on a timeout error.
+  $effect(() => {
+    if (app.requestSettingsFor === tab.id) {
+      section = "settings";
+      app.requestSettingsFor = null;
+    }
+  });
 
   let showSource = $state(false);
   let source = $state("");

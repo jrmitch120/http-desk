@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use httpdesk_core::env::SslConfig;
-use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
+use httpdesk_core::exec::{execute, execute_on, prepare, ClientPool, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::{method, path};
@@ -352,6 +352,8 @@ async fn a_body_that_stalls_fails_with_a_read_timeout_naming_the_value() {
     assert!(matches!(err, ExecError::ReadTimeout(200)), "{err:?}");
     let msg = err.to_string();
     assert!(msg.contains("Read timeout") && msg.contains("200 ms") && msg.contains("@timeout"), "{msg}");
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutIdle".into(), &serde_json::json!({ "timeoutMs": 200 })));
 }
 
 #[tokio::test]
@@ -368,6 +370,8 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
         msg.contains("Connection timeout") && msg.contains("300 ms") && msg.contains("@connection-timeout"),
         "{msg}"
     );
+    let r = report(&err);
+    assert_eq!((&r["kind"], &r["details"]), (&"timeoutConnect".into(), &serde_json::json!({ "timeoutMs": 300 })));
 
     let req = parse(&format!("# @connection-timeout 1\n# @timeout 10\nGET https://{addr}/\n")).requests.remove(0);
     let msg = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err().to_string();
@@ -449,6 +453,11 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
         "only host variables are named: {msg}"
     );
     assert!(msg.contains("baseUrl") && msg.contains("environment"), "{msg}");
+    let r = report(&err);
+    assert_eq!(
+        (&r["kind"], &r["details"]),
+        (&"unresolvedVariable".into(), &serde_json::json!({ "names": ["baseUrl"] }))
+    );
 
     // A variable that resolves to a URL whose own host is unresolved names that inner variable.
     let r = Resolver::new(env(&[("baseUrl", "https://{{host}}:{{port}}/api")]));
@@ -529,4 +538,648 @@ async fn an_api_key_query_param_is_resolved_and_encoded() {
     let text = "# @httpdesk-auth apikey query {{keyName}}\nGET {{base}}/echo?n=1&{{keyName}}={{key}}\n";
     let (_, got) = sent_query(text, &[("keyName", "api key"), ("key", "s3cr&t=/+")]).await;
     assert_eq!(got, pairs(&[("n", "1"), ("api key", "s3cr&t=/+")]));
+}
+
+// ---- Content encoding (#66) ----
+
+/// A JSON body big and repetitive enough that every encoding shrinks it.
+fn compressible_json() -> Vec<u8> {
+    let items: Vec<_> = (0..200).map(|i| serde_json::json!({"id": i, "name": "a pet with a long name"})).collect();
+    serde_json::to_vec(&items).unwrap()
+}
+
+/// Encodes `data` the way a server would for `Content-Encoding: <encoding>`.
+fn encode(encoding: &str, data: &[u8]) -> Vec<u8> {
+    match encoding {
+        "gzip" => {
+            let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        // HTTP "deflate" is the zlib format (RFC 9110 sec. 8.4.1.2).
+        "deflate" => {
+            let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap()
+        }
+        "br" => {
+            let mut out = Vec::new();
+            brotli::BrotliCompress(&mut &data[..], &mut out, &Default::default()).unwrap();
+            out
+        }
+        "zstd" => zstd::encode_all(data, 0).unwrap(),
+        other => panic!("no test encoder for {other}"),
+    }
+}
+
+/// Serves `body` at `/data` as JSON with the given `Content-Encoding`.
+async fn encoded_server(encoding: &str, body: Vec<u8>) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/data"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Encoding", encoding)
+                .set_body_raw(body, "application/json"),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn an_encoded_response_reports_transferred_and_decoded_sizes_and_its_encoding() {
+    let json = compressible_json();
+    for encoding in ["gzip", "br", "deflate", "zstd"] {
+        let wire = encode(encoding, &json);
+        let server = encoded_server(encoding, wire.clone()).await;
+        let vars = env(&[("base", &server.uri())]);
+
+        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+        assert_eq!(resp.content_encoding.as_deref(), Some(encoding));
+        assert_eq!(resp.transferred_size, wire.len(), "{encoding}: raw bytes on the wire");
+        assert_eq!(resp.body_size, json.len(), "{encoding}: decoded size");
+        assert!(resp.transferred_size < resp.body_size, "{encoding}");
+        assert_eq!(resp.body_text.as_deref(), Some(std::str::from_utf8(&json).unwrap()), "{encoding}");
+        assert!(resp.warnings.is_empty(), "{encoding}: {:?}", resp.warnings);
+    }
+}
+
+#[tokio::test]
+async fn accept_encoding_defaults_to_what_we_decode_and_a_set_one_is_sent_unchanged() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/echo\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    assert_eq!(header(&received, "accept-encoding"), Some("gzip, deflate, br, zstd"));
+    let shown = resp.request.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("accept-encoding"));
+    assert_eq!(shown.map(|(_, v)| v.as_str()), Some("gzip, deflate, br, zstd"), "the Request tab lists it");
+
+    send(&parse("GET {{base}}/echo\nAccept-Encoding: identity\n").requests[0], vars, Path::new(".")).await.unwrap();
+    let received = last_request(&server).await;
+    let sent: Vec<_> = received.headers.get_all("accept-encoding").iter().map(|v| v.to_str().unwrap()).collect();
+    assert_eq!(sent, ["identity"]);
+}
+
+#[tokio::test]
+async fn an_unsupported_encoding_shows_the_bytes_as_received_with_a_warning() {
+    let wire = b"\x1f\x9d\x90some compressed bytes".to_vec();
+    let server = encoded_server("compress", wire.clone()).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+    assert_eq!(resp.content_encoding.as_deref(), Some("compress"));
+    assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
+    assert!(resp.body_text.is_none(), "still-encoded bytes are binary even though the type is JSON");
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
+    assert_eq!(raw, wire);
+    assert_eq!(resp.warnings, ["Content-Encoding compress isn't supported; showing the bytes as received"]);
+}
+
+#[tokio::test]
+async fn the_body_size_limit_applies_to_decoded_bytes() {
+    let json = compressible_json();
+    let wire = encode("gzip", &json);
+    let server = encoded_server("gzip", wire.clone()).await;
+    let settings = ExecSettings { max_body_bytes: wire.len() + 100, ..ExecSettings::default() };
+    let req = parse(&format!("GET {}/data\n", server.uri())).requests.remove(0);
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+
+    let out = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+
+    assert!(out.response.truncated);
+    assert_eq!(out.response.body_size, wire.len() + 100);
+    assert_eq!(out.body, json[..wire.len() + 100]);
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_is_shown_as_received_with_a_warning() {
+    let mut cut_short = encode("gzip", &compressible_json());
+    cut_short.truncate(cut_short.len() / 2);
+    for wire in [cut_short, b"not gzip at all".to_vec()] {
+        let server = MockServer::start().await;
+        Mock::given(path("/data"))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .insert_header("Content-Encoding", "gzip")
+                    .insert_header("set-cookie", "s=1")
+                    .set_body_raw(wire.clone(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        let vars = env(&[("base", &server.uri())]);
+
+        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+
+        assert_eq!(resp.status, 201, "status, headers and cookies survive");
+        assert!(resp.headers.iter().any(|(n, v)| n == "content-encoding" && v == "gzip"));
+        assert_eq!(resp.cookies.len(), 1);
+        assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
+        assert!(resp.body_text.is_none(), "still-encoded bytes are binary");
+        let raw =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
+        assert_eq!(raw, wire);
+        assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
+        let warning = &resp.warnings[0];
+        assert!(warning.starts_with("Couldn't decode the gzip body ("), "{warning}");
+        assert!(warning.ends_with("); showing the bytes as received"), "{warning}");
+    }
+}
+
+#[tokio::test]
+async fn a_body_that_does_not_decode_keeps_the_bytes_as_received_up_to_the_limit() {
+    let wire = b"not gzip, and longer than the limit".to_vec();
+    let server = encoded_server("gzip", wire.clone()).await;
+    let settings = ExecSettings { max_body_bytes: 10, ..ExecSettings::default() };
+    let req = parse(&format!("GET {}/data\n", server.uri())).requests.remove(0);
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+
+    let out = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+
+    assert!(out.response.truncated);
+    assert_eq!(out.body, wire[..10]);
+}
+
+// ---------------------------------------------------------------- classified send errors
+
+/// What the UI receives for a failed send: `{ kind, message, details }`.
+fn report(err: &ExecError) -> serde_json::Value {
+    serde_json::to_value(err).unwrap()
+}
+
+#[tokio::test]
+async fn a_closed_port_is_refused_with_host_and_port() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let req = parse(&format!("GET http://127.0.0.1:{port}/x\n")).requests.remove(0);
+
+    let err = send(&req, HashMap::new(), Path::new(".")).await.unwrap_err();
+    let r = report(&err);
+    assert_eq!(r["kind"], "refused", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+    assert!(r["message"].as_str().unwrap().contains("127.0.0.1"), "the error chain is kept: {r}");
+}
+
+#[tokio::test]
+async fn an_unknown_host_is_a_dns_error_naming_the_host() {
+    // `.invalid` is reserved (RFC 6761): it never resolves.
+    let req = parse("GET http://api.exmaple.invalid/x\n").requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "dns", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "api.exmaple.invalid" }));
+}
+
+#[tokio::test]
+async fn a_server_that_hangs_up_without_answering_is_a_reset() {
+    // Reads the request, then closes the connection with nothing written.
+    let base = trickle_server(vec![], Duration::ZERO);
+    let port = base.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "reset", "{r}");
+    assert_eq!(r["details"], serde_json::json!({ "host": "127.0.0.1", "port": port }));
+}
+
+/// An HTTPS server on 127.0.0.1 presenting a self-signed certificate made by
+/// `params`. Handshakes fail on the client side, so it never answers HTTP.
+async fn tls_server(params: rcgen::CertificateParams) -> String {
+    use std::sync::Arc;
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()))
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let _ = acceptor.accept(stream).await;
+            });
+        }
+    });
+    format!("https://{addr}")
+}
+
+async fn tls_reason(params: rcgen::CertificateParams) -> serde_json::Value {
+    let base = tls_server(params).await;
+    let req = parse(&format!("GET {base}/x\n")).requests.remove(0);
+    let r = report(&send(&req, HashMap::new(), Path::new(".")).await.unwrap_err());
+    assert_eq!(r["kind"], "tls", "{r}");
+    r["details"]["reason"].clone()
+}
+
+#[tokio::test]
+async fn a_self_signed_certificate_is_a_tls_error_saying_so() {
+    let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    assert_eq!(tls_reason(params).await, "selfSigned");
+}
+
+#[tokio::test]
+async fn an_expired_certificate_is_a_tls_error_saying_so() {
+    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+    params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+    assert_eq!(tls_reason(params).await, "expired");
+}
+
+// ---------------------------------------------------------------- download progress
+
+/// Sends `req` with default settings, recording each progress report and when it came.
+async fn send_with_progress(req: &Request) -> (exec::HttpResponse, Vec<(std::time::Instant, usize)>) {
+    let settings = ExecSettings::default();
+    let prepared = prepare(req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+    let mut reports = Vec::new();
+    let client = ExecClient::new(&prepared, &settings, &SslConfig::default()).unwrap();
+    let out = execute_on(&client, prepared, &settings, |n| reports.push((std::time::Instant::now(), n))).await.unwrap();
+    (out.response, reports)
+}
+
+#[tokio::test]
+async fn a_trickled_body_reports_growing_byte_counts_until_it_completes() {
+    let mut parts = vec![response_head(5000)];
+    parts.extend((0..5).map(|i| vec![b'a' + i; 1000]));
+    let base = trickle_server(parts, Duration::from_millis(150));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    let counts: Vec<usize> = reports.iter().map(|r| r.1).collect();
+    assert!(counts.len() >= 3, "too few progress reports: {counts:?}");
+    assert!(counts.windows(2).all(|w| w[0] < w[1]), "counts must grow: {counts:?}");
+    assert!(counts[0] < 5000, "the first report comes before the body is complete: {counts:?}");
+    assert!(*counts.last().unwrap() <= 5000, "{counts:?}");
+    assert_eq!(resp.transferred_size, 5000);
+}
+
+#[tokio::test]
+async fn progress_reports_are_rate_limited_however_small_the_chunks() {
+    let mut parts = vec![response_head(60)];
+    parts.extend((0..60).map(|_| b"x".to_vec()));
+    let base = trickle_server(parts, Duration::from_millis(10));
+    let req = parse(&format!("GET {base}/download\n")).requests.remove(0);
+
+    let (resp, reports) = send_with_progress(&req).await;
+
+    assert_eq!(resp.body_size, 60);
+    assert!(reports.len() >= 2, "a slow body still reports progress: {reports:?}");
+    let gaps: Vec<Duration> = reports.windows(2).map(|w| w[1].0 - w[0].0).collect();
+    assert!(gaps.iter().all(|g| *g >= Duration::from_millis(90)), "more than ~10 reports a second: {gaps:?}");
+    let window = Duration::from_millis(resp.time_ms as u64);
+    assert!(reports.len() as u128 <= window.as_millis() / 100 + 1, "{} reports in {window:?}", reports.len());
+}
+
+// Timing. wiremock listens on 127.0.0.1; asking for `localhost` instead makes
+// the request look the host up, so the DNS phase is measured.
+fn by_name(server: &MockServer) -> String {
+    server.uri().replace("127.0.0.1", "localhost")
+}
+
+#[tokio::test]
+async fn a_fresh_request_times_each_phase_within_the_total() {
+    let server = MockServer::start().await;
+    Mock::given(path("/t"))
+        .respond_with(
+            ResponseTemplate::new(200).set_delay(Duration::from_millis(40)).set_body_string("x".repeat(200_000)),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/t\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&server))]), Path::new(".")).await.unwrap();
+
+    let t = &resp.timings;
+    let dns = t.dns.expect("a lookup of localhost is timed");
+    let connect = t.connect.expect("a new connection is timed");
+    assert!(!t.reused);
+    assert_eq!(t.redirects, 0);
+    assert!(dns >= 0.0 && connect > 0.0 && t.download >= 0.0, "{t:?}");
+    assert!(t.ttfb >= 40.0, "waiting covers the server's delay: {t:?}");
+    assert!(dns + connect + t.ttfb + t.download <= resp.time_ms, "{t:?} within {}", resp.time_ms);
+}
+
+#[tokio::test]
+async fn a_second_request_on_the_same_client_reuses_the_connection_and_skips_dns_and_connect() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &by_name(&server))]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared(), &settings, &SslConfig::default()).unwrap();
+
+    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    assert!(!first.reused && first.dns.is_some() && first.connect.is_some(), "{first:?}");
+
+    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    assert!(second.reused, "{second:?}");
+    assert_eq!((second.dns, second.connect), (None, None));
+    assert!(second.ttfb > 0.0, "{second:?}");
+}
+
+#[tokio::test]
+async fn a_redirect_chain_reports_its_length_and_times_the_final_hop() {
+    let server = MockServer::start().await;
+    for (from, to) in [("/a", "/b"), ("/b", "/c")] {
+        Mock::given(path(from))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", to))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/c")).respond_with(ResponseTemplate::new(200).set_body_string("c")).mount(&server).await;
+    let vars = env(&[("base", &by_name(&server))]);
+
+    let resp = send(&parse("GET {{base}}/a\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(resp.timings.redirects, 2);
+    // The first hop opened the connection; the final one went over it.
+    assert!(resp.timings.reused, "{:?}", resp.timings);
+    assert_eq!((resp.timings.dns, resp.timings.connect), (None, None));
+
+    let direct = send(&parse("GET {{base}}/c\n").requests.remove(0), vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(direct.timings.redirects, 0);
+    let unfollowed = parse("# @no-redirect\nGET {{base}}/a\n").requests.remove(0);
+    assert_eq!(send(&unfollowed, vars, Path::new(".")).await.unwrap().timings.redirects, 0);
+}
+
+#[tokio::test]
+async fn a_redirect_to_another_server_times_the_final_hops_new_connection() {
+    let target = MockServer::start().await;
+    Mock::given(path("/end"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(40)))
+        .mount(&target)
+        .await;
+    let origin = MockServer::start().await;
+    Mock::given(path("/go"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .set_delay(Duration::from_millis(60))
+                .insert_header("location", format!("{}/end", by_name(&target)).as_str()),
+        )
+        .mount(&origin)
+        .await;
+
+    let req = parse("GET {{base}}/go\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &by_name(&origin))]), Path::new(".")).await.unwrap();
+    let t = &resp.timings;
+    assert_eq!(t.redirects, 1);
+    assert!(!t.reused && t.dns.is_some() && t.connect.is_some(), "{t:?}");
+    assert!(t.ttfb >= 40.0 && t.ttfb < 100.0, "waiting is the final hop's, not the first: {t:?}");
+    assert!(resp.time_ms >= 100.0, "the total covers both hops: {}", resp.time_ms);
+}
+
+// Cookies.
+
+#[tokio::test]
+async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/home")
+                .insert_header("set-cookie", "a=1; Path=/; HttpOnly"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/home"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "b=2; Max-Age=60; SameSite=Lax")
+                .append_header("set-cookie", "not a cookie"),
+        )
+        .mount(&server)
+        .await;
+    let req = parse("GET {{base}}/login\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert_eq!(resp.status, 200);
+
+    let got: Vec<_> = resp.cookies.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.url.as_str())).collect();
+    let (login, home) = (format!("{}/login", server.uri()), format!("{}/home", server.uri()));
+    assert_eq!(got, [("a", "1", login.as_str()), ("b", "2", home.as_str()), ("", "", home.as_str())]);
+    assert!(resp.cookies[0].http_only);
+    assert_eq!((resp.cookies[1].max_age, resp.cookies[1].same_site.as_deref()), (Some(60), Some("Lax")));
+    assert_eq!(resp.cookies[2].raw, "not a cookie");
+
+    let hops = server.received_requests().await.unwrap();
+    assert_eq!(hops.len(), 2);
+    assert!(hops.iter().all(|r| r.headers.get("cookie").is_none()), "a cookie was sent back");
+}
+
+#[tokio::test]
+async fn a_cookie_header_the_user_wrote_is_still_sent() {
+    let server = echo_server().await;
+    let req = parse("GET {{base}}/echo\nCookie: mine=1\n").requests.remove(0);
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    assert!(resp.cookies.is_empty());
+    assert_eq!(header(&last_request(&server).await, "cookie"), Some("mine=1"));
+}
+
+#[tokio::test]
+async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
+    let server = MockServer::start().await;
+    for (route, cookie) in [("/one", "a=1"), ("/two", "b=2")] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", cookie))
+            .mount(&server)
+            .await;
+    }
+    // Sets a cookie, then redirects to a port nothing listens on.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    Mock::given(path("/broken"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("set-cookie", "c=3")
+                .insert_header("location", format!("http://127.0.0.1:{closed}/gone").as_str()),
+        )
+        .mount(&server)
+        .await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
+    let client = ExecClient::new(&prepared("GET {{base}}/one\n"), &settings, &SslConfig::default()).unwrap();
+
+    let names = |r: &exec::HttpResponse| r.cookies.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
+    assert_eq!(names(&first), ["a"]);
+    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
+    assert_eq!(names(&second), ["b"], "the first request's cookie leaked into the second");
+    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
+    assert_eq!(names(&again), ["a"]);
+
+    // A request that fails after a hop set a cookie never takes its cookies;
+    // the next one on the client must not inherit them.
+    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings, |_| {}).await;
+    assert!(matches!(failed, Err(ExecError::Refused { .. })), "the redirect target is closed");
+    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
+    assert_eq!(names(&after), ["b"], "the failed request's cookie leaked into the next");
+
+    let sent = server.received_requests().await.unwrap();
+    assert_eq!(sent.len(), 5);
+    assert!(sent.iter().all(|r| r.headers.get("cookie").is_none()), "a reused client sent a cookie back");
+}
+
+// ---------------------------------------------------------------- the final request after redirects
+
+/// The header `name` as the Request tab shows it.
+fn shown<'a>(r: &'a exec::SentRequest, name: &str) -> Option<&'a str> {
+    r.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+}
+
+#[tokio::test]
+async fn after_a_cross_origin_303_the_request_tab_shows_the_get_that_reached_the_other_server() {
+    let target = MockServer::start().await;
+    Mock::given(path("/end")).respond_with(ResponseTemplate::new(200)).mount(&target).await;
+    let origin = MockServer::start().await;
+    Mock::given(path("/start"))
+        .respond_with(ResponseTemplate::new(303).insert_header("location", format!("{}/end", target.uri()).as_str()))
+        .mount(&origin)
+        .await;
+    let text = "POST {{base}}/start\nAuthorization: Bearer secret\nCookie: mine=1\nProxy-Authorization: Basic eA==\n\
+                X-Trace: 7\nContent-Type: application/json\n\n{\"a\": 1}\n";
+    let req = parse(text).requests.remove(0);
+
+    let resp = send(&req, env(&[("base", &origin.uri())]), Path::new(".")).await.unwrap();
+
+    let sent = &resp.request;
+    assert_eq!(sent.method, "GET");
+    assert_eq!(sent.url, format!("{}/end", target.uri()));
+    assert_eq!((sent.body_size, sent.body_preview.as_deref()), (0, None), "303 drops the body");
+    for gone in ["authorization", "cookie", "proxy-authorization", "content-type"] {
+        assert_eq!(shown(sent, gone), None, "{gone} isn't sent across origins / without a body");
+    }
+    assert_eq!(shown(sent, "x-trace"), Some("7"));
+    assert_eq!(shown(sent, "referer"), Some(format!("{}/start", origin.uri()).as_str()));
+
+    // And that is what the other server got.
+    let received = last_request(&target).await;
+    assert_eq!(received.method.as_str(), "GET");
+    assert!(received.body.is_empty());
+    for (name, value) in &sent.headers {
+        assert_eq!(header(&received, name), Some(value.as_str()), "{name} as shown was sent");
+    }
+    for gone in ["authorization", "cookie", "proxy-authorization", "content-type"] {
+        assert_eq!(header(&received, gone), None, "{gone}");
+    }
+}
+
+#[tokio::test]
+async fn a_same_origin_307_keeps_the_method_body_and_credentials() {
+    let server = MockServer::start().await;
+    Mock::given(path("/old"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/new"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/new")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let text = "PUT {{base}}/old\nAuthorization: Bearer secret\nContent-Type: text/plain\n\nhello\n";
+    let req = parse(text).requests.remove(0);
+
+    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+
+    let sent = &resp.request;
+    assert_eq!((sent.method.as_str(), sent.url.clone()), ("PUT", format!("{}/new", server.uri())));
+    assert_eq!((sent.body_size, sent.body_preview.as_deref()), (5, Some("hello")));
+    assert_eq!(shown(sent, "authorization"), Some("Bearer secret"));
+    assert_eq!(shown(sent, "content-type"), Some("text/plain"));
+    let received = last_request(&server).await;
+    assert_eq!((received.method.as_str(), received.body.as_slice()), ("PUT", &b"hello"[..]));
+}
+
+#[tokio::test]
+async fn a_302_turns_a_post_into_a_get_but_keeps_other_methods() {
+    let server = MockServer::start().await;
+    Mock::given(path("/old"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/new"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/new")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let vars = env(&[("base", &server.uri())]);
+
+    let post = parse("POST {{base}}/old\nContent-Type: text/plain\n\nhello\n").requests.remove(0);
+    let sent = send(&post, vars.clone(), Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("GET", 0));
+    assert_eq!(shown(&sent, "content-type"), None);
+
+    let put = parse("PUT {{base}}/old\nContent-Type: text/plain\n\nhello\n").requests.remove(0);
+    let sent = send(&put, vars, Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("PUT", 5));
+    assert_eq!(shown(&sent, "content-type"), Some("text/plain"));
+    assert_eq!(last_request(&server).await.method.as_str(), "PUT");
+}
+
+#[tokio::test]
+async fn without_redirects_the_request_tab_shows_the_prepared_request() {
+    let server = echo_server().await;
+    let req = parse("POST {{base}}/echo\nAuthorization: Bearer secret\n\nhi\n").requests.remove(0);
+    let sent = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap().request;
+    assert_eq!((sent.method.as_str(), sent.body_size), ("POST", 2));
+    assert_eq!(shown(&sent, "authorization"), Some("Bearer secret"));
+    assert_eq!(shown(&sent, "referer"), None);
+}
+
+// ---------------------------------------------------------------- client pool
+
+#[tokio::test]
+async fn a_second_send_through_the_pool_reuses_the_connection() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+
+    let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    drop(client);
+    let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+
+    assert!(!first.reused, "{first:?}");
+    assert!(second.reused, "{second:?}");
+}
+
+#[tokio::test]
+async fn a_client_in_use_is_never_handed_out_twice() {
+    let server = echo_server().await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let req = parse("GET {{base}}/echo\n").requests.remove(0);
+    let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+
+    let warm = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    execute_on(&warm, prepared(), &settings, |_| {}).await.unwrap();
+    // `warm` is still checked out (a send in flight), so this gets a new client.
+    let other = pool.checkout(&prepared(), &settings, &ssl).unwrap();
+    let timings = execute_on(&other, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    assert!(!timings.reused, "{timings:?}");
+}
+
+#[tokio::test]
+async fn sends_with_different_client_settings_get_different_clients() {
+    let server = echo_server().await;
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let pool = ClientPool::default();
+    let ssl = SslConfig::default();
+    let send = |text: &'static str, settings: ExecSettings| {
+        let (pool, resolver, ssl) = (&pool, &resolver, &ssl);
+        async move {
+            let p = prepare(&parse(text).requests.remove(0), resolver, Path::new("."), &settings).unwrap();
+            let client = pool.checkout(&p, &settings, ssl).unwrap();
+            execute_on(&client, p, &settings, |_| {}).await.unwrap().response.timings.reused
+        }
+    };
+
+    assert!(!send("GET {{base}}/echo\n", ExecSettings::default()).await);
+    assert!(!send("# @timeout 7\nGET {{base}}/echo\n", ExecSettings::default()).await, "a timeout directive");
+    assert!(!send("# @no-redirect\nGET {{base}}/echo\n", ExecSettings::default()).await, "redirects off");
+    let lax = ExecSettings { verify_tls: false, ..ExecSettings::default() };
+    assert!(!send("GET {{base}}/echo\n", lax).await, "TLS verification off");
+    assert!(send("GET {{base}}/echo\n", ExecSettings::default()).await, "the first client, still warm");
 }

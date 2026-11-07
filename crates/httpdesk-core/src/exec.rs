@@ -1,18 +1,29 @@
 //! Request execution. [`prepare`] turns a model [`Request`] into the exact bytes
 //! to send (applying variables and dropping disabled components). [`execute`]
-//! sends it with reqwest.
+//! sends it with reqwest on a fresh [`ExecClient`]; [`execute_on`] sends it on
+//! a given one, such as an idle client from a [`ClientPool`], so a connection
+//! left open by an earlier send can be reused.
+
+mod timing;
+
+pub use timing::Timings;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::body_format::{self, ResponseKind};
+use crate::cookies::{self, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
 use crate::parser::DISABLED_MARKER;
 use crate::query::{self, Part};
 use crate::vars::Resolver;
+
+mod body;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecError {
@@ -32,8 +43,21 @@ pub enum ExecError {
     /// Connecting (TCP and TLS) took longer than this many ms (`@connection-timeout`).
     #[error("Connection timeout: couldn't connect within {}. Check the host is reachable, or raise it with # @connection-timeout or the connection timeout in Settings.", human_ms(*.0))]
     ConnectTimeout(u64),
+    /// The host name didn't resolve. `chain` is the full error chain.
+    #[error("{chain}")]
+    Dns { host: String, chain: String },
+    /// The server's certificate was rejected, or the TLS handshake failed.
+    #[error("{chain}")]
+    TlsHandshake { reason: TlsReason, chain: String },
+    /// Nothing accepted the TCP connection. `chain` is the full error chain.
+    #[error("{chain}")]
+    Refused { host: String, port: u16, chain: String },
+    /// The server closed or reset the connection before answering.
+    #[error("{chain}")]
+    Reset { host: String, port: u16, chain: String },
+    /// Any other failure, as its error chain.
     #[error("{0}")]
-    Http(String),
+    Other(String),
     /// Unresolved variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
@@ -49,9 +73,85 @@ fn human_ms(ms: u64) -> String {
     }
 }
 
+/// The class of a failed send, which the UI picks a heading, hint and fix-it
+/// button by. Serialised in camelCase (`timeoutIdle`), as `SendError["kind"]`
+/// in `src/lib/types.ts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorKind {
+    Dns,
+    Refused,
+    Reset,
+    Tls,
+    TimeoutIdle,
+    TimeoutConnect,
+    InvalidUrl,
+    UnresolvedVariable,
+    File,
+    Other,
+}
+
+impl ExecError {
+    /// The class of failure the UI picks a heading, hint and fix-it buttons by.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            ExecError::Dns { .. } => ErrorKind::Dns,
+            ExecError::Refused { .. } => ErrorKind::Refused,
+            ExecError::Reset { .. } => ErrorKind::Reset,
+            ExecError::ReadTimeout(_) => ErrorKind::TimeoutIdle,
+            ExecError::ConnectTimeout(_) => ErrorKind::TimeoutConnect,
+            ExecError::InvalidUrl { .. } => ErrorKind::InvalidUrl,
+            ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
+            ExecError::File { .. } => ErrorKind::File,
+            ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
+            ExecError::InvalidMethod(_)
+            | ExecError::InvalidHeader(_)
+            | ExecError::DynamicVariable(_)
+            | ExecError::Other(_) => ErrorKind::Other,
+        }
+    }
+
+    /// The structured facts behind [`Self::kind`], for the UI's hint. `null` when there are none.
+    fn details(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            ExecError::Dns { host, .. } => json!({ "host": host }),
+            ExecError::Refused { host, port, .. } | ExecError::Reset { host, port, .. } => {
+                json!({ "host": host, "port": port })
+            }
+            ExecError::TlsHandshake { reason, .. } => json!({ "reason": reason }),
+            ExecError::Tls(_) => json!({ "reason": TlsReason::Other }),
+            ExecError::ReadTimeout(ms) | ExecError::ConnectTimeout(ms) => json!({ "timeoutMs": ms }),
+            ExecError::InvalidUrl { url, reason } => json!({ "url": url, "reason": reason }),
+            ExecError::UnresolvedHost(names) => json!({ "names": names }),
+            ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
+            _ => serde_json::Value::Null,
+        }
+    }
+}
+
+/// Why a TLS connection failed, as far as it can be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TlsReason {
+    SelfSigned,
+    Expired,
+    WrongHost,
+    UnknownIssuer,
+    /// Anything else, including TLS configuration errors (unreadable CA or client certificate).
+    Other,
+}
+
+/// Send errors reach the UI as `{ kind, message, details }`: the core owns the
+/// message, the UI chooses the hint and buttons by kind.
 impl Serialize for ExecError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&self.to_string())
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ExecError", 3)?;
+        st.serialize_field("kind", &self.kind())?;
+        st.serialize_field("message", &self.to_string())?;
+        st.serialize_field("details", &self.details())?;
+        st.end()
     }
 }
 
@@ -258,6 +358,9 @@ fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
     }
 }
 
+/// Sent when the request sets no `Accept-Encoding`: every encoding `body` can decode.
+const DEFAULT_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
+
 /// Resolves variables and applies enablement. Disabled components are never included.
 pub fn prepare(
     req: &Request,
@@ -335,6 +438,10 @@ pub fn prepare(
     if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("user-agent")) {
         headers.push(("User-Agent".into(), concat!("HttpDesk/", env!("CARGO_PKG_VERSION")).into()));
     }
+    // Added here rather than by reqwest so the Request tab shows it.
+    if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-encoding")) {
+        headers.push(("Accept-Encoding".into(), DEFAULT_ACCEPT_ENCODING.into()));
+    }
 
     let mut warnings = Vec::new();
     let unresolved = resolver.unresolved();
@@ -379,16 +486,35 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
     pub time_ms: f64,
     pub ttfb_ms: f64,
+    /// Decoded body size (what the viewer shows and the size limit applies to).
     pub body_size: usize,
+    /// Body bytes as received on the wire, before `Content-Encoding` is undone.
+    pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
+    /// What the body is, for the viewer (see [`body_format::response_kind`]).
+    #[serde(default)]
+    pub body_kind: ResponseKind,
+    /// The response's `Content-Encoding` header, as sent by the server.
+    pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
     pub body_text: Option<String>,
+    /// The Pretty view's text for a JSON or XML body (the raw text if it
+    /// doesn't parse). The shell fills it in for bodies small enough to send
+    /// twice; `None` means fetch it by response id when Pretty is opened.
+    #[serde(default)]
+    pub pretty_text: Option<String>,
     /// Base64 for binary content (only below the preview limit).
     pub body_base64: Option<String>,
     pub truncated: bool,
     pub request: SentRequest,
     pub warnings: Vec<String>,
+    /// Phase timing of the final request (`time_ms` covers every hop).
+    #[serde(default)]
+    pub timings: Timings,
+    /// Every `Set-Cookie` received, redirect hops first, each with the URL
+    /// that set it. Shown only; never sent back.
+    pub cookies: Vec<ResponseCookie>,
 }
 
 pub struct ExecOutcome {
@@ -413,13 +539,240 @@ fn error_chain(e: &dyn std::error::Error) -> String {
     msg
 }
 
-fn build_client(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<reqwest::Client, ExecError> {
+/// Every error in `e`'s source chain, including the ones `std::io::Error` wraps
+/// (its `source()` skips the wrapped error itself, which is where rustls and
+/// OS errors live).
+fn causes<'a>(e: &'a (dyn std::error::Error + 'static)) -> Vec<&'a (dyn std::error::Error + 'static)> {
+    let mut out = Vec::new();
+    let mut next = Some(e);
+    while let Some(err) = next {
+        out.push(err);
+        next = match err.downcast_ref::<std::io::Error>().and_then(|io| io.get_ref()) {
+            Some(wrapped) => Some(wrapped),
+            None => err.source(),
+        };
+    }
+    out
+}
+
+/// Turns a transport failure into the error kind the UI explains. Async because
+/// a rejected certificate may be fetched again to tell why (see [`crate::tls_probe`]).
+async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
+    match (e.is_timeout(), e.is_connect()) {
+        (true, true) if p.connect_timeout_ms > 0 => return ExecError::ConnectTimeout(p.connect_timeout_ms),
+        (true, false) if p.timeout_ms > 0 => return ExecError::ReadTimeout(p.timeout_ms),
+        _ => {}
+    }
+    let chain = error_chain(&e);
+    let url = e.url().cloned().or_else(|| url::Url::parse(&p.url).ok());
+    let host = url.as_ref().and_then(|u| u.host_str()).unwrap_or_default().trim_matches(['[', ']']).to_string();
+    let port = url.as_ref().and_then(url::Url::port_or_known_default).unwrap_or_default();
+    use std::io::ErrorKind as K;
+    let io_kind = |kinds: &[K]| {
+        causes(&e).iter().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| kinds.contains(&io.kind())))
+    };
+    // hyper-util's and reqwest's resolver errors are private types, so they're known by their text.
+    if causes(&e).iter().any(|c| matches!(c.to_string().as_str(), "dns error" | "error resolving DNS")) {
+        return ExecError::Dns { host, chain };
+    }
+    let tls = causes(&e).into_iter().find_map(|c| c.downcast_ref::<rustls::Error>().cloned());
+    if let Some(tls) = tls {
+        use rustls::CertificateError as C;
+        let reason = match tls {
+            rustls::Error::InvalidCertificate(C::Expired | C::ExpiredContext { .. }) => TlsReason::Expired,
+            rustls::Error::InvalidCertificate(C::NotValidForName | C::NotValidForNameContext { .. }) => {
+                TlsReason::WrongHost
+            }
+            rustls::Error::InvalidCertificate(cert) => {
+                let timeout = Duration::from_millis(match p.connect_timeout_ms {
+                    0 => 5_000,
+                    ms => ms.min(5_000),
+                });
+                // Behind a proxy, the verifier's reason is all there is.
+                let found = match &url {
+                    Some(u) if !crate::tls_probe::through_proxy(u) => {
+                        crate::tls_probe::certificate_reason(&host, port, timeout).await
+                    }
+                    _ => None,
+                };
+                found.unwrap_or(if cert == C::UnknownIssuer { TlsReason::UnknownIssuer } else { TlsReason::Other })
+            }
+            _ => TlsReason::Other,
+        };
+        return ExecError::TlsHandshake { reason, chain };
+    }
+    if io_kind(&[K::ConnectionRefused]) {
+        return ExecError::Refused { host, port, chain };
+    }
+    let hung_up =
+        causes(&e).iter().any(|c| c.downcast_ref::<hyper::Error>().is_some_and(hyper::Error::is_incomplete_message));
+    if hung_up || io_kind(&[K::ConnectionReset, K::ConnectionAborted, K::BrokenPipe, K::UnexpectedEof]) {
+        return ExecError::Reset { host, port, chain };
+    }
+    ExecError::Other(chain)
+}
+
+/// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
+/// with the hooks that time its phases and record the cookies its responses
+/// set. [`execute`] builds one per send; [`execute_on`] reuses one, which lets
+/// a later request go over a connection that is still open.
+///
+/// It times and records one request at a time: concurrent sends on one client
+/// would mix their phases and cookies. [`ClientPool`] keeps to that.
+pub struct ExecClient {
+    http: reqwest::Client,
+    timing: timing::Recorder,
+    cookies: Arc<cookies::Recorder>,
+}
+
+impl ExecClient {
+    /// Builds a client with `p`'s redirect and timeout settings plus the TLS
+    /// settings. Fails with [`ExecError::Tls`] if a certificate can't be read.
+    pub fn new(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<Self, ExecError> {
+        let timing = timing::Recorder::default();
+        let cookies = Arc::new(cookies::Recorder::default());
+        let http = build_client(p, settings, ssl, &timing, cookies.clone())?;
+        Ok(Self { http, timing, cookies })
+    }
+}
+
+/// Everything [`build_client`] builds a client from, so two sends with equal
+/// keys can share one. Certificate files are identified by path, size and
+/// modification time, so replacing one builds a new client. The proxy
+/// environment variables are read when the client is built, so they're part of
+/// it too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClientKey {
+    follow_redirects: bool,
+    max_redirects: usize,
+    accept_invalid_certs: bool,
+    timeout_ms: u64,
+    connect_timeout_ms: u64,
+    files: Vec<Option<FileStamp>>,
+    proxy_env: Vec<Option<std::ffi::OsString>>,
+}
+
+/// A certificate file as a [`ClientKey`] sees it: its path, and its size and
+/// modification time if it can be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileStamp {
+    path: PathBuf,
+    stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+impl ClientKey {
+    fn new(p: &PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Self {
+        let file = |path: Option<&PathBuf>| {
+            path.map(|path| {
+                let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.len(), m.modified().ok()?)));
+                FileStamp { path: path.clone(), stamp }
+            })
+        };
+        let cert = ssl.client_certificate.as_ref().or(settings.client_cert_path.as_ref());
+        let key = ssl.client_certificate_key.as_ref().or(settings.client_key_path.as_ref());
+        let proxy_vars = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+        ClientKey {
+            follow_redirects: p.follow_redirects,
+            max_redirects: settings.max_redirects,
+            accept_invalid_certs: !settings.verify_tls || ssl.verify_host_certificate == Some(false),
+            timeout_ms: p.timeout_ms,
+            connect_timeout_ms: p.connect_timeout_ms,
+            files: vec![file(settings.ca_cert_path.as_ref()), file(cert), file(key)],
+            proxy_env: proxy_vars
+                .iter()
+                .flat_map(|v| [v.to_string(), v.to_ascii_uppercase()])
+                .chain(["REQUEST_METHOD".to_string()])
+                .map(std::env::var_os)
+                .collect(),
+        }
+    }
+}
+
+/// At most this many idle clients are kept; the longest idle goes first.
+pub const MAX_IDLE_CLIENTS: usize = 8;
+
+/// Idle [`ExecClient`]s kept between sends, so a send can go over a
+/// connection an earlier one left open. [`ClientPool::checkout`] hands out an
+/// idle client built with the same settings, or builds a new one; a client
+/// is never handed out while it's checked out, so each times one request at a
+/// time. Cloning shares the pool.
+#[derive(Clone, Default)]
+pub struct ClientPool {
+    idle: Arc<Mutex<Vec<(ClientKey, ExecClient)>>>,
+}
+
+impl ClientPool {
+    /// An idle client for sending `p` with these settings, or a new one. It
+    /// returns to the pool when the [`PooledClient`] is dropped.
+    pub fn checkout(
+        &self,
+        p: &PreparedRequest,
+        settings: &ExecSettings,
+        ssl: &SslConfig,
+    ) -> Result<PooledClient, ExecError> {
+        let key = ClientKey::new(p, settings, ssl);
+        let idle = {
+            let mut idle = self.idle.lock().unwrap_or_else(|e| e.into_inner());
+            // The most recently used one has the warmest connections.
+            idle.iter().rposition(|(k, _)| *k == key).map(|i| idle.remove(i).1)
+        };
+        let client = match idle {
+            Some(client) => client,
+            None => ExecClient::new(p, settings, ssl)?,
+        };
+        Ok(PooledClient { entry: Some((key, client)), pool: self.clone() })
+    }
+}
+
+/// A client checked out of a [`ClientPool`]; dropping it returns it.
+pub struct PooledClient {
+    entry: Option<(ClientKey, ExecClient)>,
+    pool: ClientPool,
+}
+
+impl std::ops::Deref for PooledClient {
+    type Target = ExecClient;
+
+    fn deref(&self) -> &ExecClient {
+        &self.entry.as_ref().expect("present until dropped").1
+    }
+}
+
+impl Drop for PooledClient {
+    fn drop(&mut self) {
+        if let Some(entry) = self.entry.take() {
+            let mut idle = self.pool.idle.lock().unwrap_or_else(|e| e.into_inner());
+            idle.push(entry);
+            if idle.len() > MAX_IDLE_CLIENTS {
+                idle.remove(0);
+            }
+        }
+    }
+}
+
+fn build_client(
+    p: &PreparedRequest,
+    settings: &ExecSettings,
+    ssl: &SslConfig,
+    timing: &timing::Recorder,
+    cookies: Arc<cookies::Recorder>,
+) -> Result<reqwest::Client, ExecError> {
+    let redirect = if p.follow_redirects {
+        timing.redirects(reqwest::redirect::Policy::limited(settings.max_redirects))
+    } else {
+        reqwest::redirect::Policy::none()
+    };
+    // Decoding happens in `body` so the raw bytes can be counted. These also
+    // guard against another crate enabling reqwest's decompression features.
     let mut b = reqwest::Client::builder()
-        .redirect(if p.follow_redirects {
-            reqwest::redirect::Policy::limited(settings.max_redirects)
-        } else {
-            reqwest::redirect::Policy::none()
-        })
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .cookie_provider(cookies)
+        .redirect(redirect)
+        .dns_resolver(timing.resolver())
+        .connector_layer(timing.layer())
         .danger_accept_invalid_certs(!settings.verify_tls || ssl.verify_host_certificate == Some(false));
     if p.timeout_ms > 0 {
         b = b.read_timeout(Duration::from_millis(p.timeout_ms));
@@ -456,7 +809,10 @@ fn is_textual(content_type: &str) -> bool {
             .any(|t| ct.contains(t))
 }
 
-fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
+/// A body as text: in its `charset`, else UTF-8 for textual or unknown content
+/// types; `None` for binary. The shell re-decodes stored bodies with it, so
+/// they match the response's `body_text`.
+pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     let charset = content_type.and_then(|ct| {
         ct.split(';').find_map(|p| p.trim().strip_prefix("charset=").map(|c| c.trim_matches('"').to_string()))
     });
@@ -470,11 +826,101 @@ fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     }
 }
 
+/// What the Request tab shows: the request as it reached the server that sent
+/// the final response. Without redirects that is `p`. After them it is rebuilt
+/// with the rules reqwest (and tower-http's follow-redirect under it) applies
+/// to each hop:
+/// - 301/302 turn a POST into a GET, and 303 turns anything but HEAD into a
+///   GET; both drop the body and its Content-Type, Content-Length,
+///   Content-Encoding and Transfer-Encoding headers, for every later hop too.
+/// - A hop to another origin (scheme, host or port) than the one before it
+///   leaves out Authorization, Cookie, Cookie2, Proxy-Authorization and
+///   WWW-Authenticate. Each hop starts again from the request's headers, so
+///   this depends on the final hop only.
+/// - The final hop carries a Referer naming the URL before it (without
+///   userinfo or fragment), except from https to http.
+///
+/// It's a reconstruction: headers reqwest adds itself (Host, Accept, ...)
+/// aren't listed.
+fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> SentRequest {
+    let mut method = p.method.clone();
+    let mut body = p.body.as_deref();
+    let mut headers = p.headers.clone();
+    let without = |headers: &mut Vec<(String, String)>, names: &[&str]| {
+        headers.retain(|(n, _)| !names.iter().any(|g| n.eq_ignore_ascii_case(g)));
+    };
+    let payload = ["content-type", "content-length", "content-encoding", "transfer-encoding"];
+    for hop in hops {
+        let to_get = match hop.status {
+            301 | 302 if method == "POST" => true,
+            303 => method != "HEAD",
+            _ => continue,
+        };
+        if to_get {
+            method = "GET".into();
+        }
+        body = None;
+        without(&mut headers, &payload);
+    }
+    if let Some(last) = hops.last() {
+        let (to, from) = (&last.to, &last.from);
+        let cross_origin = to.host_str() != from.host_str()
+            || to.port_or_known_default() != from.port_or_known_default()
+            || to.scheme() != from.scheme();
+        if cross_origin {
+            without(&mut headers, &["authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate"]);
+        }
+        if !(to.scheme() == "http" && from.scheme() == "https") {
+            let mut referer = from.clone();
+            let _ = referer.set_username("");
+            let _ = referer.set_password(None);
+            referer.set_fragment(None);
+            match headers.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case("referer")) {
+                Some((_, v)) => *v = referer.to_string(),
+                None => headers.push(("Referer".into(), referer.to_string())),
+            }
+        }
+    }
+    SentRequest {
+        method,
+        url: if hops.is_empty() { p.url.clone() } else { final_url.to_string() },
+        headers,
+        body_size: body.map_or(0, <[u8]>::len),
+        body_preview: body.map(|b| {
+            let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
+            if b.len() > 64 * 1024 {
+                format!("{s}\n… ({} bytes total)", b.len())
+            } else {
+                s
+            }
+        }),
+    }
+}
+
+/// Sends `p` on a new [`ExecClient`] built for it.
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
-    let client = build_client(&p, settings, ssl)?;
+    let client = ExecClient::new(&p, settings, ssl)?;
+    execute_on(&client, p, settings, |_| {}).await
+}
+
+/// The shortest gap between two progress reports, so a body arriving in many
+/// small chunks doesn't flood the UI (at most ~10 reports a second).
+pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Sends `p` on `client`, which keeps the redirect, timeout and TLS settings
+/// it was built with; `settings` supplies the body size limit. While the body
+/// downloads, `on_progress` gets the body bytes received on the wire so far:
+/// at most once per [`PROGRESS_INTERVAL`], each larger than the last, and none
+/// after the function returns.
+pub async fn execute_on(
+    client: &ExecClient,
+    p: PreparedRequest,
+    settings: &ExecSettings,
+    mut on_progress: impl FnMut(usize) + Send,
+) -> Result<ExecOutcome, ExecError> {
     let method =
         reqwest::Method::from_bytes(p.method.as_bytes()).map_err(|_| ExecError::InvalidMethod(p.method.clone()))?;
-    let mut builder = client.request(method, &p.url);
+    let mut builder = client.http.request(method, &p.url);
     for (n, v) in &p.headers {
         let name =
             reqwest::header::HeaderName::from_bytes(n.as_bytes()).map_err(|_| ExecError::InvalidHeader(n.clone()))?;
@@ -486,15 +932,18 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
         builder = builder.body(body.clone());
     }
 
-    let map_err = |e: reqwest::Error| match (e.is_timeout(), e.is_connect()) {
-        (true, true) if p.connect_timeout_ms > 0 => ExecError::ConnectTimeout(p.connect_timeout_ms),
-        (true, false) if p.timeout_ms > 0 => ExecError::ReadTimeout(p.timeout_ms),
-        _ => ExecError::Http(error_chain(&e)),
-    };
-
+    client.timing.reset();
+    // Drop anything an earlier request on this client left behind (one that
+    // failed part-way never took its cookies), so this response lists only
+    // the cookies set while it was being fetched.
+    client.cookies.take();
     let start = Instant::now();
-    let mut resp = builder.send().await.map_err(map_err)?;
-    let ttfb = start.elapsed();
+    let mut resp = match builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => return Err(classify(e, &p).await),
+    };
+    let headers_at = Instant::now();
+    let ttfb = headers_at - start;
 
     let status = resp.status();
     let http_version = format!("{:?}", resp.version());
@@ -508,36 +957,46 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
     let content_type =
         resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_string);
 
-    let mut body = Vec::new();
-    let mut truncated = false;
-    while let Some(chunk) = resp.chunk().await.map_err(map_err)? {
-        if body.len() + chunk.len() > settings.max_body_bytes {
-            body.extend_from_slice(&chunk[..settings.max_body_bytes - body.len()]);
-            truncated = true;
+    let content_encoding = resp
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string());
+
+    // A body that can't be decoded (an unknown encoding, or bytes that don't
+    // decode) is kept as received, with a warning.
+    let (mut reader, unsupported) = body::BodyReader::new(content_encoding.as_deref(), settings.max_body_bytes);
+    let mut last_report: Option<Instant> = None;
+    loop {
+        let chunk = match resp.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => return Err(classify(e, &p).await),
+        };
+        if !reader.push(&chunk) {
             break;
         }
-        body.extend_from_slice(&chunk);
+        // The first chunk reports at once; after that, once per interval.
+        if last_report.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) && !chunk.is_empty() {
+            last_report = Some(Instant::now());
+            on_progress(reader.transferred());
+        }
     }
-    let elapsed = start.elapsed();
+    let body::ReceivedBody { bytes: body, transferred, truncated, decode_failure } = reader.finish();
+    let as_received = unsupported.is_some() || decode_failure.is_some();
+    let end = Instant::now();
+    let elapsed = end - start;
+    let timings = client.timing.timings(start, headers_at, end);
+    let cookies = client.cookies.take();
+    let request = final_request(&p, &client.timing.hops(), &final_url);
+    let mut warnings = p.warnings;
+    warnings.extend(unsupported);
+    warnings.extend(decode_failure);
 
-    let body_text = decode_text(&body, content_type.as_deref());
+    // Still-encoded bytes are binary whatever the content type says.
+    let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };
     let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
         .then(|| base64::engine::general_purpose::STANDARD.encode(&body));
-
-    let request = SentRequest {
-        method: p.method.clone(),
-        url: p.url.clone(),
-        headers: p.headers.clone(),
-        body_size: p.body.as_ref().map_or(0, Vec::len),
-        body_preview: p.body.as_ref().map(|b| {
-            let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
-            if b.len() > 64 * 1024 {
-                format!("{s}\n… ({} bytes total)", b.len())
-            } else {
-                s
-            }
-        }),
-    };
 
     Ok(ExecOutcome {
         response: HttpResponse {
@@ -550,13 +1009,19 @@ pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfi
             time_ms: elapsed.as_secs_f64() * 1000.0,
             ttfb_ms: ttfb.as_secs_f64() * 1000.0,
             body_size: body.len(),
+            transferred_size: transferred,
             headers_size,
+            body_kind: body_format::response_kind(content_type.as_deref(), body_text.as_deref()),
             content_type,
+            content_encoding,
             body_text,
+            pretty_text: None,
             body_base64,
             truncated,
             request,
-            warnings: p.warnings,
+            warnings,
+            timings,
+            cookies,
         },
         body,
     })
