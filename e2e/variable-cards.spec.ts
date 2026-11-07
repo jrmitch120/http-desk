@@ -30,7 +30,7 @@ const focusedRow = (page: Page) =>
     const el = document.activeElement;
     const name = (el?.closest(".kv-row")?.querySelector(".c-name") as HTMLInputElement | null)?.value ?? null;
     const cell = el?.closest(".c-value");
-    return { name, value: !cell ? null : el instanceof HTMLInputElement ? el.value : cell.textContent };
+    return { name, value: !cell ? null : el instanceof HTMLInputElement ? el.value : cell.textContent?.trim() };
   });
 
 test("a Secret is masked in its hover card until revealed, and only in that card", async ({ page }) => {

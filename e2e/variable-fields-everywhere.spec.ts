@@ -48,7 +48,7 @@ test("an API key value highlights variables and shows their cards", async ({ pag
   await expect(value.locator(".cm-var-ok.cm-var-secret")).toHaveText("{{token}}");
   await expect(value.locator(".cm-var-bad")).toHaveText("{{nope}}");
   await value.locator(".cm-var", { hasText: "{{token}}" }).hover();
-  await expect(card(page)).toHaveText(['token•••••••• (secret)from environment "local"']);
+  await expect(card(page)).toHaveText(['token•••••••• (secret)from environment "local"RevealEdit']);
 });
 
 test("a Basic auth password stays masked, and its variables show only once revealed", async ({ page }) => {
@@ -135,7 +135,7 @@ test("a File variable's value resolves the variables it refers to", async ({ pag
   const pet = grid.locator(".kv-row").nth(2).locator(".c-value");
   await expect(pet.locator(".cm-var-ok")).toHaveText(["{{api}}", "{{petId}}"]);
   await pet.locator(".cm-var", { hasText: "{{api}}" }).hover();
-  await expect(card(page)).toHaveText(["apihttp://127.0.0.1:8765/v1from this file"]);
+  await expect(card(page)).toHaveText(["apihttp://127.0.0.1:8765/v1from this fileEdit"]);
 });
 
 /** Opens the Environments modal on `env` and returns its variable grid. */
@@ -179,9 +179,20 @@ test("an environment's values see that environment and the shared variables, whi
   const url = grid.locator(".kv-row").nth(3).locator(".c-value");
   await expect(url).toHaveText("{{api}} {{baseUrl}}");
   await url.locator(".cm-var", { hasText: "{{api}}" }).hover();
-  await expect(card(page)).toHaveText(['apihttps://example.org/v1from environment "staging"']);
+  await expect(card(page)).toHaveText(['apihttps://example.org/v1from environment "staging"Edit']);
   await url.locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
-  await expect(card(page)).toHaveText(['baseUrlhttps://staging.example.comfrom environment "staging"']);
+  await expect(card(page)).toHaveText(['baseUrlhttps://staging.example.comfrom environment "staging"Edit']);
+
+  // Edit stays in the modal: a shared variable's card shows the shared variables, on its row.
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+  await grid.locator(".kv-row").nth(2).locator(".c-value .cm-var", { hasText: "{{version}}" }).hover();
+  await expect(card(page)).toContainText("from shared");
+  await card(page).getByRole("button", { name: "Edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Environments" });
+  await expect(dialog.locator(".main-head .title")).toContainText("Shared variables");
+  await expect(card(page)).toHaveCount(0);
+  await expect(page.locator(":focus").locator("xpath=ancestor::*[contains(@class,'kv-row')]").locator("input.c-name")).toHaveValue("version");
 });
 
 test("a Secret's value stays masked, marks included, until it is shown", async ({ page }) => {

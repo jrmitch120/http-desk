@@ -214,7 +214,9 @@ paths), File variable values and environment values.
   definition's row when the app has one: a File variable at the top of the file in
   the request's Settings section, an environment's variable in the Environments modal
   on that environment (or the shared variables). It comes from the provider's `edit`
-  (the request editor wires it to `app.editDefinition`), and the info's `definition`;
+  (the request editor wires it to `app.editDefinition`; the Environments modal sets
+  `app.definitionWanted`, so Edit switches to the supplying environment or the shared
+  variables in place), and the info's `definition`;
   a request's own `@name`, a dynamic or an Undefined variable has none. A press in the
   card keeps focus where it was, so an editor (and its card) stays open.
 - Autocomplete lists the names in scope, each with its source (file, environment,

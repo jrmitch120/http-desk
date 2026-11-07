@@ -57,7 +57,9 @@
    *  A hover card's Edit focuses the defining row here (e.g. a shared variable used in an environment's value). */
   const variables = $derived({
     ...makeVarProvider({ env: envVariables(set, selectedEnv?.name ?? null), fileVars: [], requestVars: [], envName: selected }),
-    edit: (d: Definition) => (app.definitionWanted = d),
+    edit: (d: Definition) => {
+      app.definitionWanted = d;
+    },
   });
   /** Production and colour per environment name. Saved to the app settings, not
    *  the env files; renames and deletes below carry or drop them. */
