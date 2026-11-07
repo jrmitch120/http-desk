@@ -71,6 +71,7 @@ export interface MockState {
   settings: {
     theme: string;
     exec: Record<string, unknown>;
+    showResolved: boolean;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
   };
   /** `.http` file models by path, as last saved. */
@@ -83,6 +84,8 @@ export interface MockState {
   envFiles: { shared: EnvFile; private: EnvFile };
   /** How many times the viewer called `pretty_response`. */
   prettyRequests: number;
+  /** How many times the resolved preview called `preview_request`. */
+  previewRequests: number;
   /** Whether the app has been given its settings yet. */
   settingsServed: boolean;
   /** The window title the app last set (null before it sets one). */

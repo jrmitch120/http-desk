@@ -39,6 +39,29 @@ pub(crate) fn segments(text: &str) -> Vec<Segment<'_>> {
     out
 }
 
+/// Dynamic variables that generate a new value on every send. The others
+/// (`$processEnv`, `$dotenv`, `$env.X`) read a value that's already there.
+const GENERATED: &[&str] = &[
+    "uuid",
+    "guid",
+    "random.uuid",
+    "timestamp",
+    "isoTimestamp",
+    "randomInt",
+    "random.integer",
+    "random.float",
+    "random.alphabetic",
+    "random.alphanumeric",
+    "random.hexadecimal",
+    "random.email",
+    "datetime",
+    "localDatetime",
+];
+
+/// Brackets the index of a placeholder (see [`Resolver::previewing`]). Private-use
+/// characters, so they can't clash with real text and survive query encoding.
+const PLACEHOLDER: (char, char) = ('\u{E000}', '\u{E001}');
+
 /// Resolves `{{name}}` references against a flat variable map.
 #[derive(Debug, Default)]
 pub struct Resolver {
@@ -47,6 +70,8 @@ pub struct Resolver {
     unresolved: std::cell::RefCell<BTreeSet<String>>,
     circular: std::cell::RefCell<Vec<Vec<String>>>,
     errors: std::cell::RefCell<Vec<String>>,
+    /// Set by [`Resolver::previewing`]: generated dynamic variables, as written.
+    placeholders: Option<std::cell::RefCell<Vec<String>>>,
 }
 
 impl Resolver {
@@ -66,6 +91,44 @@ impl Resolver {
             vars.insert(v.name.clone(), v.value.clone());
         }
         Resolver { vars, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
+    }
+
+    /// For the resolved preview: dynamic variables that would generate a new value
+    /// on every send (`$uuid`, `$timestamp`, `$random…`) are not generated. They
+    /// resolve to placeholders that [`Resolver::replace_placeholders`] turns back
+    /// into the reference as written, wherever they end up (even percent-encoded).
+    pub fn previewing(mut self) -> Self {
+        self.placeholders = Some(Default::default());
+        self
+    }
+
+    /// `text` with each placeholder replaced by `with(reference as written)`.
+    pub fn replace_placeholders(&self, text: &str, with: impl Fn(&str) -> String) -> String {
+        let Some(placeholders) = &self.placeholders else { return text.to_string() };
+        let (open, close) = PLACEHOLDER;
+        let encoded = |c: char| c.encode_utf8(&mut [0; 4]).bytes().map(|b| format!("%{b:02X}")).collect::<String>();
+        let mut out = text.to_string();
+        for (i, whole) in placeholders.borrow().iter().enumerate() {
+            let value = with(whole);
+            out = out.replace(&format!("{open}{i}{close}"), &value);
+            out = out.replace(&format!("{}{i}{}", encoded(open), encoded(close)), &value);
+        }
+        out
+    }
+
+    /// Whether `text` holds a placeholder.
+    pub fn has_placeholders(&self, text: &str) -> bool {
+        self.placeholders.is_some() && text.contains(PLACEHOLDER.0)
+    }
+
+    fn placeholder(&self, whole: &str) -> Option<String> {
+        let mut placeholders = self.placeholders.as_ref()?.borrow_mut();
+        let i = placeholders.iter().position(|p| p == whole).unwrap_or_else(|| {
+            placeholders.push(whole.to_string());
+            placeholders.len() - 1
+        });
+        let (open, close) = PLACEHOLDER;
+        Some(format!("{open}{i}{close}"))
     }
 
     pub fn resolve(&self, text: &str) -> String {
@@ -102,6 +165,12 @@ impl Resolver {
                 Segment::Reference { whole, name } => (whole, name),
             };
             let value = if let Some(dynamic) = inner.strip_prefix('$') {
+                if GENERATED.contains(&split_call(dynamic).0) {
+                    if let Some(placeholder) = self.placeholder(whole) {
+                        out.push_str(&placeholder);
+                        continue;
+                    }
+                }
                 match self.dynamic(dynamic) {
                     Ok(v) => v,
                     Err(e) => {

@@ -12,12 +12,21 @@ import type {
   HttpFile,
   HttpResponse,
   Request,
+  RequestPreview,
   SearchHit,
   SpecSummary,
   TreeNode,
   Variable,
   WorkspaceInfo,
 } from "./types";
+
+/** A request with the scope it's sent in, as `send_request` and `preview_request` take it. */
+export type RequestArgs = {
+  request: Request;
+  filePath: string | null;
+  fileVariables: Variable[];
+  environment: string | null;
+};
 
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
@@ -39,13 +48,9 @@ export const api = {
   loadEnvironments: () => invoke<EnvironmentSet>("load_environments"),
   saveEnvironments: (set: EnvironmentSet) => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set }),
 
-  sendRequest: (args: {
-    runId: string;
-    request: Request;
-    filePath: string | null;
-    fileVariables: Variable[];
-    environment: string | null;
-  }) => invoke<HttpResponse>("send_request", args),
+  sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),
+  /** What `sendRequest` with the same arguments would send, without sending it. */
+  previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**

@@ -146,6 +146,24 @@ export interface SentRequest {
   bodySize: number;
 }
 
+/**
+ * The resolved preview (`preview_request`, core `exec::RequestPreview`): what a
+ * send would send, without sending. Dynamic variables that generate a value on
+ * every send stay as written (`{{$uuid}}`); the body isn't included.
+ */
+export interface RequestPreview {
+  method: string;
+  /** As sent: query params encoded per ADR-0001. */
+  url: string;
+  /** Every header sent, including the auth header, the Content-Type the body implies and the defaults. */
+  headers: [string, string][];
+  /** The enabled auth's fields resolved, labelled as in the Authorization section. */
+  auth: [string, string][];
+  warnings: string[];
+  /** Why a send would fail before reaching the network. */
+  error: SendError | null;
+}
+
 export interface HttpResponse {
   id: string;
   status: number;
@@ -303,6 +321,8 @@ export interface AppSettings {
   sidebarWidth: number;
   /** Request pane's share (0..1) of the request/response split, per layout. */
   splitRatio: Record<AppSettings["layout"], number>;
+  /** Show the resolved preview under the URL bar. */
+  showResolved: boolean;
 }
 
 // ---- OpenAPI
