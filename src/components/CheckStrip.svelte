@@ -6,14 +6,10 @@
   // of check renders in its own branch below.
   import { SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
   import { folderLabel } from "../lib/envFolders";
+  import { joinAnd } from "../lib/http";
   import Icon from "./Icon.svelte";
 
   let { checks, onfix }: { checks: Check[]; onfix: (check: Check, fix: QuickFix) => void } = $props();
-
-  /** "A", "A and B", "A, B and C". */
-  function list(items: string[]): string {
-    return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
-  }
 </script>
 
 {#if checks.length}
@@ -32,7 +28,7 @@
             </span>
           {:else if check.kind === "undefined"}
             <span class="message">
-              <code>{`{{${check.name}}}`}</code> is undefined, used in {list(check.sections.map((s) => SECTION_LABELS[s]))}
+              <code>{`{{${check.name}}}`}</code> is undefined, used in {joinAnd(check.sections.map((s) => SECTION_LABELS[s]))}
             </span>
             <span class="fixes">
               {#each check.fixes as fix (fix.kind)}

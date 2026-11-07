@@ -3,7 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinAnd, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
@@ -111,7 +111,6 @@ export interface RenameChoice {
 export interface Renaming {
   name: string;
   dir: string;
-  resolve: (choice: RenameChoice | null) => void;
 }
 
 /** The user's answer to the Extract to variable form. */
@@ -124,7 +123,32 @@ export interface ExtractChoice {
 export interface Extraction {
   tabId: string;
   value: string;
-  resolve: (choice: ExtractChoice | null) => void;
+}
+
+/**
+ * A form on screen that the store waits on (Rename variable, Extract to variable):
+ * `shown` is what it shows, null when there is none; `answer` closes it with the
+ * user's choice (null: cancelled). Asking again cancels one still showing.
+ */
+class PendingForm<S, C> {
+  shown = $state<S | null>(null);
+  private resolve: ((choice: C | null) => void) | null = null;
+
+  /** Shows the form and waits for its answer. */
+  ask(shown: S): Promise<C | null> {
+    this.answer(null);
+    return new Promise((resolve) => {
+      this.shown = shown;
+      this.resolve = resolve;
+    });
+  }
+
+  answer(choice: C | null) {
+    const resolve = this.resolve;
+    this.shown = null;
+    this.resolve = null;
+    resolve?.(choice);
+  }
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | null;
@@ -177,8 +201,11 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  private extractForm = new PendingForm<Extraction, ExtractChoice>();
   /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
-  extraction = $state<Extraction | null>(null);
+  get extraction(): Extraction | null {
+    return this.extractForm.shown;
+  }
   /** True until `init` has finished reopening the last workspace, so the
    *  Welcome screen doesn't flash first. */
   starting = $state(true);
@@ -200,8 +227,11 @@ class AppStore {
   /** A Find usages result asked to show this field of the tab's request: its
    *  request editor switches to it and clears this. */
   fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
+  private renameForm = new PendingForm<Renaming, RenameChoice>();
   /** The Rename variable form on screen (`RenameVariable.svelte`), if any. */
-  renaming = $state<Renaming | null>(null);
+  get renaming(): Renaming | null {
+    return this.renameForm.shown;
+  }
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -388,7 +418,7 @@ class AppStore {
     try {
       const info = await api.openWorkspace(path);
       this.missingRoot = null;
-      if (info.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+      if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
       this.tree = info.tree;
       this.docs = {};
@@ -1201,13 +1231,18 @@ class AppStore {
     this.envPickerWanted = true;
   }
 
-  /** Saves an environment set the store changed as folder `dir`'s own pair (env files
-   *  have no unsaved state of their own) and reloads the environments. False if the save
-   *  failed (it was reported). */
-  private async writeEnvironments(set: EnvironmentSet, dir = ""): Promise<boolean> {
+  /** Tells the user that folder `dir`'s private env file was added to `.gitignore` (a save or an import did it). */
+  gitignoreUpdated(dir: string) {
+    this.toast("info", `Added ${dir ? `${dir}/` : ""}http-client.private.env.json to .gitignore`);
+  }
+
+  /** Saves an environment set as folder `dir`'s own pair (the Environments modal's Save, and
+   *  the store's own changes: env files have no unsaved state of their own) and reloads the
+   *  environments. False if the save failed (it was reported). */
+  async writeEnvironments(set: EnvironmentSet, dir = ""): Promise<boolean> {
     try {
       const report = await api.saveEnvironments(set, dir);
-      if (report.gitignoreUpdated) this.toast("info", `Added ${dir ? `${dir}/` : ""}http-client.private.env.json to .gitignore`);
+      if (report.gitignoreUpdated) this.gitignoreUpdated(dir);
     } catch (e) {
       this.toast("error", `Could not save environments: ${errorMessage(e)}`);
       return false;
@@ -1243,7 +1278,7 @@ class AppStore {
    * that fails, nothing else changes. False if cancelled or the env files couldn't be saved.
    */
   async renameVariable(name: string, dir = ""): Promise<boolean> {
-    const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, dir, resolve }));
+    const choice = await this.renameForm.ask({ name, dir });
     if (!choice) return false;
     const { name: next } = choice;
     const usages = choice.usages ? await this.renameTargets(name, dir, choice.usages) : [];
@@ -1270,8 +1305,7 @@ class AppStore {
     let message = `Renamed ${name} to ${next} in every environment${dir ? ` of ${dir}/` : ""}`;
     if (edited) message += ` and ${edited} file${edited === 1 ? "" : "s"}`;
     message += ".";
-    if (unsaved.length === 1) message += ` ${unsaved[0]} had unsaved edits, so it was left unsaved.`;
-    else if (unsaved.length) message += ` ${unsaved.slice(0, -1).join(", ")} and ${unsaved.at(-1)} had unsaved edits, so they were left unsaved.`;
+    if (unsaved.length) message += ` ${joinAnd(unsaved)} had unsaved edits, so ${unsaved.length === 1 ? "it was" : "they were"} left unsaved.`;
     this.toast("success", message);
     return true;
   }
@@ -1298,9 +1332,7 @@ class AppStore {
 
   /** Answers the Rename variable form on screen (null: cancelled). */
   closeRenaming(choice: RenameChoice | null) {
-    const r = this.renaming;
-    this.renaming = null;
-    r?.resolve(choice);
+    this.renameForm.answer(choice);
   }
 
   // ---------------------------------------------------------------- extract to variable
@@ -1312,7 +1344,7 @@ class AppStore {
    * the user cancelled or the definition couldn't be written.
    */
   async extractVariable(tabId: string, value: string): Promise<string | null> {
-    const choice = await new Promise<ExtractChoice | null>((resolve) => (this.extraction = { tabId, value, resolve }));
+    const choice = await this.extractForm.ask({ tabId, value });
     if (!choice) return null;
     const { name, target } = choice;
     const tab = this.tabs.find((t) => t.id === tabId);
@@ -1361,9 +1393,7 @@ class AppStore {
 
   /** Answers the Extract to variable form on screen (null: cancelled). */
   closeExtraction(choice: ExtractChoice | null) {
-    const x = this.extraction;
-    this.extraction = null;
-    x?.resolve(choice);
+    this.extractForm.answer(choice);
   }
 
   // ---------------------------------------------------------------- feedback

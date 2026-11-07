@@ -1708,7 +1708,7 @@ describe("Extract to variable", () => {
     app.settings = null;
     app.envName = null;
     app.envSet = { shared: [], environments: [], privateFileIgnored: true };
-    app.extraction = null;
+    app.closeExtraction(null);
   });
 
   it("to a File variable: adds an @name line at the top of the file, unsaved, and returns the name", async () => {

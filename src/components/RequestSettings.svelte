@@ -2,7 +2,7 @@
   import { tick } from "svelte";
   import { app } from "../lib/store.svelte";
   import type { HttpFile, Request, Variable } from "../lib/types";
-  import { getDirective, setDirective, variableNameError } from "../lib/http";
+  import { getDirective, lastNamed, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
   import KeyValueGrid from "./KeyValueGrid.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
@@ -32,7 +32,7 @@
     const vars = file.header.variables;
     if (want.add && !vars.some((v) => v.name === want.name)) vars.push({ name: want.name, value: "" });
     // The last of a repeated name is the one in use.
-    const row = vars.filter((v) => v.name === want.name).at(-1);
+    const row = lastNamed(vars, want.name);
     if (row) tick().then(() => grid?.focusValue(row));
   });
 

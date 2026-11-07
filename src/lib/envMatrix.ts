@@ -2,10 +2,8 @@
 // shared variables and one per environment. It's a view of an EnvironmentSet;
 // edits go into the set's own variable lists, so saving is the usual
 // `save_environments` and Secrets stay in the private file.
+import { envVarsOf, SHARED } from "./vars";
 import type { EnvironmentSet, EnvVar } from "./types";
-
-/** The Shared column's name: the env files' `$shared` key. */
-export const SHARED = "$shared";
 
 /**
  * What a cell shows:
@@ -22,11 +20,6 @@ export function matrixColumns(set: EnvironmentSet): string[] {
   return [SHARED, ...set.environments.map((e) => e.name)];
 }
 
-/** A column's variables, or undefined for an environment that isn't in the set. */
-function listOf(set: EnvironmentSet, column: string): EnvVar[] | undefined {
-  return column === SHARED ? set.shared : set.environments.find((e) => e.name === column)?.variables;
-}
-
 /** Every named variable once, in the order first seen from Shared through the environments. */
 export function matrixNames(set: EnvironmentSet): string[] {
   const names = new Set<string>();
@@ -38,7 +31,8 @@ export function matrixNames(set: EnvironmentSet): string[] {
 
 /** The column's definition of `name`: the last same-named row, as sending uses. */
 function find(set: EnvironmentSet, column: string, name: string): EnvVar | undefined {
-  return listOf(set, column)?.filter((v) => v.name.trim() === name).at(-1);
+  // A name typed with spaces around it is saved trimmed, so it's compared trimmed.
+  return envVarsOf(set, column)?.filter((v) => v.name.trim() === name).at(-1);
 }
 
 export function matrixCell(set: EnvironmentSet, column: string, name: string): MatrixCell {
@@ -53,7 +47,7 @@ export function matrixCell(set: EnvironmentSet, column: string, name: string): M
  * shareable, then `patch`), so typing into a gap or locking it fills it.
  */
 export function setCell(set: EnvironmentSet, column: string, name: string, patch: Partial<Pick<EnvVar, "value" | "secret">>) {
-  const list = listOf(set, column);
+  const list = envVarsOf(set, column);
   if (!list) return;
   const variable = find(set, column, name);
   if (variable) Object.assign(variable, patch);

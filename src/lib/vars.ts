@@ -42,7 +42,15 @@ export function isDynamic(reference: string): boolean {
   return DYNAMIC_VARIABLES.some((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
 }
 
-export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string; dir?: string }>;
+/** The env files' key for the shared variables, which stands for them wherever an environment is named. */
+export const SHARED = "$shared";
+
+/** The variables of environment `env` in `set` (`SHARED`: the shared ones); undefined if the set doesn't have it. */
+export function envVarsOf(set: EnvironmentSet, env: string): EnvVar[] | undefined {
+  return env === SHARED ? set.shared : set.environments.find((e) => e.name === env)?.variables;
+}
+
+export type EnvVarMap =Record<string, { value: string; secret: boolean; source: string; dir?: string }>;
 
 /**
  * The variables of environment `envName`: the shared variables, then the
@@ -58,7 +66,7 @@ export function envVariables(set: EnvironmentSet | null, envName: string | null)
     const dir = (v.secret ? from?.private : from?.public) ?? undefined;
     return { value: v.value, secret: v.secret, source, ...(dir !== undefined ? { dir } : {}) };
   };
-  for (const v of set.shared) out[v.name] = entry(v, "$shared", set.sharedSource);
+  for (const v of set.shared) out[v.name] = entry(v, SHARED, set.sharedSource);
   const env = set.environments.find((e) => e.name === envName);
   for (const v of env?.variables ?? []) out[v.name] = entry(v, env!.name, env!.source);
   return out;
@@ -99,8 +107,8 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   // Later wins: environment, then the file, then the request's own declarations.
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
-    const source = e.source === "$shared" ? "shared variables" : `environment "${e.source}"`;
-    const origin = e.source === "$shared" ? "shared" : "environment";
+    const source = e.source === SHARED ? "shared variables" : `environment "${e.source}"`;
+    const origin = e.source === SHARED ? "shared" : "environment";
     const definition: Definition = { kind: "env", env: e.source, name, ...(e.dir !== undefined ? { dir: e.dir } : {}) };
     scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
@@ -186,6 +194,17 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   }
 
   return { resolve, info, completions };
+}
+
+/**
+ * What a value of environment `env` (`SHARED`: a shared variable) in the
+ * Environments modal can refer to: that environment over the shared variables as
+ * edited in `set`, over `inherited` (below the root, what the folder's requests get
+ * from farther folders' files, ADR-0004).
+ */
+export function envValueProvider(set: EnvironmentSet, inherited: EnvironmentSet | null, env: string): VarProvider {
+  const name = env === SHARED ? null : env;
+  return makeVarProvider({ env: { ...envVariables(inherited, name), ...envVariables(set, name) }, fileVars: [], requestVars: [], envName: env });
 }
 
 const PREVIEW_LENGTH = 40;

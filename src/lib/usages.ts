@@ -1,6 +1,7 @@
 // Find usages results as the sidebar lists them.
 import { folderOf } from "./envFolders";
 import { basename } from "./http";
+import { SHARED } from "./vars";
 import type { AuthPart, Usage, UsageField } from "./types";
 
 /** A line of the Find usages list: one field holding the reference (however many times). */
@@ -58,7 +59,7 @@ export function usageRows(usages: Usage[], root = ""): UsageRow[] {
       row = { key: `${u.path}\0@${u.index}`, title: `@${u.name}`, where: `${basename(u.path)} · File variable`, disabled: false };
     } else {
       const dir = root ? folderOf(root, u.path) : "";
-      const where = [u.env === "$shared" ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
+      const where = [u.env === SHARED ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
       row = { key: `${dir}\0${u.env}\0${u.name}`, title: u.name, where: where.join(" · "), disabled: false };
     }
     if (!rows.has(row.key)) rows.set(row.key, { ...row, usage: u });

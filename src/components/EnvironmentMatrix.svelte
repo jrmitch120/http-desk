@@ -7,9 +7,9 @@
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { envVariables, makeVarProvider } from "../lib/vars";
+  import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition, VarProvider } from "../lib/codemirror/setup";
-  import { matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell, SHARED } from "../lib/envMatrix";
+  import { matrixCell, matrixColumns, matrixNames, removeEverywhere, rowMatches, setCell } from "../lib/envMatrix";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import Icon from "./Icon.svelte";
@@ -53,12 +53,7 @@
       columns.map((column) => [
         column,
         {
-          ...makeVarProvider({
-            env: { ...envVariables(inherited, column === SHARED ? null : column), ...envVariables(set, column === SHARED ? null : column) },
-            fileVars: [],
-            requestVars: [],
-            envName: column,
-          }),
+          ...envValueProvider(set, inherited, column),
           edit: (d: Definition) => {
             app.definitionWanted = d;
           },

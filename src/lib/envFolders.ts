@@ -4,6 +4,8 @@
 // of those at or above its own folder, or the root's own set. Each environment in
 // those sets says which folders supply it (`source`), so edits can go to that
 // folder's own pair of files (`load_environments` / `save_environments` with `dir`).
+import { lastNamed } from "./http";
+import { SHARED } from "./vars";
 import type { EnvironmentSet, EnvSource, FolderEnvironments, TreeNode } from "./types";
 
 const parts = (p: string) => p.split(/[\\/]/).filter(Boolean);
@@ -79,13 +81,13 @@ export function writeFolder(set: EnvironmentSet | null, env: string, name: strin
   if (!set) return undefined;
   let source: EnvSource | null | undefined;
   let vars;
-  if (env === "$shared") [source, vars] = [set.sharedSource, set.shared];
+  if (env === SHARED) [source, vars] = [set.sharedSource, set.shared];
   else {
     const e = set.environments.find((e) => e.name === env);
     [source, vars] = [e?.source, e?.variables ?? []];
   }
   if (!source) return undefined;
-  const existing = vars.filter((v) => v.name === name).at(-1);
+  const existing = lastNamed(vars, name);
   const dir = existing ? (existing.secret ? source.private : source.public) : (source.public ?? source.private);
   return dir ?? undefined;
 }

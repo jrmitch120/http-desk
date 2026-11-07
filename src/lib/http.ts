@@ -553,12 +553,22 @@ export function promptMasked(name: string): boolean {
 
 // ------------------------------------------------------------------ variables
 
+/** The definition of `name` in use in `list`: the last one, since a later definition wins. */
+export function lastNamed<T extends { name: string }>(list: readonly T[], name: string): T | undefined {
+  return list.filter((v) => v.name === name).at(-1);
+}
+
 /** All file-scoped variables: header + every request's `@var` lines. */
 export function fileVariables(file: HttpFile): Variable[] {
   return [...file.header.variables, ...file.requests.flatMap((r) => r.variables)];
 }
 
 // ------------------------------------------------------------------ formatting
+
+/** "A", "A and B", "A, B and C". */
+export function joinAnd(items: string[]): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
 
 /** How many bytes a base64 string decodes to, without decoding it. */
 export function base64DecodedLength(b64: string): number {
