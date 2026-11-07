@@ -121,7 +121,7 @@
       {#if otherDirectives.length}
         <p class="muted sub">Other directives:</p>
         <ul>
-          {#each otherDirectives as d (d.name)}<li><code># @{d.name}{d.value ? ` ${d.value}` : ""}</code></li>{/each}
+          {#each otherDirectives as d, i (i)}<li><code># @{d.name}{d.value ? ` ${d.value}` : ""}</code></li>{/each}
         </ul>
       {/if}
       {#if preserved.length}

@@ -67,6 +67,8 @@ type EnvFile = Record<string, Record<string, unknown>>;
 /** What the mocked backend exposes to tests as `window.__mock` (see src/dev/mock.ts). */
 export interface MockState {
   sent: { method: string; url: string }[];
+  /** The Prompt variable values each send got, in order. */
+  sentPrompts: Record<string, string>[];
   /** The settings it last saved. */
   settings: {
     theme: string;

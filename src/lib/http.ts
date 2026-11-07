@@ -1,6 +1,6 @@
 // Pure helpers for editing the request model. No Svelte/Tauri imports so
 // they can be unit tested with vitest (src/lib/http.test.ts).
-import type { BodyMode, HttpFile, KeyValue, Request, Variable } from "./types";
+import type { BodyMode, HttpFile, KeyValue, Prompt, Request, Variable } from "./types";
 
 export const STANDARD_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -516,6 +516,25 @@ export function setDirective(req: Request, name: string, value: string | null): 
   } else {
     req.directives.push({ name, value });
   }
+}
+
+/**
+ * The request's Prompt variables (`# @prompt name [description]`), in order, as
+ * the core's `Request::prompts` reads them: a name declared twice is asked once.
+ */
+export function requestPrompts(req: Request): Prompt[] {
+  const out: Prompt[] = [];
+  for (const d of req.directives) {
+    if (d.name.toLowerCase() !== "prompt") continue;
+    const m = /^(\S+)\s*(.*)$/s.exec(d.value.trim());
+    if (m && !out.some((p) => p.name === m[1])) out.push({ name: m[1], description: m[2].trim() });
+  }
+  return out;
+}
+
+/** Whether a prompt's value is typed masked: its name is `password`, `passwd` or `pass`, ignoring case. */
+export function promptMasked(name: string): boolean {
+  return ["password", "passwd", "pass"].includes(name.toLowerCase());
 }
 
 // ------------------------------------------------------------------ variables

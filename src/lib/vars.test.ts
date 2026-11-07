@@ -14,6 +14,9 @@ interface Case {
   value: string;
   undefined?: string[];
   circular?: string[][];
+  /** The request's Prompt variables; one with a `value` has been answered. */
+  prompts?: { name: string; value?: string }[];
+  asked?: string[];
 }
 
 /**
@@ -181,6 +184,36 @@ describe("what autocomplete offers after {{", () => {
   });
 });
 
+describe("what hovering a Prompt variable shows", () => {
+  const env = { otp: { value: "env", secret: false, source: "dev" }, code: { value: "otp={{otp}}", secret: false, source: "dev" } };
+  const prompts = [
+    { name: "otp", description: "One-time code" },
+    { name: "password", description: "" },
+    { name: "user", description: "" },
+  ];
+  const provider = makeVarProvider({ env, fileVars: [], requestVars: [], envName: "dev", prompts, answers: { password: "s3cret", user: "ann" } });
+
+  it("is asked when sent until answered, even when defined elsewhere", () => {
+    expect(provider.info("otp")).toEqual({ state: "prompt", source: "a prompt: asked when sent" });
+    expect(varSegments("{{code}}", provider)[0].cls).toBe("cm-var cm-var-ok");
+    expect(provider.info("code")).toMatchObject({ value: "otp={{otp}}" });
+  });
+
+  it("shows a remembered value, masked for password prompts", () => {
+    expect(provider.info("user")).toEqual({ state: "ok", value: "ann", secret: false, source: "a prompt, remembered until the app quits" });
+    expect(provider.info("password")).toMatchObject({ state: "ok", secret: true });
+    expect(varSegments("{{otp}}", provider)[0].cls).toBe("cm-var cm-var-prompt");
+  });
+
+  it("is offered by autocomplete as a prompt, over a variable of the same name, never previewing a masked value", () => {
+    const offered = provider.completions();
+    expect(offered.filter((c) => c.name === "otp")).toEqual([{ name: "otp", source: "prompt" }]);
+    expect(offered.find((c) => c.name === "user")).toEqual({ name: "user", source: "prompt", preview: "ann" });
+    expect(offered.find((c) => c.name === "password")).toEqual({ name: "password", source: "prompt", secret: true });
+    expect(JSON.stringify(offered)).not.toContain("s3cret");
+  });
+});
+
 describe("the frontend resolver agrees with the core on the shared cases", () => {
   it.each((shared.cases as Case[]).map((c) => [c.case, c] as const))("%s", (_, c) => {
     const environment = c.environment ?? null;
@@ -189,12 +222,15 @@ describe("the frontend resolver agrees with the core on the shared cases", () =>
       fileVars: c.file ?? [],
       requestVars: c.request ?? [],
       envName: environment,
+      prompts: (c.prompts ?? []).map((p) => ({ name: p.name, description: "" })),
+      answers: Object.fromEntries((c.prompts ?? []).flatMap((p) => (p.value === undefined ? [] : [[p.name, p.value]]))),
     });
     const r = provider.resolve(c.text);
-    expect({ value: r.value, undefined: r.undefined, circular: r.circular }).toEqual({
+    expect({ value: r.value, undefined: r.undefined, circular: r.circular, asked: r.asked }).toEqual({
       value: c.value,
       undefined: c.undefined ?? [],
       circular: c.circular ?? [],
+      asked: c.asked ?? [],
     });
   });
 });

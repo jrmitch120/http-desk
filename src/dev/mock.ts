@@ -17,6 +17,13 @@ const files: Record<string, unknown> = {
   [`${ROOT}/api/pets.http`]: pets,
   [`${ROOT}/samples/jetbrains.http`]: jetbrains,
 };
+// `?prompts=otp One-time code;password` declares Prompt variables (`# @prompt …`) on pets.http's first request.
+const promptsParam = new URLSearchParams(location.search).get("prompts");
+if (promptsParam) {
+  const withPrompts = structuredClone(pets);
+  (withPrompts.requests[0] as { directives: unknown[] }).directives = promptsParam.split(";").map((value) => ({ name: "prompt", value }));
+  files[`${ROOT}/api/pets.http`] = withPrompts;
+}
 const tree = {
   name: "demo",
   path: ROOT,
@@ -35,22 +42,33 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
-type PreviewArgs = { request: Request; fileVariables: { name: string; value: string }[]; environment: string | null };
+type PreviewArgs = {
+  request: Request;
+  fileVariables: { name: string; value: string }[];
+  environment: string | null;
+  promptValues?: Record<string, string>;
+};
 /** Dynamic variables that generate a value on every send: the preview shows them as written. */
 const GENERATED = /^\$(uuid|guid|random\.|randomInt|timestamp|isoTimestamp|datetime|localDatetime)/;
 /**
  * A rough stand-in for the core's `exec::preview` (tested for real in Rust):
  * `$shared`, then the environment, then File variables; generated dynamic
  * variables kept as written; query values percent-encoded; the Content-Type
- * the body implies; the default headers.
+ * the body implies; the default headers. Prompt variables: remembered values over
+ * everything (masked ones masked), unanswered ones kept as written.
  */
-function previewRequest({ request: r, fileVariables, environment }: PreviewArgs) {
+function previewRequest({ request: r, fileVariables, environment, promptValues = {} }: PreviewArgs) {
+  const prompts = r.directives.filter((d) => d.name.toLowerCase() === "prompt").map((d) => d.value.trim().split(/\s+/)[0]);
   const env = envSet.environments.find((e) => e.name === environment)?.variables ?? [];
   const vars = new Map([...envSet.shared, ...env, ...fileVariables, ...r.variables].map((v) => [v.name, v.value]));
   const unresolved = new Set<string>();
   const resolve = (text: string, depth = 0): string =>
     text.replace(/\{\{\s*(.*?)\s*\}\}/g, (whole, name: string) => {
       if (GENERATED.test(name)) return whole;
+      if (prompts.includes(name)) {
+        if (!(name in promptValues)) return whole;
+        return /^(password|passwd|pass)$/i.test(name) ? "••••••••" : promptValues[name];
+      }
       const value = vars.get(name);
       if (value === undefined || depth >= 10) return unresolved.add(name), whole;
       return resolve(value, depth + 1);
@@ -138,6 +156,8 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
+/** The `promptValues` each `send_request` got, in order. */
+const sentPrompts: Record<string, string>[] = [];
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
@@ -148,6 +168,7 @@ let previewRequests = 0;
 let windowTitle: string | null = null;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
+  sentPrompts,
   /** The window title the app last set. */
   get title() {
     return windowTitle;
@@ -589,6 +610,7 @@ mockIPC(
       }
       case "send_request": {
         sent.push(clone(args.request));
+        sentPrompts.push(clone(args.promptValues ?? {}));
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);

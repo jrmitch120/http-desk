@@ -206,11 +206,12 @@ paths), File variable values and environment values.
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
   (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
-  reference), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
+  reference), `cm-var-prompt` (an unanswered Prompt variable), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
 - The hover card shows the resolved value and where it comes from ("this file",
-  "this request", `environment "staging"`, "shared variables"). A Secret, or a value a
-  Secret went into, is masked until **Reveal**, in that card only. **Edit** opens the
+  "this request", `environment "staging"`, "shared variables", or a prompt). An
+  unanswered Prompt variable shows "Asked when sent". A Secret, a masked prompted
+  value, or a value either went into, is masked until **Reveal**, in that card only. **Edit** opens the
   definition's row when the app has one: a File variable at the top of the file in
   the request's Settings section, an environment's variable in the Environments modal
   on that environment (or the shared variables). It comes from the provider's `edit`
@@ -220,7 +221,7 @@ paths), File variable values and environment values.
   a request's own `@name`, a dynamic or an Undefined variable has none. A press in the
   card keeps focus where it was, so an editor (and its card) stays open.
 - Autocomplete lists the names in scope, each with its source (file, environment,
-  shared) and a short preview of its resolved value ("secret" instead of a Secret's),
+  shared, prompt; a Prompt variable takes the entry of a name it overrides) and a short preview of its resolved value ("secret" instead of a Secret's),
   then every dynamic variable with its argument hint and a description. The list is
   `crates/httpdesk-core/dynamic-variables.json`, which a core test keeps equal to what
   the core generates. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
@@ -375,6 +376,9 @@ Popups opened inside a modal close first on Escape.
 
 For a question or a confirmation, don't build a modal: call `app.choose(title, message,
 buttons)` or `app.prompt(title, value, placeholder?)`, which render `Dialog.svelte`.
+A dialog can also hold a short form (`DialogState.fields`: label, help text, masked):
+each field has a reveal button, Enter in any field picks the primary button, and the
+values come back in order as `values`. The Prompt variables form uses it.
 
 ## Status
 

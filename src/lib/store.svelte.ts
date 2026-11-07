@@ -3,7 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
@@ -62,12 +62,23 @@ export interface DialogButton {
   focus?: boolean;
 }
 
+/** One field of a dialog form: a labelled text input, masked (with a reveal button) if asked. */
+export interface DialogField {
+  label: string;
+  /** Shown under the label; empty for none. */
+  help: string;
+  masked: boolean;
+  value: string;
+}
+
 export interface DialogState {
   title: string;
   message?: string;
   input?: { value: string; placeholder?: string; selectStem?: boolean };
+  /** A form of several fields; their values come back in `values`, in order. */
+  fields?: DialogField[];
   buttons: DialogButton[];
-  resolve: (r: { button: string; value: string }) => void;
+  resolve: (r: { button: string; value: string; values: string[] }) => void;
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | null;
@@ -840,7 +851,43 @@ class AppStore {
       filePath: tab.path,
       fileVariables: $state.snapshot(fileVariables(doc.file)),
       environment: this.envName,
+      promptValues: this.promptAnswers(tab),
     };
+  }
+
+  /** Values typed for Prompt variables, per request key: for this app session only, never saved. */
+  private promptValues = $state<Record<string, Record<string, string>>>({});
+
+  /** The values remembered for the tab's request's Prompt variables, by name. */
+  promptAnswers(tab: Tab): Record<string, string> {
+    return { ...this.promptValues[tab.key] };
+  }
+
+  /** Forgets the tab's request's prompted values, so its next send asks again. */
+  forgetPrompts(tab: Tab) {
+    delete this.promptValues[tab.key];
+  }
+
+  /**
+   * Asks for the request's Prompt variables that have no remembered value, all in
+   * one form, and remembers the answers. False if the user cancelled.
+   */
+  private async askPrompts(tab: Tab, req: Request): Promise<boolean> {
+    const remembered = this.promptAnswers(tab);
+    const asked = requestPrompts(req).filter((p) => !Object.hasOwn(remembered, p.name));
+    if (!asked.length) return true;
+    const r = await this.openDialog({
+      title: asked.length === 1 ? `Value for "${asked[0].name}"` : "Values for this request",
+      message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
+      fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
+      buttons: [
+        { label: "Cancel", value: "cancel" },
+        { label: "Send", value: "send", primary: true },
+      ],
+    });
+    if (r.button !== "send") return false;
+    this.promptValues[tab.key] = { ...remembered, ...Object.fromEntries(asked.map((p, i) => [p.name, r.values[i] ?? ""])) };
+    return true;
   }
 
   /** What sending the tab's request would send, without sending it (see `api.previewRequest`). */
@@ -858,6 +905,14 @@ class AppStore {
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
     // Only awaited when it asks, so an ordinary send starts loading at once.
+    if (requestPrompts(req).some((p) => !Object.hasOwn(this.promptAnswers(tab), p.name))) {
+      this.confirmingSend.add(tabId);
+      try {
+        if (!(await this.askPrompts(tab, req))) return;
+      } finally {
+        this.confirmingSend.delete(tabId);
+      }
+    }
     if (this.guardsMethod(req.method) && !(await this.confirmProductionSend(tabId, req.method))) return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
@@ -875,7 +930,7 @@ class AppStore {
     }
   }
 
-  /** Tabs whose send is waiting on the production confirmation. */
+  /** Tabs whose send is waiting on the prompt form or the production confirmation. */
   private confirmingSend = new Set<string>();
 
   /** Whether sending `method` needs confirming: a production environment is
@@ -1011,7 +1066,7 @@ class AppStore {
   private dialogQueue: DialogState[] = [];
 
   /** Shows the dialog, or queues it behind the one on screen. */
-  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string }> {
+  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string; values: string[] }> {
     return new Promise((resolve) => {
       const next = { ...d, resolve };
       if (this.dialog) this.dialogQueue.push(next);
@@ -1019,8 +1074,9 @@ class AppStore {
     });
   }
 
-  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
-    return this.openDialog({ title, message, buttons });
+  async choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string; value: string }> {
+    const { button, value } = await this.openDialog({ title, message, buttons });
+    return { button, value };
   }
 
   async prompt(title: string, value: string, placeholder?: string, selectStem = false): Promise<string | null> {
@@ -1035,11 +1091,11 @@ class AppStore {
     return r.button === "ok" ? r.value : null;
   }
 
-  /** Answers the dialog on screen and shows the next queued one, if any. */
-  closeDialog(button: string, value = "") {
+  /** Answers the dialog on screen (`values`: its form fields, in order) and shows the next queued one, if any. */
+  closeDialog(button: string, value = "", values: string[] = []) {
     const d = this.dialog;
     this.dialog = this.dialogQueue.shift() ?? null;
-    d?.resolve({ button, value });
+    d?.resolve({ button, value, values });
   }
 }
 

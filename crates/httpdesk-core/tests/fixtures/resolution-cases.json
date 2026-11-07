@@ -126,6 +126,42 @@
       "text": "{{$nope}}/{{ $env. }}/{{$random.word(3)}}",
       "value": "{{$nope}}/{{ $env. }}/{{$random.word(3)}}",
       "undefined": ["$env.", "$nope", "$random.word(3)"]
+    },
+    {
+      "case": "a prompted value overrides the request, the file and the environment",
+      "envFiles": { "public": { "dev": { "token": "env" } } },
+      "environment": "dev",
+      "file": [{ "name": "token", "value": "file" }],
+      "request": [{ "name": "token", "value": "request" }],
+      "prompts": [{ "name": "token", "value": "typed" }],
+      "text": "Bearer {{token}}",
+      "value": "Bearer typed"
+    },
+    {
+      "case": "a prompted value is used inside File variables and environment values that reference it",
+      "envFiles": { "public": { "$shared": { "auth": "Bearer {{token}}" }, "dev": { "host": "env.example" } } },
+      "environment": "dev",
+      "file": [{ "name": "url", "value": "https://{{host}}/x" }],
+      "prompts": [{ "name": "host", "value": "typed.example" }, { "name": "token", "value": "t0k" }],
+      "text": "{{url}} {{auth}}",
+      "value": "https://typed.example/x Bearer t0k"
+    },
+    {
+      "case": "a prompted value is used as typed: references in it are not resolved",
+      "file": [{ "name": "host", "value": "file.example" }],
+      "prompts": [{ "name": "q", "value": "{{host}}" }],
+      "text": "?q={{q}}",
+      "value": "?q={{host}}"
+    },
+    {
+      "case": "an unanswered prompt is asked when sent, not undefined, even when defined elsewhere or used inside another value",
+      "envFiles": { "public": { "dev": { "otp": "env", "code": "otp={{otp}}" } } },
+      "environment": "dev",
+      "prompts": [{ "name": "otp" }],
+      "text": "{{otp}} {{code}} {{nope}}",
+      "value": "{{otp}} otp={{otp}} {{nope}}",
+      "undefined": ["nope"],
+      "asked": ["otp"]
     }
   ]
 }

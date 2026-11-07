@@ -352,7 +352,8 @@ struct SendProgress {
 }
 
 /// The variables a request is sent with (the environment from disk, then File
-/// variables, then its own), and the folder its relative paths start from.
+/// variables, then its own, then its answered Prompt variables), and the folder
+/// its relative paths start from.
 /// Shared by send and preview so the two can't disagree.
 fn request_resolver(
     root: Option<&Path>,
@@ -360,6 +361,7 @@ fn request_resolver(
     file_path: Option<&Path>,
     file_variables: &[Variable],
     environment: Option<&str>,
+    prompt_values: &HashMap<String, String>,
 ) -> Result<(Resolver, PathBuf), ExecError> {
     let base_dir = file_path
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -370,7 +372,8 @@ fn request_resolver(
         None => EnvironmentSet::default(),
     };
     let env_vars = env::variables(&env_set, environment);
-    let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir));
+    let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
+        .with_prompts(&request.prompts(), prompt_values);
     Ok((resolver, base_dir))
 }
 
@@ -383,12 +386,19 @@ async fn preview_request<R: tauri::Runtime>(
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
+    prompt_values: Option<HashMap<String, String>>,
 ) -> CmdResult<exec::RequestPreview> {
     off_main(app, move |state| {
         let root = state.root.lock().unwrap().clone();
-        let (resolver, _) =
-            request_resolver(root.as_deref(), &request, file_path.as_deref(), &file_variables, environment.as_deref())
-                .map_err(err)?;
+        let (resolver, _) = request_resolver(
+            root.as_deref(),
+            &request,
+            file_path.as_deref(),
+            &file_variables,
+            environment.as_deref(),
+            &prompt_values.unwrap_or_default(),
+        )
+        .map_err(err)?;
         Ok(exec::preview(&request, resolver))
     })
     .await
@@ -396,6 +406,8 @@ async fn preview_request<R: tauri::Runtime>(
 
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
+// Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn send_request<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -405,13 +417,20 @@ async fn send_request<R: tauri::Runtime>(
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
+    prompt_values: Option<HashMap<String, String>>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
     let settings = state.settings.lock().unwrap().exec.clone();
 
     let (prepared, ssl) = {
-        let (resolver, base_dir) =
-            request_resolver(root.as_deref(), &request, file_path.as_deref(), &file_variables, environment.as_deref())?;
+        let (resolver, base_dir) = request_resolver(
+            root.as_deref(),
+            &request,
+            file_path.as_deref(),
+            &file_variables,
+            environment.as_deref(),
+            &prompt_values.unwrap_or_default(),
+        )?;
         let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, e),
