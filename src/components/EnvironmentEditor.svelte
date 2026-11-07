@@ -19,7 +19,7 @@
   import type { Definition } from "../lib/codemirror/setup";
   import SegmentedControl from "./SegmentedControl.svelte";
   import EnvironmentMatrix from "./EnvironmentMatrix.svelte";
-  import { addToAllEnvironments, SHARED } from "../lib/envMatrix";
+  import { addToAllEnvironments, setCell, SHARED } from "../lib/envMatrix";
 
   /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
   const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
@@ -219,6 +219,8 @@
     if (want.env !== SHARED && !set.environments.some((e) => e.name === want.env)) return;
     filter = "";
     if (matrix) {
+      // An empty patch adds the variable, empty, only where the column lacks it.
+      if (want.add) setCell(set, want.env, want.name, {});
       tick().then(() => matrix?.focusCell(want.env, want.name));
       return;
     }
