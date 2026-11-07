@@ -1,6 +1,6 @@
 // What the Extract to variable form says about a name before anything is written.
 import { describe, expect, it } from "vitest";
-import { extractConflict, extractNameError } from "./extract";
+import { extractConflict, extractNameError, extractTargets } from "./extract";
 import { newRequest } from "./http";
 import type { EnvironmentSet, HttpFile } from "./types";
 
@@ -49,5 +49,20 @@ describe("extractConflict", () => {
     expect(extractConflict({ kind: "all" }, "token", scope)).toBe("local and staging already have token; their values will be replaced.");
     expect(extractConflict({ kind: "all" }, "version", scope)).toBeNull();
     expect(extractConflict({ kind: "file" }, "", scope)).toBeNull();
+  });
+});
+
+describe("extractTargets", () => {
+  const set = (...envs: string[]): EnvironmentSet => ({ shared: [], environments: envs.map((name) => ({ name, variables: [] })), privateFileIgnored: null });
+
+  it("offers the selected environment only when the request's environments define it (ADR-0004: never another folder's)", () => {
+    expect(extractTargets("dev", set("dev", "prod"))).toEqual([{ kind: "file" }, { kind: "env", env: "dev" }, { kind: "all" }]);
+    expect(extractTargets("qa", set("dev", "prod"))).toEqual([{ kind: "file" }, { kind: "all" }]);
+  });
+
+  it("offers no environment destination without a selected environment or any environments", () => {
+    expect(extractTargets(null, set("dev"))).toEqual([{ kind: "file" }, { kind: "all" }]);
+    expect(extractTargets("dev", set())).toEqual([{ kind: "file" }]);
+    expect(extractTargets("dev", null)).toEqual([{ kind: "file" }]);
   });
 });

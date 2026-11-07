@@ -721,7 +721,9 @@ Decisions made during implementation, beyond the plan above:
   `@name = value` line at the top of the file (or a new value for the same-named File
   variable the request uses), an in-memory edit like any other, so it shows as unsaved
   and untouched requests still save byte-for-byte. An environment destination (the
-  selected one, or all of the request's environments with the same value) goes through
+  selected one, offered only when the request's folders define it, as the
+  "Add X to <env>" quick fix is: `extractTargets` in `src/lib/extract.ts`; or all of the
+  request's environments with the same value) goes through
   `save_environments` at once, since env files have no unsaved state outside the
   Environments modal, in the folder supplying each environment to the request (see
   [the Environments modal](#environment-folders)). The

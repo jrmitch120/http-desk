@@ -55,6 +55,22 @@ export function extractConflict(target: ExtractTarget, name: string, { file, req
   return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} already have ${name}; their values will be replaced.`;
 }
 
+/**
+ * Where the form offers to define the variable, for a request getting the
+ * environments `envSet` (its folders', ADR-0004) with `envName` selected: a File
+ * variable; the selected environment, only if `envSet` defines it (a request whose
+ * folders don't is sent with no environment, so a value there would be another
+ * folder's); and all of `envSet`'s environments, if it has any.
+ */
+export function extractTargets(envName: string | null, envSet: EnvironmentSet | null): ExtractTarget[] {
+  const envs = envSet?.environments ?? [];
+  return [
+    { kind: "file" },
+    ...(envName && envs.some((e) => e.name === envName) ? [{ kind: "env" as const, env: envName }] : []),
+    ...(envs.length ? [{ kind: "all" as const }] : []),
+  ];
+}
+
 /** The environments `target` puts a variable in. */
 export function targetEnvironments(target: ExtractTarget, set: EnvironmentSet): string[] {
   if (target.kind === "env") return [target.env];
