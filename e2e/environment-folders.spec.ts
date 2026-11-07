@@ -1,7 +1,8 @@
 // The Environments modal edits one folder's pair of env files at a time (#88, ADR-0004).
 // With `?folderEnvs=1` the mocked workspace's api/ has its own env files: `local` with
 // its own baseUrl (http://127.0.0.1:9001) and `qa`. The root's private `local` token
-// still applies to api/'s requests. samples/ has no env files.
+// still applies to api/'s requests. samples/ has no env files. `?envView=matrix`: the
+// modal opens on the matrix, as if the user had picked it.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { dialog, mockState, openApp, openRequest, urlBar } from "./helpers";
 
@@ -23,7 +24,7 @@ async function openEnvironments(page: Page): Promise<Locator> {
 }
 
 test("hover-card Edit opens the folder that supplies the value, on its cell, and Save writes only that folder's files", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await selectEnvironment(page, "local");
   const rootFiles = await mockState(page, "envFiles");
@@ -51,7 +52,7 @@ test("hover-card Edit opens the folder that supplies the value, on its cell, and
 });
 
 test("Edit on a value a parent folder supplies opens that folder", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await selectEnvironment(page, "local");
   // The Secret token comes from the root's private file, though api/ defines local too.
@@ -63,7 +64,7 @@ test("Edit on a value a parent folder supplies opens that folder", async ({ page
 });
 
 test("the strip's Add to environment fix adds it in the folder that supplies the environment", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await selectEnvironment(page, "qa");
   const rootFiles = await mockState(page, "envFiles");
@@ -85,7 +86,7 @@ test("the strip's Add to environment fix adds it in the folder that supplies the
 });
 
 test("the modal opens on the active request's nearest folder with env files, and the selector lists every folder", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   await openRequest(page, ["samples", "jetbrains.http"], "Get request with a header");
   let m = await openEnvironments(page);
   await expect(folderPicker(page)).toHaveText("Workspace root");
@@ -111,7 +112,7 @@ test("the modal opens on the active request's nearest folder with env files, and
 });
 
 test("switching folders with unsaved changes asks first", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   await openRequest(page, ["api", "pets.http"], "List pets");
   const m = await openEnvironments(page);
   await cellField(m, "baseUrl", "qa").click();
@@ -130,7 +131,7 @@ test("switching folders with unsaved changes asks first", async ({ page }) => {
 });
 
 test("environment files can be added to a folder that has none", async ({ page }) => {
-  await openApp(page, "?folderEnvs=1");
+  await openApp(page, "?folderEnvs=1&envView=matrix");
   const m = await openEnvironments(page);
   await folderPicker(page).click();
   await folderOptions(page).filter({ hasText: /^samples\// }).click();

@@ -3,7 +3,7 @@
 // environment values), marks the ones that aren't sent, and opens each on the
 // field that holds it. A row of the Environments matrix offers it too.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, openApp, openRequest, showEnvironmentList, urlBar } from "./helpers";
+import { dialog, openApp, openRequest, showEnvironmentList, showEnvironmentMatrix, urlBar } from "./helpers";
 
 const card = (page: Page) => page.locator(".popup-layer .var-card");
 const usages = (page: Page) => page.getByRole("region", { name: /^Usages of / });
@@ -74,6 +74,7 @@ test("references inside environment values are listed and open the variable's ce
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
   const modal = dialog(page, "Environments");
+  await showEnvironmentMatrix(page);
   // staging has no token: fill its gap with a reference to baseUrl.
   await matrixField(page, "token", "staging").click();
   await page.keyboard.type("{{baseUrl}}/v1");
@@ -85,7 +86,7 @@ test("references inside environment values are listed and open the variable's ce
   await findUsages(page, page.locator(".url-input"), "baseUrl");
   await expect.poll(() => rows(page)).toContain('token | Environment "staging"');
 
-  // The matrix (the default view) focuses the variable's cell in that environment.
+  // The matrix (picked above, so remembered) focuses the variable's cell in that environment.
   const result = usages(page).locator(".usage", { hasText: 'Environment "staging"' });
   await result.click();
   await expect(modal).toBeVisible();
@@ -106,6 +107,7 @@ test("a matrix row's Find usages closes the Environments modal and lists the var
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
   const modal = dialog(page, "Environments");
+  await showEnvironmentMatrix(page);
   const matrix = modal.getByRole("group", { name: "Environments matrix" });
 
   // From the name's context menu.

@@ -2,11 +2,12 @@
 // as columns, edited in place. The mock has shared `version`, `local` with
 // `baseUrl` and a Secret `token`, and `staging` with only `baseUrl`.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, mockState, openApp } from "./helpers";
+import { dialog, mockState, openApp, showEnvironmentMatrix } from "./helpers";
 
-/** Opens the Environments modal, which shows the matrix unless the list was picked. */
+/** Opens the Environments modal on the matrix (it opens on the list unless the matrix was picked). */
 async function open(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentMatrix(page);
   return dialog(page, "Environments");
 }
 
@@ -167,23 +168,26 @@ test("a hover card's Edit focuses the cell that defines the variable", async ({ 
 
 test("the List / Matrix choice is remembered, and the filter narrows rows", async ({ page }) => {
   await openApp(page);
-  let modal = await open(page);
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  let modal = dialog(page, "Environments");
+
+  // List first, Matrix second; the list is the default.
+  const view = modal.getByRole("radiogroup", { name: "View" });
+  await expect(view.getByRole("radio")).toHaveText(["List", "Matrix"]);
+  await expect(view.getByRole("radio", { name: "List" })).toBeChecked();
+  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
+  await expect(matrix(modal)).toHaveCount(0);
+  await view.getByRole("radio", { name: "Matrix" }).click();
+  await expect(modal.getByRole("group", { name: "Variables" })).toHaveCount(0);
+  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("matrix");
   await modal.getByPlaceholder("Filter variables").fill("staging.example");
   await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["baseUrl"]);
 
-  // List first, Matrix second; the matrix is the default.
-  const view = modal.getByRole("radiogroup", { name: "View" });
-  await expect(view.getByRole("radio")).toHaveText(["List", "Matrix"]);
-  await expect(view.getByRole("radio", { name: "Matrix" })).toBeChecked();
-  await view.getByRole("radio", { name: "List" }).click();
-  await expect(matrix(modal)).toHaveCount(0);
-  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
-  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("list");
-
   await page.reload();
-  modal = await open(page);
-  await expect(modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" })).toBeChecked();
-  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  modal = dialog(page, "Environments");
+  await expect(modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "Matrix" })).toBeChecked();
+  await expect(matrix(modal)).toBeVisible();
 });
 
 test("the header's last cell adds an environment as a new column", async ({ page }) => {

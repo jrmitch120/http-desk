@@ -92,11 +92,11 @@ struct MatrixWidths {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum EnvView {
-    /// Every environment side by side.
-    #[default]
-    Matrix,
     /// One environment at a time.
+    #[default]
     List,
+    /// Every environment side by side.
+    Matrix,
 }
 
 /// Reads a settings field, taking the default for a value this version doesn't know
@@ -143,7 +143,7 @@ impl Default for AppSettings {
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
             show_resolved: false,
-            env_view: EnvView::Matrix,
+            env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
         }
     }

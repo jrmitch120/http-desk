@@ -2,7 +2,7 @@
 // multipart values, File variables and the Environments modal all highlight
 // {{variables}}, show the hover card and autocomplete them.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests, showEnvironmentList } from "./helpers";
+import { openApp, openRequest, sentRequests } from "./helpers";
 
 /** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
 async function openSection(page: Page, section: "Authorization" | "Body" | "Settings"): Promise<void> {
@@ -142,7 +142,6 @@ test("a File variable's value resolves the variables it refers to", async ({ pag
 async function environment(page: Page, env: string): Promise<Locator> {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
-  await showEnvironmentList(page);
   const dialog = page.getByRole("dialog", { name: "Environments" });
   await dialog.locator(".env").filter({ has: page.getByText(env, { exact: true }) }).click();
   return dialog.getByRole("group", { name: "Variables" });

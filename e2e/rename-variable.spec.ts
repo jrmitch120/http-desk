@@ -5,14 +5,15 @@
 // `staging` (baseUrl); pets.http and jetbrains.http each use `{{token}}` in one
 // request's auth.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, tab, urlBar } from "./helpers";
+import { dialog, mockState, openApp, openRequest, showEnvironmentMatrix, tab, urlBar } from "./helpers";
 
 const PETS = "/demo/api/pets.http";
 const JETBRAINS = "/demo/samples/jetbrains.http";
 
-/** Opens the Environments modal and picks "Rename…" from variable `name`'s row actions. */
+/** Opens the Environments modal on the matrix and picks "Rename…" from variable `name`'s row actions. */
 async function startRename(page: Page, name: string): Promise<Locator> {
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentMatrix(page);
   const matrix = dialog(page, "Environments").getByRole("group", { name: "Environments matrix" });
   await matrix.locator(".kv-row").filter({ hasText: name }).getByRole("button", { name: `Actions for ${name}` }).click();
   await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
@@ -93,6 +94,7 @@ test("renaming across two files saves the one without unsaved edits and leaves t
 test("with unsaved environment changes, Rename asks to save them first", async ({ page }) => {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentMatrix(page);
   const modal = dialog(page, "Environments");
   await page.getByRole("textbox", { name: "baseUrl in staging", exact: true }).click();
   await page.keyboard.press("End");

@@ -4,7 +4,7 @@
 // field's own items (Extract to variable…, Unset in …). Read-only text gets
 // Copy and Select all. Anything else shows no menu at all.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { bodyEditor, dialog, openApp, openRequest, searchBox, urlBar } from "./helpers";
+import { bodyEditor, dialog, openApp, openRequest, searchBox, showEnvironmentMatrix, urlBar } from "./helpers";
 
 const EDIT = ["Cut", "Copy", "Paste", "Select all"];
 const READ_ONLY = ["Copy", "Select all"];
@@ -83,6 +83,7 @@ test("every kind of text field opens the app's edit menu, never the webview's", 
 
   // Matrix cells, set (with Unset) or not.
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentMatrix(page);
   const modal = dialog(page, "Environments");
   await expectMenu(page, modal.getByRole("textbox", { name: "baseUrl in local", exact: true }), [...EDIT, "Unset in local"]);
   await expectMenu(page, modal.getByRole("textbox", { name: "token in staging", exact: true }), EDIT);
