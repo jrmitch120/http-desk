@@ -29,10 +29,14 @@ const defaultPrevented = (page: Page) => page.evaluate(() => (window as unknown 
 const menuItems = (page: Page) => page.getByRole("menu").getByRole("menuitem");
 const item = (page: Page, name: string) => page.getByRole("menu").getByRole("menuitem", { name, exact: true });
 
-/** Right-clicks `target`: the webview's menu is prevented and the app's shows `items`. Closes it. */
+/** The menu items that draw an icon (an Icon with a name the set doesn't know draws nothing). */
+const withIcons = (page: Page) => menuItems(page).filter({ has: page.locator(".ico svg path:not([d=''])") });
+
+/** Right-clicks `target`: the webview's menu is prevented and the app's shows `items`, each with an icon. Closes it. */
 async function expectMenu(page: Page, target: Locator, items: string[]) {
   await target.click({ button: "right" });
   await expect(menuItems(page)).toHaveText(items);
+  await expect(withIcons(page)).toHaveText(items);
   expect(await defaultPrevented(page)).toBe(true);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
@@ -138,6 +142,7 @@ test("in a variable field: Paste keeps it on one line, Copy takes the selection,
   await page.keyboard.press("ControlOrMeta+A");
   await accept.click({ button: "right" });
   await expect(menuItems(page)).toHaveText([...EDIT, "Extract to variable…"]);
+  await expect(withIcons(page)).toHaveText([...EDIT, "Extract to variable…"]);
   await item(page, "Copy").click();
   expect(await clipboard(page)).toBe("application/json;charset=utf-8");
 

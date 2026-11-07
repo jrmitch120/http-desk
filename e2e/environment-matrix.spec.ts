@@ -16,6 +16,8 @@ const matrix = (modal: Locator) => modal.getByRole("group", { name: "Environment
 const cell = (modal: Locator, name: string, column: string) =>
   matrix(modal).locator(".m-cell").filter({ has: modal.page().getByRole("textbox", { name: `${name} in ${column}`, exact: true }) });
 const envFiles = (page: Page) => mockState(page, "envFiles");
+/** The open menu's items that draw an icon. */
+const itemsWithIcons = (page: Page) => page.getByRole("menu").getByRole("menuitem").filter({ has: page.locator(".ico svg path:not([d=''])") });
 
 test("shows every variable across Shared and the environments, with gaps highlighted", async ({ page }) => {
   await openApp(page);
@@ -142,6 +144,7 @@ test("a row's menu deletes the variable from every environment", async ({ page }
   await expect(matrix(modal).locator(".kv-row .c-actions").first()).toBeEmpty();
   await actions.click();
   await expect(page.getByRole("menuitem", { name: "Delete from all environments" })).toBeVisible();
+  await expect(itemsWithIcons(page)).toHaveText(["Find usages", "Rename…", "Delete from all environments"]);
   await page.keyboard.press("Escape");
   await expect(actions).toBeFocused();
 
@@ -323,6 +326,7 @@ test("an environment's header has Rename, Duplicate and Delete, from its actions
   await expect(actions).toHaveCSS("opacity", "1");
   await actions.click();
   await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename…", "Duplicate", "Delete environment…"]);
+  await expect(itemsWithIcons(page)).toHaveText(["Rename…", "Duplicate", "Delete environment…"]);
   await page.getByRole("menuitem", { name: "Rename…" }).click();
   const ask = dialog(page, "Rename environment");
   await ask.getByRole("textbox").fill("dev");

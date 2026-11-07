@@ -144,7 +144,8 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 the app's Menu instead:
 
 - An editable field (a text `<input>`, a `<textarea>`, an editor: a VarField
-  focused or not, the URL bar, the body editor): Cut, Copy, Paste, Select all. Cut
+  focused or not, the URL bar, the body editor): Cut, Copy, Paste, Select all (icons
+  `cut`, `copy`, `paste`, `select-all`). Cut
   and Copy are disabled with nothing selected, and in a password input or a
   `masked` VarField. Read-only text (the response viewer, the `.http` source, a
   read-only input): Copy and Select all.
@@ -156,7 +157,8 @@ the app's Menu instead:
   target calls `addMenuItems(e, items)` and lets the event bubble (Extract to
   variable… on a selection, "Unset in …" on a set matrix cell, Copy path in a JSON
   response body). On something that isn't text, those items alone make the menu
-  (a set matrix cell's padding).
+  (a set matrix cell's padding). Every item has an icon, contextual ones too
+  (`e2e/edit-menu.spec.ts` checks).
 - Anything else gets no menu at all.
 - Shift+F10 and the Menu key open it at the caret (`openFromKeyboard`); a handler
   can tell with `fromKeyboard(e)`.

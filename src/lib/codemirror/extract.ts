@@ -60,7 +60,7 @@ export function extractExtension(provider: VarProvider): Extension {
         if (!extractable(view)) return false;
         const { from, to } = view.state.selection.main;
         const pos = fromKeyboard(e) || !(e.clientX || e.clientY) ? from : view.posAtCoords({ x: e.clientX, y: e.clientY });
-        if (pos !== null && pos >= from && pos <= to) addMenuItems(e, [{ label: "Extract to variable…", icon: "code", action: () => extract(view, provider) }]);
+        if (pos !== null && pos >= from && pos <= to) addMenuItems(e, [{ label: "Extract to variable…", icon: "braces", action: () => extract(view, provider) }]);
         // The window's listener opens the menu.
         return false;
       },
