@@ -572,7 +572,7 @@ Decisions made during implementation, beyond the plan above:
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
   turns verification off), the timeouts open the request's Settings, and
-  `unresolvedVariable` opens the environment picker. They ask through one-shot store
+  `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does). They ask through one-shot store
   fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
   component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate

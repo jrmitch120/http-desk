@@ -28,7 +28,7 @@
   ]);
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
-  // "Choose environment" on an unresolved-variable error opens the picker.
+  // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an unresolved-variable error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
   $effect(() => {
     if (app.envPickerWanted && envSelect) {
@@ -80,7 +80,7 @@
       value={app.envName ?? ""}
       onchange={(v) => app.selectEnvironment(v || null)}
       label="Active environment"
-      tooltip="Active environment"
+      tooltip="Active environment (⌘⌥E / Ctrl Alt E)"
     />
     <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
   </div>
