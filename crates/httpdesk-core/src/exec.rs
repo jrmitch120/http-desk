@@ -231,11 +231,14 @@ fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
     std::fs::read(&full).map_err(|e| ExecError::File { path: full, reason: e.to_string() })
 }
 
+/// Reads a body file by its path as written (variables resolved).
+type ReadFile<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ExecError>;
+
 /// `< path` (raw) or `<@ path` (variables substituted). `None` if not a file reference.
-fn file_reference(line: &str, resolver: &Resolver, base_dir: &Path) -> Option<Result<Vec<u8>, ExecError>> {
+fn file_reference(line: &str, resolver: &Resolver, read: ReadFile) -> Option<Result<Vec<u8>, ExecError>> {
     let crate::parser::FileReference { substitute, path } = crate::parser::file_reference(line)?;
     let path = resolver.resolve(path);
-    Some(read_file(base_dir, &path).map(|bytes| {
+    Some(read(&path).map(|bytes| {
         if substitute {
             resolver.resolve(&String::from_utf8_lossy(&bytes)).into_bytes()
         } else {
@@ -244,13 +247,13 @@ fn file_reference(line: &str, resolver: &Resolver, base_dir: &Path) -> Option<Re
     }))
 }
 
-fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Option<Vec<u8>>, ExecError> {
+fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option<Vec<u8>>, ExecError> {
     if !body.enabled || !body.is_present() {
         return Ok(None);
     }
     let text = body.text.trim_end();
     if !text.contains('\n') {
-        if let Some(file) = file_reference(text, resolver, base_dir) {
+        if let Some(file) = file_reference(text, resolver, read) {
             return file.map(Some);
         }
     }
@@ -259,7 +262,7 @@ fn build_body(body: &Body, resolver: &Resolver, base_dir: &Path) -> Result<Optio
             let mut out = Vec::new();
             // `#~` lines are disabled parts (see the parser).
             for line in text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)) {
-                match file_reference(line, resolver, base_dir) {
+                match file_reference(line, resolver, read) {
                     Some(file) => out.extend(file?),
                     None => out.extend(resolver.resolve(line).into_bytes()),
                 }
@@ -361,36 +364,27 @@ fn wire_param(p: &KeyValue, resolver: &Resolver, auto_encode: bool) -> String {
 /// Sent when the request sets no `Accept-Encoding`: every encoding `body` can decode.
 const DEFAULT_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 
-/// Resolves variables and applies enablement. Disabled components are never included.
-pub fn prepare(
-    req: &Request,
-    resolver: &Resolver,
-    base_dir: &Path,
-    settings: &ExecSettings,
-) -> Result<PreparedRequest, ExecError> {
+/// The Content-Type a body implies when the request sets none. Decided from the
+/// body's mode alone, so the preview can show it without building the body.
+fn implied_content_type(body: &Body) -> Option<&'static str> {
+    if body.enabled && body.is_present() {
+        default_content_type(body.mode)
+    } else {
+        None
+    }
+}
+
+/// The method, URL and headers of a request: everything [`prepare`] and [`preview`]
+/// share except the body. A relative URL without a `Host` header is the one
+/// failure; it comes back alongside the URL as written so the preview can show it.
+fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, String)>, Option<ExecError>) {
     let method = req.method.trim().to_ascii_uppercase();
     let method = if method.is_empty() { "GET".to_string() } else { method };
 
     // Headers
     let mut headers: Vec<(String, String)> = Vec::new();
-    let auth = &req.auth;
-    if auth.enabled {
-        match auth.kind {
-            AuthKind::Basic => {
-                let creds = format!("{}:{}", resolver.resolve(&auth.username), resolver.resolve(&auth.password));
-                headers.push((
-                    "Authorization".into(),
-                    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(creds)),
-                ));
-            }
-            AuthKind::Bearer => {
-                headers.push(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim()))))
-            }
-            AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
-                headers.push((auth.key_name.clone(), resolver.resolve(&auth.key_value)));
-            }
-            _ => {}
-        }
+    if let Some(header) = auth_header(&req.auth, resolver) {
+        headers.push(header);
     }
     headers.extend(req.headers.active().map(|h| (resolver.resolve(&h.name), resolver.resolve(&h.value))));
 
@@ -398,51 +392,84 @@ pub fn prepare(
     let mut url = resolver.resolve(req.url.trim());
     let auto_encode = req.directive("no-auto-encoding").is_none();
     let mut params: Vec<String> = req.query.active().map(|p| wire_param(p, resolver, auto_encode)).collect();
-    if auth.enabled
-        && auth.kind == AuthKind::ApiKey
-        && auth.key_location == ApiKeyLocation::Query
-        && !auth.key_name.is_empty()
-    {
-        params.push(wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode));
+    if let Some(param) = auth_param(&req.auth, resolver, auto_encode) {
+        params.push(param);
     }
     if !params.is_empty() {
         url.push(if url.contains('?') { '&' } else { '?' });
         url.push_str(&params.join("&"));
     }
-    if !has_scheme(&url) {
-        url = if url.starts_with('/') {
-            let host =
-                headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).ok_or_else(
-                    || ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() },
-                )?;
-            format!("http://{host}{url}")
+    let mut error = None;
+    // One still starting with an undefined `{{base}}` can't be sent; it's shown as written.
+    if !has_scheme(&url) && !url.starts_with("{{") {
+        if !url.starts_with('/') {
+            url = format!("http://{url}");
+        } else if let Some((_, host)) = headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("host")) {
+            url = format!("http://{host}{url}");
         } else {
-            format!("http://{url}")
-        };
-    }
-    dynamic_errors(resolver)?;
-    let host_vars = variable_names(origin(&url));
-    if !host_vars.is_empty() {
-        return Err(ExecError::UnresolvedHost(host_vars));
-    }
-    url::Url::parse(&url).map_err(|e| ExecError::InvalidUrl { url: url.clone(), reason: e.to_string() })?;
-
-    // Body
-    let body = build_body(&req.body, resolver, base_dir)?;
-    dynamic_errors(resolver)?;
-    if body.is_some() && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("content-type")) {
-        if let Some(ct) = default_content_type(req.body.mode) {
-            headers.push(("Content-Type".into(), ct.into()));
+            error = Some(ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() });
         }
     }
-    if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("user-agent")) {
+    (method, url, headers, error)
+}
+
+/// The header that enabled Basic, Bearer or header API-key auth adds.
+fn auth_header(auth: &Auth, resolver: &Resolver) -> Option<(String, String)> {
+    if !auth.enabled {
+        return None;
+    }
+    match auth.kind {
+        AuthKind::Basic => {
+            let creds = format!("{}:{}", resolver.resolve(&auth.username), resolver.resolve(&auth.password));
+            // Base64 would hide a preview's placeholders, so those credentials are shown unencoded.
+            let encoded = if resolver.has_placeholders(&creds) {
+                format!("base64({creds})")
+            } else {
+                base64::engine::general_purpose::STANDARD.encode(creds)
+            };
+            Some(("Authorization".into(), format!("Basic {encoded}")))
+        }
+        AuthKind::Bearer => Some(("Authorization".into(), format!("Bearer {}", resolver.resolve(auth.token.trim())))),
+        AuthKind::ApiKey if auth.key_location == ApiKeyLocation::Header && !auth.key_name.is_empty() => {
+            Some((auth.key_name.clone(), resolver.resolve(&auth.key_value)))
+        }
+        _ => None,
+    }
+}
+
+/// The query param that enabled query API-key auth adds, as sent.
+fn auth_param(auth: &Auth, resolver: &Resolver, auto_encode: bool) -> Option<String> {
+    let query_key = auth.kind == AuthKind::ApiKey && auth.key_location == ApiKeyLocation::Query;
+    (auth.enabled && query_key && !auth.key_name.is_empty())
+        .then(|| wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode))
+}
+
+/// Why a URL can't be sent: variables left in its scheme or host, or it doesn't parse.
+fn url_error(url: &str) -> Option<ExecError> {
+    let host_vars = variable_names(origin(url));
+    if !host_vars.is_empty() {
+        return Some(ExecError::UnresolvedHost(host_vars));
+    }
+    url::Url::parse(url).err().map(|e| ExecError::InvalidUrl { url: url.to_string(), reason: e.to_string() })
+}
+
+/// Adds the headers every send carries unless the request sets them: the
+/// Content-Type the body implies, `User-Agent` and `Accept-Encoding`.
+fn add_default_headers(body: &Body, headers: &mut Vec<(String, String)>) {
+    let has = |headers: &[(String, String)], name: &str| headers.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));
+    if let Some(ct) = implied_content_type(body).filter(|_| !has(headers, "content-type")) {
+        headers.push(("Content-Type".into(), ct.into()));
+    }
+    if !has(headers, "user-agent") {
         headers.push(("User-Agent".into(), concat!("HttpDesk/", env!("CARGO_PKG_VERSION")).into()));
     }
     // Added here rather than by reqwest so the Request tab shows it.
-    if !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("accept-encoding")) {
+    if !has(headers, "accept-encoding") {
         headers.push(("Accept-Encoding".into(), DEFAULT_ACCEPT_ENCODING.into()));
     }
+}
 
+fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) -> Vec<String> {
     let mut warnings = Vec::new();
     let unresolved = resolver.unresolved();
     if !unresolved.is_empty() {
@@ -455,6 +482,29 @@ pub fn prepare(
             warnings.push("Multipart body without a boundary in Content-Type".into());
         }
     }
+    warnings
+}
+
+/// Resolves variables and applies enablement. Disabled components are never included.
+pub fn prepare(
+    req: &Request,
+    resolver: &Resolver,
+    base_dir: &Path,
+    settings: &ExecSettings,
+) -> Result<PreparedRequest, ExecError> {
+    let (method, url, mut headers, error) = head(req, resolver);
+    if let Some(e) = error {
+        return Err(e);
+    }
+    dynamic_errors(resolver)?;
+    if let Some(e) = url_error(&url) {
+        return Err(e);
+    }
+
+    let body = build_body(&req.body, resolver, &|path| read_file(base_dir, path))?;
+    dynamic_errors(resolver)?;
+    add_default_headers(&req.body, &mut headers);
+    let warnings = warnings(req, resolver, &headers);
 
     let timeout_ms = req.directive("timeout").and_then(parse_duration_ms).unwrap_or(settings.timeout_ms);
     let connect_timeout_ms =
@@ -462,6 +512,61 @@ pub fn prepare(
     let follow_redirects = settings.follow_redirects && req.directive("no-redirect").is_none();
 
     Ok(PreparedRequest { method, url, headers, body, follow_redirects, timeout_ms, connect_timeout_ms, warnings })
+}
+
+/// What [`preview`] shows: the method, URL and headers a send would produce.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestPreview {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    /// The enabled auth's fields, resolved and labelled as in the Authorization section.
+    pub auth: Vec<(String, String)>,
+    /// The same warnings a send would report.
+    pub warnings: Vec<String>,
+    /// Why a send would fail before reaching the network, if it would.
+    pub error: Option<ExecError>,
+}
+
+fn auth_fields(auth: &Auth, resolver: &Resolver) -> Vec<(String, String)> {
+    let fields: &[(&str, &str)] = match auth.kind {
+        _ if !auth.enabled => &[],
+        AuthKind::Basic => &[("Username", &auth.username), ("Password", &auth.password)],
+        AuthKind::Bearer => &[("Token", auth.token.trim())],
+        AuthKind::ApiKey => &[("Key", &auth.key_name), ("Value", &auth.key_value)],
+        AuthKind::None => &[],
+    };
+    // The key name is sent as written, like at send.
+    let resolve = |label: &str, text: &str| if label == "Key" { text.to_string() } else { resolver.resolve(text) };
+    fields.iter().map(|(label, text)| (label.to_string(), resolve(label, text))).collect()
+}
+
+/// The request as [`prepare`] would make it, without sending it. Dynamic variables
+/// that generate a new value on every send are shown as written, not generated.
+/// The body isn't shown and no file is read, but the Content-Type it implies is.
+pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
+    let resolver = resolver.previewing();
+    let (method, url, mut headers, error) = head(req, &resolver);
+    // A placeholder stands for a plain value, so check the URL with one in its place.
+    let error = error.or_else(|| url_error(&resolver.replace_placeholders(&url, |_| "0".into())));
+    // Built only so its undefined variables are reported as at send; files read as empty.
+    let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
+    add_default_headers(&req.body, &mut headers);
+    let auth = auth_fields(&req.auth, &resolver);
+    let warnings = warnings(req, &resolver, &headers);
+    let shown = |pairs: &[(String, String)]| {
+        let shown = |text: &str| resolver.replace_placeholders(text, str::to_string);
+        pairs.iter().map(|(n, v)| (shown(n), shown(v))).collect()
+    };
+    RequestPreview {
+        method,
+        url: resolver.replace_placeholders(&url, str::to_string),
+        headers: shown(&headers),
+        auth: shown(&auth),
+        warnings,
+        error,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

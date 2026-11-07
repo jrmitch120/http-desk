@@ -5,6 +5,7 @@
 mod confinement;
 mod deleting;
 mod paths;
+mod preview;
 mod watcher;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
