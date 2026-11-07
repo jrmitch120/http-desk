@@ -207,6 +207,25 @@ fn editing_one_request_leaves_others_untouched() {
 }
 
 #[test]
+fn extracting_a_file_variable_rewrites_only_the_header_and_the_edited_request() {
+    // Extract to variable: a new `@name` line at the top, `{{name}}` in one request's URL.
+    let mut f = parse(JETBRAINS);
+    f.header.variables.push(Variable { name: "exampleHost".into(), value: "https://example.com".into() });
+    f.requests[2].url = "{{exampleHost}}/comments".into();
+    let out = serialize(&f);
+
+    assert!(out.starts_with(
+        "@host = https://httpbin.org\n@userId = 42\n@exampleHost = https://example.com\n\n### Get request"
+    ));
+    assert!(out.contains("### Multi-line query\nGET {{exampleHost}}/comments?page=2&pageSize=10\n"));
+    let untouched_before =
+        &JETBRAINS[JETBRAINS.find("### Get request").unwrap()..JETBRAINS.find("### Multi-line query").unwrap()];
+    assert!(out.contains(untouched_before));
+    let untouched_after = &JETBRAINS[JETBRAINS.find("### Basic auth").unwrap()..];
+    assert!(out.ends_with(untouched_after));
+}
+
+#[test]
 fn every_fixture_request_is_semantically_stable_when_rerendered() {
     for src in [JETBRAINS, VSCODE] {
         let f = parse(src);

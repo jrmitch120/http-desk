@@ -14,6 +14,7 @@
   import EnvironmentEditor from "./components/EnvironmentEditor.svelte";
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
+  import ExtractVariable from "./components/ExtractVariable.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
@@ -134,6 +135,7 @@
 {#if app.modal === "env"}<EnvironmentEditor />{/if}
 {#if app.modal === "openapi"}<OpenApiImport />{/if}
 {#if app.modal === "settings"}<SettingsModal />{/if}
+{#if app.extraction}<ExtractVariable />{/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}
 {/if}

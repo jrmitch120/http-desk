@@ -17,6 +17,7 @@
   import { Compartment, EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { masked as maskedExt, singleLineExtensions, theme, varCard, variableExtensions, type VarProvider } from "./setup";
+  import { extractHolds } from "./extract";
   import { varSegments } from "../vars";
   import { popup } from "../popup/popup";
 
@@ -117,11 +118,12 @@
   });
 
   // Back to the static rendering once focus has really left: not while the
-  // window is in the background (the field keeps focus then, as an input does).
+  // window is in the background (the field keeps focus then, as an input does),
+  // nor while its Extract to variable menu or form has it (the answer replaces the selection).
   function onfocusout() {
     setTimeout(() => {
       // `root` is gone when the field was removed with focus in it (a modal closing).
-      if (editing && root && !root.contains(document.activeElement)) editing = false;
+      if (editing && root && !root.contains(document.activeElement) && !(view && extractHolds(view))) editing = false;
     });
   }
 
