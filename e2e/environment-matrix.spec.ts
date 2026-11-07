@@ -128,9 +128,29 @@ test("a row's menu deletes the variable from every environment", async ({ page }
   await page.getByRole("menuitem", { name: "Delete from all environments" }).click();
   await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["token", "version"]);
 
-  // The row's actions button opens the same menu.
-  await matrix(modal).locator(".kv-row").filter({ hasText: "token" }).getByRole("button", { name: "Actions for token" }).click();
+  // The row's actions button opens the same menu. It sits at the right edge of the
+  // Variable cell, shown on hover and focus; the last column only heads "+ Environment".
+  const row = matrix(modal).locator(".kv-row").filter({ hasText: "token" });
+  const actions = row.locator(".c-name").getByRole("button", { name: "Actions for token" });
+  await expect(actions).toHaveCSS("opacity", "0");
+  await row.hover();
+  await expect(actions).toHaveCSS("opacity", "1");
+  const nameBox = (await row.locator(".c-name").boundingBox())!;
+  const buttonBox = (await actions.boundingBox())!;
+  expect(nameBox.x + nameBox.width - (buttonBox.x + buttonBox.width)).toBeLessThan(8);
+  await expect(matrix(modal).locator(".kv-row .c-actions").first()).toBeEmpty();
+  await actions.click();
   await expect(page.getByRole("menuitem", { name: "Delete from all environments" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
+
+  // From the keyboard: the button is reachable with Tab, and shows while focused.
+  await page.mouse.move(0, 0);
+  await matrix(modal).getByRole("button", { name: "New environment" }).focus();
+  await page.keyboard.press("Tab");
+  const first = matrix(modal).locator(".kv-row").first().getByRole("button", { name: /^Actions for / });
+  await expect(first).toBeFocused();
+  await expect(first).toHaveCSS("opacity", "1");
 });
 
 test("a hover card's Edit focuses the cell that defines the variable", async ({ page }) => {

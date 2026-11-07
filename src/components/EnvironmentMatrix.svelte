@@ -81,13 +81,13 @@
   const key = (column: string, name: string) => JSON.stringify([column, name]);
 
   const ariaSort = { asc: "ascending", desc: "descending" } as const;
-  /** The last column: wide enough for its header's "+ Environment". */
-  const ACTIONS_WIDTH = 124;
+  /** The last column: wide enough for its header's "+ Environment"; its body cells are empty. */
+  const ADD_WIDTH = 112;
   const gridColumns = $derived<Column<MatrixRow>[]>([
     { id: "name", header: "Variable", width: "150px", cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort] },
     ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell })),
-    // Each row's actions button, under the header's "+ Environment".
-    { id: "actions", header: "", width: `${ACTIONS_WIDTH}px`, cell: actionsCell, headerCell: onaddenvironment && addEnvironmentHeader },
+    // Only the header's "+ Environment"; a row's actions are in its Variable cell.
+    { id: "actions", header: "", width: `${ADD_WIDTH}px`, cell: emptyCell, headerCell: onaddenvironment && addEnvironmentHeader },
   ]);
 
   function menuFor(name: string): MenuItem[] {
@@ -157,7 +157,12 @@
 
 {#snippet nameCell({ row }: GridCell<MatrixRow>)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <span class="cell m-name ellipsis" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>{row.name}</span>
+  <div class="m-var" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>
+    <span class="cell m-name ellipsis">{row.name}</span>
+    <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
+      <Icon name="more" size={13} />
+    </button>
+  </div>
 {/snippet}
 
 {#snippet valueCell({ row, column: id }: GridCell<MatrixRow>)}
@@ -208,13 +213,9 @@
   </div>
 {/snippet}
 
-{#snippet actionsCell({ row }: GridCell<MatrixRow>)}
-  <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
-    <Icon name="more" size={13} />
-  </button>
-{/snippet}
+{#snippet emptyCell()}{/snippet}
 
-<div class="matrix" bind:this={root} style:--matrix-min="{150 + ACTIONS_WIDTH + columns.length * 170}px">
+<div class="matrix" bind:this={root} style:--matrix-min="{150 + ADD_WIDTH + columns.length * 170}px">
   <KeyValueGrid
     items={rows}
     columns={gridColumns}
@@ -233,9 +234,16 @@
   .matrix :global(.kv) {
     min-width: var(--matrix-min);
   }
+  /* The Variable cell: the name, then the row's actions at its right edge. */
+  .m-var {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+  }
   .m-name {
     display: block;
-    align-self: center;
+    flex: 1;
     line-height: 31px;
     color: var(--text);
     cursor: default;
@@ -316,7 +324,8 @@
     margin-right: var(--space-1);
   }
   .actions {
-    margin: auto 0 auto var(--space-1);
+    flex: none;
+    margin-right: var(--space-1);
     width: var(--control-h-sm);
     height: var(--control-h-sm);
     opacity: 0;

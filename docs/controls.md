@@ -388,8 +388,10 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     (not the environment selected in the top bar). Bulk edit is off, because it would
     show Secret values as plain text.
   - The Environments matrix (`EnvironmentMatrix.svelte`): one row per variable name,
-    a read-only name column, one VarField column per environment plus Shared (built
-    from the set, with positional ids `m0`, `m1`…), and a row actions button.
+    a read-only Variable column (the name, and the row's actions button at the cell's
+    right edge, shown on row hover and focus), one VarField column per environment
+    plus Shared (built from the set, with positional ids `m0`, `m1`…), and a narrow
+    last column that only heads "+ Environment" (its body cells are empty).
     No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
     lock (and a reveal button when it's a Secret), and a gap is tinted. A set cell with an empty value shows a dim, italic
     "Empty" placeholder, unlike a cell that isn't set ("Not set"). A set cell
@@ -400,9 +402,9 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     doesn't remount the row and drop focus. Rows are sorted by name, A→Z by
     default, so filling a cell never moves its row; the Variable header is a sort
     button (`headerCell`, with `sort` for `aria-sort`) that flips A→Z ⇄ Z→A (an
-    arrow icon shows which), kept in `app.envMatrixSort` for the session. The last column is the row actions
-    button under the header's "+ Environment" (accessible name "New environment"),
-    which adds an environment; the List view keeps its own + button.
+    arrow icon shows which), kept in `app.envMatrixSort` for the session. The header's "+ Environment" (accessible
+    name "New environment") adds an environment; the List view keeps its own +
+    button.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
