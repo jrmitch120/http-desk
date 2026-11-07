@@ -172,11 +172,21 @@ spinners.
 is marked by state, hovering one shows the variable's card (value, Secrets masked, and
 where it is defined), and typing `{{` offers the names in scope. It is the URL bar's
 editor generalised (both build on `singleLineExtensions` in
-`src/lib/codemirror/setup.ts`). Params and header values use it.
+`src/lib/codemirror/setup.ts`). Every field that can hold a variable uses it: param and
+header values, the Authorization fields, form and multipart values (and file part
+paths), File variable values and environment values.
 
 - Props: `value`, `onchange(value)` (every edit, with the whole text), `variables?` (a
   `VarProvider`; without one the field is plain text), `placeholder?`, `label?`
-  (accessible name), `onenter?`, `class?`. Through `bind:this`, `focus()`.
+  (accessible name), `onenter?`, `masked?`, `invalid?` (sets `aria-invalid`; the owner
+  shows the error and the red border), `class?`. Through `bind:this`, `focus()`.
+- `masked` is password mode (an auth password or token, a Secret in the Environments
+  modal): the text is drawn as discs (`-webkit-text-security` in the editor, `•`
+  characters in the static rendering), nothing is marked and no hover card opens, so
+  neither gives the text away, and copy, cut and drag are blocked. `{{` autocomplete
+  still works. The owner's reveal button turns it off.
+- On a field styled as an `.input` (the Authorization fields), app.css gives it the
+  input's focus border; a press on its padding focuses it, as in an input.
 - Cheap enough for hundreds of rows: without focus it is a static rendering of the text
   (a focusable `textbox` with the same marks and hover cards), and the CodeMirror editor
   exists only while it has focus. The two line up to the pixel, so focusing doesn't
@@ -184,7 +194,8 @@ editor generalised (both build on `singleLineExtensions` in
 - Keyboard: like a text input. Tab and Shift+Tab move focus on (Tab into it selects the
   text), arrows move the caret, Enter runs `onenter` or does nothing, ⌘/Ctrl+Enter
   reaches the app's Send shortcut unless `onenter` takes it. When the `{{` list is open,
-  Up/Down, Enter and Escape go to the list.
+  Up/Down, Enter and Escape go to the list; otherwise Escape reaches the owner, so a
+  [Modal](#modal-and-dialog) closes as it would from an input.
 - A click puts the caret, or starts a drag selection, where it lands.
 - It never holds a line break: typed or pasted line breaks are removed with the
   whitespace around them, so a pasted wrapped token joins up (the save-time
@@ -298,13 +309,16 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - How it's configured today:
   - Params and headers: enable, name, value, description, delete. Headers add
     name suggestions. Values are VarFields.
-  - File variables: name, value, delete.
+  - File variables: name, value, delete. Values are VarFields with the request's
+    variables, so `{{host}}/api` resolves in the hover card.
   - Form fields and multipart parts: enable, name, value, delete. A disabled field is
     kept as `#~` lines in the body text (ARCHITECTURE §5). Multipart adds a part type
-    Select and a content type column.
-  - Environment variables: a custom value column (a password input with a reveal button
-    for Secrets), a Secret lock column, and a search filter (`visible`). Bulk edit is
-    off, because it would show Secret values as plain text.
+    Select and a content type column. Values (and file part paths) are VarFields.
+  - Environment variables: a custom value column (a VarField, masked for a Secret,
+    with a reveal button), a Secret lock column, and a search filter (`visible`). The
+    VarFields see the environment being edited, as edited, plus the shared variables
+    (not the environment selected in the top bar). Bulk edit is off, because it would
+    show Secret values as plain text.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
@@ -325,7 +339,8 @@ request/response split.
 
 `Modal.svelte` is the window for Settings, Environments and OpenAPI import: props
 `title` (also its accessible name), `onclose`, `width?`, `height?`, `children`,
-`footer?`. Escape closes it, Tab stays inside it, and focus returns to where it was.
+`footer?`. Escape closes it (unless a field inside it took the key, e.g. to close its
+`{{` list), Tab stays inside it, and focus returns to where it was.
 Closing it (Escape, the backdrop, the close button) blurs the focused field first, so a
 field that applies on blur keeps what was typed.
 Popups opened inside a modal close first on Escape.

@@ -21,6 +21,7 @@
     type MultipartPart,
   } from "../lib/http";
   import Editor from "../lib/codemirror/Editor.svelte";
+  import VarField from "../lib/codemirror/VarField.svelte";
   import Checkbox from "./Checkbox.svelte";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
@@ -113,11 +114,11 @@
 {#snippet partValueCell({ row, set }: GridCell<MultipartPart>)}
   {#if row.kind === "file"}
     <span class="file-cell">
-      <input class="cell c-value" value={row.value} placeholder="./path/to/file" spellcheck="false" oninput={(e) => set({ value: e.currentTarget.value })} />
+      <VarField class="cell" value={row.value} placeholder="./path/to/file" label="File path" {variables} onchange={(value) => set({ value })} />
       <button class="btn small" onclick={() => pickFile((rel) => set({ value: rel }))}>Choose…</button>
     </span>
   {:else}
-    <input class="cell c-value" value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => set({ value: e.currentTarget.value })} />
+    <VarField class="cell" value={row.value} placeholder="Value" label="Value" {variables} onchange={(value) => set({ value })} />
   {/if}
 {/snippet}
 
@@ -142,7 +143,7 @@
   {#if body.mode === "none"}
     <div class="none muted">This request does not have a body.</div>
   {:else if body.mode === "formUrlEncoded"}
-    <KeyValueGrid bind:items={formRows} label="Form fields" columns={["enable", "name", "value", "delete"]} blank={blankField} carry={["comments", "after"]} separator="=" onchange={(rows) => (body.text = buildForm(rows))} />
+    <KeyValueGrid bind:items={formRows} label="Form fields" columns={["enable", "name", "value", "delete"]} blank={blankField} carry={["comments", "after"]} separator="=" {variables} onchange={(rows) => (body.text = buildForm(rows))} />
   {:else if body.mode === "multipart"}
     <KeyValueGrid bind:items={parts} label="Form-data parts" columns={partColumns} blank={blankPart} carry={["kind", "contentType"]} onchange={(rows) => (body.text = buildMultipart(rows, boundary))} />
     <p class="muted note">Boundary <code>{boundary}</code> (from the Content-Type header). Files are referenced relative to the .http file.</p>
@@ -235,7 +236,7 @@
     padding-right: 4px;
     min-width: 0;
   }
-  .file-cell .cell {
+  .file-cell :global(.cell) {
     flex: 1;
     align-self: stretch;
   }

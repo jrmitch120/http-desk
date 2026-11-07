@@ -221,14 +221,35 @@ function varCompletion(provider: VarProvider) {
  */
 export const layerTooltips = (): Extension => tooltips({ parent: popupLayer() });
 
-export function variableExtensions(provider: VarProvider): Extension {
+/**
+ * `{{variable}}` marks, hover cards and autocompletion. With `marks: false` only
+ * the autocompletion: for a masked field, where a mark or a card would give the
+ * hidden text away.
+ */
+export function variableExtensions(provider: VarProvider, { marks = true }: { marks?: boolean } = {}): Extension {
   return [
     layerTooltips(),
-    varDecorations(provider),
-    varTooltip(provider),
+    marks ? [varDecorations(provider), varTooltip(provider)] : [],
     autocompletion({ override: [varCompletion(provider)], icons: false }),
   ];
 }
+
+/**
+ * Draws the text as discs, as a password input does, and keeps it off the
+ * clipboard. The placeholder stays readable.
+ */
+export const masked: Extension = [
+  EditorView.editorAttributes.of({ class: "cm-masked" }),
+  EditorView.domEventHandlers({
+    copy: (e) => (e.preventDefault(), true),
+    cut: (e) => (e.preventDefault(), true),
+    dragstart: (e) => (e.preventDefault(), true),
+  }),
+  EditorView.theme({
+    "&.cm-masked .cm-content": { WebkitTextSecurity: "disc" },
+    "&.cm-masked .cm-placeholder": { WebkitTextSecurity: "none" },
+  }),
+];
 
 // ---------------------------------------------------------------- body syntax warnings
 
@@ -296,7 +317,8 @@ export const singleLine = EditorState.transactionFilter.of((tr) => {
  * The editing core of a single-line field (the URL bar, VarField): no line
  * breaks and history. Enter runs `onenter` (or nothing); ⌘/Ctrl+Enter runs
  * `onenter` too, and without it reaches the app's Send shortcut. Tab isn't
- * bound, so it moves focus as in a text input.
+ * bound, so it moves focus as in a text input, and neither is Escape (unless
+ * the autocomplete list is open), so it reaches a modal.
  */
 export function singleLineExtensions(opts: { placeholder?: string; label?: string; onenter?: () => void }): Extension {
   const enter = opts.onenter;
@@ -310,7 +332,8 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
       { key: "Enter", run: () => (enter?.(), true) },
       ...(enter ? [{ key: "Mod-Enter", run: () => (enter(), true) }] : []),
       ...completionKeymap,
-      ...defaultKeymap.filter((b) => !b.key?.includes("Enter")),
+      // Escape is left to the owner (a modal closes), as in a text input; the `{{` list still takes it while open.
+      ...defaultKeymap.filter((b) => !b.key?.includes("Enter") && b.key !== "Escape"),
       ...historyKeymap,
     ]),
   ];

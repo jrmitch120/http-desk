@@ -187,7 +187,8 @@ textarea,
   outline: none;
   min-width: 0;
 }
-.input:focus {
+.input:focus,
+.var-field.input:focus-within {
   border-color: var(--focus);
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
