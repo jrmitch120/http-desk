@@ -21,7 +21,9 @@
   const doc = tab && app.docs[tab.path];
   const request = app.requestFor(tab ?? null);
   const envName = app.envName;
-  const envCount = app.envSet?.environments.length ?? 0;
+  /** The environments the request gets (its folder's, ADR-0004): where env destinations write. */
+  const envSet = tab ? app.envSetFor(tab.path) : null;
+  const envCount = envSet?.environments.length ?? 0;
 
   const options: SegmentedOption<Where>[] = [
     { value: "file", label: "File variable" },
@@ -34,13 +36,18 @@
 
   const target = $derived<ExtractTarget>(where === "env" && envName ? { kind: "env", env: envName } : where === "all" ? { kind: "all" } : { kind: "file" });
   const error = $derived(extractNameError(name.trim()));
-  const warning = $derived(doc && !error ? extractConflict(target, name.trim(), { file: doc.file, request, envSet: app.envSet }) : null);
+  const warning = $derived(doc && !error ? extractConflict(target, name.trim(), { file: doc.file, request, envSet }) : null);
+  /** The env file of the folder that supplies the selected environment to the request. */
+  const envFile = $derived.by(() => {
+    const dir = tab && envName ? app.envWriteFolder(tab.path, envName, name.trim()) : "";
+    return `${dir ? `${dir}/` : ""}http-client.env.json`;
+  });
   const ready = $derived(!!name.trim() && !error);
   const help = $derived(
     where === "file"
       ? `Adds @${name.trim() || "name"} = … at the top of ${tab ? basename(tab.path) : "the file"}.`
       : where === "env"
-        ? `Adds it to ${envName} in http-client.env.json.`
+        ? `Adds it to ${envName} in ${envFile}.`
         : `Adds it to every environment with this value; change the others afterwards.`,
   );
 

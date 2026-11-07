@@ -49,4 +49,10 @@ describe("usageRows", () => {
       ["token", undefined, 'Environment "dev" · Secret'],
     ]);
   });
+
+  it("names the folder of a nested folder's env file, keeping same-named values of each folder apart", () => {
+    const at = (path: string, secret = false): Usage => ({ kind: "environment", path, env: "dev", name: "url", secret, start: 0, end: 8 });
+    const rows = usageRows([at("/ws/http-client.env.json"), at("/ws/api/users/http-client.env.json"), at("/ws/api/http-client.private.env.json", true)], "/ws");
+    expect(rows.map((r) => r.where)).toEqual(['Environment "dev"', 'Environment "dev" · api/users/', 'Environment "dev" · api/ · Secret']);
+  });
 });

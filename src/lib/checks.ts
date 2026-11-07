@@ -3,6 +3,7 @@
 // the quick fixes for it. Computed synchronously from the frontend resolver
 // (`makeVarProvider`), which gives the core's answers, so they follow every edit.
 import type { VarProvider } from "./codemirror/setup";
+import { writeFolder } from "./envFolders";
 import { variableNameError } from "./http";
 import type { Auth, Body, EnvironmentSet, Request } from "./types";
 
@@ -108,7 +109,8 @@ export function undefinedVariables(req: Request, variables: VarProvider): Undefi
  * for an environment the folder doesn't define, open the picker to choose another.
  */
 export type QuickFix =
-  | { kind: "addToEnvironment"; env: string }
+  /** `dir`: the folder whose env files get it (`writeFolder`); without it, the one the Environments modal opens on. */
+  | { kind: "addToEnvironment"; env: string; dir?: string }
   | { kind: "addFileVariable" }
   | { kind: "selectEnvironment"; env: string }
   | { kind: "chooseEnvironment" };
@@ -121,7 +123,10 @@ export type QuickFix =
 export function quickFixes(name: string, set: EnvironmentSet | null, envName: string | null): QuickFix[] {
   if (name.startsWith("$") || variableNameError(name)) return [];
   const fixes: QuickFix[] = [];
-  if (envName) fixes.push({ kind: "addToEnvironment", env: envName });
+  if (envName) {
+    const dir = writeFolder(set, envName, name);
+    fixes.push({ kind: "addToEnvironment", env: envName, ...(dir !== undefined ? { dir } : {}) });
+  }
   fixes.push({ kind: "addFileVariable" });
   const defining = set?.environments.find((e) => e.name !== envName && e.variables.some((v) => v.name === name));
   if (defining) fixes.push({ kind: "selectEnvironment", env: defining.name });

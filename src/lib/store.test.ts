@@ -1287,11 +1287,16 @@ describe("find usages", () => {
     expect(app.definitionWanted).toEqual({ kind: "file", name: "base" });
   });
 
-  it("opens an environment value's row in the Environments modal", async () => {
+  it("opens an environment value's row in the Environments modal, on the folder of its env file", async () => {
+    app.root = "/ws";
     await app.openUsage({ kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 8 });
 
     expect(app.modal).toBe("env");
-    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url", dir: "" });
+
+    // One in a nested folder's file opens that folder's environments.
+    await app.openUsage({ kind: "environment", path: "/ws/api/users/http-client.private.env.json", env: "dev", name: "token", secret: true, start: 0, end: 8 });
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "token", dir: "api/users" });
   });
 });
 
@@ -1341,7 +1346,7 @@ describe("renaming a variable", () => {
       environments: [
         { name: "dev", variables: [{ name: "apiToken", value: "t", secret: true }, { name: "auth", value: "Bearer {{token}}", secret: false }] },
       ],
-    });
+    }, "");
     expect(app.envSet?.environments[0].variables[0].name).toBe("apiToken");
     expect(saveHttpFile).not.toHaveBeenCalled();
     expect(readHttpFile).not.toHaveBeenCalled();
@@ -1374,6 +1379,36 @@ describe("renaming a variable", () => {
     expect(app.docs[PATH].file.requests.map((r) => r.url)).toEqual(["{{apiToken}}/books", "https://x/1"]);
     expect(app.isDocDirty(PATH)).toBe(true);
     expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment and 2 files. books.http had unsaved edits, so it was left unsaved.");
+  });
+
+  it("in a nested folder's environments: renames in that folder's files only, with only its env values' references", async () => {
+    const apiPair = (): EnvironmentSet => ({
+      shared: [],
+      environments: [{ name: "dev", variables: [{ name: "token", value: "api-t", secret: true }, { name: "url", value: "{{token}}", secret: false }] }],
+      privateFileIgnored: true,
+    });
+    loadEnvironments.mockImplementation(async (dir?: string) => (dir === "api" ? apiPair() : envSet()));
+    const done = app.renameVariable("token", "api");
+    app.closeRenaming({
+      name: "apiToken",
+      usages: [
+        // The root's auth uses the root's token: not this folder's to rename.
+        { kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "auth", secret: false, start: 7, end: 16 },
+        { kind: "environment", path: "/ws/api/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 9 },
+      ],
+    });
+    expect(await done).toBe(true);
+
+    expect(saveEnvironments.mock.calls).toEqual([
+      [
+        {
+          ...apiPair(),
+          environments: [{ name: "dev", variables: [{ name: "apiToken", value: "api-t", secret: true }, { name: "url", value: "{{apiToken}}", secret: false }] }],
+        },
+        "api",
+      ],
+    ]);
+    expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment of api/.");
   });
 
   it("cancelling the form changes nothing", async () => {
@@ -1671,6 +1706,58 @@ describe("Extract to variable", () => {
     expect(await extract(tab.id, "https://api.example.com", null)).toBeNull();
     expect(app.docs[PATH].file.header.variables).toEqual([]);
     expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("from a request in a nested folder: writes to the folders whose env files supply each environment to it", async () => {
+    // PATH is in api/. dev's public file is the root's, its private one api/'s; qa is api/'s only.
+    const rootPair = () => ({ shared: [], environments: [{ name: "dev", variables: [{ name: "host", value: "h", secret: false }] }], privateFileIgnored: true });
+    const apiPair = () => ({
+      shared: [],
+      environments: [
+        { name: "dev", variables: [{ name: "token", value: "old", secret: true }] },
+        { name: "qa", variables: [] },
+      ],
+      privateFileIgnored: true,
+    });
+    app.envSet = rootPair();
+    app.envFolders = [
+      {
+        dir: "api",
+        set: {
+          shared: [],
+          environments: [
+            { name: "dev", source: { public: "", private: "api" }, variables: [{ name: "host", value: "h", secret: false }, { name: "token", value: "old", secret: true }] },
+            { name: "qa", source: { public: "api" }, variables: [] },
+          ],
+          privateFileIgnored: true,
+        },
+      },
+    ];
+    loadEnvironments.mockImplementation(async (dir?: string) => (dir === "api" ? apiPair() : rootPair()));
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+    expect(api.saveEnvironments.mock.calls).toEqual([
+      [
+        {
+          shared: [],
+          environments: [
+            { name: "dev", variables: [{ name: "token", value: "abc", secret: true }] },
+            { name: "qa", variables: [{ name: "token", value: "abc", secret: false }] },
+          ],
+          privateFileIgnored: true,
+        },
+        "api",
+      ],
+    ]);
+
+    // A new value of dev goes to the root, whose shareable file supplies dev here.
+    api.saveEnvironments.mockClear();
+    app.envName = "dev";
+    await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "dev" } });
+    expect(api.saveEnvironments.mock.calls[0][1]).toBe("");
+    expect(api.saveEnvironments.mock.calls[0][0].environments[0].variables).toContainEqual({ name: "baseUrl", value: "https://api.example.com", secret: false });
   });
 
   it("to a File variable that exists: replaces the value of the definition the request uses, adding no line", async () => {

@@ -51,10 +51,12 @@ export const api = {
   deletePermanently: (path: string) => invoke<void>("delete_permanently", { path }),
   pathExists: (path: string) => invoke<boolean>("path_exists", { path }),
 
-  loadEnvironments: () => invoke<EnvironmentSet>("load_environments"),
+  /** Folder `dir`'s own pair of env files (relative to the root, `/`-separated; the root's by default). */
+  loadEnvironments: (dir = "") => invoke<EnvironmentSet>("load_environments", { dir }),
   /** Each folder below the root with env files, with the environments its requests get (ADR-0004). */
   loadFolderEnvironments: () => invoke<FolderEnvironments[]>("load_folder_environments"),
-  saveEnvironments: (set: EnvironmentSet) => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set }),
+  /** Saves `set` as folder `dir`'s own pair of env files (the root's by default). */
+  saveEnvironments: (set: EnvironmentSet, dir = "") => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set, dir }),
 
   sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),
   /** What `sendRequest` with the same arguments would send, without sending it. */

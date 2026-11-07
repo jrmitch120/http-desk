@@ -220,7 +220,8 @@ paths), File variable values and environment values.
   value, or a value either went into, is masked until **Reveal**, in that card only. **Edit** opens the
   definition's row when the app has one: a File variable at the top of the file in
   the request's Settings section, an environment's variable in the Environments modal
-  on that environment (or the shared variables). It comes from the provider's `edit`
+  on that environment (or the shared variables), in the folder whose env files supply
+  the value (`Definition.dir`; the modal switches folders for an inherited value). It comes from the provider's `edit`
   (the request editor wires it to `app.editDefinition`; the Environments modal sets
   `app.definitionWanted`, so Edit switches to the supplying environment or the shared
   variables in place), and the info's `definition`;

@@ -4,7 +4,7 @@
 // variables are left as written: they're generated at send time.
 import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
 import { promptMasked, VAR_RE } from "./http";
-import type { EnvironmentSet, Prompt, Variable } from "./types";
+import type { EnvironmentSet, EnvSource, EnvVar, Prompt, Variable } from "./types";
 import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
 
 /**
@@ -33,20 +33,25 @@ export function isDynamic(reference: string): boolean {
   return DYNAMIC_VARIABLES.some((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
 }
 
-export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string }>;
+export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string; dir?: string }>;
 
 /**
  * The variables of environment `envName`: the shared variables, then the
  * environment's own over them (as the core's `env::variables`). `source` is
- * `"$shared"` or the environment's name. Private values were already merged into
+ * `"$shared"` or the environment's name, `dir` the folder whose files supply the
+ * value, when the set says (`EnvSource`). Private values were already merged into
  * the set by the core.
  */
 export function envVariables(set: EnvironmentSet | null, envName: string | null): EnvVarMap {
   const out: EnvVarMap = {};
   if (!set) return out;
-  for (const v of set.shared) out[v.name] = { value: v.value, secret: v.secret, source: "$shared" };
+  const entry = (v: EnvVar, source: string, from: EnvSource | null | undefined) => {
+    const dir = (v.secret ? from?.private : from?.public) ?? undefined;
+    return { value: v.value, secret: v.secret, source, ...(dir !== undefined ? { dir } : {}) };
+  };
+  for (const v of set.shared) out[v.name] = entry(v, "$shared", set.sharedSource);
   const env = set.environments.find((e) => e.name === envName);
-  for (const v of env?.variables ?? []) out[v.name] = { value: v.value, secret: v.secret, source: env!.name };
+  for (const v of env?.variables ?? []) out[v.name] = entry(v, env!.name, env!.source);
   return out;
 }
 
@@ -106,7 +111,8 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   for (const [name, e] of Object.entries(env)) {
     const source = e.source === "$shared" ? "shared variables" : `environment "${e.source}"`;
     const origin = e.source === "$shared" ? "shared" : "environment";
-    scope.set(name, { ...e, source, origin, definition: { kind: "env", env: e.source, name } });
+    const definition: Definition = { kind: "env", env: e.source, name, ...(e.dir !== undefined ? { dir: e.dir } : {}) };
+    scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
   for (const v of fileVars) {
     const definition: Definition | undefined = headerVars.includes(v) ? { kind: "file", name: v.name } : undefined;

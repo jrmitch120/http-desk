@@ -218,7 +218,8 @@ pub enum Part {
 
 /// Every `{{name}}` reference in the workspace: in the `.http` files, in explorer
 /// order (File variables at the top of a file, then each request), then in the
-/// values of the environment files at the root. `open` holds documents as the app
+/// values of each folder's own environment files (the root's, then every folder with env
+/// files in explorer order: [`crate::env::folders`]). `open` holds documents as the app
 /// has them (unsaved edits included); they're used instead of the files on disk at
 /// the same paths. Unreadable files and env files are skipped.
 pub fn usages(root: &Path, name: &str, open: &[(PathBuf, HttpFile)]) -> Vec<Usage> {
@@ -258,12 +259,15 @@ pub fn usages(root: &Path, name: &str, open: &[(PathBuf, HttpFile)]) -> Vec<Usag
             }
         }
     }
-    if let Ok(set) = crate::env::load(root) {
+    let below = crate::env::folders(root).unwrap_or_default();
+    for (dir, set) in
+        std::iter::once(root.to_path_buf()).chain(below).filter_map(|d| Some((d.clone(), crate::env::load(&d).ok()?)))
+    {
         let envs = std::iter::once((crate::env::SHARED, &set.shared))
             .chain(set.environments.iter().map(|e| (e.name.as_str(), &e.variables)));
         for (env, vars) in envs {
             for v in vars {
-                let path = root.join(if v.secret { crate::env::PRIVATE_ENV_FILE } else { crate::env::ENV_FILE });
+                let path = dir.join(if v.secret { crate::env::PRIVATE_ENV_FILE } else { crate::env::ENV_FILE });
                 for (_, start, end) in positions(&v.value, name) {
                     let (env, name, secret) = (env.to_string(), v.name.clone(), v.secret);
                     out.push(Usage::Environment { path: path.clone(), env, name, secret, start, end });
@@ -548,6 +552,34 @@ mod usage_tests {
                     start: 0,
                     end: 10
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_references_in_every_folders_env_files() {
+        let dir = workspace(&[
+            ("api/users/http-client.private.env.json", r#"{ "dev": { "token": "{{host}}" } }"#),
+            ("api/http-client.env.json", r#"{ "$shared": { "base": "{{host}}/api" } }"#),
+            ("http-client.env.json", r#"{ "dev": { "url": "{{host}}" } }"#),
+            ("node_modules/x/http-client.env.json", r#"{ "dev": { "url": "{{host}}" } }"#),
+        ]);
+        let root = dir.path();
+        let got: Vec<_> = usages(root, "host", &[])
+            .into_iter()
+            .map(|u| match u {
+                Usage::Environment { path, env, name, .. } => {
+                    (path.strip_prefix(root).unwrap().to_path_buf(), env, name)
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("http-client.env.json".into(), "dev".into(), "url".into()),
+                ("api/http-client.env.json".into(), "$shared".into(), "base".into()),
+                ("api/users/http-client.private.env.json".into(), "dev".into(), "token".into()),
             ]
         );
     }

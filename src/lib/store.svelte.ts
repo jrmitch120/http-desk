@@ -8,7 +8,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { renameInEnvironments, renameInFile } from "./rename";
-import { environmentNames, environmentsFor, requestFolder } from "./envFolders";
+import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, requestFolder, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type {
@@ -715,10 +715,11 @@ class AppStore {
 
   /** Shows where a Find usages result is: the request on the field holding it
    *  (found as `openSearchHit` finds it), a File variable's row in its file's
-   *  request Settings, or an environment value's row in the Environments modal. */
+   *  request Settings, or an environment value's row in the Environments modal (on
+   *  the folder of the env file holding it). */
   async openUsage(usage: Usage) {
     if (usage.kind === "environment") {
-      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name };
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.root ? requestFolder(this.root, usage.path) : "" };
       this.modal = "env";
       return;
     }
@@ -1170,12 +1171,13 @@ class AppStore {
     this.envPickerWanted = true;
   }
 
-  /** Saves an environment set the store changed (env files have no unsaved state of
-   *  their own) and reloads it. False if the save failed (it was reported). */
-  private async writeEnvironments(set: EnvironmentSet): Promise<boolean> {
+  /** Saves an environment set the store changed as folder `dir`'s own pair (env files
+   *  have no unsaved state of their own) and reloads the environments. False if the save
+   *  failed (it was reported). */
+  private async writeEnvironments(set: EnvironmentSet, dir = ""): Promise<boolean> {
     try {
-      const report = await api.saveEnvironments(set);
-      if (report.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+      const report = await api.saveEnvironments(set, dir);
+      if (report.gitignoreUpdated) this.toast("info", `Added ${dir ? `${dir}/` : ""}http-client.private.env.json to .gitignore`);
     } catch (e) {
       this.toast("error", `Could not save environments: ${errorMessage(e)}`);
       return false;
@@ -1184,25 +1186,43 @@ class AppStore {
     return true;
   }
 
+  /** A copy of folder `dir`'s own pair of env files to change (the root's as loaded, a
+   *  nested folder's read from disk). Null if it can't be read (that's reported). */
+  private async folderPair(dir: string): Promise<EnvironmentSet | null> {
+    if (!dir && this.envSet) return $state.snapshot(this.envSet) as EnvironmentSet;
+    try {
+      return await api.loadEnvironments(dir);
+    } catch (e) {
+      this.toast("error", `Could not read the environments of ${folderLabel(dir)}: ${errorMessage(e)}`);
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------- rename variable
 
   /**
-   * Rename variable on environment variable `name`: asks for the new name and
+   * Rename variable on environment variable `name` of folder `dir`'s env files (the
+   * Environments modal's folder; the root's by default): asks for the new name and
    * whether to update references (`RenameVariable.svelte`), then renames it in
-   * every environment through the normal environment save, and edits each file
+   * every environment of that folder's pair through the normal environment save
+   * (references in that pair's values too; other folders' env files are left alone),
+   * and edits each file
    * holding a reference Find usages found. A file with no unsaved edits is saved
    * at once; one with unsaved edits gets the rename in memory only and stays
    * unsaved, so the user's pending work isn't saved without them. The env files
    * are saved first; if that fails, nothing else changes. False if cancelled or
    * the env files couldn't be saved.
    */
-  async renameVariable(name: string): Promise<boolean> {
+  async renameVariable(name: string, dir = ""): Promise<boolean> {
     const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, resolve }));
-    if (!choice || !this.envSet) return false;
+    if (!choice) return false;
     const { name: next, usages } = choice;
-    const set = $state.snapshot(this.envSet) as EnvironmentSet;
-    renameInEnvironments(set, usages ?? [], name, next);
-    if (!(await this.writeEnvironments(set))) return false;
+    const set = await this.folderPair(dir);
+    if (!set) return false;
+    // Find usages lists every folder's env values; only this folder's pair is renamed here.
+    const inPair = (usages ?? []).filter((u) => u.kind === "environment" && (this.root ? requestFolder(this.root, u.path) : "") === dir);
+    renameInEnvironments(set, inPair, name, next);
+    if (!(await this.writeEnvironments(set, dir))) return false;
 
     const byFile = new Map<string, Usage[]>();
     for (const u of usages ?? []) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
@@ -1219,7 +1239,7 @@ class AppStore {
     }
     if (this.usages?.name === name) this.closeUsages();
 
-    let message = `Renamed ${name} to ${next} in every environment`;
+    let message = `Renamed ${name} to ${next} in every environment${dir ? ` of ${dir}/` : ""}`;
     if (edited) message += ` and ${edited} file${edited === 1 ? "" : "s"}`;
     message += ".";
     if (unsaved.length === 1) message += ` ${unsaved[0]} had unsaved edits, so it was left unsaved.`;
@@ -1247,23 +1267,48 @@ class AppStore {
     const choice = await new Promise<ExtractChoice | null>((resolve) => (this.extraction = { tabId, value, resolve }));
     if (!choice) return null;
     const { name, target } = choice;
-    if (target.kind !== "file") return (await this.extractToEnvironments(target, name, value)) ? name : null;
     const tab = this.tabs.find((t) => t.id === tabId);
+    if (target.kind !== "file") return tab && (await this.extractToEnvironments(tab.path, target, name, value)) ? name : null;
     const doc = tab && this.docs[tab.path];
     if (!tab || !doc) return null;
     extractToFile(doc.file, this.requestFor(tab), name, value);
     return name;
   }
 
-  /** Writes an extracted variable to the env files right away (they have no unsaved state). */
-  private async extractToEnvironments(target: ExtractTarget, name: string, value: string): Promise<boolean> {
-    if (!this.envSet) return false;
-    const set = $state.snapshot(this.envSet) as EnvironmentSet;
-    const envs = targetEnvironments(target, set);
-    extractToEnvironments(set, envs, name, value);
-    if (!(await this.writeEnvironments(set))) return false;
+  /** Writes an extracted variable to the env files right away (they have no unsaved state):
+   *  for each target environment of the request in the file at `path`, the pair of
+   *  files of the folder that supplies it to that request (`writeFolder`). */
+  private async extractToEnvironments(path: string, target: ExtractTarget, name: string, value: string): Promise<boolean> {
+    const effective = this.envSetFor(path);
+    if (!effective) return false;
+    const envs = targetEnvironments(target, effective);
+    const byFolder = new Map<string, string[]>();
+    for (const env of envs) {
+      const dir = this.envWriteFolder(path, env, name);
+      byFolder.set(dir, [...(byFolder.get(dir) ?? []), env]);
+    }
+    for (const [dir, names] of byFolder) {
+      const set = await this.folderPair(dir);
+      if (!set) return false;
+      // An environment the folder's own files don't have yet is added there.
+      for (const env of names) if (!set.environments.some((e) => e.name === env)) set.environments.push({ name: env, variables: [] });
+      extractToEnvironments(set, names, name, value);
+      if (!(await this.writeEnvironments(set, dir))) return false;
+    }
     this.toast("success", target.kind === "all" ? `Added ${name} to every environment` : `Added ${name} to ${envs[0]}`);
     return true;
+  }
+
+  /** The folder whose own env files a value of `name` in `env` goes to, for the request in
+   *  the file at `path`: where its environments say (`writeFolder`), else the nearest folder
+   *  with env files at or above the request's (where the Environments modal opens for it). */
+  envWriteFolder(path: string, env: string, name: string): string {
+    return writeFolder(this.envSetFor(path), env, name) ?? this.envFolderFor(path);
+  }
+
+  /** The nearest folder with env files at or above the file at `path`'s ("" for the root). */
+  envFolderFor(path: string): string {
+    return nearestEnvFolder(this.envFolders, this.root ? requestFolder(this.root, path) : "");
   }
 
   /** Answers the Extract to variable form on screen (null: cancelled). */

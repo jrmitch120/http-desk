@@ -1,4 +1,5 @@
 // Find usages results as the sidebar lists them.
+import { requestFolder } from "./envFolders";
 import { basename } from "./http";
 import type { Usage, UsageField } from "./types";
 
@@ -36,8 +37,9 @@ function fieldLabel(f: UsageField): string {
   }
 }
 
-/** The usages as list rows, in the order found, one per field. */
-export function usageRows(usages: Usage[]): UsageRow[] {
+/** The usages as list rows, in the order found, one per field. An environment value in a
+ *  folder below workspace `root` names that folder (`api/`). */
+export function usageRows(usages: Usage[], root = ""): UsageRow[] {
   const rows = new Map<string, UsageRow>();
   for (const u of usages) {
     let row: Omit<UsageRow, "usage">;
@@ -48,8 +50,9 @@ export function usageRows(usages: Usage[]): UsageRow[] {
     } else if (u.kind === "fileVariable") {
       row = { key: `${u.path}\0@${u.index}`, title: `@${u.name}`, where: `${basename(u.path)} · File variable`, disabled: false };
     } else {
-      const env = u.env === "$shared" ? "Shared variables" : `Environment "${u.env}"`;
-      row = { key: `${u.env}\0${u.name}`, title: u.name, where: u.secret ? `${env} · Secret` : env, disabled: false };
+      const dir = root ? requestFolder(root, u.path) : "";
+      const where = [u.env === "$shared" ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
+      row = { key: `${dir}\0${u.env}\0${u.name}`, title: u.name, where: where.join(" · "), disabled: false };
     }
     if (!rows.has(row.key)) rows.set(row.key, { ...row, usage: u });
   }

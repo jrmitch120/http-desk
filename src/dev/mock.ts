@@ -46,23 +46,74 @@ let envSet = {
 // with its own baseUrl (the root's private `local` token still applies: private files are
 // looked up separately) and `qa`, which no other folder defines.
 const folderEnvs = new URLSearchParams(location.search).get("folderEnvs") === "1";
+type MockSet = typeof envSet;
+type MockSource = { public: string | null; private: string | null };
+type MockEnvVar = { name: string; value: string; secret: boolean };
+/** Each folder's own pair of env files below the root, by folder relative to the root (the root's is `envSet`). */
+const folderPairs: Record<string, MockSet> = folderEnvs
+  ? {
+      api: {
+        shared: [],
+        environments: [
+          { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:9001", secret: false }] },
+          { name: "qa", variables: [{ name: "baseUrl", value: "https://qa.example.com", secret: false }] },
+        ],
+        privateFileIgnored: true,
+      },
+    }
+  : {};
+const pairOf = (dir: string): MockSet | undefined => (dir ? folderPairs[dir] : envSet);
+/**
+ * A rough `env::load_for`: for each environment (and `$shared`) the nearest folder of
+ * `chain` whose public part defines it (listed with a shareable value, or with no
+ * values at all) and the nearest whose private part does (a Secret), private values
+ * over public ones. `label` names the folders in `source` (`load_environments` gives a
+ * pair's own folder as "").
+ */
+function loadFor(chain: string[], label = (d: string) => d): MockSet & { sharedSource?: MockSource } {
+  const definesPublic = (vars: MockEnvVar[] | undefined, env: boolean) => !!vars && (vars.some((v) => !v.secret) || (env && !vars.some((v) => v.secret)));
+  const definesPrivate = (vars: MockEnvVar[] | undefined) => !!vars?.some((v) => v.secret);
+  const pick = (get: (s: MockSet) => MockEnvVar[] | undefined, env: boolean) => {
+    const of = (d: string) => {
+      const pair = pairOf(d);
+      return pair && get(pair);
+    };
+    const pub = chain.find((d) => definesPublic(of(d), env));
+    const priv = chain.find((d) => definesPrivate(of(d)));
+    if (pub === undefined && priv === undefined) return null;
+    const vars: MockEnvVar[] = pub === undefined ? [] : of(pub)!.filter((v) => !v.secret).map((v) => ({ ...v }));
+    for (const v of priv === undefined ? [] : of(priv)!.filter((v) => v.secret)) {
+      const i = vars.findIndex((x) => x.name === v.name);
+      if (i >= 0) vars[i] = { ...v };
+      else vars.push({ ...v });
+    }
+    return { vars, source: { public: pub === undefined ? null : label(pub), private: priv === undefined ? null : label(priv) } };
+  };
+  const names = [...new Set([...chain].reverse().flatMap((d) => pairOf(d)?.environments.map((e) => e.name) ?? []))];
+  const shared = pick((s) => s.shared, false);
+  return {
+    shared: shared?.vars ?? [],
+    ...(shared ? { sharedSource: shared.source } : {}),
+    environments: names.flatMap((name) => {
+      const e = pick((s) => s.environments.find((e) => e.name === name)?.variables, true);
+      return e ? [{ name, variables: e.vars, source: e.source }] : [];
+    }),
+    privateFileIgnored: pairOf(chain[0])?.privateFileIgnored ?? envSet.privateFileIgnored,
+  };
+}
+/** The folders a request in `dir` looks in, nearest first, ending at the root. */
+const chainOf = (dir: string) => [...dir.split("/").filter(Boolean).map((_, i, a) => a.slice(0, a.length - i).join("/")), ""];
 /** What `load_folder_environments` gives: each folder below the root with env files, with its requests' environments. */
 function folderEnvironments() {
-  if (!folderEnvs) return [];
-  const rootLocal = envSet.environments.find((e) => e.name === "local")?.variables ?? [];
-  const set = {
-    shared: envSet.shared,
-    environments: [
-      { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:9001", secret: false }, ...rootLocal.filter((v) => v.secret)] },
-      ...envSet.environments.filter((e) => e.name !== "local"),
-      { name: "qa", variables: [{ name: "baseUrl", value: "https://qa.example.com", secret: false }] },
-    ],
-    privateFileIgnored: envSet.privateFileIgnored,
-  };
-  return [{ dir: "api", set }];
+  return Object.keys(folderPairs)
+    .sort()
+    .map((dir) => ({ dir, set: loadFor(chainOf(dir)) }));
 }
 /** The environments of a request in the file at `path`: its nearest folder's with env files, else the root's. */
-const envSetFor = (path: string | null) => folderEnvironments().find((f) => path?.startsWith(`${ROOT}/${f.dir}/`))?.set ?? envSet;
+const envSetFor = (path: string | null) =>
+  folderEnvironments()
+    .filter((f) => path?.startsWith(`${ROOT}/${f.dir}/`))
+    .sort((a, b) => b.dir.length - a.dir.length)[0]?.set ?? envSet;
 type PreviewArgs = {
   request: Request;
   filePath: string | null;
@@ -165,15 +216,18 @@ function findUsages(name: string, open: { path: string; file: any }[]) {
         }
     });
   }
-  const envs: [string, MockEnvVar[]][] = [["$shared", envSet.shared], ...envSet.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
-  for (const [env, vars] of envs)
-    for (const v of vars)
-      for (const p of refs(v.value))
-        out.push({ kind: "environment", path: `${ROOT}/http-client${v.secret ? ".private" : ""}.env.json`, env, name: v.name, secret: v.secret, ...p });
+  for (const dir of ["", ...Object.keys(folderPairs).sort()]) {
+    const pair = pairOf(dir)!;
+    const envs: [string, MockEnvVar[]][] = [["$shared", pair.shared], ...pair.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
+    const folder = dir ? `${ROOT}/${dir}` : ROOT;
+    for (const [env, vars] of envs)
+      for (const v of vars)
+        for (const p of refs(v.value))
+          out.push({ kind: "environment", path: `${folder}/http-client${v.secret ? ".private" : ""}.env.json`, env, name: v.name, secret: v.secret, ...p });
+  }
   return out;
 }
 type EnvMap = Record<string, Record<string, unknown>>;
-type MockEnvVar = { name: string; value: string; secret: boolean };
 /**
  * What saving writes to http-client.env.json (`shared`) and
  * http-client.private.env.json (`private`), like `env::save` in the Rust core:
@@ -276,6 +330,10 @@ let windowTitle: string | null = null;
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
     return clone(envFiles);
+  },
+  /** Each folder's own pair of env files below the root, as last saved, by folder ("api"). */
+  get folderPairs() {
+    return clone(folderPairs);
   },
 };
 
@@ -626,13 +684,24 @@ mockIPC(
       case "get_tree":
         return tree;
       case "load_environments":
-        return clone(envSet);
+        if (args?.dir && !findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
+        return clone(loadFor([args?.dir ?? ""], () => ""));
       case "load_folder_environments":
         return clone(folderEnvironments());
-      case "save_environments":
-        envSet = args.set;
+      case "save_environments": {
+        // Sources are what loading reports; saving ignores them.
+        const set = clone(args.set) as MockSet & { sharedSource?: unknown; environments: { source?: unknown }[] };
+        delete set.sharedSource;
+        for (const e of set.environments) delete e.source;
+        if (args.dir) {
+          if (!findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
+          folderPairs[args.dir] = set;
+          return { gitignoreUpdated: false };
+        }
+        envSet = set;
         envFiles = splitEnvFiles(envSet, envFiles);
         return { gitignoreUpdated: false };
+      }
       case "read_http_file":
         return clone(files[args.path]);
       case "save_http_file":
