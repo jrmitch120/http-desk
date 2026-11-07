@@ -404,7 +404,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     button under the header's "+ Environment" (accessible name "New environment"),
     which adds an environment; the List view keeps its own + button.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
-  Settings' "Show parameter descriptions".
+  Settings' "Show parameter descriptions". Focusing it (Tab, Shift+Tab or a click) edits
+  it, caret at the end. It runs to the grid's clipping right edge, so its ring is inset.
 
 ### SplitPane
 
