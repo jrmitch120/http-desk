@@ -402,6 +402,8 @@ async fn preview_request<R: tauri::Runtime>(
 
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
+// Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn send_request<R: tauri::Runtime>(
     app: AppHandle<R>,
