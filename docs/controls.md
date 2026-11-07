@@ -26,6 +26,12 @@ text/password switches, never to slip a checkbox or number past the test.
 Also not native: confirmation and text prompts go through `app.choose(...)` and
 `app.prompt(...)` (rendered by `Dialog.svelte`), never `window.confirm` or `window.prompt`.
 
+Nor is any context menu: the webview's (OS) menu never shows. Every text field gets
+the app's [edit menu](#the-edit-menu); anything else shows the app's own
+[Menu](#menu) or nothing. `e2e/edit-menu.spec.ts` right-clicks each kind of text
+field and checks the event's default was prevented and the app's menu opened; add
+a line there for a new kind of field.
+
 ## Picking a control
 
 | You need | Use |
@@ -117,15 +123,10 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   disabled?, separator?, checked? }`. `options.onclose` runs when the menu closes,
   before a picked item's action.
 - Variants:
-  - Context menu: call `menu.show(e, items)` from `oncontextmenu`; it opens at the
-    pointer, or under the element when opened from the keyboard (Shift+F10).
-    Editors keep the webview's own menu, except the response body editor for JSON
-    bodies (Copy, Select all, Copy path), and a right-click on selected text in a
-    variable-aware editor (Cut, Copy, Extract to variable…; see
-    [VarField](#varfield)). The body editor uses the Editor's `caretForMenu(e)`, and
-    Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`). A set cell
-    of the Environments matrix has one too ("Unset in …"; see
-    [KeyValueGrid](#keyvaluegrid)).
+  - Context menu: call `menu.show(e, items)` from `oncontextmenu` (a tree row, a
+    tab, a matrix row); it opens at the pointer, or under the element when opened
+    from the keyboard (Shift+F10, or the Menu key). On text, don't: add items to the
+    [edit menu](#the-edit-menu) instead.
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
@@ -135,6 +136,37 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   - `danger` for destructive commands.
 - Use a menu when picking an item does something now. For a value in a form, use a
   Select.
+
+#### The edit menu
+
+`src/lib/editMenu.ts`. The window's `contextmenu` listener (`openContextMenu`, in
+`App.svelte`) prevents the webview's menu on every right-click, and on text opens
+the app's Menu instead:
+
+- An editable field (a text `<input>`, a `<textarea>`, an editor: a VarField
+  focused or not, the URL bar, the body editor): Cut, Copy, Paste, Select all. Cut
+  and Copy are disabled with nothing selected, and in a password input or a
+  `masked` VarField. Read-only text (the response viewer, the `.http` source, a
+  read-only input): Copy and Select all.
+- A right-click outside an editor's selection puts the caret there first; on a
+  VarField's static rendering it starts the editor with the caret there. While the
+  menu is open the editor is held (`src/lib/codemirror/holds.ts`), so a VarField
+  keeps it and Paste lands in it.
+- Contextual items follow, each group after a separator: a handler nearer the
+  target calls `addMenuItems(e, items)` and lets the event bubble (Extract to
+  variable… on a selection, "Unset in …" on a set matrix cell, Copy path in a JSON
+  response body). On something that isn't text, those items alone make the menu
+  (a set matrix cell's padding).
+- Anything else gets no menu at all.
+- Shift+F10 and the Menu key open it at the caret (`openFromKeyboard`); a handler
+  can tell with `fromKeyboard(e)`.
+- Paste reads the clipboard through Tauri's clipboard plugin (`src/lib/clipboard.ts`;
+  the app grants only `clipboard-manager:allow-read-text`), since the webviews'
+  `navigator.clipboard.readText()` asks first or fails. Cut and Copy write with
+  `navigator.clipboard.writeText()`. The mock reads `navigator.clipboard`, which
+  e2e tests replace to control it.
+- Content in an `<iframe>` (the HTML and PDF previews) isn't the app's document, so
+  the webview's menu still shows there.
 
 ### Toggle
 
@@ -253,8 +285,8 @@ paths), File variable values and environment values.
   the core generates. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
   leaves the caret before `}}`.
 - **Extract to variable**: with text selected, ⌘⌥V (macOS) / Ctrl+Alt+V (Windows,
-  Linux, as in JetBrains), or a right-click on the selection (a menu of Cut, Copy and
-  Extract to variable…; Shift+F10 opens it under the selection), opens the Extract to
+  Linux, as in JetBrains), or "Extract to variable…" in the [edit menu](#the-edit-menu)
+  of a right-click on the selection (or Shift+F10), opens the Extract to
   variable form (`ExtractVariable.svelte`, from `app.extractVariable`). It asks for a
   name (the File variable name rule, and no leading `$`) and where it goes: a File
   variable (`@name = value` at the top of the file, or a new value for the File
@@ -268,9 +300,9 @@ paths), File variable values and environment values.
   request editor wires it; the Environments modal has none, so it isn't offered there),
   the URL bar and the body editor get it too (one-line selections only), and a
   `masked` field never offers it. Without a selection, or on a right-click outside it,
-  the webview's own menu stays. While the menu or form is open a VarField keeps its
-  editor, so the answer lands in the same selection (`extractHolds` in
-  `src/lib/codemirror/extract.ts`).
+  the edit menu has no Extract item. While the menu or form is open a VarField keeps
+  its editor (`src/lib/codemirror/holds.ts`), so the answer lands in the same
+  selection.
 - In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
   become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write
   through `set`.
@@ -404,8 +436,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     lock (and a reveal button when it's a Secret), and a gap is tinted. A set cell with an empty value shows a dim, italic
     "Empty" placeholder, unlike a cell that isn't set ("Not set"). A set cell
     also has an Unset button (an `x` icon-btn named "Unset", shown on hover or
-    focus, like the row actions) and a context menu ("Unset in <environment>" or
-    "Unset in Shared"; a cell that isn't set keeps the webview's menu); unsetting
+    focus, like the row actions) and adds "Unset in <environment>" or "Unset in
+    Shared" to its field's [edit menu](#the-edit-menu); unsetting
     moves focus to the cell's lock. Rows are stable objects per name, so an edit
     doesn't remount the row and drop focus. Rows are sorted by name, A→Z by
     default, so filling a cell never moves its row; the Variable header is a sort

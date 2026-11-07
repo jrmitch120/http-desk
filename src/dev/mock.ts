@@ -686,6 +686,9 @@ mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
+      case "plugin:clipboard-manager|read_text":
+        // The browser's clipboard (tests replace navigator.clipboard to control it).
+        return navigator.clipboard.readText().catch(() => "");
       case "plugin:window|set_title":
         windowTitle = args.value;
         return null;

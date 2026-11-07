@@ -6,6 +6,7 @@
   import type { EnvironmentSet } from "../lib/types";
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
+  import { addMenuItems } from "../lib/editMenu";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition, VarProvider } from "../lib/codemirror/setup";
@@ -154,11 +155,11 @@
     el.querySelector<HTMLElement>(".lock")?.focus();
   }
 
-  /** A set cell's context menu. A cell that isn't set keeps the webview's own menu. */
+  /** A set cell adds "Unset in <column>" to its field's edit menu (or, outside the field, it's the menu). */
   function cellMenu(e: MouseEvent, column: string, name: string) {
     if (matrixCell(set, column, name).state !== "set") return;
     const el = e.currentTarget as HTMLElement;
-    menu.show(e, [{ label: `Unset in ${columnLabel(column)}`, icon: "x", action: () => unset(column, name, el) }]);
+    addMenuItems(e, [{ label: `Unset in ${columnLabel(column)}`, icon: "x", action: () => unset(column, name, el) }]);
   }
 
   let root: HTMLDivElement;

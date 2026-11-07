@@ -592,8 +592,8 @@ Decisions made during implementation, beyond the plan above:
   with an empty value isn't a gap: it reads "Empty" (dim and italic), so set-but-empty
   and not set look different. Typing into a gap, or locking it, adds the variable
   to that environment only; each cell has its own Secret lock. A set cell's Unset
-  button (shown on hover or focus) or its context menu ("Unset in local", "Unset in
-  Shared") removes the variable from that column (`unsetCell`), so it's "Not set" there
+  button (shown on hover or focus) or its edit menu ("Unset in local", "Unset in
+  Shared", after Cut, Copy, Paste and Select all) removes the variable from that column (`unsetCell`), so it's "Not set" there
   (a gap when nothing else supplies it) and Save leaves it out of both of the folder's
   files; clearing the text only leaves an empty value. A row unset in every
   column stays until the modal closes (`matrixNames` with the previous rows). Rows

@@ -21,6 +21,7 @@
   import { updates } from "./lib/updates.svelte";
   import { modalOpen } from "./lib/modal";
   import { SIDEBAR } from "./lib/panes";
+  import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
     app.init().then(() => {
@@ -37,7 +38,7 @@
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
-    if (e.key === "F10" && e.shiftKey) return keyboardContextMenu(e);
+    if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") return keyboardContextMenu(e);
     const action = shortcut(e);
     if (!action) return;
     e.preventDefault();
@@ -46,14 +47,11 @@
   }
 
   /**
-   * Shift+F10 opens the focused element's context menu (macOS keyboards have no
-   * Menu key). Text fields keep the webview's own behaviour.
+   * Shift+F10 (macOS keyboards have no Menu key) and the Menu key open the
+   * focused element's context menu: a text field's edit menu at its caret.
    */
   function keyboardContextMenu(e: KeyboardEvent) {
-    const t = e.target;
-    if (!(t instanceof HTMLElement) || t === document.body || t.closest("input, textarea, .cm-editor") || modalOpen()) return;
-    e.preventDefault();
-    t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    if (openFromKeyboard()) e.preventDefault();
   }
 
   /** The global shortcut `e` triggers, if any. */
@@ -86,7 +84,8 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} oncontextmenu={(e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).closest?.(".cm-editor") || e.preventDefault()} />
+<!-- The app's own context menus only, never the webview's (src/lib/editMenu.ts). -->
+<svelte:window onkeydown={onKey} oncontextmenu={openContextMenu} />
 
 {#if app.root}
   <div class="shell">

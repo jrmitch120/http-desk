@@ -45,6 +45,10 @@ control or the popup layer.
       System).
 - [ ] Sidebar: tree with method badges lined up, search box with its results list, and
       the context menu on a request (right-click, and Shift+F10).
+- [ ] Edit menu: right-click a text input, the URL bar, a value field and the response
+      body: the app's menu (Cut, Copy, Paste, Select all), never the OS one. Paste
+      something copied in another app into each (no permission prompt or "Paste"
+      callout), and Copy from the app into another app.
 - [ ] Tab bar: method badges, the unsaved dot, overflow when many tabs are open.
 - [ ] Sidebar separator and request/response separator: drag, arrow keys,
       double-click to reset. Same hover highlight on both. Check the vertical layout too.

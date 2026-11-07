@@ -81,7 +81,7 @@ test("Copy path gives the path of the value under the cursor in Pretty view", as
   await expect.poll(() => copied(page)).toEqual(["$.a['odd key'][0].b", "$.a['odd key']"]);
 });
 
-test("Copy path is disabled while a filter is on, and the menu is absent for non-JSON bodies", async ({ page }) => {
+test("Copy path is disabled while a filter is on, and absent for non-JSON bodies", async ({ page }) => {
   await openApp(page, "?response=nested");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
@@ -96,5 +96,5 @@ test("Copy path is disabled while a filter is on, and the menu is absent for non
   await send(page);
   await page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Raw" }).click();
   await bodyLines(page).first().click({ button: "right" });
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Copy", "Select all"]);
 });
