@@ -98,6 +98,34 @@ fn parses_vscode_fixture() {
 }
 
 #[test]
+fn prompt_variables_are_read_from_hash_and_slash_comments_with_or_without_a_description() {
+    let src = "# @prompt username\n// @prompt otp Your one-time password\n#@prompt  password   \n# @prompt otp again\nGET https://x/{{username}}\n";
+    let f = parse(src);
+    let prompts = f.requests[0].prompts();
+    let names: Vec<_> = prompts.iter().map(|p| (p.name.as_str(), p.description.as_str(), p.masked())).collect();
+    assert_eq!(
+        names,
+        [("username", "", false), ("otp", "Your one-time password", false), ("password", "", true)],
+        "declared once each, in order; the first description wins"
+    );
+    assert_eq!(serialize(&f), src, "written back unchanged");
+
+    let profile = &parse(VSCODE).requests[1];
+    assert_eq!(profile.prompts().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["otp"]);
+}
+
+#[test]
+fn only_password_like_prompt_names_are_masked() {
+    let masked = |name: &str| Prompt { name: name.into(), description: String::new() }.masked();
+    for name in ["password", "Password", "PASSWD", "pass", "PaSs"] {
+        assert!(masked(name), "{name}");
+    }
+    for name in ["passphrase", "userPassword", "otp", "token"] {
+        assert!(!masked(name), "{name}");
+    }
+}
+
+#[test]
 fn parses_url_only_and_custom_methods() {
     let f = parse(
         "https://example.com/a\n\n###\nPURGE https://example.com/cache\n\n### lower\nget https://example.com/b\n",
