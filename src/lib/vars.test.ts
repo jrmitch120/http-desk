@@ -204,6 +204,14 @@ describe("what hovering a Prompt variable shows", () => {
     expect(provider.info("password")).toMatchObject({ state: "ok", secret: true });
     expect(varSegments("{{otp}}", provider)[0].cls).toBe("cm-var cm-var-prompt");
   });
+
+  it("is offered by autocomplete as a prompt, over a variable of the same name, never previewing a masked value", () => {
+    const offered = provider.completions();
+    expect(offered.filter((c) => c.name === "otp")).toEqual([{ name: "otp", source: "prompt" }]);
+    expect(offered.find((c) => c.name === "user")).toEqual({ name: "user", source: "prompt", preview: "ann" });
+    expect(offered.find((c) => c.name === "password")).toEqual({ name: "password", source: "prompt", secret: true });
+    expect(JSON.stringify(offered)).not.toContain("s3cret");
+  });
 });
 
 describe("the frontend resolver agrees with the core on the shared cases", () => {
