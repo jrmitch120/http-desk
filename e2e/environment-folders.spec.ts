@@ -89,7 +89,7 @@ test("the modal opens on the active request's nearest folder with env files, and
   await openRequest(page, ["samples", "jetbrains.http"], "Get request with a header");
   let m = await openEnvironments(page);
   await expect(folderPicker(page)).toHaveText("Workspace root");
-  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", ""]);
+  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", "Environment"]);
   await folderPicker(page).click();
   await expect(folderOptions(page)).toHaveText(["Workspace root", "api/", "samples/Add environment files here…"]);
   await page.keyboard.press("Escape");
@@ -100,14 +100,14 @@ test("the modal opens on the active request's nearest folder with env files, and
   m = await openEnvironments(page);
   await expect(folderPicker(page)).toHaveText("api/");
   // api/'s own pair: no root Shared or staging, no root token.
-  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "qa", ""]);
+  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "qa", "Environment"]);
   await expect(m.locator(".kv-row .m-name")).toHaveText(["baseUrl"]);
   await expect(m.getByText("Saved to api/http-client.env.json")).toBeVisible();
 
   // Switching folders shows that folder's pair.
   await folderPicker(page).click();
   await folderOptions(page).filter({ hasText: /^Workspace root/ }).click();
-  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", ""]);
+  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", "Environment"]);
 });
 
 test("switching folders with unsaved changes asks first", async ({ page }) => {
@@ -135,7 +135,7 @@ test("environment files can be added to a folder that has none", async ({ page }
   await folderPicker(page).click();
   await folderOptions(page).filter({ hasText: /^samples\// }).click();
   await expect(folderPicker(page)).toHaveText("samples/");
-  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", ""]);
+  await expect(m.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "Environment"]);
 
   await m.getByRole("button", { name: "New environment" }).click();
   await expect(dialog(page, "New environment")).toBeVisible();

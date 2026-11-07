@@ -122,7 +122,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
     bodies (Copy, Select all, Copy path), and a right-click on selected text in a
     variable-aware editor (Cut, Copy, Extract to variable…; see
     [VarField](#varfield)). The body editor uses the Editor's `caretForMenu(e)`, and
-    Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`).
+    Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`). A set cell
+    of the Environments matrix has one too ("Unset in …"; see
+    [KeyValueGrid](#keyvaluegrid)).
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
@@ -214,6 +216,13 @@ paths), File variable values and environment values.
   (Undefined variable, red with a wavy underline), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
   reference), `cm-var-prompt` (an unanswered Prompt variable), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
+- The hover card sizes itself to its content (`width: max-content`, never to what
+  contains it: in WebKit, the macOS webview, CodeMirror positions its tooltips
+  absolutely in the zero-size popup layer). It is at least `--popup-card-min-width`
+  wide and grows to `--popup-card-max-width` (480px, less in a narrower window), so a
+  URL and "from environment …" stay on one line; a value wider than that breaks
+  anywhere (`overflow-wrap: anywhere`). The URL bar's, the body editor's and a
+  VarField's static rendering's cards are the same `.var-card`.
 - The hover card shows the resolved value and where it comes from ("this file",
   "this request", `environment "staging"`, "shared variables", or a prompt). An
   unanswered Prompt variable shows "Asked when sent". A Secret, a masked prompted
@@ -352,7 +361,11 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   can serve several columns). Write through `set(patch)`, unless the rows are a view
   of other state that the cell edits directly (the Environments matrix). Inputs given
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
-  replaces the value input, and one with `id: "name"` replaces the name input.
+  replaces the value input, and one with `id: "name"` replaces the name input. A
+  custom column's `headerCell` snippet renders its header instead of the `header`
+  text (a button: the matrix's Variable sort, its "+ Environment"), and `sort`
+  (`"ascending"`, `"descending"` or `"none"`) makes the header a `columnheader` with
+  that `aria-sort`; the caller sorts `items` itself.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
@@ -378,8 +391,18 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     a read-only name column, one VarField column per environment plus Shared (built
     from the set, with positional ids `m0`, `m1`…), and a row actions button.
     No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
-    lock (and a reveal button when it's a Secret), and a gap is tinted. Rows are
-    stable objects per name, so an edit doesn't remount the row and drop focus.
+    lock (and a reveal button when it's a Secret), and a gap is tinted. A set cell
+    also has an Unset button (an `x` icon-btn named "Unset", shown on hover or
+    focus, like the row actions) and a context menu ("Unset in <environment>" or
+    "Unset in Shared"; a cell that isn't set keeps the webview's menu); unsetting
+    moves focus to the cell's lock. Rows are stable objects per name, so an edit
+    doesn't remount the row and drop focus, and their order is kept while the
+    matrix is shown (`matrixNames` with the previous order), so filling a cell
+    never moves its row. The Variable header is a sort button (`headerCell`, with
+    `sort` for `aria-sort`): file order, A→Z, Z→A (an arrow icon shows which), kept
+    in `app.envMatrixSort` for the session. The last column is the row actions
+    button under the header's "+ Environment" (accessible name "New environment"),
+    which adds an environment; the List view keeps its own + button.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
@@ -514,7 +537,8 @@ find bar), so their edges line up; `--radius` and `--radius-sm`;
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
 `:focus-visible` for focus (a control flush against an edge that clips, such as a tab
 in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of
-the ring is cut off); and the `--popup-*` tokens for floating surfaces. Colours
+the ring is cut off); and the `--popup-*` tokens for floating surfaces
+(`--popup-card-min-width` and `--popup-card-max-width` size a variable's hover card). Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
 so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control
 works in the light and dark themes without its own rules.

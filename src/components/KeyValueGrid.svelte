@@ -28,6 +28,10 @@
     /** A CSS grid track size, e.g. `80px` or `1fr`. */
     width: string;
     cell: Snippet<[GridCell<R>]>;
+    /** Renders the header cell instead of `header`: a button that sorts by the column, or a command. */
+    headerCell?: Snippet;
+    /** Makes the header a `columnheader` with this `aria-sort`, for a column the rows can be sorted by. */
+    sort?: "ascending" | "descending" | "none";
   }
 
   /** A built-in column by name, a built-in with its own width, or a custom column. */
@@ -105,14 +109,15 @@
     variables,
   }: Props = $props();
 
-  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]> };
+  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]>; headerCell?: Snippet; sort?: CustomColumn<R>["sort"] };
 
   const tracks: Track[] = $derived(
     columns.flatMap((c): Track[] => {
       const col = typeof c === "string" ? { id: c, width: WIDTHS[c] } : c;
       if (col.id === "description") return [];
       const header = "header" in col ? col.header : col.id === "name" ? namePlaceholder : col.id === "value" ? valuePlaceholder : "";
-      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: "cell" in col ? col.cell : undefined }];
+      const custom = "cell" in col ? col : undefined;
+      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: custom?.cell, headerCell: custom?.headerCell, sort: custom?.sort }];
     }),
   );
   const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
@@ -265,7 +270,7 @@
             {/if}
           </span>
         {:else}
-          <span class="c-{t.id}">{t.header}</span>
+          <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell()}{:else}{t.header}{/if}</span>
         {/if}
       {/each}
     {/if}
@@ -366,6 +371,12 @@
     padding-left: 11px;
     overflow: hidden;
     white-space: nowrap;
+  }
+  /* A header with its own control (a sort button, a command) lays it out itself. */
+  .kv-head > span.has-control {
+    display: flex;
+    align-items: center;
+    padding-left: var(--space-1);
   }
   .kv-head > span.c-hint {
     grid-column: 1 / -1;

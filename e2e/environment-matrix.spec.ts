@@ -20,7 +20,7 @@ test("shows every variable across Shared and the environments, with gaps highlig
   await openApp(page);
   const modal = await open(page);
   const grid = matrix(modal);
-  await expect(grid.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", ""]);
+  await expect(grid.locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", "Environment"]);
   await expect(grid.locator(".kv-row .m-name")).toHaveText(["version", "baseUrl", "token"]);
   await expect(grid.locator(".kv-row.ghost")).toHaveCount(0);
 
@@ -153,4 +153,122 @@ test("the Matrix / List choice is remembered, and the filter narrows rows", asyn
   modal = await open(page);
   await expect(modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" })).toBeChecked();
   await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
+});
+
+test("the header's last cell adds an environment as a new column", async ({ page }) => {
+  await openApp(page);
+  const modal = await open(page);
+  // The only way to add one in the matrix: no stray button in the toolbar.
+  const add = modal.getByRole("button", { name: "New environment" });
+  await expect(add).toHaveCount(1);
+  await expect(matrix(modal).locator(".kv-head")).toContainText("Environment");
+  await add.click();
+  const ask = dialog(page, "New environment");
+  await ask.getByRole("textbox").fill("prod");
+  await ask.getByRole("button", { name: "OK" }).click();
+  await expect(matrix(modal).locator(".kv-head > span")).toHaveText(["Variable", "Shared", "local", "staging", "prod", "Environment"]);
+  await expect(cell(modal, "baseUrl", "prod")).toHaveClass(/\bgap\b/);
+});
+
+test("typing a value never moves a row, even where the variable is first seen", async ({ page }) => {
+  await openApp(page);
+  const modal = await open(page);
+  const names = matrix(modal).locator(".kv-row .m-name");
+  await expect(names).toHaveText(["version", "baseUrl", "token"]);
+  // token was first seen in local; filling Shared's cell makes Shared define it first.
+  await cell(modal, "token", "Shared").locator(".var-field").click();
+  await page.keyboard.type("t");
+  await expect(names).toHaveText(["version", "baseUrl", "token"]);
+  await expect(page.getByRole("textbox", { name: "token in Shared", exact: true })).toBeFocused();
+  await page.keyboard.type("ok");
+  await page.keyboard.press("Tab");
+  await expect(cell(modal, "token", "Shared")).toHaveText("tok");
+  await expect(names).toHaveText(["version", "baseUrl", "token"]);
+});
+
+test("the Variable header sorts the rows by name, and the sort lasts the session", async ({ page }) => {
+  await openApp(page);
+  let modal = await open(page);
+  const names = matrix(modal).locator(".kv-row .m-name");
+  const header = matrix(modal).getByRole("columnheader", { name: "Variable" });
+  const sort = header.getByRole("button", { name: "Variable" });
+  await expect(header).toHaveAttribute("aria-sort", "none");
+
+  await sort.click();
+  await expect(header).toHaveAttribute("aria-sort", "ascending");
+  await expect(names).toHaveText(["baseUrl", "token", "version"]);
+  await sort.press("Enter");
+  await expect(header).toHaveAttribute("aria-sort", "descending");
+  await expect(names).toHaveText(["version", "token", "baseUrl"]);
+  await sort.press("Space");
+  await expect(header).toHaveAttribute("aria-sort", "none");
+  await expect(names).toHaveText(["version", "baseUrl", "token"]);
+
+  // A to Z: a new variable takes its sorted place, and the filter still applies.
+  await sort.click();
+  await modal.getByRole("button", { name: "Add variable to all environments" }).click();
+  const ask = dialog(page, "Add variable to all environments");
+  await ask.getByRole("textbox").fill("apiKey");
+  await ask.getByRole("button", { name: "OK" }).click();
+  await expect(names).toHaveText(["apiKey", "baseUrl", "token", "version"]);
+  await page.keyboard.type("zzz"); // a value sorts nothing
+  await page.keyboard.press("Tab");
+  await expect(names).toHaveText(["apiKey", "baseUrl", "token", "version"]);
+  await modal.getByPlaceholder("Filter variables").fill("k");
+  await expect(names).toHaveText(["apiKey", "token"]);
+
+  // Kept when the modal opens again, but not saved with the settings.
+  await modal.getByRole("button", { name: "Cancel" }).click();
+  await dialog(page, "Discard changes?").getByRole("button", { name: "Discard" }).click();
+  modal = await open(page);
+  await expect(matrix(modal).getByRole("columnheader", { name: "Variable" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["baseUrl", "token", "version"]);
+  await page.reload();
+  modal = await open(page);
+  await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["version", "baseUrl", "token"]);
+});
+
+test("a cell's Unset button and context menu remove the variable from that column, and Save drops it from both files", async ({ page }) => {
+  await openApp(page);
+  const modal = await open(page);
+  const names = matrix(modal).locator(".kv-row .m-name");
+
+  // The button shows on hover, only on a cell that's set.
+  const staging = cell(modal, "baseUrl", "staging");
+  const unset = staging.getByRole("button", { name: "Unset" });
+  await expect(unset).toHaveCSS("opacity", "0");
+  await staging.hover();
+  await expect(unset).toHaveCSS("opacity", "1");
+  await expect(cell(modal, "token", "staging").getByRole("button", { name: "Unset" })).toHaveCount(0);
+  await unset.click();
+  await expect(staging).toHaveClass(/\bgap\b/);
+  await expect(page.getByRole("textbox", { name: "baseUrl in staging", exact: true })).toHaveAttribute("aria-placeholder", "Not set");
+  await expect(staging.getByRole("button", { name: "Unset" })).toHaveCount(0);
+
+  // An empty value is still set until it's unset.
+  const local = cell(modal, "baseUrl", "local");
+  await local.locator(".var-field").click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Tab");
+  await expect(local).not.toHaveClass(/\bgap\b/);
+  await local.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unset in local" }).click();
+  await expect(local).toHaveClass(/\bgap\b/);
+  // No column defines baseUrl now; its row stays until the modal closes.
+  await expect(names).toHaveText(["version", "baseUrl", "token"]);
+
+  // A Secret, and a shared variable (an environment without its own then has a gap).
+  await cell(modal, "token", "local").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unset in local" }).click();
+  await cell(modal, "version", "Shared").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unset in Shared" }).click();
+  await expect(page.getByRole("textbox", { name: "version in Shared", exact: true })).toHaveAttribute("aria-placeholder", "Not set");
+  await expect(cell(modal, "version", "local")).toHaveClass(/\bgap\b/);
+
+  await modal.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Environments saved")).toBeVisible();
+  const files = await envFiles(page);
+  expect(files.shared).toEqual({ $shared: {}, local: {}, staging: {} });
+  expect(files.private).toEqual({});
 });

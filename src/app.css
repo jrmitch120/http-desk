@@ -78,6 +78,10 @@
   --popup-border: 1px solid var(--border-strong);
   --popup-radius: 8px;
   --popup-shadow: var(--shadow);
+  /* A variable's hover card: at least this wide, and grows with its value up to
+     the maximum before wrapping (never wider than the window). */
+  --popup-card-min-width: 220px;
+  --popup-card-max-width: 480px;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
@@ -514,8 +518,12 @@ kbd {
 .var-card {
   padding: 6px 10px;
   font-size: 12px;
-  max-width: 420px;
   font-family: var(--font);
+  /* Sized by its content, not by what contains it: WebKit lays out CodeMirror's
+     tooltips absolutely in the popup layer, which has no width to give. */
+  width: max-content;
+  min-width: var(--popup-card-min-width);
+  max-width: min(var(--popup-card-max-width), calc(100vw - 12px));
 }
 .var-card-name {
   font-weight: 600;
@@ -523,7 +531,8 @@ kbd {
 }
 .var-card-value {
   font-family: var(--mono);
-  word-break: break-all;
+  /* Breaks mid-word only when a value doesn't fit at the card's maximum width. */
+  overflow-wrap: anywhere;
   color: var(--text-2);
 }
 .var-card-source {

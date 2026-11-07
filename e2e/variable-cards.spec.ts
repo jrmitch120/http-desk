@@ -2,7 +2,7 @@
 // until revealed in that card, Edit jumps to the variable's row, and `{{` lists
 // each name with its source and a value preview, then the dynamic variables.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, showEnvironmentList } from "./helpers";
+import { openApp, openRequest, showEnvironmentList, urlBar } from "./helpers";
 
 /** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
 async function openSection(page: Page, section: "Headers" | "Settings"): Promise<void> {
@@ -189,4 +189,64 @@ test("a dynamic variable that needs an argument leaves the caret for it", async 
   }).toPass();
   await page.keyboard.type("HOME");
   await expect(cell).toHaveText("{{$processEnv HOME}}");
+});
+
+test("a hover card fits a URL on one line, and only wraps a value too wide for it", async ({ page }) => {
+  await openApp(page);
+  // local's baseUrl becomes a typical URL, saved, so the request's cards show it.
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  const modal = page.getByRole("dialog", { name: "Environments" });
+  await modal.getByRole("textbox", { name: "baseUrl in local", exact: true }).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("https://api.weather.gov");
+  await page.keyboard.press("Tab");
+  await modal.getByRole("button", { name: "Save" }).click();
+  await expect(modal).toHaveCount(0);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+
+  /** How many lines a part of the card's text takes (the line boxes' distinct tops). */
+  const lines = (part: Locator) =>
+    part.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    });
+  const onOneLine = async () => {
+    await expect(card(page).locator(".var-card-value")).toHaveText("https://api.weather.gov");
+    // In WebKit (the macOS webview) CodeMirror positions its tooltips absolutely in the
+    // popup layer, which has no size, so the card gets no width from what contains it.
+    // Laid out like that here too, it still has to fit.
+    await card(page).evaluate((el) => (el.parentElement!.style.position = "absolute"));
+    expect(await lines(card(page).locator(".var-card-value"))).toBe(1);
+    await expect(card(page).locator(".var-card-source")).toHaveText('from environment "local"');
+    expect(await lines(card(page).locator(".var-card-source"))).toBe(1);
+  };
+
+  // The URL bar's card (an editor's).
+  await urlBar(page).locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
+  await onOneLine();
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+
+  // A grid cell's static rendering has its own.
+  const cell = await headerValue(page, "{{baseUrl}}");
+  await cell.locator(".cm-var").hover();
+  await onOneLine();
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+
+  // A value wider than the card can be wraps, and the card stays in the window.
+  const long = `https://api.weather.gov/${"gridpoints/".repeat(12)}forecast`;
+  await page.locator(".subtab", { hasText: "Settings" }).click();
+  await page.getByPlaceholder("Add variable").click();
+  await page.keyboard.type("petId");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type(long);
+  const petId = await headerValue(page, "{{petId}}");
+  await petId.locator(".cm-var").hover();
+  await expect(card(page).locator(".var-card-value")).toHaveText(long);
+  expect(await lines(card(page).locator(".var-card-value"))).toBeGreaterThan(1);
+  const box = (await card(page).boundingBox())!;
+  expect(box.width).toBeLessThanOrEqual(480);
+  expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });

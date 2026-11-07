@@ -142,6 +142,9 @@
     if (nameTaken(name)) return app.toast("error", `An environment named "${name}" already exists`);
     set.environments.push({ name, variables: [] });
     selected = name;
+    // In the matrix it's a new column at the end: bring it into view.
+    await tick();
+    matrix?.revealColumn(name);
   }
 
   async function renameEnv(name: string) {
@@ -423,7 +426,6 @@
       <SegmentedControl options={viewOptions} value={view} onchange={(v) => app.updateSettings({ envView: v })} label="View" />
       {#if view === "matrix"}
         <div class="spacer"></div>
-        <button class="icon-btn" aria-label="New environment" use:tooltip onclick={addEnv}><Icon name="plus" /></button>
         <button class="btn small" disabled={!set.environments.length} onclick={addToAll}>
           <Icon name="plus" size={13} />Add variable to all environments
         </button>
@@ -437,7 +439,7 @@
       <section class="matrix-pane">
         {@render secretsWarning()}
         <div class="vars">
-          <EnvironmentMatrix bind:this={matrix} {set} {inherited} {filter} {rowActions} />
+          <EnvironmentMatrix bind:this={matrix} {set} {inherited} {filter} {rowActions} onaddenvironment={addEnv} />
         </div>
       </section>
     {:else}

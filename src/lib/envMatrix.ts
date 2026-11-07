@@ -20,13 +20,37 @@ export function matrixColumns(set: EnvironmentSet): string[] {
   return [SHARED, ...set.environments.map((e) => e.name)];
 }
 
-/** Every named variable once, in the order first seen from Shared through the environments. */
-export function matrixNames(set: EnvironmentSet): string[] {
-  const names = new Set<string>();
+/**
+ * Every named variable once, in the order first seen from Shared through the
+ * environments. With `previous` (the rows shown so far), those keep their places
+ * and new ones follow: filling or unsetting a cell changes where a name is first
+ * seen, and must not move its row. A name in `previous` stays even when no column
+ * defines it any more (its last cell was unset), so its row doesn't vanish; the
+ * owner drops a deleted row from `previous` itself.
+ */
+export function matrixNames(set: EnvironmentSet, previous: readonly string[] = []): string[] {
+  const names = new Set(previous);
   for (const list of [set.shared, ...set.environments.map((e) => e.variables)]) {
     for (const v of list) if (v.name.trim()) names.add(v.name.trim());
   }
   return [...names];
+}
+
+/** How the rows are sorted: by name A→Z, Z→A, or not (`none`: the file order). */
+export type MatrixSort = "none" | "asc" | "desc";
+
+const byName = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+
+/** `names` sorted by name only, so typing a value never moves a row. */
+export function sortNames(names: readonly string[], sort: MatrixSort): string[] {
+  if (sort === "none") return [...names];
+  const sign = sort === "asc" ? 1 : -1;
+  return [...names].sort((a, b) => sign * byName.compare(a, b));
+}
+
+/** What a click on the Variable header does: file order → A→Z → Z→A → file order. */
+export function nextSort(sort: MatrixSort): MatrixSort {
+  return sort === "none" ? "asc" : sort === "asc" ? "desc" : "none";
 }
 
 /** The column's definition of `name`: the last same-named row, as sending uses. */
@@ -52,6 +76,17 @@ export function setCell(set: EnvironmentSet, column: string, name: string, patch
   const variable = find(set, column, name);
   if (variable) Object.assign(variable, patch);
   else list.push({ name, value: "", secret: false, ...patch });
+}
+
+/** Unsets a cell: removes `name` from the column (every same-named row), so it's
+ *  "Not set" there, and a gap when nothing else supplies it. Saving drops it from
+ *  both of the folder's files. */
+export function unsetCell(set: EnvironmentSet, column: string, name: string) {
+  const list = envVarsOf(set, column);
+  if (!list) return;
+  const keep = list.filter((v) => v.name.trim() !== name);
+  if (column === SHARED) set.shared = keep;
+  else set.environments.find((e) => e.name === column)!.variables = keep;
 }
 
 /** Adds `name`, empty, to every environment that doesn't define it (not to Shared). Returns how many got it. */
