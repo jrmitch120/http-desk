@@ -3,7 +3,7 @@
 // fixes. The mocked workspace starts on `local` (baseUrl, Secret token); `staging`
 // has only baseUrl. Create pet has a Content-Type header and a JSON body.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests } from "./helpers";
+import { dialog, mockState, openApp, openRequest, sentRequests, showEnvironmentList } from "./helpers";
 
 const strip = (page: Page) => page.getByRole("region", { name: "Pre-send checks" });
 const subtab = (page: Page, name: string) => page.locator(".subtab", { hasText: name });
@@ -80,19 +80,45 @@ test("the strip never blocks sending", async ({ page }) => {
   await expect(strip(page)).toBeVisible();
 });
 
-test("Add to the selected environment adds an empty variable there and focuses its value", async ({ page }) => {
+test("Add to the selected environment adds an empty cell in the matrix and focuses it", async ({ page }) => {
+  await headerValue(page, "{{token}}");
+  await selectEnvironment(page, "staging");
+  await strip(page).getByRole("button", { name: "Add token to staging" }).click();
+
+  const modal = dialog(page, "Environments");
+  const matrix = modal.getByRole("group", { name: "Environments matrix" });
+  const field = page.getByRole("textbox", { name: "token in staging", exact: true });
+  await expect(field).toBeFocused();
+  // Defined, though empty, so no longer a gap; local's Secret is untouched.
+  await expect(matrix.locator(".m-cell.gap")).toHaveCount(0);
+  await expect(matrix.locator(".kv-row .m-name")).toHaveText(["version", "baseUrl", "token"]);
+  await expect(page.getByRole("textbox", { name: "token in local", exact: true })).toHaveText("•••••••••••••");
+
+  await page.keyboard.type("stg-1");
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(strip(page)).toHaveCount(0);
+  await expect(count(page, "Headers")).toHaveCount(0);
+});
+
+test("Add to the selected environment adds an empty variable there and focuses its value (list view)", async ({ page }) => {
   await headerValue(page, "{{apiKey}}");
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentList(page);
+  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("list");
+  await page.keyboard.press("Escape");
+  await expect(dialog(page, "Environments")).toHaveCount(0);
   await strip(page).getByRole("button", { name: "Add apiKey to local" }).click();
 
-  const dialog = page.getByRole("dialog", { name: "Environments" });
-  await expect(dialog.locator(".main-head .title")).toHaveText("local");
-  const grid = dialog.getByRole("group", { name: "Variables" });
+  const modal = dialog(page, "Environments");
+  await expect(modal.locator(".main-head .title")).toHaveText("local");
+  const grid = modal.getByRole("group", { name: "Variables" });
   await expect.poll(() => names(grid)).toEqual(["baseUrl", "token", "apiKey"]);
   await expect.poll(() => focusedRow(page)).toEqual({ name: "apiKey", inValue: true });
 
   await page.keyboard.type("k-123");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).toHaveCount(0);
   await expect(strip(page)).toHaveCount(0);
   await expect(count(page, "Headers")).toHaveCount(0);
 });

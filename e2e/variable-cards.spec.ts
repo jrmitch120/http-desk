@@ -2,7 +2,7 @@
 // until revealed in that card, Edit jumps to the variable's row, and `{{` lists
 // each name with its source and a value preview, then the dynamic variables.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { openApp, openRequest, showEnvironmentList } from "./helpers";
 
 /** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
 async function openSection(page: Page, section: "Headers" | "Settings"): Promise<void> {
@@ -62,15 +62,29 @@ test("a Secret is masked in its hover card until revealed, and only in that card
   await expect(page.locator(".kv .cm-editor")).toHaveCount(1);
 });
 
-test("Edit in a header value's hover card opens the Environments modal on the variable's row", async ({ page }) => {
+test("Edit in a header value's hover card opens the Environments modal on the variable's cell", async ({ page }) => {
   await openSection(page, "Headers");
   const cell = await headerValue(page, "{{baseUrl}} {{version}}");
   const modal = page.getByRole("dialog", { name: "Environments" });
 
+  // The matrix (#83): the cell in the environment that supplies it.
   await cell.locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
   await card(page).getByRole("button", { name: "Edit" }).click();
   await expect(modal).toBeVisible();
   await expect(card(page)).toHaveCount(0);
+  await expect(modal.getByRole("textbox", { name: "baseUrl in local", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  await cell.locator(".cm-var", { hasText: "{{version}}" }).hover();
+  await card(page).getByRole("button", { name: "Edit" }).click();
+  await expect(modal.getByRole("textbox", { name: "version in Shared", exact: true })).toBeFocused();
+  await showEnvironmentList(page);
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+
+  // The list: the environment, on the variable's row.
+  await cell.locator(".cm-var", { hasText: "{{baseUrl}}" }).hover();
+  await card(page).getByRole("button", { name: "Edit" }).click();
   await expect(modal.locator(".main-head .title")).toHaveText("local");
   await expect.poll(() => focusedRow(page)).toEqual({ name: "baseUrl", value: "http://127.0.0.1:8765" });
 
@@ -101,13 +115,16 @@ test("Edit on a File variable opens the request's Settings with its row focused"
   await expect.poll(() => focusedRow(page)).toEqual({ name: "petId", value: "7" });
 });
 
-test("a variable with no row to edit, or a dynamic one, has no Edit", async ({ page }) => {
+test("a variable with no row to edit, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
   await openSection(page, "Headers");
   const cell = await headerValue(page, "{{nope}} {{$uuid}}");
-  for (const name of ["{{nope}}", "{{$uuid}}"]) {
+  for (const [name, buttons] of [
+    ["{{nope}}", ["Find usages"]],
+    ["{{$uuid}}", []],
+  ] as const) {
     await cell.locator(".cm-var", { hasText: name }).hover();
     await expect(card(page)).toBeVisible();
-    await expect(card(page).getByRole("button")).toHaveCount(0);
+    await expect(card(page).getByRole("button")).toHaveText([...buttons]);
     await page.mouse.move(0, 0);
     await expect(card(page)).toHaveCount(0);
   }

@@ -113,12 +113,15 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 `menuitem`s for commands; it is mounted once in `App.svelte`.
 
 - `menu.show(event, items, options?)`. `MenuItem` is `{ label, icon?, action, danger?,
-  disabled?, separator?, checked? }`.
+  disabled?, separator?, checked? }`. `options.onclose` runs when the menu closes,
+  before a picked item's action.
 - Variants:
   - Context menu: call `menu.show(e, items)` from `oncontextmenu`; it opens at the
     pointer, or under the element when opened from the keyboard (Shift+F10).
     Editors keep the webview's own menu, except the response body editor for JSON
-    bodies (Copy, Select all, Copy path). It uses the Editor's `caretForMenu(e)`, and
+    bodies (Copy, Select all, Copy path), and a right-click on selected text in a
+    variable-aware editor (Cut, Copy, Extract to variable…; see
+    [VarField](#varfield)). The body editor uses the Editor's `caretForMenu(e)`, and
     Shift+F10 there opens the menu at the caret (`openMenuAtCaret()`).
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
@@ -221,7 +224,11 @@ paths), File variable values and environment values.
   (the request editor wires it to `app.editDefinition`; the Environments modal sets
   `app.definitionWanted`, so Edit switches to the supplying environment or the shared
   variables in place), and the info's `definition`;
-  a request's own `@name`, a dynamic or an Undefined variable has none. A press in the
+  a request's own `@name`, a dynamic or an Undefined variable has none. **Find usages**
+  (any name not starting with `$`, defined or not) comes from the provider's
+  `findUsages` (the request editor wires it to `app.findUsages`; the Environments modal
+  has none): it lists every reference in the workspace in the sidebar, see
+  [ARCHITECTURE.md](ARCHITECTURE.md#find-usages). A press in the
   card keeps focus where it was, so an editor (and its card) stays open.
 - Autocomplete lists the names in scope, each with its source (file, environment,
   shared, prompt; a Prompt variable takes the entry of a name it overrides) and a short preview of its resolved value ("secret" instead of a Secret's),
@@ -229,6 +236,23 @@ paths), File variable values and environment values.
   `crates/httpdesk-core/dynamic-variables.json`, which a core test keeps equal to what
   the core generates. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
   leaves the caret before `}}`.
+- **Extract to variable**: with text selected, ⌘⌥V (macOS) / Ctrl+Alt+V (Windows,
+  Linux, as in JetBrains), or a right-click on the selection (a menu of Cut, Copy and
+  Extract to variable…; Shift+F10 opens it under the selection), opens the Extract to
+  variable form (`ExtractVariable.svelte`, from `app.extractVariable`). It asks for a
+  name (the File variable name rule, and no leading `$`) and where it goes: a File
+  variable (`@name = value` at the top of the file, or a new value for the File
+  variable of that name the request uses), the selected environment, or all
+  environments (same value in each; a same-named variable gets the new value and a
+  Secret stays a Secret). It warns when the destination already has the name. Env
+  files are written at once; the field then puts `{{name}}` in place of the selection,
+  an ordinary edit that shows as unsaved. It comes from the provider's `extract` (the
+  request editor wires it; the Environments modal has none, so it isn't offered there),
+  the URL bar and the body editor get it too (one-line selections only), and a
+  `masked` field never offers it. Without a selection, or on a right-click outside it,
+  the webview's own menu stays. While the menu or form is open a VarField keeps its
+  editor, so the answer lands in the same selection (`extractHolds` in
+  `src/lib/codemirror/extract.ts`).
 - In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
   become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write
   through `set`.
@@ -319,13 +343,16 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - `columns` picks columns left to right: `"enable"`, `"name"`, `"value"`,
   `"description"`, `"delete"`, a built-in with a width (`{ id: "name", width: "34%" }`),
   or a custom column `{ id, header, width, cell }`, whose `cell` snippet gets
-  `{ row, index, ghost, set }`. Always write through `set(patch)`. Inputs given
+  `{ row, index, ghost, set, column }` (`column` is the column's id, so one snippet
+  can serve several columns). Write through `set(patch)`, unless the rows are a view
+  of other state that the cell edits directly (the Environments matrix). Inputs given
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
-  replaces the value input.
+  replaces the value input, and one with `id: "name"` replaces the name input.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`,
+  filter), `bulkEdit` (default on), `addRows` (the ghost row, default on),
+  `showDescriptions` (default on), `onchange(items)`,
   `variables` (makes the built-in value cells [VarFields](#varfield)). Through
   `bind:this`, `focusValue(row)` puts focus in a row's value cell (a hover card's Edit
   lands there).
@@ -342,6 +369,12 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     VarFields see the environment being edited, as edited, plus the shared variables
     (not the environment selected in the top bar). Bulk edit is off, because it would
     show Secret values as plain text.
+  - The Environments matrix (`EnvironmentMatrix.svelte`): one row per variable name,
+    a read-only name column, one VarField column per environment plus Shared (built
+    from the set, with positional ids `m0`, `m1`…), and a row actions button.
+    No ghost row (`addRows={false}`) and no bulk edit. Each cell has its own Secret
+    lock (and a reveal button when it's a Secret), and a gap is tinted. Rows are
+    stable objects per name, so an edit doesn't remount the row and drop focus.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 
@@ -373,6 +406,10 @@ buttons)` or `app.prompt(title, value, placeholder?)`, which render `Dialog.svel
 A dialog can also hold a short form (`DialogState.fields`: label, help text, masked):
 each field has a reveal button, Enter in any field picks the primary button, and the
 values come back in order as `values`. The Prompt variables form uses it.
+A form that needs a choice or checks its input as you type (Extract to variable:
+a name, a [SegmentedControl](#segmentedcontrol) for where it goes, an inline error and a
+warning Banner) is its own small `Modal` with Cancel and a primary button that stays
+disabled until the input is valid; Enter in its text field picks the primary button.
 
 ## Status
 

@@ -11,6 +11,7 @@ import type {
   GenerateOptions,
   GenerateReport,
   HttpFile,
+  Usage,
   HttpResponse,
   Request,
   RequestPreview,
@@ -35,6 +36,8 @@ export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   getTree: () => invoke<TreeNode>("get_tree"),
   searchRequests: (query: string) => invoke<SearchHit[]>("search_requests", { query }),
+  /** Find usages of `{{name}}`; `open` documents are searched as given (unsaved edits included). */
+  findUsages: (name: string, open: { path: string; file: HttpFile }[]) => invoke<Usage[]>("find_usages", { name, open }),
 
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),

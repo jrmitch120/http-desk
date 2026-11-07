@@ -8,8 +8,23 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { environmentNames, environmentsFor, requestFolder } from "./envFolders";
+import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
-import type { AppSettings, EnvironmentSet, EnvironmentSettings, FolderEnvironments, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
+import type {
+  AppSettings,
+  EnvironmentSet,
+  EnvironmentSettings,
+  FolderEnvironments,
+  HttpFile,
+  HttpResponse,
+  Request,
+  RequestPreview,
+  SearchHit,
+  SendError,
+  TreeNode,
+  Usage,
+  UsageField,
+} from "./types";
 
 export interface Doc {
   path: string;
@@ -84,7 +99,20 @@ export interface DialogState {
   resolve: (r: { button: string; value: string; values: string[] }) => void;
 }
 
-export type ModalKind = "env" | "openapi" | "settings" | null;
+/** The user's answer to the Extract to variable form. */
+export interface ExtractChoice {
+  name: string;
+  target: ExtractTarget;
+}
+
+/** An Extract to variable form: the selected text, for the request in tab `tabId`. */
+export interface Extraction {
+  tabId: string;
+  value: string;
+  resolve: (choice: ExtractChoice | null) => void;
+}
+
+export type ModalKind ="env" | "openapi" | "settings" | null;
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 
@@ -134,6 +162,8 @@ class AppStore {
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
   dialog = $state<DialogState | null>(null);
+  /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
+  extraction = $state<Extraction | null>(null);
   /** True until `init` has finished reopening the last workspace, so the
    *  Welcome screen doesn't flash first. */
   starting = $state(true);
@@ -149,6 +179,12 @@ class AppStore {
    *  (an Undefined variable's quick fix), an empty row is added first if there's none. */
   definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
+  /** Find usages results shown in the sidebar (`usages` null while searching); null when closed. */
+  usages = $state<{ name: string; usages: Usage[] | null } | null>(null);
+  private usagesSeq = 0;
+  /** A Find usages result asked to show this field of the tab's request: its
+   *  request editor switches to it and clears this. */
+  fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
@@ -633,6 +669,49 @@ class AppStore {
     if (req) await this.openRequest(hit.path, { key: req._key });
   }
 
+  /** Find usages of `{{name}}` across the workspace, shown in the sidebar. Open
+   *  documents are searched as they are on screen (unsaved edits included); the
+   *  backend reads every other file, and the env files, from disk. */
+  async findUsages(name: string) {
+    const seq = ++this.usagesSeq;
+    this.usages = { name, usages: null };
+    const open = Object.values(this.docs)
+      .filter((d) => !d.missing)
+      .map((d) => ({ path: d.path, file: $state.snapshot(d.file) as HttpFile }));
+    try {
+      const usages = await api.findUsages(name, open);
+      if (seq === this.usagesSeq) this.usages = { name, usages };
+    } catch (e) {
+      if (seq === this.usagesSeq) this.usages = null;
+      this.toast("error", errorMessage(e));
+    }
+  }
+
+  closeUsages() {
+    this.usagesSeq++;
+    this.usages = null;
+  }
+
+  /** Shows where a Find usages result is: the request on the field holding it
+   *  (found as `openSearchHit` finds it), a File variable's row in its file's
+   *  request Settings, or an environment value's row in the Environments modal. */
+  async openUsage(usage: Usage) {
+    if (usage.kind === "environment") {
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name };
+      this.modal = "env";
+      return;
+    }
+    if (usage.kind === "fileVariable") {
+      const open = this.tabs.find((t) => t.path === usage.path && t.id === this.activeTabId) ?? this.tabs.find((t) => t.path === usage.path);
+      if (open) this.activeTabId = open.id;
+      else await this.openRequest(usage.path, { index: 0 });
+      if (this.activeTab?.path === usage.path) this.editDefinition(this.activeTab.id, { kind: "file", name: usage.name });
+      return;
+    }
+    await this.openSearchHit(usage);
+    if (this.activeTab?.path === usage.path) this.fieldWanted = { tabId: this.activeTab.id, field: usage.field };
+  }
+
   // ---------------------------------------------------------------- tabs
 
   async openRequest(path: string, which: { key?: string; index?: number }) {
@@ -1068,6 +1147,51 @@ class AppStore {
   /** Opens the environment picker in the top bar. */
   chooseEnvironment() {
     this.envPickerWanted = true;
+  }
+
+  // ---------------------------------------------------------------- extract to variable
+
+  /**
+   * Extract to variable on `value`, text selected in a field of the tab's
+   * request: asks for a name and where it goes, and defines it there. Returns the
+   * name for the field to put `{{name}}` in place of its selection, or null if
+   * the user cancelled or the definition couldn't be written.
+   */
+  async extractVariable(tabId: string, value: string): Promise<string | null> {
+    const choice = await new Promise<ExtractChoice | null>((resolve) => (this.extraction = { tabId, value, resolve }));
+    if (!choice) return null;
+    const { name, target } = choice;
+    if (target.kind !== "file") return (await this.extractToEnvironments(target, name, value)) ? name : null;
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const doc = tab && this.docs[tab.path];
+    if (!tab || !doc) return null;
+    extractToFile(doc.file, this.requestFor(tab), name, value);
+    return name;
+  }
+
+  /** Writes an extracted variable to the env files right away (they have no unsaved state). */
+  private async extractToEnvironments(target: ExtractTarget, name: string, value: string): Promise<boolean> {
+    if (!this.envSet) return false;
+    const set = $state.snapshot(this.envSet) as EnvironmentSet;
+    const envs = targetEnvironments(target, set);
+    extractToEnvironments(set, envs, name, value);
+    try {
+      const report = await api.saveEnvironments(set);
+      if (report.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+    } catch (e) {
+      this.toast("error", `Could not save environments: ${errorMessage(e)}`);
+      return false;
+    }
+    await this.loadEnvironments();
+    this.toast("success", target.kind === "all" ? `Added ${name} to every environment` : `Added ${name} to ${envs[0]}`);
+    return true;
+  }
+
+  /** Answers the Extract to variable form on screen (null: cancelled). */
+  closeExtraction(choice: ExtractChoice | null) {
+    const x = this.extraction;
+    this.extraction = null;
+    x?.resolve(choice);
   }
 
   // ---------------------------------------------------------------- feedback

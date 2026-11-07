@@ -18,6 +18,8 @@ export interface MenuOptions {
   align?: Align;
   /** The menu's accessible name. */
   label?: string;
+  /** Called when the menu closes, before a picked item's action runs. */
+  onclose?: () => void;
 }
 
 interface OpenMenu {
@@ -27,6 +29,7 @@ interface OpenMenu {
   anchor: HTMLElement | null;
   align: Align;
   label: string | undefined;
+  onclose: (() => void) | undefined;
 }
 
 class MenuState {
@@ -34,12 +37,13 @@ class MenuState {
   /** Where focus goes back to when the menu closes. */
   private opener: HTMLElement | null = null;
 
-  show(e: MouseEvent, items: MenuItem[], { anchor, align = "start", label }: MenuOptions = {}) {
+  show(e: MouseEvent, items: MenuItem[], { anchor, align = "start", label, onclose }: MenuOptions = {}) {
     e.preventDefault();
     e.stopPropagation();
+    this.open?.onclose?.();
     const target = e.currentTarget instanceof HTMLElement ? e.currentTarget : null;
     this.opener = anchor ?? (target?.matches("[tabindex], button") ? target : document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    const base = { items, anchor: anchor ?? null, align, label };
+    const base = { items, anchor: anchor ?? null, align, label, onclose };
     // Opened from the keyboard (no pointer position): place it under the element.
     if (e.clientX === 0 && e.clientY === 0 && target) {
       const r = target.getBoundingClientRect();
@@ -56,9 +60,11 @@ class MenuState {
 
   /** Closes the menu. `restoreFocus` puts focus back on the element it was opened from. */
   close(restoreFocus = true) {
+    const onclose = this.open?.onclose;
     this.open = null;
     if (restoreFocus && this.opener?.isConnected) this.opener.focus();
     this.opener = null;
+    onclose?.();
   }
 }
 

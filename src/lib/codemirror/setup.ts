@@ -30,6 +30,7 @@ import {
 import { tags as t } from "@lezer/highlight";
 import { popupLayer } from "../popup/layer";
 import { createFindPanel } from "./findPanel.svelte";
+import { extractExtension } from "./extract";
 
 export type Language = "json" | "xml" | "html" | "text";
 
@@ -178,6 +179,14 @@ export interface VarProvider {
   completions: () => VarCompletion[];
   /** Opens a definition's row (the hover card's Edit); without it the card has no Edit. */
   edit?: (definition: Definition) => void;
+  /** Lists where a variable is used (the hover card's Find usages); without it the card has none. */
+  findUsages?: (name: string) => void;
+  /**
+   * Extract to variable on selected text: asks for a name and defines it,
+   * resolving to the name (null if cancelled); the field then puts `{{name}}` in
+   * place of the selection. Without it fields don't offer Extract to variable.
+   */
+  extract?: (value: string) => Promise<string | null>;
 }
 
 function varDecorations(provider: VarProvider) {
@@ -207,7 +216,7 @@ function varTooltip(provider: VarProvider) {
       const to = from + m[0].length;
       if (pos < from || pos > to) continue;
       const close = () => view.dispatch({ effects: closeHoverTooltips });
-      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1]), { edit: provider.edit, close }) }) };
+      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1]), { edit: provider.edit, findUsages: provider.findUsages, close }) }) };
     }
     return null;
   });
@@ -217,10 +226,15 @@ function varTooltip(provider: VarProvider) {
  * The hover card's content for `{{name}}`: its value and where it comes from. A
  * Secret (or a value a Secret went into) is masked until Reveal, in this card
  * only. With `edit` and a definition that has a row in the app, Edit closes the
- * card (`close`) and opens that row. Shared by editors' hover tooltips and
- * VarField's static rendering, so both show the same card.
+ * card (`close`) and opens that row; with `findUsages`, Find usages closes it and
+ * lists the references to a named (not `$`) variable. Shared by editors' hover
+ * tooltips and VarField's static rendering, so both show the same card.
  */
-export function varCard(name: string, info: VarInfo, actions: { edit?: (d: Definition) => void; close?: () => void } = {}): HTMLElement {
+export function varCard(
+  name: string,
+  info: VarInfo,
+  actions: { edit?: (d: Definition) => void; findUsages?: (name: string) => void; close?: () => void } = {},
+): HTMLElement {
   const div = (cls: string, text = "") => {
     const el = document.createElement("div");
     el.className = cls;
@@ -256,12 +270,18 @@ export function varCard(name: string, info: VarInfo, actions: { edit?: (d: Defin
       b.textContent = revealed ? "Hide" : "Reveal";
       showValue();
     });
-  const { edit, close } = actions;
+  const { edit, findUsages, close } = actions;
   const definition = info.definition;
   if (edit && definition)
     button("Edit", () => {
       close?.();
       edit(definition);
+    });
+  // Any named variable, defined or not; a `$name` is never looked up.
+  if (findUsages && !name.startsWith("$"))
+    button("Find usages", () => {
+      close?.();
+      findUsages(name);
     });
   if (buttons.length) {
     const row = div("var-card-actions");
@@ -345,14 +365,15 @@ const completionColumns = [
 export const layerTooltips = (): Extension => tooltips({ parent: popupLayer() });
 
 /**
- * `{{variable}}` marks, hover cards and autocompletion. With `marks: false` only
- * the autocompletion: for a masked field, where a mark or a card would give the
- * hidden text away.
+ * `{{variable}}` marks, hover cards, autocompletion and Extract to variable
+ * (when the provider has `extract`). With `marks: false` only the
+ * autocompletion: for a masked field, where a mark, a card or extracting the
+ * selection would give the hidden text away.
  */
 export function variableExtensions(provider: VarProvider, { marks = true }: { marks?: boolean } = {}): Extension {
   return [
     layerTooltips(),
-    marks ? [varDecorations(provider), varTooltip(provider)] : [],
+    marks ? [varDecorations(provider), varTooltip(provider), extractExtension(provider)] : [],
     autocompletion({ override: [varCompletion(provider)], icons: false, addToOptions: completionColumns }),
   ];
 }

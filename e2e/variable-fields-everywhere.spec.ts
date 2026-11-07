@@ -2,7 +2,7 @@
 // multipart values, File variables and the Environments modal all highlight
 // {{variables}}, show the hover card and autocomplete them.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests } from "./helpers";
+import { openApp, openRequest, sentRequests, showEnvironmentList } from "./helpers";
 
 /** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
 async function openSection(page: Page, section: "Authorization" | "Body" | "Settings"): Promise<void> {
@@ -48,7 +48,7 @@ test("an API key value highlights variables and shows their cards", async ({ pag
   await expect(value.locator(".cm-var-ok.cm-var-secret")).toHaveText("{{token}}");
   await expect(value.locator(".cm-var-bad")).toHaveText("{{nope}}");
   await value.locator(".cm-var", { hasText: "{{token}}" }).hover();
-  await expect(card(page)).toHaveText(['token•••••••• (secret)from environment "local"RevealEdit']);
+  await expect(card(page)).toHaveText(['token•••••••• (secret)from environment "local"RevealEditFind usages']);
 });
 
 test("a Basic auth password stays masked, and its variables show only once revealed", async ({ page }) => {
@@ -135,13 +135,14 @@ test("a File variable's value resolves the variables it refers to", async ({ pag
   const pet = grid.locator(".kv-row").nth(2).locator(".c-value");
   await expect(pet.locator(".cm-var-ok")).toHaveText(["{{api}}", "{{petId}}"]);
   await pet.locator(".cm-var", { hasText: "{{api}}" }).hover();
-  await expect(card(page)).toHaveText(["apihttp://127.0.0.1:8765/v1from this fileEdit"]);
+  await expect(card(page)).toHaveText(["apihttp://127.0.0.1:8765/v1from this fileEditFind usages"]);
 });
 
-/** Opens the Environments modal on `env` and returns its variable grid. */
+/** Opens the Environments list on `env` and returns its variable grid. */
 async function environment(page: Page, env: string): Promise<Locator> {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentList(page);
   const dialog = page.getByRole("dialog", { name: "Environments" });
   await dialog.locator(".env").filter({ has: page.getByText(env, { exact: true }) }).click();
   return dialog.getByRole("group", { name: "Variables" });

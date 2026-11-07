@@ -2,7 +2,8 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, HttpFile, HttpResponse } from "./types";
+import type { AppSettings, HttpFile, HttpResponse, Usage } from "./types";
+import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const api = vi.hoisted(() => ({
   deletePermanently: vi.fn(),
   pathExists: vi.fn(),
   searchRequests: vi.fn(),
+  findUsages: vi.fn(),
   sendRequest: vi.fn(),
   previewRequest: vi.fn(),
   cancelRequest: vi.fn(),
@@ -23,6 +25,7 @@ const api = vi.hoisted(() => ({
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
   loadFolderEnvironments: vi.fn(),
+  saveEnvironments: vi.fn(),
   getTree: vi.fn(),
 }));
 const {
@@ -35,6 +38,7 @@ const {
   deletePermanently,
   pathExists,
   searchRequests,
+  findUsages,
   openWorkspace,
   getSettings,
   loadEnvironments,
@@ -1224,6 +1228,72 @@ describe("environment settings", () => {
   });
 });
 
+describe("find usages", () => {
+  const usage = (index: number, name: string, url: string): Usage => ({
+    kind: "request",
+    path: PATH,
+    index,
+    name,
+    method: "GET",
+    url,
+    field: { kind: "header", index: 0, name: "Authorization", part: "value" },
+    disabled: false,
+    start: 7,
+    end: 16,
+  });
+
+  it("searches open documents as they are on screen and lists what the backend found", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "{{host}}/books"; // unsaved
+    findUsages.mockResolvedValue([usage(0, "List", "{{host}}/books")]);
+
+    await app.findUsages("host");
+
+    const [name, open] = findUsages.mock.lastCall!;
+    expect(name).toBe("host");
+    expect(open).toHaveLength(1);
+    expect(open[0].path).toBe(PATH);
+    expect(open[0].file.requests[0].url).toBe("{{host}}/books");
+    expect(app.usages).toEqual({ name: "host", usages: [usage(0, "List", "{{host}}/books")] });
+  });
+
+  it("keeps only the latest search when two overlap", async () => {
+    findUsages.mockImplementationOnce(() => later(30, [usage(0, "Old", "x")])).mockImplementationOnce(() => later(5, []));
+    const first = app.findUsages("a");
+    await app.findUsages("b");
+    await first;
+    expect(app.usages).toEqual({ name: "b", usages: [] });
+  });
+
+  it("opens a usage's request on the field that holds it, even after unsaved edits moved it", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    await app.duplicateRequest(PATH, list.key); // "Get" moves to index 2
+    const u = usage(1, "Get", "https://x/books/1");
+
+    await app.openUsage(u);
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("Get");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "header", index: 0, name: "Authorization", part: "value" } });
+  });
+
+  it("opens a File variable's row in its file's request Settings", async () => {
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+
+    await app.openUsage({ kind: "fileVariable", path: PATH, index: 0, name: "base", start: 0, end: 8 });
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("List");
+    expect(app.requestSettingsFor).toBe(app.activeTabId);
+    expect(app.definitionWanted).toEqual({ kind: "file", name: "base" });
+  });
+
+  it("opens an environment value's row in the Environments modal", async () => {
+    await app.openUsage({ kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 8 });
+
+    expect(app.modal).toBe("env");
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
+  });
+});
+
 describe("Prompt variables", () => {
   beforeEach(() => {
     app.root = "/ws";
@@ -1410,5 +1480,115 @@ describe("per-directory environments", () => {
     expect(app.envSet).toEqual(rootSet);
     expect(app.envFolders).toEqual([]);
     expect(app.toasts.map((t) => t.message)).toEqual(["api/http-client.env.json is not a valid environment file"]);
+  });
+});
+
+describe("Extract to variable", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = { shared: [], environments: [], privateFileIgnored: true };
+    app.extraction = null;
+  });
+
+  it("to a File variable: adds an @name line at the top of the file, unsaved, and returns the name", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+    const extracting = app.extractVariable(tab.id, "https://api.example.com");
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    expect(app.extraction!.value).toBe("https://api.example.com");
+    app.closeExtraction({ name: "baseUrl", target: { kind: "file" } });
+
+    expect(await extracting).toBe("baseUrl");
+    expect(app.docs[PATH].file.header.variables).toEqual([{ name: "baseUrl", value: "https://api.example.com" }]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(app.extraction).toBeNull();
+  });
+
+  /** Two environments; `staging` already has a Secret. */
+  const twoEnvs = () => ({
+    shared: [{ name: "version", value: "v1", secret: false }],
+    environments: [
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "s3cret", secret: true }] },
+    ],
+    privateFileIgnored: true,
+  });
+  /** Extracts `value` from the tab's request with `choice` and returns what the store returned. */
+  async function extract(tabId: string, value: string, choice: ExtractChoice | null) {
+    const extracting = app.extractVariable(tabId, value);
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    app.closeExtraction(choice);
+    return extracting;
+  }
+
+  it("to the selected environment: saves it in that environment's env file and reloads the environments", async () => {
+    app.envSet = twoEnvs();
+    app.envName = "staging";
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "staging" } })).toBe("baseUrl");
+
+    const saved = api.saveEnvironments.mock.calls[0][0];
+    expect(saved.environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      {
+        name: "staging",
+        variables: [
+          { name: "token", value: "s3cret", secret: true },
+          { name: "baseUrl", value: "https://api.example.com", secret: false },
+        ],
+      },
+    ]);
+    expect(saved.shared).toEqual([{ name: "version", value: "v1", secret: false }]);
+    expect(loadEnvironments).toHaveBeenCalled();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+  });
+
+  it("to all environments: sets the same value in each, replacing a same-named one in place (a Secret stays a Secret)", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+
+    expect(api.saveEnvironments.mock.calls[0][0].environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "abc", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "abc", secret: true }] },
+    ]);
+    expect(app.toasts.map((t) => t.message)).toContain("Added token to every environment");
+  });
+
+  it("returns null when the env files can't be written, or when cancelled, so the field keeps its text", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockRejectedValue("disk full");
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "local" } })).toBeNull();
+    expect(app.toasts.map((t) => t.message)).toContain("Could not save environments: disk full");
+
+    expect(await extract(tab.id, "https://api.example.com", null)).toBeNull();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("to a File variable that exists: replaces the value of the definition the request uses, adding no line", async () => {
+    const f = fileOf(["GET", "A", "https://a.example.com/x"], ["GET", "B", "https://b.example.com/y"]);
+    f.header.variables = [{ name: "host", value: "old" }, { name: "id", value: "1" }];
+    f.requests[1].variables = [{ name: "host", value: "own" }];
+    const [a, b] = await openAll(f);
+    const file = () => app.docs[PATH].file;
+
+    await extract(a.id, "https://a.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().header.variables).toEqual([{ name: "host", value: "https://a.example.com" }, { name: "id", value: "1" }]);
+
+    // B declares its own @host, which wins over the file's, so that one changes.
+    await extract(b.id, "https://b.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().requests[1].variables).toEqual([{ name: "host", value: "https://b.example.com" }]);
+    expect(file().header.variables[0]).toEqual({ name: "host", value: "https://a.example.com" });
   });
 });
