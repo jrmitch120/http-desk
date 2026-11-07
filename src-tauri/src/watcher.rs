@@ -10,13 +10,51 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use httpdesk_core::{env, workspace};
-use notify_debouncer_mini::{
-    new_debouncer, notify::RecommendedWatcher, notify::RecursiveMode, DebounceEventResult, Debouncer,
-};
+use notify_debouncer_mini::notify::event::{AccessKind, AccessMode};
+use notify_debouncer_mini::notify::{self, EventHandler, EventKind, RecommendedWatcher, RecursiveMode, WatcherKind};
+use notify_debouncer_mini::{new_debouncer_opt, Config, DebounceEventResult, Debouncer};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::self_writes::SelfWrites;
+
+/// The platform watcher, minus events for reading a file. Linux's inotify reports every
+/// open, so without this, reading a file (the user's tools, a send loading the env files,
+/// even `SelfWrites::is_own` checking content) would be reported as a change to it.
+struct ChangeWatcher(RecommendedWatcher);
+
+/// Whether `kind` reports a file being read rather than changed. Closing a file that
+/// was open for writing stays, as it marks the end of a write.
+fn is_read(kind: &EventKind) -> bool {
+    matches!(kind, EventKind::Access(a) if *a != AccessKind::Close(AccessMode::Write))
+}
+
+impl notify::Watcher for ChangeWatcher {
+    fn new<F: EventHandler>(mut handler: F, config: notify::Config) -> notify::Result<Self> {
+        let changes = move |res: notify::Result<notify::Event>| {
+            if !res.as_ref().is_ok_and(|e| is_read(&e.kind)) {
+                handler.handle_event(res);
+            }
+        };
+        RecommendedWatcher::new(changes, config).map(Self)
+    }
+
+    fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> notify::Result<()> {
+        self.0.watch(path, recursive_mode)
+    }
+
+    fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
+        self.0.unwatch(path)
+    }
+
+    fn configure(&mut self, option: notify::Config) -> notify::Result<bool> {
+        self.0.configure(option)
+    }
+
+    fn kind() -> WatcherKind {
+        RecommendedWatcher::kind()
+    }
+}
 
 /// How often the workspace folder's existence is checked, for platforms that
 /// don't report the watched folder itself being moved away.
@@ -60,7 +98,7 @@ fn is_relevant(root: &Path, path: &Path) -> bool {
 
 /// A running watch. Dropping it stops both the watcher and the root check.
 pub struct Watcher {
-    _debouncer: Debouncer<RecommendedWatcher>,
+    _debouncer: Debouncer<ChangeWatcher>,
     _stop_polling: mpsc::Sender<()>,
 }
 
@@ -93,7 +131,8 @@ pub fn start<R: tauri::Runtime>(app: &AppHandle<R>, self_writes: SelfWrites, roo
     let root_check =
         Arc::new(RootCheck { app: app.clone(), root: root.to_path_buf(), missing: AtomicBool::new(false) });
     let (app, watched, check) = (app.clone(), root.to_path_buf(), root_check.clone());
-    let mut debouncer = new_debouncer(Duration::from_millis(250), move |res: DebounceEventResult| {
+    let config = Config::default().with_timeout(Duration::from_millis(250));
+    let mut debouncer = new_debouncer_opt::<_, ChangeWatcher>(config, move |res: DebounceEventResult| {
         let events = match res {
             Ok(events) => events,
             Err(e) => {

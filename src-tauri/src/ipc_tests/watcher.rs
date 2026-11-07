@@ -64,6 +64,31 @@ fn churn_in_ignored_folders_and_unlisted_files_emits_no_events() {
     }
 }
 
+/// Reading isn't changing: Linux's inotify reports every open of a file, and the app
+/// reads env files all the time (each send and preview), as do the user's tools.
+#[test]
+fn reading_workspace_files_is_not_reported() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    std::fs::create_dir(root.join("api")).unwrap();
+    std::fs::write(root.join("api/a.http"), "GET https://a\n").unwrap();
+    std::fs::write(root.join("http-client.env.json"), r#"{ "dev": { "host": "h" } }"#).unwrap();
+    std::fs::write(root.join("http-client.private.env.json"), r#"{ "dev": { "token": "t" } }"#).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let rx = events(&h, "workspace-changed");
+    changed_paths(&rx, Duration::from_millis(600));
+
+    h.ok("load_environments", json!({}));
+    h.ok("read_http_file", json!({ "path": root.join("api/a.http") }));
+    for f in ["http-client.env.json", "http-client.private.env.json", "api/a.http"] {
+        std::fs::read(root.join(f)).unwrap();
+    }
+    std::fs::read_dir(root.join("api")).unwrap().for_each(drop);
+    let reported = changed_paths(&rx, Duration::from_secs(2));
+    assert!(reported.is_empty(), "reads were reported as changes: {reported:?}");
+}
+
 /// The ignore rule applies below the workspace root, not to the folders it sits in.
 #[test]
 fn a_workspace_inside_an_ignored_folder_still_syncs() {
