@@ -13,6 +13,13 @@ export interface Directive {
   value: string;
 }
 
+/** A Prompt variable: `# @prompt name [description]` asks for a value at send. */
+export interface Prompt {
+  name: string;
+  /** Help text for the field; empty when the line has none. */
+  description: string;
+}
+
 export interface KeyValue {
   enabled: boolean;
   name: string;
@@ -117,6 +124,36 @@ export interface SearchHit {
   url: string;
 }
 
+/** An auth field that can hold references (core `workspace::AuthPart`): the `Auth`
+ *  property of that name. `keyName` only for a query API key, whose name is resolved at send. */
+export type AuthPart = "username" | "password" | "token" | "keyName" | "keyValue";
+
+/**
+ * The field of a request a `{{reference}}` is in (core `workspace::RequestField`).
+ * `index` counts into `query.items`, `headers.items` or `variables`; `url` is the
+ * URL without its query string; `body` is `body.text` in any mode.
+ */
+export type UsageField =
+  | { kind: "url" }
+  | { kind: "param" | "header"; index: number; name: string; part: "name" | "value" }
+  | { kind: "auth"; part: AuthPart }
+  | { kind: "body" }
+  | { kind: "variable"; index: number; name: string };
+
+/**
+ * One `{{name}}` reference found by Find usages (core `workspace::Usage`).
+ * `start`..`end` is where it sits in its field's text, braces included, in
+ * UTF-16 code units (so `text.slice(start, end)` is the reference as written).
+ * - `request`: in a request, identified as a `SearchHit` is; `disabled` when it isn't sent.
+ * - `fileVariable`: in the value of `file.header.variables[index]` (named `name`).
+ * - `environment`: in the value of variable `name` of `env` (`$shared` for the
+ *   shared variables); `path` is the env file holding it (the private one for a Secret).
+ */
+export type Usage =
+  | ({ kind: "request"; field: UsageField; disabled: boolean; start: number; end: number } & SearchHit)
+  | { kind: "fileVariable"; path: string; index: number; name: string; start: number; end: number }
+  | { kind: "environment"; path: string; env: string; name: string; secret: boolean; start: number; end: number };
+
 /** JSON type an env value was read with; saving writes it back with it (missing = string). */
 export type JsonType = "string" | "number" | "boolean" | "null";
 
@@ -130,12 +167,37 @@ export interface EnvVar {
 export interface Environment {
   name: string;
   variables: EnvVar[];
+  /** The folders whose files supply it, in the sets the core loads for requests; ignored on save. */
+  source?: EnvSource;
+}
+
+/**
+ * Which folders supply an environment (or the shared variables) to a folder's
+ * requests (ADR-0004): the nearest whose public file defines it and the nearest whose
+ * private file does, relative to the workspace root (`""` for the root). A Secret's
+ * value comes from `private`, any other from `public` (core `env::EnvSource`).
+ */
+export interface EnvSource {
+  public?: string | null;
+  private?: string | null;
 }
 
 export interface EnvironmentSet {
   shared: EnvVar[];
   environments: Environment[];
   privateFileIgnored: boolean | null;
+  /** The folders supplying the shared variables (see `Environment.source`). */
+  sharedSource?: EnvSource | null;
+}
+
+/**
+ * The environments of the requests in a folder below the workspace root that has env
+ * files of its own (and in its subfolders that have none): core `env::FolderEnvironments`.
+ */
+export interface FolderEnvironments {
+  /** Relative to the workspace root, `/`-separated (`api/users`). */
+  dir: string;
+  set: EnvironmentSet;
 }
 
 export interface SentRequest {
@@ -144,6 +206,24 @@ export interface SentRequest {
   headers: [string, string][];
   bodyPreview: string | null;
   bodySize: number;
+}
+
+/**
+ * The resolved preview (`preview_request`, core `exec::RequestPreview`): what a
+ * send would send, without sending. Dynamic variables that generate a value on
+ * every send stay as written (`{{$uuid}}`); the body isn't included.
+ */
+export interface RequestPreview {
+  method: string;
+  /** As sent: query params encoded per ADR-0001. */
+  url: string;
+  /** Every header sent, including the auth header, the Content-Type the body implies and the defaults. */
+  headers: [string, string][];
+  /** The enabled auth's fields resolved, labelled as in the Authorization section. */
+  auth: [string, string][];
+  warnings: string[];
+  /** Why a send would fail before reaching the network. */
+  error: SendError | null;
 }
 
 export interface HttpResponse {
@@ -259,6 +339,8 @@ export type SendError = { message: string } & (
   | { kind: "timeoutIdle" | "timeoutConnect"; details: { timeoutMs: number } }
   | { kind: "invalidUrl"; details: { url: string; reason: string } }
   | { kind: "unresolvedVariable"; details: { names: string[] } }
+  /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
+  | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
   | { kind: "other"; details: null }
 );
@@ -277,10 +359,21 @@ export interface ExecSettings {
   maxBodyBytes: number;
 }
 
+/** Settings of one environment that aren't variables. */
+export interface EnvironmentSettings {
+  /** Sending anything but GET, HEAD or OPTIONS asks for confirmation first. */
+  production?: boolean;
+  /** A colour name from `ENV_COLORS` (src/lib/envColors.ts) tinting the top bar. */
+  color?: string | null;
+}
+
 export interface AppSettings {
   exec: ExecSettings;
   recentWorkspaces: string[];
   environments: Record<string, string>;
+  /** Per workspace root, then per environment name. Kept here, never in the env
+   *  files, so other tools don't see extra keys they'd treat as variables. */
+  environmentSettings: Record<string, Record<string, EnvironmentSettings>>;
   /** "system" follows the OS appearance (prefers-color-scheme). */
   theme: "system" | "light" | "dark";
   layout: "horizontal" | "vertical";
@@ -290,6 +383,20 @@ export interface AppSettings {
   sidebarWidth: number;
   /** Request pane's share (0..1) of the request/response split, per layout. */
   splitRatio: Record<AppSettings["layout"], number>;
+  /** Show the resolved preview under the URL bar. */
+  showResolved: boolean;
+  /** How the Environments modal shows variables: every environment side by side, or one at a time. */
+  envView: "matrix" | "list";
+  /** Per workspace root: the Environments matrix's column widths, as resized. */
+  envMatrixWidths: Record<string, MatrixWidths>;
+}
+
+/** Column widths of the Environments matrix in one workspace, px. A column not listed keeps its default width. */
+export interface MatrixWidths {
+  /** The Variable column. */
+  variable?: number | null;
+  /** By column: `$shared` for the shared variables, else the environment's name. */
+  columns: Record<string, number>;
 }
 
 // ---- OpenAPI

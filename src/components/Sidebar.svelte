@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { app } from "../lib/store.svelte";
+  import { usageRows } from "../lib/usages";
   import { errorMessage } from "../lib/api";
   import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
@@ -19,6 +21,11 @@
 
   $effect(() => {
     if (app.focusSearch) searchInput?.focus();
+  });
+
+  // Find usages takes the place of search results.
+  $effect(() => {
+    if (app.usages) untrack(() => (query = ""));
   });
 
   $effect(() => {
@@ -164,6 +171,30 @@
           </button>
         {/each}
       </div>
+    {:else if app.usages}
+      {@const rows = app.usages.usages && usageRows(app.usages.usages, app.root ?? "")}
+      <section class="usages" aria-label="Usages of {app.usages.name}">
+        <div class="usages-head">
+          <span class="usages-title ellipsis">Usages of <code>{`{{${app.usages.name}}}`}</code></span>
+          <button class="icon-btn" aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
+        </div>
+        {#if !rows}
+          <div class="none muted">Searching…</div>
+        {:else if !rows.length}
+          <div class="none muted">Nothing in the workspace uses <code>{`{{${app.usages.name}}}`}</code>.</div>
+        {:else}
+          <div class="usages-count muted">{rows.length} {rows.length === 1 ? "place" : "places"}</div>
+          {#each rows as row (row.key)}
+            <button class="hit usage" class:disabled={row.disabled} onclick={() => app.openUsage(row.usage)}>
+              {#if row.method}<Badge method={row.method} />{:else}<span class="usage-icon"><Icon name={row.usage.kind === "environment" ? "globe" : "code"} size={13} /></span>{/if}
+              <span class="hit-text">
+                <span class="ellipsis">{row.title}</span>
+                <span class="file ellipsis">{row.where}{row.disabled ? " · disabled" : ""}</span>
+              </span>
+            </button>
+          {/each}
+        {/if}
+      </section>
     {:else if app.tree}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
@@ -290,6 +321,40 @@
   }
   .file {
     font-size: 11px;
+    color: var(--muted);
+  }
+  .usages-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px 2px 14px;
+  }
+  .usages-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .usages-head .icon-btn {
+    width: 20px;
+    height: 20px;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .usages-count {
+    padding: 0 14px 4px;
+    font-size: 11px;
+  }
+  .usage-icon {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    flex: none;
+    color: var(--muted);
+  }
+  .usage.disabled .hit-text > :first-child {
     color: var(--muted);
   }
 </style>

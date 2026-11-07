@@ -7,11 +7,14 @@ import type {
   FormatMode,
   JsonShape,
   EnvironmentSet,
+  FolderEnvironments,
   GenerateOptions,
   GenerateReport,
   HttpFile,
+  Usage,
   HttpResponse,
   Request,
+  RequestPreview,
   SearchHit,
   SpecSummary,
   TreeNode,
@@ -19,10 +22,22 @@ import type {
   WorkspaceInfo,
 } from "./types";
 
+/** A request with the scope it's sent in, as `send_request` and `preview_request` take it. */
+export type RequestArgs = {
+  request: Request;
+  filePath: string | null;
+  fileVariables: Variable[];
+  environment: string | null;
+  /** Values remembered for the request's Prompt variables, by name. Never written anywhere. */
+  promptValues: Record<string, string>;
+};
+
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   getTree: () => invoke<TreeNode>("get_tree"),
   searchRequests: (query: string) => invoke<SearchHit[]>("search_requests", { query }),
+  /** Find usages of `{{name}}`; `open` documents are searched as given (unsaved edits included). */
+  findUsages: (name: string, open: { path: string; file: HttpFile }[]) => invoke<Usage[]>("find_usages", { name, open }),
 
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
@@ -36,16 +51,16 @@ export const api = {
   deletePermanently: (path: string) => invoke<void>("delete_permanently", { path }),
   pathExists: (path: string) => invoke<boolean>("path_exists", { path }),
 
-  loadEnvironments: () => invoke<EnvironmentSet>("load_environments"),
-  saveEnvironments: (set: EnvironmentSet) => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set }),
+  /** Folder `dir`'s own pair of env files (relative to the root, `/`-separated; the root's by default). */
+  loadEnvironments: (dir = "") => invoke<EnvironmentSet>("load_environments", { dir }),
+  /** Each folder below the root with env files, with the environments its requests get (ADR-0004). */
+  loadFolderEnvironments: () => invoke<FolderEnvironments[]>("load_folder_environments"),
+  /** Saves `set` as folder `dir`'s own pair of env files (the root's by default). */
+  saveEnvironments: (set: EnvironmentSet, dir = "") => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set, dir }),
 
-  sendRequest: (args: {
-    runId: string;
-    request: Request;
-    filePath: string | null;
-    fileVariables: Variable[];
-    environment: string | null;
-  }) => invoke<HttpResponse>("send_request", args),
+  sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),
+  /** What `sendRequest` with the same arguments would send, without sending it. */
+  previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**

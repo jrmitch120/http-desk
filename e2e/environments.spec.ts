@@ -6,7 +6,7 @@ import { mockState, openApp } from "./helpers";
 
 const warning = /http-client\.private\.env\.json is not ignored by git/;
 
-/** Opens the Environments editor on `local` and returns its variable grid. */
+/** Opens the Environments editor's list on `local` and returns its variable grid. */
 async function variables(page: Page): Promise<Locator> {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
@@ -40,7 +40,7 @@ test("variables are added in the ghost row, edited and deleted like params", asy
   await page.keyboard.press("Tab");
   await page.keyboard.type("abc");
   await expect(names(grid)).toHaveCount(3);
-  await expect(grid.locator(".c-value input").nth(2)).toHaveValue("abc");
+  await expect(grid.locator(".kv-row").nth(2).locator(".c-value")).toHaveText("abc");
 
   await grid.locator("input.c-name").first().fill("host");
   await expect(grid.locator("input.c-name").first()).toHaveValue("host");
@@ -98,9 +98,12 @@ test("the lock column makes a variable a Secret, saved only to the private file"
   const grid = await variables(page);
   await grid.getByPlaceholder("Add variable").fill("apiKey");
   const row = grid.locator(".kv-row:not(.ghost)").last();
-  const value = row.locator(".c-value input");
-  await value.fill("s3cret");
-  await expect(value).toHaveAttribute("type", "text");
+  // A variable-aware field (#80): typed into, and a Secret's text is shown as discs.
+  const value = row.locator(".c-value .var-field");
+  await value.click();
+  await page.keyboard.type("s3cret");
+  await page.keyboard.press("Tab");
+  await expect(value).toHaveText("s3cret");
 
   // One name for both states; aria-pressed says which, the tooltip says where the value goes.
   const lock = row.getByRole("button", { name: "Secret", exact: true });
@@ -112,9 +115,9 @@ test("the lock column makes a variable a Secret, saved only to the private file"
   await page.mouse.move(0, 0);
   await lock.hover();
   await expect(page.getByRole("tooltip")).toHaveText("Secret: saved only in http-client.private.env.json. Click to make it shareable.");
-  await expect(value).toHaveAttribute("type", "password");
+  await expect(value).toHaveText("••••••");
   await row.getByRole("button", { name: "Show value" }).click();
-  await expect(value).toHaveAttribute("type", "text");
+  await expect(value).toHaveText("s3cret");
 
   await page.getByRole("dialog", { name: "Environments" }).getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Environments saved")).toBeVisible();

@@ -12,7 +12,7 @@ use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
-use httpdesk_core::workspace::{self, SearchHit, TreeNode};
+use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -53,6 +53,9 @@ struct AppSettings {
     recent_workspaces: Vec<PathBuf>,
     /// Last selected environment per workspace.
     environments: HashMap<String, String>,
+    /// Per workspace, then per environment name: settings that aren't variables
+    /// (production, colour), kept here so the env files only hold variables.
+    environment_settings: HashMap<String, HashMap<String, EnvironmentSettings>>,
     /// "system" (follow the OS appearance), "light" or "dark".
     theme: String,
     layout: String,
@@ -64,6 +67,52 @@ struct AppSettings {
     sidebar_width: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
+    /// Show the resolved preview under the URL bar.
+    show_resolved: bool,
+    /// How the Environments modal shows variables.
+    #[serde(deserialize_with = "or_default")]
+    env_view: EnvView,
+    /// Per workspace: the Environments matrix's column widths, as the user resized them.
+    #[serde(deserialize_with = "or_default")]
+    env_matrix_widths: HashMap<String, MatrixWidths>,
+}
+
+/// Column widths of the Environments matrix in one workspace, px. Columns not
+/// listed keep their default width.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct MatrixWidths {
+    /// The Variable column.
+    variable: Option<f64>,
+    /// By column: `$shared` for the shared variables, else the environment's name.
+    columns: HashMap<String, f64>,
+}
+
+/// How the Environments modal shows variables (`envView` in the settings file).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum EnvView {
+    /// One environment at a time.
+    #[default]
+    List,
+    /// Every environment side by side.
+    Matrix,
+}
+
+/// Reads a settings field, taking the default for a value this version doesn't know
+/// (a hand-edited file, or a newer version's), so one odd field doesn't drop the rest.
+fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).unwrap_or_default())
+}
+
+/// Settings of one environment (see `AppSettings::environment_settings`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct EnvironmentSettings {
+    /// Sending anything but GET, HEAD or OPTIONS asks for confirmation first.
+    production: bool,
+    /// A colour name from the frontend's palette (src/lib/envColors.ts), or none.
+    color: Option<String>,
 }
 
 /// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
@@ -86,12 +135,16 @@ impl Default for AppSettings {
             exec: ExecSettings::default(),
             recent_workspaces: vec![],
             environments: HashMap::new(),
+            environment_settings: HashMap::new(),
             theme: "system".into(),
             layout: "horizontal".into(),
             check_updates: true,
             show_descriptions: true,
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
+            show_resolved: false,
+            env_view: EnvView::List,
+            env_matrix_widths: HashMap::new(),
         }
     }
 }
@@ -217,6 +270,21 @@ async fn search_requests<R: tauri::Runtime>(app: AppHandle<R>, query: String) ->
     off_main(app, move |state| Ok(workspace::search(&state.root()?, &query))).await
 }
 
+/// A document as the app has it, unsaved edits included.
+#[derive(Debug, Deserialize)]
+struct OpenDoc {
+    path: PathBuf,
+    file: HttpFile,
+}
+
+/// Find usages: every `{{name}}` reference in the workspace's `.http` files and
+/// env files. `open` documents are searched as given instead of from disk.
+#[tauri::command]
+async fn find_usages<R: tauri::Runtime>(app: AppHandle<R>, name: String, open: Vec<OpenDoc>) -> CmdResult<Vec<Usage>> {
+    let open: Vec<_> = open.into_iter().map(|d| (d.path, d.file)).collect();
+    off_main(app, move |state| Ok(workspace::usages(&state.root()?, &name, &open))).await
+}
+
 // ------------------------------------------------------------------ files
 
 #[tauri::command]
@@ -302,18 +370,41 @@ fn path_exists(path: PathBuf) -> bool {
 
 // ------------------------------------------------------------------ environments
 
-#[tauri::command]
-fn load_environments(state: State<'_, AppState>) -> CmdResult<EnvironmentSet> {
-    env::load(&state.root()?).map_err(err)
+/// The workspace folder `dir` names (relative to the root, `/`-separated; the root when
+/// missing or empty), confined to the workspace.
+fn env_folder(state: &AppState, dir: Option<&str>) -> CmdResult<PathBuf> {
+    let root = state.root()?;
+    let Some(dir) = dir.filter(|d| !d.is_empty()) else { return Ok(root) };
+    let path = state.confine(&dir.split('/').collect::<PathBuf>())?;
+    if !path.is_dir() {
+        return Err(format!("{dir} is not a folder of the workspace"));
+    }
+    Ok(path)
 }
 
+/// The environments in folder `dir`'s own pair of files (the root's by default): what
+/// the Environments modal edits.
 #[tauri::command]
-fn save_environments(state: State<'_, AppState>, set: EnvironmentSet) -> CmdResult<SaveReport> {
+fn load_environments(state: State<'_, AppState>, dir: Option<String>) -> CmdResult<EnvironmentSet> {
+    env::load(&env_folder(&state, dir.as_deref())?).map_err(err)
+}
+
+/// The environments of the requests in each folder below the root that has env files
+/// (ADR-0004); a request uses its nearest folder's, or the root's (`load_environments`).
+#[tauri::command]
+async fn load_folder_environments<R: tauri::Runtime>(app: AppHandle<R>) -> CmdResult<Vec<env::FolderEnvironments>> {
+    off_main(app, |state| env::load_folders(&state.root()?).map_err(err)).await
+}
+
+/// Saves `set` as folder `dir`'s own pair of files (the root's by default).
+#[tauri::command]
+fn save_environments(state: State<'_, AppState>, set: EnvironmentSet, dir: Option<String>) -> CmdResult<SaveReport> {
     let root = state.root()?;
+    let folder = env_folder(&state, dir.as_deref())?;
     // The core serializes, so the bytes are only known afterwards: mark both env files after saving.
-    let report = env::save(&root, &set).map_err(err)?;
+    let report = env::save_folder(&root, &folder, &set).map_err(err)?;
     for name in [env::ENV_FILE, env::PRIVATE_ENV_FILE] {
-        state.self_writes.wrote(&root.join(name));
+        state.self_writes.wrote(&folder.join(name));
     }
     Ok(report)
 }
@@ -330,8 +421,93 @@ struct SendProgress {
     received: usize,
 }
 
+/// What a request is sent with: the variables (its folder's environment from disk,
+/// then File variables, then its own, then its answered Prompt variables), the folder
+/// its relative paths start from, and a warning when its folder doesn't define the
+/// selected environment (it's then sent with none: ADR-0004).
+/// Shared by send and preview so the two can't disagree.
+struct RequestScope {
+    resolver: Resolver,
+    base_dir: PathBuf,
+    env_warning: Option<String>,
+}
+
+fn request_resolver(
+    root: Option<&Path>,
+    request: &Request,
+    file_path: Option<&Path>,
+    file_variables: &[Variable],
+    environment: Option<&str>,
+    prompt_values: &HashMap<String, String>,
+) -> Result<RequestScope, ExecError> {
+    let base_dir = file_path
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| root.map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let env_set = match root {
+        Some(r) => env::load_for(r, &base_dir).map_err(|e| ExecError::Other(e.to_string()))?,
+        None => EnvironmentSet::default(),
+    };
+    let env_warning = match (root, environment) {
+        (Some(r), Some(name)) if !env_set.environments.iter().any(|e| e.name == name) => Some(format!(
+            "Environment \"{name}\" isn't defined for {}, so it's sent with no environment",
+            folder_label(r, &base_dir)
+        )),
+        _ => None,
+    };
+    let env_vars = env::variables(&env_set, environment);
+    // A File variable of a Secret's name replaces it, so it's no Secret.
+    let secrets = env::secret_names(&env_set, environment)
+        .into_iter()
+        .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
+    let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
+        .with_secrets(secrets)
+        .with_prompts(&request.prompts(), prompt_values);
+    Ok(RequestScope { resolver, base_dir, env_warning })
+}
+
+/// A folder as the UI names it: relative to the workspace root with a trailing `/`
+/// (`api/users/`), or "the workspace root".
+fn folder_label(root: &Path, dir: &Path) -> String {
+    match env::relative_dir(root, dir) {
+        rel if rel.is_empty() => "the workspace root".into(),
+        rel => format!("{rel}/"),
+    }
+}
+
+/// The resolved preview: what `send_request` would send, without sending it (see
+/// `exec::preview`). Off the main thread, since it reads the environment files.
+#[tauri::command]
+async fn preview_request<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    request: Request,
+    file_path: Option<PathBuf>,
+    file_variables: Vec<Variable>,
+    environment: Option<String>,
+    prompt_values: Option<HashMap<String, String>>,
+) -> CmdResult<exec::RequestPreview> {
+    off_main(app, move |state| {
+        let root = state.root.lock().unwrap().clone();
+        let scope = request_resolver(
+            root.as_deref(),
+            &request,
+            file_path.as_deref(),
+            &file_variables,
+            environment.as_deref(),
+            &prompt_values.unwrap_or_default(),
+        )
+        .map_err(err)?;
+        let mut preview = exec::preview(&request, scope.resolver);
+        preview.warnings.splice(0..0, scope.env_warning);
+        Ok(preview)
+    })
+    .await
+}
+
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
+// Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn send_request<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -341,25 +517,24 @@ async fn send_request<R: tauri::Runtime>(
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
+    prompt_values: Option<HashMap<String, String>>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
-    let base_dir = file_path
-        .as_ref()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| root.clone())
-        .unwrap_or_else(|| PathBuf::from("."));
     let settings = state.settings.lock().unwrap().exec.clone();
 
     let (prepared, ssl) = {
-        let env_set = match &root {
-            Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
-            None => EnvironmentSet::default(),
-        };
-        let env_vars = env::variables(&env_set, environment.as_deref());
-        let resolver = Resolver::for_request(&env_vars, &file_variables, &request.variables, Some(&base_dir));
-        let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
+        let scope = request_resolver(
+            root.as_deref(),
+            &request,
+            file_path.as_deref(),
+            &file_variables,
+            environment.as_deref(),
+            &prompt_values.unwrap_or_default(),
+        )?;
+        let mut prepared = exec::prepare(&request, &scope.resolver, &scope.base_dir, &settings)?;
+        prepared.warnings.splice(0..0, scope.env_warning);
         let ssl = match (&root, &environment) {
-            (Some(r), Some(e)) => env::ssl_config(r, e),
+            (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
         (prepared, ssl)
@@ -670,6 +845,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             open_workspace,
             get_tree,
             search_requests,
+            find_usages,
             read_http_file,
             save_http_file,
             render_request,
@@ -680,8 +856,10 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             delete_permanently,
             path_exists,
             load_environments,
+            load_folder_environments,
             save_environments,
             send_request,
+            preview_request,
             cancel_request,
             save_response_body,
             format_body,
@@ -702,6 +880,7 @@ pub fn run() {
     with_commands(
         tauri::Builder::default()
             .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_clipboard_manager::init())
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init()),

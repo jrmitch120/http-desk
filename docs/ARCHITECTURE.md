@@ -12,11 +12,11 @@ and this document disagree, fix one of them. Terms in **bold** (**File variable*
 
 | Concern | Assessment |
 |---|---|
-| **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, saving a response body, formatting a body, a hex dump) is therefore an async command or runs on the blocking pool, so the window stays responsive. Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
+| **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, the resolved preview, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, saving a response body, formatting a body, a hex dump) is therefore an async command or runs on the blocking pool, so the window stays responsive. Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
 | **Rust core** | `.http` parsing, serialization, variable resolution, execution and OpenAPI generation all live in a plain library crate (`crates/httpdesk-core`) with **no Tauri dependency**. It can be tested with `cargo test` and no window, and could later be reused by a CLI. |
 | **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. TLS and redirect settings can differ per request or environment, so a client is built for its settings, and the shell keeps idle ones in an `exec::ClientPool` keyed by everything a client is built from (redirects, timeouts, TLS verification, CA and client certificate files by path, size and modification time, and the proxy environment variables). Each send checks out a client no other send is using, or a new one when none is idle (at most 8 are kept idle), so a later send can go over a connection an earlier one left open and the Timing tab can say "reused". Each client carries timing hooks (a DNS resolver wrapper, a connector layer and a redirect-policy wrapper) that measure the final request's DNS, connect + TLS, waiting and download phases, and a cookie recorder; both are cleared at the start of each send. |
 | **Svelte 5** | Runes (`$state`, `$derived`) handle the deeply nested request model without a separate store library. It compiles to small, fast bundles. Plain Vite SPA, without SvelteKit (no routing or SSR needed). |
-| **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) and the single-line URL editor (`{{variable}}` highlighting and autocompletion). |
+| **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) the single-line URL editor and the variable-aware value fields (`VarField`, [controls.md](controls.md#varfield)), which share `{{variable}}` highlighting, hover cards and autocompletion. |
 | **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. The UI uses HttpDesk's own controls and bundled fonts instead of native form widgets and system fonts, so it renders the same in every webview ([ADR-0002](adr/0002-owned-controls-over-native-widgets.md)); the controls are described in [controls.md](controls.md). |
 
 Rejected alternatives: Electron (size, needs a Node backend), a sidecar HTTP service
@@ -30,9 +30,9 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   parser.rs             .http text → HttpFile
   serializer.rs         HttpFile → .http text (lossless for untouched requests)
   query.rs              query param escaping, unescaping and send-time encoding (ADR-0001)
-  env.rs                http-client.env.json / http-client.private.env.json, gitignore check
+  env.rs                http-client.env.json / http-client.private.env.json, per-directory lookup, gitignore check
   vars.rs               {{variable}} + dynamic variable resolution
-  exec.rs               request execution via reqwest, send error classification
+  exec.rs               request preparation (shared by send and the resolved preview), execution via reqwest, send error classification
   exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
   exec/timing.rs        phase timing hooks (DNS, connect + TLS, redirects) for the Timing tab
   cookies.rs            Set-Cookie parsing, and the display-only cookie recorder plugged into reqwest
@@ -41,7 +41,7 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   json_filter.rs        RFC 9535 JSONPath filter bar: matches copied from the body's own text; shape summary for key completion
   tls_probe.rs          why a server's certificate was rejected (self-signed, expired)
   openapi/              OpenAPI 3.0/3.1 loading, validation, generation
-  workspace.rs          tree listing, search, ignore rule, atomic writes
+  workspace.rs          tree listing, search, find usages, ignore rule, atomic writes
 src-tauri/              thin Tauri shell: commands, app state
   confine.rs            workspace confinement for every path a command receives
   watcher.rs            file watcher
@@ -153,8 +153,8 @@ that wouldn't read back as variables, API key names with whitespace, header name
 containing `:` while it has a description (`# @param` splits at the first `:`), and a
 Basic auth username containing `:` (RFC 7617 can't represent it). The error names the
 request and the field. This backs up the UI, which checks header, API-key, Basic
-username and variable names as you type and edits single-line fields in plain inputs that can't hold a line
-break. Body text is written as is. A body line that `.http` would read as syntax (a
+username and variable names as you type and edits single-line fields in plain inputs or
+single-line editors (the URL bar, VarField) that can't hold a line break. Body text is written as is. A body line that `.http` would read as syntax (a
 `###` separator, or a column-0 `>>`, `> {%` or `> file.js` handler) gets an inline
 warning in the body editor instead.
 
@@ -517,21 +517,245 @@ sync, WebSocket, GraphQL, mocks.
 
 Decisions made during implementation, beyond the plan above:
 
-* **Environment files live at the workspace root.** Every request in the workspace
-  uses `http-client.env.json` / `http-client.private.env.json` from the root.
-  Per-directory env files (which JetBrains also supports) are not merged yet.
+* **Per-directory environment files** ([ADR-0004](adr/0004-per-directory-environment-files.md),
+  research in [research/per-directory-env-files.md](research/per-directory-env-files.md)).
+  Any folder can hold an `http-client.env.json` / `http-client.private.env.json` pair. For
+  a request, each environment name (and `$shared`) comes from the nearest folder whose
+  file defines it, looking in the request's folder and then each parent up to the
+  workspace root; public and private files are looked up separately, the private file's
+  values override the public file's, and a farther file of the same kind is never merged
+  into a nearer one (`env::load_for(root, dir)`; `env::load(dir)` is one folder's own
+  pair). `SSLConfiguration` comes from the same files, with paths relative to the file's
+  folder. Send and the resolved preview load the request's folder's environments from
+  disk (`request_resolver`); the frontend gets the root's own set (`load_environments`)
+  and one effective set per folder below the root that has env files
+  (`load_folder_environments` → `env::load_folders`, the explorer's folders), and a
+  request takes the nearest one at or above its folder (`src/lib/envFolders.ts`,
+  `app.envSetFor(path)`), so highlighting, hover, autocomplete and the checks use the
+  request's own environments. The picker lists every name in the workspace
+  (`app.envNames`) and marks the ones the active request's folder doesn't define ("not
+  defined for api/"). A request whose folders don't define the selected environment is
+  sent with none (only `$shared`), never with another folder's: the checks strip says
+  "staging isn't defined for `api/users/`" (check kind `envMissing`, fix "Choose
+  environment") and the response and preview carry the warning `Environment "staging"
+  isn't defined for api/users/, so it's sent with no environment`. Environments reload
+  when the watcher reports an env file in any folder or a folder change (a folder holding
+  env files moved in or deleted), and after the app itself moves or deletes a folder.
+  Each environment (and `$shared`) in a loaded set says which folders supply it
+  (`source` / `sharedSource`: the nearest folder whose public file defines it and the
+  nearest whose private file does, `env::EnvSource`); a Secret's value comes from the
+  private one, any other from the public one, so the frontend knows the supplying folder
+  of every value without reading the pairs.
+* <a id="environment-folders"></a>**The Environments modal edits one folder's own pair**
+  (`load_environments` / `save_environments` take `dir`, relative to the root, confined
+  to the workspace; `env::load(dir)` / `env::save_folder(root, dir, set)`). Its Folder
+  selector lists the root, every folder with env files, and the workspace's other
+  folders marked "Add environment files here…" (saving creates that folder's files, and
+  the `.gitignore` check and update apply to its private file as at the root). It opens
+  on the active request's nearest folder with env files (`app.envFolderFor`), or on the
+  folder a hover card's Edit points at (`Definition.dir`, the folder supplying the value
+  in use); switching folders with unsaved edits asks to save, discard or stay. Values
+  below the root can refer to what the folder's requests inherit from farther folders
+  (the matrix's and list's providers put the folder's own edits over its effective set),
+  and Edit on an inherited value switches to the folder supplying it. Production and
+  colour stay keyed by environment name across folders; a rename carries them over, and
+  they're dropped once no folder has the name. Saving marks the folder's two files as
+  self-writes, so the watcher doesn't report them. Below the root an environment whose
+  variables are all Secrets isn't added to the folder's public file (unless it's there
+  already): there it would supply the whole environment and hide a farther folder's public
+  values. Writes from outside the modal go to the folder whose files supply the
+  environment to the request (`writeFolder` in `src/lib/envFolders.ts`): the value in use
+  stays where it is (a Secret in its private file's folder); a new one goes to the folder
+  whose public file supplies the environment (else its private file's), so no nearer
+  file starts hiding a farther one. That covers the checks strip's "Add X to <env>" (the
+  quick fix carries `dir`) and Extract to an environment or all of them (each folder's
+  pair is loaded, changed and saved).
+* **Production environments and colours.** An environment can be marked production and
+  given a colour in the Environments modal. Both are stored in the app settings
+  (`environmentSettings`, keyed by workspace root, then environment name), never in the
+  env files, so other tools don't see extra keys they'd read as variables. Renaming an
+  environment in the modal carries them over, deleting it drops them, and duplicating it
+  copies them. Sending anything but GET, HEAD or OPTIONS with a production environment
+  first asks through the shared Dialog (Cancel focused), naming the environment
+  and the method; Cancel doesn't send. What counts is the environment the request is
+  sent with (`app.sentEnvironment(path)`): a request whose folders don't define the
+  selected environment is sent with none (ADR-0004), so it isn't asked about. The colour comes from a fixed palette
+  (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
+  bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
+  name keeps the text colour).
+* **Environments matrix.** The Environments modal opens on the list (one environment
+  at a time) unless the user picked the matrix (a List | Matrix switch, remembered as
+  the `envView` app setting; an unknown value opens the list): one row per variable name, a
+  column for Shared and one per environment, each cell a VarField that sees its own
+  column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
+  doesn't define the variable and Shared doesn't either; an environment cell Shared
+  supplies says "Uses shared", and the Shared column is never a gap. A variable defined
+  with an empty value isn't a gap: it reads "Empty" (dim and italic), so set-but-empty
+  and not set look different. Typing into a gap, or locking it, adds the variable
+  to that environment only; each cell has its own Secret lock. A set cell's Unset
+  button (shown on hover or focus) or its edit menu ("Unset in local", "Unset in
+  Shared", after Cut, Copy, Paste and Select all) removes the variable from that column (`unsetCell`), so it's "Not set" there
+  (a gap when nothing else supplies it) and Save leaves it out of both of the folder's
+  files; clearing the text only leaves an empty value. A row unset in every
+  column stays until the modal closes (`matrixNames` with the previous rows). Rows
+  are sorted by name, A→Z by default; the Variable header flips it to Z→A and back
+  (`sortNames`), for the app session (`app.envMatrixSort`, not saved). The sort
+  compares names only, so typing a value never moves a row, and a new variable
+  appears at its sorted place. The header's last cell, "+
+  Environment", adds an environment as a new column. Every other column resizes (drag
+  its header's right edge, or its separator's arrow keys; double-click or Enter fits it
+  to its widest value), and the widths are remembered per workspace in the app
+  settings (`envMatrixWidths`: the Variable column, then by column, `$shared` or the
+  environment's name). Like production and colour, a renamed environment's width
+  carries over (`app.carryMatrixWidth`) and Save drops the widths of environments no
+  folder has any more (`app.keepMatrixWidths`). A value that doesn't fit shows in full in a tooltip, never a
+  masked Secret's. "Add variable to all
+  environments" adds it, empty, to every environment that lacks it (not to Shared), so
+  every environment saves the key. A row's menu (right-click its name, or its actions
+  button) offers Find usages (which closes the modal, asking about unsaved edits first,
+  since the search reads the env files from disk), Rename… (see
+  [Rename variable](#rename-variable)) and "Delete from all environments" (Shared and
+  every environment of the folder, unsaved until Save). A "Filter variables" box above
+  the matrix narrows the rows to names, or shareable values in any column, containing
+  the text (never matching a Secret's value; `rowMatches`).
+  The matrix edits the modal's unsaved set
+  (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
+  the private file. An environment's column header has Rename…, Duplicate and
+  Delete environment… (its actions button, shown on hover or focus, or a right-click;
+  the same actions as the List view's buttons, so Delete confirms the same way); the
+  Shared header has none. Use, production and colour stay in the list.
 * **Variable precedence:** File variables > selected environment > `$shared`. Within an
   environment, a value in the private file overrides one in the shared file. Among File
   variables, the request's own declaration wins over a same-named one elsewhere in the
-  file. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
+  file. Values are resolved recursively in that same scope, so an environment's
+  `baseUrl = {{host}}/api` picks up a File variable `host`. Two resolvers apply these
+  rules: the core's `vars::Resolver` at send, and the frontend's `makeVarProvider`
+  (`src/lib/vars.ts`) for highlighting, hover and autocomplete. They are kept in step by
+  one set of cases, `crates/httpdesk-core/tests/fixtures/resolution-cases.json`, which
+  `tests/resolution_parity.rs` and `src/lib/vars.test.ts` both run. The frontend leaves
+  dynamic variables as written. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
   `$random.*`, `$datetime`, `$localDatetime`, `$processEnv`, `$env.X`, `$dotenv`) are
   resolved at send time. A dynamic variable with invalid or out-of-range arguments stops
-  the send with an error naming it.
-* **Unresolved variables:** if the URL's scheme or host still contains an unresolved
-  `{{variable}}` (typically `{{baseUrl}}` with no environment selected), the send fails
+  the send with an error naming it. The core generates only the names in
+  `vars::DYNAMIC_VARIABLES`; any other `{{$name}}` is an Undefined variable, in both
+  resolvers. Autocomplete lists them from `crates/httpdesk-core/dynamic-variables.json`
+  (with a description and an argument hint each), and a core test fails if that list
+  and `DYNAMIC_VARIABLES` differ.
+* **Undefined variables at send:** if the URL's scheme or host still contains an
+  Undefined variable (typically `{{baseUrl}}` with no environment selected), the send fails
   with an error naming the variables and suggesting an environment that defines them.
-  Anywhere else, unresolved variables are sent as written (in the query they are
-  percent-encoded like any other text) and reported as a warning on the response.
+  Anywhere else, Undefined variables are sent as written (in the query they are
+  percent-encoded like any other text) and reported as a warning on the response
+  ("Undefined variables: a, b", from `Resolver::undefined`).
+* **Undefined-variable checks** catch them before sending, without blocking it.
+  `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
+  the enabled auth's fields, an API key's name only as a query param; the enabled body
+  without `#~` lines or a form's comment lines) through the frontend resolver, so the
+  checks follow every edit synchronously. A name missing behind a defined one counts
+  where the outer reference is written; Circular references and unanswered Prompt
+  variables don't count. Every editor underlines an Undefined variable (`cm-var-bad`);
+  a masked field marks nothing, so its references are counted from the request, not
+  the field. The Params, Headers, Authorization and Body tabs show how many Undefined
+  variables each uses, and a strip above the sections (`CheckStrip.svelte`, hidden
+  when empty) lists each once with where it is used and its quick fixes: add an empty
+  variable to the selected environment, add an empty File variable at the top of the
+  file (each opens its row with the value focused, through `app.editDefinition` with
+  `add`), and select the first other environment that defines it. A `{{$name}}` the
+  core doesn't generate, or a name a `@name =` line can't hold, has no fixes. The strip
+  takes a list of `Check`s, one variant per kind of problem, so a new check (such as
+  an environment a request's folder doesn't define) adds a variant, its entries in
+  `requestChecks`, and a branch in the strip.
+* **Circular references:** a reference that leads back to a name already being resolved
+  (`a → b → a`, or `@host = {{host}}/v2`) is its own state, not an Undefined variable.
+  Resolution stops at the repeated name, leaves that reference as written, and records
+  the chain followed from the reference as written (`Resolver::circular`). There is no
+  depth limit; a chain without a cycle resolves however long it is. The URL bar and body
+  editor colour it apart (`cm-var-circular`) and hover shows "Circular: a → b → a". At
+  send, each chain is its own warning ("Circular variable reference: a → b → a"); one in
+  the URL's scheme or host fails the send with kind `circularVariable`, unless an
+  Undefined variable is also there, which is reported first.
+* <a id="find-usages"></a>**Find usages** (a hover card's button, or a row's menu in the
+  Environments matrix) lists every
+  `{{name}}` reference in the workspace in the sidebar, in place of the tree, until
+  closed. The search is the core's `workspace::usages(root, name, open)` behind the
+  `find_usages` command: each `.http`/`.rest` file the explorer lists (open documents as
+  the app has them, unsaved edits included, which `app.findUsages` sends), then the
+  values in every folder's env files (the root's, then each folder's in explorer order). It finds direct references only, as written:
+  a request's URL, param and header names and values, its auth fields (those of its
+  kind, including a query API key's name, which is resolved at send; a header key's
+  name is sent as written), its body text in any mode, its own `@name` values, the File variables at the
+  top of a file, and environment and shared values. A request that uses `{{base}}`,
+  whose value uses `{{host}}`, isn't listed under `host`; the `base` definition is. Each
+  result (`workspace::Usage`, `Usage` in `src/lib/types.ts`) says where the reference
+  is: file, request (as a search hit: index, name, method, URL), field (`RequestField`)
+  and its UTF-16 range in the field's text, so a rename can edit it; a reference that
+  isn't sent (disabled param, header, auth, body, section, or a `#~` form field or
+  multipart part line) is `disabled` and listed as such. Clicking a result
+  (`app.openUsage`) opens the request on its field (the URL bar, the row of a param or
+  header, the auth field, the Body section, or the `.http` source, with the line selected, for a request's own
+  `@name`), a File variable's row in Settings, or an environment value's cell in the
+  Environments matrix (its row in the list view), on the folder of its env file; the
+  list names that folder for values below the root (`Environment "dev" · api/`).
+* <a id="rename-variable"></a>**Rename variable** (a matrix row's Rename…) renames an
+  environment variable in Shared and every environment of the folder the Environments
+  modal shows (`app.renameVariable(name, dir)`) and, with "Update references"
+  (on by default), the references that mean that variable. Which ones follows
+  ADR-0004's nearest-folder rule (`renameScope` in `src/lib/rename.ts`): renaming `old`
+  in folder D's env files rewrites `{{old}}` in D's own env values, and in the `.http`
+  files in D or below it, except those with a nearer folder (between the file and D)
+  whose own env files also define a variable named `old`: for those requests `{{old}}`
+  is that nearer folder's variable. Files outside D, and other folders' env files and
+  their same-named variables, are left alone. Renaming saves the env files, so
+  unsaved edits in the Environments modal are saved first (the user is asked). The form
+  (`RenameVariable.svelte`, opened by `app.renameVariable(name, dir)` through
+  `app.renaming`, which carries `dir`) gets D's pair and exactly the usages that will
+  change from `app.renamePlan(name, dir)`. It refuses a name a reference can't use or
+  one D's Shared or an environment already has, and, since there is no undo beyond
+  version control, shows the files that will change with how many requests (File
+  variables, environment values) in each before anything is written. On Rename the
+  store renames it in a copy of D's saved pair, rewrites the references in its values,
+  and saves it with the usual
+  `save_environments` (a Secret stays in the private file); if that fails nothing else
+  changes. Then each `.http` file with references is loaded, edited at the usages'
+  ranges (`renameInFile` in `src/lib/rename.ts`: `{{ old }}` becomes `{{ new }}`, spacing
+  kept; a request is found at its index or by name, method and URL, and a range that no
+  longer holds the reference is skipped) and saved with `save_http_file` at once, so
+  untouched requests keep their bytes. A file that already had unsaved edits gets the
+  rename in memory only and stays unsaved. Both commands register their writes with
+  `SelfWrites`, so the watcher doesn't report them. References are matched by name, so
+  a `{{name}}` that resolves to a same-named File variable is renamed too.
+* **Prompt variables** (VS Code REST Client): `# @prompt name [description]` or
+  `// @prompt …` in a request's comment lines asks for a value at send. They are kept
+  as ordinary directives, so the file is written back unchanged; `Request::prompts()`
+  (and `requestPrompts` in `src/lib/http.ts`) reads them, a name declared twice once.
+  Before a send, the store asks for every prompt without a remembered value in one form
+  in the shared Dialog (`DialogState.fields`; the description is the help text, Cancel
+  cancels the send), then the production confirmation if any. Names `password`,
+  `passwd` and `pass` (any case) are typed masked; every field has a reveal button.
+  Values are remembered per request (by its frontend key, so reopening the tab doesn't
+  ask) in the store's memory only: never in settings, env files or the `.http` file,
+  and gone when the app quits. They travel as `promptValues` with `send_request` and
+  `preview_request`, and `Resolver::with_prompts` puts them over every other variable
+  of the same name, used as typed, and also inside File variables and environment
+  values that reference them (unlike REST Client). An unanswered prompt is left as
+  written and reported apart (`Resolver::unanswered`): it's never an Undefined variable.
+  The editors mark it `cm-var-prompt` (hover "Asked when sent"); the resolved preview
+  shows it as written (a placeholder, so a prompted host isn't a URL error), shows a
+  masked value as `••••••••`, and offers "Forget prompted values", after which the
+  next send asks again.
+* **Extract to variable** writes no new syntax. A File variable is a standard
+  `@name = value` line at the top of the file (or a new value for the same-named File
+  variable the request uses), an in-memory edit like any other, so it shows as unsaved
+  and untouched requests still save byte-for-byte. An environment destination (the
+  selected one, offered only when the request's folders define it, as the
+  "Add X to <env>" quick fix is: `extractTargets` in `src/lib/extract.ts`; or all of the
+  request's environments with the same value) goes through
+  `save_environments` at once, since env files have no unsaved state outside the
+  Environments modal, in the folder supplying each environment to the request (see
+  [the Environments modal](#environment-folders)). The
+  field puts `{{name}}` in place of its selection itself (`src/lib/codemirror/extract.ts`),
+  so every field owner sees an ordinary edit; the store (`app.extractVariable`) only
+  asks and writes the definition. See [controls.md](controls.md#varfield).
 * **Query encoding** follows [ADR-0001](adr/0001-query-encoding.md). The params table
   holds decoded names and values. In the file, only characters that would change the
   query's structure are percent-escaped: whitespace, `&`, `#`, `=` in names, and `%`
@@ -566,13 +790,14 @@ Decisions made during implementation, beyond the plan above:
   `src/lib/types.ts` is a union on it), unlike other commands, whose errors are strings.
   Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
   `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
-  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `file` (path,
+  (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `circularVariable` (chains, each
+  a list of names), `file` (path,
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
   turns verification off), the timeouts open the request's Settings, and
-  `unresolvedVariable` opens the environment picker. They ask through one-shot store
+  `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does). They ask through one-shot store
   fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
   component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
@@ -582,6 +807,36 @@ Decisions made during implementation, beyond the plan above:
   (`tls_probe.rs`). That probe connects directly, so it's skipped when reqwest would
   use a proxy for the URL (the same hyper-util matcher over HTTP_PROXY, HTTPS_PROXY,
   ALL_PROXY and NO_PROXY), and the reason stays the verifier's.
+* **The resolved preview** (the Resolved toggle under the URL bar, remembered as
+  `showResolved` in app settings) shows the request as it will be sent: method, URL,
+  every header (the auth header, the Content-Type the body implies, the defaults) and
+  the auth fields, with the active environment and File variables applied. The webview
+  asks `preview_request` 150 ms after the last edit, with the same arguments as
+  `send_request` (`requestArgs` in the store); the shell builds the resolver through the
+  same helper as send (`request_resolver`) on the blocking pool, and the core's
+  `exec::preview` runs `prepare`'s method/URL/header steps. Two deliberate
+  differences: dynamic variables that generate a new value on every send (`$uuid`,
+  `$timestamp`, `$random…`, `$datetime`, …) aren't generated but shown as written
+  (`Resolver::previewing` puts private-use placeholder markers in their place, which
+  survive query encoding and are swapped back at the end; Basic credentials holding one
+  are shown as `Basic base64(user:{{$uuid}})`), and the body isn't shown and no `< file`
+  is read (only resolved for its undefined-variable warnings); the Content-Type comes
+  from the body mode (`implied_content_type`). A request that couldn't be sent (an
+  undefined or circular host, a relative URL without Host) is still shown, with the classified
+  error a send would give. `$processEnv`, `$dotenv` and `$env.X` read existing values,
+  so they are resolved. Secrets are masked as in hover cards: `request_resolver` tells
+  the resolver which names are Secrets (`env::secret_names`, less any a File variable
+  replaces; `Resolver::with_secrets`), and in the preview every reference whose value a
+  Secret went into, directly or through other variables (`Authorization: {{auth}}` with
+  `auth = Bearer {{token}}`), resolves to its value between two private-use marks
+  (`vars::SECRET_MARKS`; query-encoded marks are turned back, Basic credentials holding
+  one are shown unencoded like a placeholder, and the scheme and URL checks read the
+  value). The preview shows each marked value as `••••••••` with one Reveal Secrets /
+  Hide Secrets button for the whole preview; an error message never reveals it (the
+  URL in it is masked). A masked Prompt variable stays `••••••••` with no reveal.
+  The header-origin notes beside each header (from Authorization, from Body, default)
+  and the "Can't be sent: …" line for a request that would fail before the network are
+  part of the preview too.
 * **The Request tab shows the final hop.** After redirects, the core rebuilds the request
   that reached the final server with reqwest's rules: 301/302 turn a POST into a GET
   and 303 anything but HEAD, dropping the body and its Content-* headers; a hop to
@@ -644,13 +899,13 @@ Decisions made during implementation, beyond the plan above:
 | Layer | Tests |
 |---|---|
 | Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported, bodies that fail to decode), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (recorded, never sent back), and a reused client listing only each request's own cookies. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
+| Execution | `tests/preview.rs`: the resolved preview gives the same method, URL, headers and warnings as `prepare` (query encoding with and without `# @no-auto-encoding`, every auth kind, bodies), dynamic variables stay placeholders, a body file is never read but its implied Content-Type is shown, a request that can't be sent is shown with the reason, and prompted values are shown (masked ones masked) with unanswered prompts as written. `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses, content encodings (gzip, br, deflate, zstd, unsupported, bodies that fail to decode), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (recorded, never sent back), and a reused client listing only each request's own cookies. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
-| Env, vars, workspace | Unit tests in each module |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/`: the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments, OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
-| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk, including folders below the root) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/` (`confinement.rs`, `deleting.rs`, `folder_envs.rs`, `paths.rs`, `preview.rs`, `renaming.rs`, `usages.rs`, `watcher.rs`): the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, Pretty text sent with a small response and fetched by response id for a large one (exact numbers, invalid and evicted bodies), environments (matrix edits keeping Secrets only in the private file, and the List | Matrix choice, List by default, surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning; saving a nested folder's environments leaving the root's files untouched, keeping Secrets in that folder's git-ignored private file, and not being reported by the watcher), environment settings (production, colour) surviving a restart without touching the env files, Find usages (`usages.rs`: references read from disk, from open documents with unsaved edits, and in env values), Rename variable (`renaming.rs`: the env and `.http` writes keep Secrets in the private file and untouched requests byte-for-byte, and aren't reported by the watcher), the preview marking every value a Secret went into (`preview.rs`), OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression), `send-progress` events for a trickled body, and a second send reusing the connection the first left open (the client pool) |
+| Frontend | `src/lib/http.test.ts` (URL ⇄ params sync, base64 decoded length, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, unsetting a cell, stable row order, sorting by name, adding to all environments, the row filter), `src/lib/envFolders.test.ts` (per-directory environments: a file's folder, the nearest folder's set, every environment name, which folder's files a write goes to), `src/lib/usages.test.ts` (Find usages rows: one per field, how each field, File variable and environment value is named, nested folders), `src/lib/rename.test.ts` (Rename variable: rewriting references in every field and in env values, the name check, the preview rows, and which usages a rename in a folder covers under ADR-0004), `src/lib/extract.test.ts` (Extract to variable: the name rule, conflicts, and the destinations offered), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`) |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |

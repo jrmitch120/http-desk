@@ -9,10 +9,14 @@ test("single-line fields drop pasted line breaks", async ({ page }) => {
   await name.fill("List\npets");
   await expect(name).not.toHaveValue(/\n/);
 
+  // Header values are variable-aware fields; e2e/variable-fields.spec.ts covers typing and pasting line breaks.
   await page.locator(".subtab", { hasText: "Headers" }).click();
-  const value = page.getByPlaceholder("Value").first();
-  await value.fill("*/*\nX-Injected: 1");
-  await expect(value).not.toHaveValue(/\n/);
+  const value = page.locator(".kv-row").first().locator(".c-value");
+  await value.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText("*/*\nX-Injected: 1");
+  await expect(value.locator(".cm-line")).toHaveCount(1);
+  await expect(value).toHaveText("*/*X-Injected: 1");
 });
 
 test("header names that would break the file show an inline error", async ({ page }) => {
@@ -45,13 +49,20 @@ test("a Basic auth username containing ':' shows an inline error", async ({ page
   await page.getByRole("combobox", { name: "Authorization type" }).click();
   await page.getByRole("option", { name: "Basic Auth" }).click();
 
-  const username = page.getByPlaceholder("{{username}}");
-  await username.fill("dom:ain");
+  // A variable-aware field (#80): typed into; the textbox is its editor while it has focus.
+  const username = page.getByRole("textbox", { name: "Username" });
+  await username.click();
+  await page.keyboard.type("dom:ain");
   await expect(username).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert")).toHaveText("Basic auth usernames can't contain ':'");
+  await page.keyboard.press("Tab");
+  await expect(username).toHaveAttribute("aria-invalid", "true");
 
-  await username.fill("domain");
+  await username.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("domain");
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(username).not.toHaveAttribute("aria-invalid", "true");
 });
 
 test("a body line starting with ### shows an inline warning", async ({ page }) => {

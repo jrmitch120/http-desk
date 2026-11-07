@@ -16,6 +16,7 @@ const HEADINGS: Record<SendErrorKind, string> = {
   timeoutConnect: "Timed out",
   invalidUrl: "Invalid URL",
   unresolvedVariable: "Undefined variables in the URL",
+  circularVariable: "Circular variable in the URL",
   file: "Couldn't read a file",
   other: "Could not send request",
 };
@@ -61,6 +62,10 @@ function hint(err: SendError): string | null {
       return `The connection timeout fired: couldn't connect within ${humanMs(err.details.timeoutMs)}.`;
     case "unresolvedVariable":
       return `Not defined: ${err.details.names.join(", ")}. Choose an environment that defines them.`;
+    case "circularVariable":
+      return err.details.chains
+        .map((chain) => `Change a value in ${chain.join(" → ")} so the chain doesn't come back to ${chain[chain.length - 1]}.`)
+        .join(" ");
     case "invalidUrl":
     case "file":
       return null;

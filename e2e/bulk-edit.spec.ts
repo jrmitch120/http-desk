@@ -20,5 +20,5 @@ test("bulk-edit text is applied as it's typed, so switching tabs keeps it", asyn
 
   const names = page.locator(".kv-row:not(.ghost) input.c-name");
   await expect(names.last()).toHaveValue("X-Bulk");
-  await expect(page.locator(".kv-row:not(.ghost) input.c-value").last()).toHaveValue("yes");
+  await expect(page.locator(".kv-row:not(.ghost) .c-value").last()).toHaveText("yes");
 });

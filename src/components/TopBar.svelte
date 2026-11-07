@@ -3,7 +3,9 @@
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
+  import { folderLabel } from "../lib/envFolders";
   import { THEMES, themeLabel } from "../lib/themes";
+  import { envColorShade } from "../lib/envColors";
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -22,13 +24,20 @@
     ]);
   }
 
-  const envOptions: SelectOption[] = $derived([
-    { value: "", label: "No environment" },
-    ...(app.envSet?.environments.map((e) => ({ value: e.name, label: e.name })) ?? []),
-  ]);
+  // Every environment in the workspace (ADR-0004). With a request open, names its folder
+  // doesn't define are marked: picking one sends that request with no environment.
+  const envOptions: SelectOption[] = $derived.by(() => {
+    const tab = app.activeTab;
+    const own = tab ? app.envSetFor(tab.path) : null;
+    const note = tab && app.root ? `not defined for ${folderLabel(app.folderOf(tab.path))}` : "";
+    return [
+      { value: "", label: "No environment" },
+      ...app.envNames.map((name) => ({ value: name, label: name, note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined })),
+    ];
+  });
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
-  // "Choose environment" on an unresolved-variable error opens the picker.
+  // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
   $effect(() => {
     if (app.envPickerWanted && envSelect) {
@@ -71,7 +80,7 @@
     <Icon name="import" size={14} />Import OpenAPI
   </button>
 
-  <div class="env" class:none={!app.envName}>
+  <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
     <Icon name="globe" size={14} />
     <Select
       bind:this={envSelect}
@@ -80,7 +89,7 @@
       value={app.envName ?? ""}
       onchange={(v) => app.selectEnvironment(v || null)}
       label="Active environment"
-      tooltip="Active environment"
+      tooltip="Active environment (⌘⌥E / Ctrl Alt E)"
     />
     <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
   </div>
@@ -189,6 +198,13 @@
   }
   .env.none {
     color: var(--muted);
+  }
+  /* The environment's own colour (Environments modal) on the icon and border,
+     with a faint wash behind; the name keeps --text, so it reads in both themes. */
+  .env.tinted {
+    color: var(--env-color);
+    border-color: var(--env-color);
+    background: color-mix(in srgb, var(--env-color) 12%, var(--panel-2));
   }
   .env :global(.env-select) {
     height: 28px;

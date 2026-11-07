@@ -5,8 +5,10 @@
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import VarField from "../lib/codemirror/VarField.svelte";
+  import type { VarProvider } from "../lib/codemirror/setup";
 
-  let { auth }: { auth: Auth } = $props();
+  let { auth = $bindable(), variables = null }: { auth: Auth; variables?: VarProvider | null } = $props();
   let reveal = $state(false);
 
   // A header key is written as a header line; either way the name goes on the `# @httpdesk-auth` line, which splits at spaces.
@@ -69,33 +71,36 @@
 
   <div class="right">
     {#if auth.kind === "basic"}
-      <label class="field">
+      <div class="field">
         <span>Username</span>
-        <input class="input mono" bind:value={auth.username} placeholder={"{{username}}"} spellcheck="false" aria-invalid={usernameError ? "true" : undefined} />
+        <VarField class="input mono" value={auth.username} onchange={(v) => (auth.username = v)} placeholder={"{{username}}"} label="Username" invalid={!!usernameError} {variables} />
         {#if usernameError}<span class="field-error" role="alert">{usernameError}</span>{/if}
-      </label>
-      <label class="field">
+      </div>
+      <div class="field">
         <span>Password</span>
         <div class="with-btn">
-          <input class="input mono" type={reveal ? "text" : "password"} bind:value={auth.password} placeholder={"{{password}}"} spellcheck="false" />
+          <VarField class="input mono" value={auth.password} onchange={(v) => (auth.password = v)} placeholder={"{{password}}"} label="Password" masked={!reveal} {variables} />
           <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
-      </label>
+      </div>
     {:else if auth.kind === "bearer"}
-      <label class="field">
+      <div class="field">
         <span>Token</span>
         <div class="with-btn">
-          <input class="input mono" type={reveal || auth.token.startsWith("{{") ? "text" : "password"} bind:value={auth.token} placeholder={"{{token}}"} spellcheck="false" />
+          <VarField class="input mono" value={auth.token} onchange={(v) => (auth.token = v)} placeholder={"{{token}}"} label="Token" masked={!reveal && !auth.token.startsWith("{{")} {variables} />
           <button class="icon-btn" aria-label={reveal ? "Hide" : "Show"} use:tooltip onclick={() => (reveal = !reveal)}><Icon name={reveal ? "eye-off" : "eye"} /></button>
         </div>
-      </label>
+      </div>
     {:else if auth.kind === "apiKey"}
-      <label class="field">
+      <div class="field">
         <span>Key</span>
-        <input class="input mono" bind:value={auth.keyName} placeholder="X-API-Key" spellcheck="false" aria-invalid={keyNameError ? "true" : undefined} />
+        <VarField class="input mono" value={auth.keyName} onchange={(v) => (auth.keyName = v)} placeholder="X-API-Key" label="Key" invalid={!!keyNameError} {variables} />
         {#if keyNameError}<span class="field-error" role="alert">{keyNameError}</span>{/if}
-      </label>
-      <label class="field"><span>Value</span><input class="input mono" bind:value={auth.keyValue} placeholder={"{{apiKey}}"} spellcheck="false" /></label>
+      </div>
+      <div class="field">
+        <span>Value</span>
+        <VarField class="input mono" value={auth.keyValue} onchange={(v) => (auth.keyValue = v)} placeholder={"{{apiKey}}"} label="Value" {variables} />
+      </div>
       <div class="field">
         <span>Add to</span>
         <Select class="auth-select" options={locations} value={auth.keyLocation} onchange={(v) => (auth.keyLocation = v)} label="Add to" />
@@ -132,7 +137,7 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .field .input,
+  .field :global(.var-field),
   .field :global(.auth-select) {
     width: 100%;
     color: var(--text);
@@ -141,13 +146,16 @@
     color: var(--danger);
     font-size: 11.5px;
   }
-  .field .input[aria-invalid="true"] {
+  .field :global(.var-field:has([aria-invalid="true"])) {
     border-color: var(--danger);
   }
   .with-btn {
     display: flex;
     gap: 4px;
     align-items: center;
+  }
+  .with-btn :global(.var-field) {
+    flex: 1;
   }
   .help {
     margin: 0;

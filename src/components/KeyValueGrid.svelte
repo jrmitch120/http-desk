@@ -13,6 +13,8 @@
     index: number;
     ghost: boolean;
     set: (patch: Partial<R>) => void;
+    /** The id of the column being rendered, so one snippet can serve several columns. */
+    column: string;
   }
 
   /** The built-in columns. "description" isn't a track: it's a line under the row, wherever it's listed. */
@@ -26,12 +28,29 @@
     /** A CSS grid track size, e.g. `80px` or `1fr`. */
     width: string;
     cell: Snippet<[GridCell<R>]>;
+    /** Renders the header cell instead of `header` (a button that sorts by the column, or a command). It gets the column's id. */
+    headerCell?: Snippet<[string]>;
+    /** Makes the header a `columnheader` with this `aria-sort`, for a column the rows can be sorted by. */
+    sort?: "ascending" | "descending" | "none";
+    /**
+     * Makes the column resizable: a ColumnResizer at its header cell's right edge,
+     * named `label`. `onresize` reports the new width in px (`done` once a drag ends,
+     * or at once for keys and fitting); the caller stores it and passes it back as `width`.
+     */
+    resize?: { label: string; onresize: (width: number, done: boolean) => void };
   }
 
   /** A built-in column by name, a built-in with its own width, or a custom column. */
   export type Column<R> = BuiltinColumn | { id: BuiltinColumn; width: string } | CustomColumn<R>;
 
   const WIDTHS: Record<BuiltinColumn, string> = { enable: "34px", name: "38%", value: "1fr", description: "", delete: "34px" };
+  /** What can take focus in a value cell: an input, or a VarField's static rendering. */
+  const FOCUSABLE = 'input, textarea, [tabindex]:not([tabindex="-1"])';
+  /** Limits of a resizable column, px, and one arrow-key step. */
+  export const COLUMN_LIMITS = { min: 100, max: 1200, step: 16 };
+  /** The element whose text sets a cell's width when its column is fitted: a VarField's
+   *  text (static, or its editor's line), or an element the caller marks `data-fit`. */
+  const FIT_TEXT = "[data-fit], .vf-static, .cm-line";
 </script>
 
 <script lang="ts" generics="R extends GridRow">
@@ -44,9 +63,13 @@
   import { SvelteSet } from "svelte/reactivity";
   import { formatBulk, KEY_VALUE_ROWS, parseBulk } from "../lib/http";
   import Checkbox from "./Checkbox.svelte";
+  import ColumnResizer from "./ColumnResizer.svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
+  import VarField from "../lib/codemirror/VarField.svelte";
+  import type { VarProvider } from "../lib/codemirror/setup";
 
   interface Props {
     items: R[];
@@ -70,10 +93,14 @@
     visible?: (row: R) => boolean;
     /** Offer bulk edit (the rows as text). */
     bulkEdit?: boolean;
+    /** Show the trailing ghost row that adds a row as you type in it. */
+    addRows?: boolean;
     /** Show the "description" column's line under each row (Settings' "Show parameter descriptions"). */
     showDescriptions?: boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
+    /** Makes the built-in value cells variable-aware fields (VarField) with these variables. */
+    variables?: VarProvider | null;
   }
   let {
     items = $bindable(),
@@ -89,18 +116,29 @@
     nameError = () => null,
     visible = () => true,
     bulkEdit = true,
+    addRows = true,
     showDescriptions = true,
     onchange,
+    variables,
   }: Props = $props();
 
-  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]> };
+  type Track = {
+    id: string;
+    width: string;
+    header: string;
+    cell?: Snippet<[GridCell<R>]>;
+    headerCell?: Snippet<[string]>;
+    sort?: CustomColumn<R>["sort"];
+    resize?: CustomColumn<R>["resize"];
+  };
 
   const tracks: Track[] = $derived(
     columns.flatMap((c): Track[] => {
       const col = typeof c === "string" ? { id: c, width: WIDTHS[c] } : c;
       if (col.id === "description") return [];
       const header = "header" in col ? col.header : col.id === "name" ? namePlaceholder : col.id === "value" ? valuePlaceholder : "";
-      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: "cell" in col ? col.cell : undefined }];
+      const custom = "cell" in col ? col : undefined;
+      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: custom?.cell, headerCell: custom?.headerCell, sort: custom?.sort, resize: custom?.resize }];
     }),
   );
   const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
@@ -120,7 +158,7 @@
   let addedUnder = $state.raw<Props["visible"]>();
   const shown = (row: R) => (addedUnder === visible && added.has(row)) || visible(row);
   /** Each shown row with its position in `items`, so hidden rows don't shift indexes. */
-  const rows = $derived([...items.map((row, i) => ({ row, i })).filter(({ row }) => shown(row)), { row: ghost, i: items.length }]);
+  const rows = $derived([...items.map((row, i) => ({ row, i })).filter(({ row }) => shown(row)), ...(addRows ? [{ row: ghost, i: items.length }] : [])]);
 
   function changed() {
     onchange?.(items);
@@ -217,6 +255,65 @@
     return { destroy: () => el.removeEventListener("input", fit) };
   }
 
+  let root: HTMLDivElement;
+  /**
+   * Puts focus in `row`'s value cell, scrolled into view (a hover card's Edit
+   * lands here). False when the row isn't shown (bulk edit, or filtered out).
+   */
+  export function focusValue(row: R): boolean {
+    const i = bulk ? -1 : rows.findIndex((r) => r.row === row);
+    const cell = root.querySelectorAll(":scope > .kv-row")[i]?.querySelector<HTMLElement>(".c-value");
+    const target = cell?.matches(FOCUSABLE) ? cell : cell?.querySelector<HTMLElement>(FOCUSABLE);
+    if (!target) return false;
+    target.scrollIntoView({ block: "nearest" });
+    target.focus();
+    return true;
+  }
+
+  // ---- resizable columns
+  /** Each resizable column's width as laid out, px (its separator's value). */
+  const laidOut = new SvelteMap<string, number>();
+  function measure(node: HTMLElement, id: string) {
+    // The layout size, not the bounding box, which a transform (the modal opening) scales.
+    const observer = new ResizeObserver(([entry]) => laidOut.set(id, Math.round(entry.borderBoxSize[0].inlineSize)));
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
+  /** Takes the new width at once, so the next key press steps from it rather than from the last layout. */
+  function resized(id: string, resize: NonNullable<Track["resize"]>, width: number, done: boolean) {
+    laidOut.set(id, width);
+    resize.onresize(width, done);
+  }
+
+  /** How much wider (or, negative, narrower) `text` would need to be to show all of its text. */
+  function shortfall(text: HTMLElement): number {
+    if (text.matches(".cm-line")) {
+      const scroller = text.closest<HTMLElement>(".cm-scroller");
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      // Room for the caret at the end.
+      return scroller ? range.getBoundingClientRect().width + 2 - scroller.clientWidth : 0;
+    }
+    const before = text.getBoundingClientRect().width;
+    const { width, flex, maxWidth } = text.style;
+    Object.assign(text.style, { width: "max-content", flex: "none", maxWidth: "none" });
+    const natural = text.getBoundingClientRect().width;
+    Object.assign(text.style, { width, flex, maxWidth });
+    return natural - before;
+  }
+
+  /** The width that shows the widest value of column `id` (its header included) in full. */
+  function fitWidth(id: string): number {
+    const c = CSS.escape(`c-${id}`);
+    let widest = COLUMN_LIMITS.min;
+    for (const cell of root.querySelectorAll<HTMLElement>(`:scope > .kv-head > .${c}, :scope > .kv-row > .${c}`)) {
+      const text = cell.querySelector<HTMLElement>(FIT_TEXT);
+      if (text) widest = Math.max(widest, cell.getBoundingClientRect().width + shortfall(text));
+    }
+    return Math.min(COLUMN_LIMITS.max, Math.ceil(widest));
+  }
+
   const allOn = $derived(items.length > 0 && items.every((r) => r.enabled));
   function enableAll(on: boolean) {
     items.forEach((r) => (r.enabled = on));
@@ -224,7 +321,7 @@
   }
 </script>
 
-<div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label}>
+<div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label} bind:this={root}>
   <div class="kv-head" style:grid-template-columns={template}>
     {#if bulk}
       {#if hasEnable}<span class="c-check"></span>{/if}
@@ -238,7 +335,23 @@
             {/if}
           </span>
         {:else}
-          <span class="c-{t.id}">{t.header}</span>
+          {#if t.resize}
+            {@const resize = t.resize}
+            <span class="c-{t.id} resizable" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort} use:measure={t.id}>
+              {#if t.headerCell}{@render t.headerCell(t.id)}{:else}{t.header}{/if}
+              <ColumnResizer
+                label={resize.label}
+                width={laidOut.get(t.id) ?? 0}
+                min={COLUMN_LIMITS.min}
+                max={COLUMN_LIMITS.max}
+                step={COLUMN_LIMITS.step}
+                onresize={(width, done) => resized(t.id, resize, width, done)}
+                onfit={() => resized(t.id, resize, fitWidth(t.id), true)}
+              />
+            </span>
+          {:else}
+            <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell(t.id)}{:else}{t.header}{/if}</span>
+          {/if}
         {/if}
       {/each}
     {/if}
@@ -261,7 +374,7 @@
             </span>
           {:else if t.cell}
             <div class="c-extra c-{t.id}" class:divider={divider(c)}>
-              {@render t.cell({ row, index: i, ghost: isGhost, set: (patch) => set(row, patch) })}
+              {@render t.cell({ row, index: i, ghost: isGhost, set: (patch) => set(row, patch), column: t.id })}
             </div>
           {:else if t.id === "name"}
             <input
@@ -275,7 +388,11 @@
               use:suggest={{ options: suggestions, label: `${namePlaceholder} suggestions` }}
             />
           {:else if t.id === "value"}
-            <input class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
+            {#if variables}
+              <VarField class="cell c-value{divider(c) ? ' divider' : ''}" value={row.value} placeholder={valuePlaceholder} label={valuePlaceholder} {variables} onchange={(value) => set(row, { value } as Partial<R>)} />
+            {:else}
+              <input class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
+            {/if}
           {:else if t.id === "delete"}
             <span class="c-del">
               {#if !isGhost}
@@ -297,10 +414,10 @@
               onblur={commitEdit}
             ></textarea>
           {:else if row.description}
-            <button class="desc" style:grid-column="{subStart} / -1" use:tooltip={row.description} onclick={() => startEdit(row)}>{row.description}</button>
+            <button class="desc" style:grid-column="{subStart} / -1" use:tooltip={row.description} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>{row.description}</button>
           {:else}
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
-            <button class="desc add" style:grid-column="{subStart} / -1" onmousedown={(e) => e.preventDefault()} onclick={() => startEdit(row)}>Add description</button>
+            <button class="desc add" style:grid-column="{subStart} / -1" onmousedown={(e) => e.preventDefault()} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>Add description</button>
           {/if}
         {/if}
         {#if error}
@@ -336,6 +453,16 @@
     overflow: hidden;
     white-space: nowrap;
   }
+  /* A resizable column's header holds its resize handle at the right edge. */
+  .kv-head > span.resizable {
+    position: relative;
+  }
+  /* A header with its own control (a sort button, a command) lays it out itself. */
+  .kv-head > span.has-control {
+    display: flex;
+    align-items: center;
+    padding-left: var(--space-1);
+  }
   .kv-head > span.c-hint {
     grid-column: 1 / -1;
     padding-right: 110px;
@@ -356,7 +483,7 @@
     padding-top: var(--space-2);
   }
   .kv-row > .c-name,
-  .kv-row > .c-value,
+  .kv-row > :global(.c-value),
   .kv-row > .c-extra,
   .kv-row > .c-del {
     grid-row: 1;
@@ -421,10 +548,15 @@
     background: var(--panel-2);
     color: var(--text);
     resize: none;
-    outline: var(--focus-ring);
-    outline-offset: var(--focus-ring-offset);
     overflow: hidden;
     white-space: pre-wrap;
+  }
+  /* The line runs to the grid's right edge, which clips: inset the ring so all
+     of it shows. */
+  .desc:focus-visible,
+  .desc-edit {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-inset);
   }
   .desc-edit::placeholder {
     color: var(--faint);
@@ -475,21 +607,26 @@
     font-size: 12.5px;
     padding: 0 var(--space-2) 0 10px;
   }
-  .kv .divider {
+  .kv :global(.divider) {
     border-right: 1px solid var(--border);
   }
-  .kv :global(.cell:focus) {
+  .kv :global(.cell:focus),
+  .kv :global(.var-field.cell:focus-within) {
     background: var(--panel-2);
   }
-  /* Text cells match :focus-visible on a click too, so they keep the ring then. */
-  .kv :global(.cell:focus-visible) {
+  /* Text cells match :focus-visible on a click too, so they keep the ring then.
+     A VarField cell shows it while its editor (or static rendering) has focus. */
+  .kv :global(.cell:focus-visible),
+  .kv :global(.var-field.cell:focus-within) {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }
   .kv :global(.cell::placeholder) {
     color: var(--faint);
   }
-  .kv-row.off :global(.cell) {
+  /* A VarField's editor sits in a flex box, which a decoration doesn't reach. */
+  .kv-row.off :global(.cell),
+  .kv-row.off :global(.cell .cm-line) {
     color: var(--faint);
     text-decoration: line-through;
     text-decoration-color: color-mix(in srgb, var(--faint) 60%, transparent);

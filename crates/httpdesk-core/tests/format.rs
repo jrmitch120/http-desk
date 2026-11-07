@@ -98,6 +98,34 @@ fn parses_vscode_fixture() {
 }
 
 #[test]
+fn prompt_variables_are_read_from_hash_and_slash_comments_with_or_without_a_description() {
+    let src = "# @prompt username\n// @prompt otp Your one-time password\n#@prompt  password   \n# @prompt otp again\nGET https://x/{{username}}\n";
+    let f = parse(src);
+    let prompts = f.requests[0].prompts();
+    let names: Vec<_> = prompts.iter().map(|p| (p.name.as_str(), p.description.as_str(), p.masked())).collect();
+    assert_eq!(
+        names,
+        [("username", "", false), ("otp", "Your one-time password", false), ("password", "", true)],
+        "declared once each, in order; the first description wins"
+    );
+    assert_eq!(serialize(&f), src, "written back unchanged");
+
+    let profile = &parse(VSCODE).requests[1];
+    assert_eq!(profile.prompts().iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["otp"]);
+}
+
+#[test]
+fn only_password_like_prompt_names_are_masked() {
+    let masked = |name: &str| Prompt { name: name.into(), description: String::new() }.masked();
+    for name in ["password", "Password", "PASSWD", "pass", "PaSs"] {
+        assert!(masked(name), "{name}");
+    }
+    for name in ["passphrase", "userPassword", "otp", "token"] {
+        assert!(!masked(name), "{name}");
+    }
+}
+
+#[test]
 fn parses_url_only_and_custom_methods() {
     let f = parse(
         "https://example.com/a\n\n###\nPURGE https://example.com/cache\n\n### lower\nget https://example.com/b\n",
@@ -176,6 +204,25 @@ fn editing_one_request_leaves_others_untouched() {
     assert!(out.starts_with(before));
     let after = &JETBRAINS[JETBRAINS.find("### Basic auth").unwrap()..];
     assert!(out.ends_with(after));
+}
+
+#[test]
+fn extracting_a_file_variable_rewrites_only_the_header_and_the_edited_request() {
+    // Extract to variable: a new `@name` line at the top, `{{name}}` in one request's URL.
+    let mut f = parse(JETBRAINS);
+    f.header.variables.push(Variable { name: "exampleHost".into(), value: "https://example.com".into() });
+    f.requests[2].url = "{{exampleHost}}/comments".into();
+    let out = serialize(&f);
+
+    assert!(out.starts_with(
+        "@host = https://httpbin.org\n@userId = 42\n@exampleHost = https://example.com\n\n### Get request"
+    ));
+    assert!(out.contains("### Multi-line query\nGET {{exampleHost}}/comments?page=2&pageSize=10\n"));
+    let untouched_before =
+        &JETBRAINS[JETBRAINS.find("### Get request").unwrap()..JETBRAINS.find("### Multi-line query").unwrap()];
+    assert!(out.contains(untouched_before));
+    let untouched_after = &JETBRAINS[JETBRAINS.find("### Basic auth").unwrap()..];
+    assert!(out.ends_with(untouched_after));
 }
 
 #[test]

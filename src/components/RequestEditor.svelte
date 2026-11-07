@@ -4,12 +4,15 @@
 </script>
 
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
-  import { makeVarProvider } from "../lib/vars";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
+  import { envVariables, makeVarProvider } from "../lib/vars";
+  import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { AUTH_FIELDS } from "../lib/usages";
+  import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
@@ -17,6 +20,8 @@
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
+  import ResolvedPreview from "./ResolvedPreview.svelte";
+  import CheckStrip from "./CheckStrip.svelte";
   import Badge from "./Badge.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import Banner from "./Banner.svelte";
@@ -31,7 +36,40 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
-  const variables = $derived(doc ? makeVarProvider(app.envVariables, fileVariables(doc.file), app.envName) : null);
+  // The request's own environments: its folder's (ADR-0004). An environment the folder
+  // doesn't define gives none, like the send.
+  const envSet = $derived(app.envSetFor(tab.path));
+  const variables = $derived.by(() => {
+    if (!doc) return null;
+    const scope = {
+      env: envVariables(envSet, app.envName),
+      fileVars: fileVariables(doc.file),
+      headerVars: doc.file.header.variables,
+      requestVars: req?.variables ?? [],
+      envName: app.envName,
+      prompts: req ? requestPrompts(req) : [],
+      answers: app.promptAnswers(tab),
+    };
+    return {
+      ...makeVarProvider(scope),
+      edit: (d: Definition) => app.editDefinition(tab.id, d),
+      findUsages: (name: string) => app.findUsages(name),
+      extract: (value: string) => app.extractVariable(tab.id, value),
+    };
+  });
+
+  // Pre-send checks: the strip, and each section tab's count of Undefined variables.
+  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path)) : []);
+  function undefinedIn(s: Section): number {
+    return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
+  }
+  function fix(check: Check, fix: QuickFix) {
+    if (fix.kind === "selectEnvironment") app.selectEnvironment(fix.env);
+    else if (fix.kind === "chooseEnvironment") app.chooseEnvironment();
+    else if (check.kind !== "undefined") return;
+    else if (fix.kind === "addToEnvironment") app.editDefinition(tab.id, { kind: "env", env: fix.env, name: check.name, dir: fix.dir, add: true });
+    else app.editDefinition(tab.id, { kind: "file", name: check.name, add: true });
+  }
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
   $effect(() => {
@@ -47,13 +85,58 @@
 
   let showSource = $state(false);
   let source = $state("");
+  /** The request (as JSON) `source` was rendered from. */
+  let rendered = $state<string | null>(null);
+  let sourceEditor = $state<Editor>();
+  /** One of the request's own `@name` lines (index into `variables`) to select once the source shows it. */
+  let declaration = $state<number | null>(null);
+
+  // A Find usages result or a hover card's Edit: show the field holding the reference. A
+  // request's own `@name` lines have no field of their own, so its .http source shows them,
+  // with the line selected.
+  let urlInput = $state<UrlInput>();
+  let paramsGrid = $state<KeyValueGrid<KeyValue>>();
+  let headersGrid = $state<KeyValueGrid<KeyValue>>();
+  let panel = $state<HTMLElement>();
+
+  $effect(() => {
+    const want = app.fieldWanted;
+    if (want?.tabId !== tab.id || !req) return;
+    app.fieldWanted = null;
+    const field = want.field;
+    showSource = field.kind === "variable";
+    if (field.kind === "url") {
+      tick().then(() => urlInput?.focus());
+      return;
+    }
+    if (field.kind === "variable") {
+      declaration = field.index;
+      return;
+    }
+    section = field.kind === "param" ? "params" : field.kind === "header" ? "headers" : field.kind;
+    tick().then(() => {
+      if (field.kind === "param") paramsGrid?.focusValue(req.query.items[field.index]);
+      else if (field.kind === "header") headersGrid?.focusValue(req.headers.items[field.index]);
+      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_FIELDS[field.part].label}"]`)?.focus();
+    });
+  });
   $effect(() => {
     if (!showSource || !req) return;
     const snap = JSON.stringify(req);
     const t = setTimeout(async () => {
       source = await api.renderRequest(JSON.parse(snap)).catch((e) => `# ${e}`);
+      rendered = snap;
     }, 120);
     return () => clearTimeout(t);
+  });
+  $effect(() => {
+    if (declaration === null || !showSource || !req || !sourceEditor || rendered !== JSON.stringify(req)) return;
+    // The source lists the request's named `@name` lines in order, before anything else starting with `@`.
+    const nth = req.variables.slice(0, declaration + 1).filter((v) => v.name).length;
+    let seen = 0;
+    const line = source.split("\n").findIndex((l) => l.startsWith("@") && ++seen === nth) + 1;
+    declaration = null;
+    tick().then(() => sourceEditor?.revealLine(line));
   });
 
   const HEADER_NAMES = [
@@ -133,6 +216,7 @@
         mono
       />
       <UrlInput
+        bind:this={urlInput}
         value={composeUrl(req)}
         onchange={(v) => applyUrlText(req, v)}
         onenter={() => app.send(tab.id)}
@@ -146,51 +230,64 @@
       {/if}
     </div>
 
+    <ResolvedPreview {tab} />
+    <CheckStrip {checks} onfix={fix} />
+
     {#if showSource}
       <div class="source">
         <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor value={source} readonly language="text" /></div>
+        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="text" /></div>
       </div>
     {:else}
+      {#snippet undefinedCount(s: Section)}
+        {@const n = undefinedIn(s)}
+        {#if n}
+          <span class="undefined-count" use:tooltip={`${n} Undefined variable${n > 1 ? "s" : ""}`}><Badge tone="danger">{n}</Badge></span>
+        {/if}
+      {/snippet}
       <nav class="subtabs">
         <button class="subtab" class:active={section === "params"} class:off={!req.query.enabled} onclick={() => (section = "params")}>
           <span class="label">Params</span>
           {#if !req.query.enabled}<Badge>OFF</Badge>{:else if qCount}<span class="count">{qCount}</span>{/if}
+          {@render undefinedCount("params")}
         </button>
         <button class="subtab" class:active={section === "headers"} class:off={!req.headers.enabled} onclick={() => (section = "headers")}>
           <span class="label">Headers</span>
           {#if !req.headers.enabled}<Badge>OFF</Badge>{:else if hCount}<span class="count">{hCount}</span>{/if}
+          {@render undefinedCount("headers")}
         </button>
         <button class="subtab" class:active={section === "auth"} class:off={!req.auth.enabled && req.auth.kind !== "none"} onclick={() => (section = "auth")}>
           <span class="label">Authorization</span>
           {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
+          {@render undefinedCount("auth")}
         </button>
         <button class="subtab" class:active={section === "body"} class:off={!req.body.enabled && req.body.mode !== "none"} onclick={() => (section = "body")}>
           <span class="label">Body</span>
           {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
+          {@render undefinedCount("body")}
         </button>
         <button class="subtab" class:active={section === "settings"} onclick={() => (section = "settings")}>
           <span class="label">Settings</span>
         </button>
       </nav>
 
-      <div class="panel" class:fill={section === "body"}>
+      <div class="panel" class:fill={section === "body"} bind:this={panel}>
         {#if section === "params"}
           <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
-          <KeyValueGrid bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" />
+          <KeyValueGrid bind:this={paramsGrid} bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" {variables} />
           <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
         {:else if section === "headers"}
           <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueGrid bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} />
+          <KeyValueGrid bind:this={headersGrid} bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} {variables} />
           {#if req.auth.kind !== "none" && req.auth.enabled}
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
         {:else if section === "auth"}
-          <AuthEditor auth={req.auth} />
+          <AuthEditor bind:auth={req.auth} {variables} />
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} file={doc.file} />
+          <RequestSettings {req} bind:file={doc.file} {variables} />
         {/if}
       </div>
     {/if}

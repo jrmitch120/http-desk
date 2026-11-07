@@ -6,8 +6,9 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { base64DecodedLength } from "../lib/http";
-import type { JsonShape, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
+import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been evicted. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -17,6 +18,24 @@ const files: Record<string, unknown> = {
   [`${ROOT}/api/pets.http`]: pets,
   [`${ROOT}/samples/jetbrains.http`]: jetbrains,
 };
+// `?prompts=otp One-time code;password` declares Prompt variables (`# @prompt …`) on pets.http's first request.
+const promptsParam = new URLSearchParams(location.search).get("prompts");
+if (promptsParam) {
+  const withPrompts = structuredClone(pets);
+  (withPrompts.requests[0] as { directives: unknown[] }).directives = promptsParam.split(";").map((value) => ({ name: "prompt", value }));
+  files[`${ROOT}/api/pets.http`] = withPrompts;
+}
+// `?requestVars=1` declares File variables inside requests: List pets' own `@page = 2` and
+// `@size = 10`, and Create pet's `@kind = cat`.
+if (new URLSearchParams(location.search).get("requestVars") === "1") {
+  const withVars = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  (withVars.requests[0] as { variables: unknown[] }).variables = [
+    { name: "page", value: "2" },
+    { name: "size", value: "10" },
+  ];
+  (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
+  files[`${ROOT}/api/pets.http`] = withVars;
+}
 const tree = {
   name: "demo",
   path: ROOT,
@@ -35,8 +54,200 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
-type EnvMap = Record<string, Record<string, unknown>>;
+// `?folderEnvs=1`: api/ has env files of its own (ADR-0004). Its public file defines `local`
+// with its own baseUrl (the root's private `local` token still applies: private files are
+// looked up separately) and `qa`, which no other folder defines.
+const folderEnvs = new URLSearchParams(location.search).get("folderEnvs") === "1";
+type MockSet = typeof envSet;
+type MockSource = { public: string | null; private: string | null };
 type MockEnvVar = { name: string; value: string; secret: boolean };
+/** Each folder's own pair of env files below the root, by folder relative to the root (the root's is `envSet`). */
+const folderPairs: Record<string, MockSet> = folderEnvs
+  ? {
+      api: {
+        shared: [],
+        environments: [
+          { name: "local", variables: [{ name: "baseUrl", value: "http://127.0.0.1:9001", secret: false }] },
+          { name: "qa", variables: [{ name: "baseUrl", value: "https://qa.example.com", secret: false }] },
+        ],
+        privateFileIgnored: true,
+      },
+    }
+  : {};
+const pairOf = (dir: string): MockSet | undefined => (dir ? folderPairs[dir] : envSet);
+/**
+ * A rough `env::load_for`: for each environment (and `$shared`) the nearest folder of
+ * `chain` whose public part defines it (listed with a shareable value, or with no
+ * values at all) and the nearest whose private part does (a Secret), private values
+ * over public ones. `label` names the folders in `source` (`load_environments` gives a
+ * pair's own folder as "").
+ */
+function loadFor(chain: string[], label = (d: string) => d): MockSet & { sharedSource?: MockSource } {
+  const definesPublic = (vars: MockEnvVar[] | undefined, env: boolean) => !!vars && (vars.some((v) => !v.secret) || (env && !vars.some((v) => v.secret)));
+  const definesPrivate = (vars: MockEnvVar[] | undefined) => !!vars?.some((v) => v.secret);
+  const pick = (get: (s: MockSet) => MockEnvVar[] | undefined, env: boolean) => {
+    const of = (d: string) => {
+      const pair = pairOf(d);
+      return pair && get(pair);
+    };
+    const pub = chain.find((d) => definesPublic(of(d), env));
+    const priv = chain.find((d) => definesPrivate(of(d)));
+    if (pub === undefined && priv === undefined) return null;
+    const vars: MockEnvVar[] = pub === undefined ? [] : of(pub)!.filter((v) => !v.secret).map((v) => ({ ...v }));
+    for (const v of priv === undefined ? [] : of(priv)!.filter((v) => v.secret)) {
+      const i = vars.findIndex((x) => x.name === v.name);
+      if (i >= 0) vars[i] = { ...v };
+      else vars.push({ ...v });
+    }
+    return { vars, source: { public: pub === undefined ? null : label(pub), private: priv === undefined ? null : label(priv) } };
+  };
+  const names = [...new Set([...chain].reverse().flatMap((d) => pairOf(d)?.environments.map((e) => e.name) ?? []))];
+  const shared = pick((s) => s.shared, false);
+  return {
+    shared: shared?.vars ?? [],
+    ...(shared ? { sharedSource: shared.source } : {}),
+    environments: names.flatMap((name) => {
+      const e = pick((s) => s.environments.find((e) => e.name === name)?.variables, true);
+      return e ? [{ name, variables: e.vars, source: e.source }] : [];
+    }),
+    privateFileIgnored: pairOf(chain[0])?.privateFileIgnored ?? envSet.privateFileIgnored,
+  };
+}
+/** The folders a request in `dir` looks in, nearest first, ending at the root. */
+const chainOf = (dir: string) => [...dir.split("/").filter(Boolean).map((_, i, a) => a.slice(0, a.length - i).join("/")), ""];
+/** What `load_folder_environments` gives: each folder below the root with env files, with its requests' environments. */
+function folderEnvironments() {
+  return Object.keys(folderPairs)
+    .sort()
+    .map((dir) => ({ dir, set: loadFor(chainOf(dir)) }));
+}
+/** The environments of a request in the file at `path`: its nearest folder's with env files, else the root's. */
+const envSetFor = (path: string | null) =>
+  folderEnvironments()
+    .filter((f) => path?.startsWith(`${ROOT}/${f.dir}/`))
+    .sort((a, b) => b.dir.length - a.dir.length)[0]?.set ?? envSet;
+type PreviewArgs = {
+  request: Request;
+  filePath: string | null;
+  fileVariables: { name: string; value: string }[];
+  environment: string | null;
+  promptValues?: Record<string, string>;
+};
+/**
+ * A rough stand-in for the core's `exec::preview` (tested for real in Rust), resolving
+ * through the frontend's resolver (`makeVarProvider`, kept in step with the core's):
+ * dynamic variables kept as written; each value a Secret went into between the Secret
+ * marks; a masked prompted value masked, unanswered ones kept as written; query values
+ * percent-encoded; the Content-Type the body implies; the default headers.
+ */
+function previewRequest({ request: r, filePath, fileVariables, environment, promptValues = {} }: PreviewArgs) {
+  const own = envSetFor(filePath) as EnvironmentSet;
+  const prompts = requestPrompts(r);
+  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues });
+  const undefinedNames = new Set<string>();
+  const circular: string[][] = [];
+  // Reference by reference, as the core marks each one a Secret went into.
+  const resolve = (text: string): string =>
+    segments(text)
+      .map(({ text: whole, ref }) => {
+        if (ref === undefined) return whole;
+        if (prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
+        const res = vars.resolve(whole);
+        res.undefined.forEach((n) => undefinedNames.add(n));
+        circular.push(...res.circular);
+        return res.secret ? `${SECRET_OPEN}${res.value}${SECRET_CLOSE}` : res.value;
+      })
+      .join("");
+  const encode = (text: string) =>
+    segments(text)
+      .map(({ text, ref }) => (ref !== undefined && isDynamic(ref) ? text : encodeURIComponent(resolve(text))))
+      .join("")
+      .replaceAll(encodeURIComponent(SECRET_OPEN), SECRET_OPEN)
+      .replaceAll(encodeURIComponent(SECRET_CLOSE), SECRET_CLOSE);
+  const a = r.auth;
+  const headers: [string, string][] = [];
+  const auth: [string, string][] = [];
+  const params = r.query.enabled ? r.query.items.filter((p) => p.enabled && p.name).map((p) => `${encode(p.name)}=${encode(p.value)}`) : [];
+  if (a.enabled && a.kind === "basic") {
+    auth.push(["Username", resolve(a.username)], ["Password", resolve(a.password)]);
+    // Like the core: credentials with a Secret are shown unencoded, so it can be masked.
+    const creds = `${auth[0][1]}:${auth[1][1]}`;
+    headers.push(["Authorization", `Basic ${creds.includes(SECRET_OPEN) ? `base64(${creds})` : btoa(creds)}`]);
+  } else if (a.enabled && a.kind === "bearer") {
+    auth.push(["Token", resolve(a.token.trim())]);
+    headers.push(["Authorization", `Bearer ${auth[0][1]}`]);
+  } else if (a.enabled && a.kind === "apiKey") {
+    auth.push(["Key", a.keyName], ["Value", resolve(a.keyValue)]);
+    if (a.keyLocation === "header") headers.push([a.keyName, auth[1][1]]);
+    else params.push(`${encode(a.keyName)}=${encode(a.keyValue)}`);
+  }
+  if (r.headers.enabled) for (const h of r.headers.items.filter((h) => h.enabled && h.name)) headers.push([resolve(h.name), resolve(h.value)]);
+  let url = resolve(r.url.trim()) + (params.length ? `?${params.join("&")}` : "");
+  const plain = url.replaceAll(SECRET_OPEN, "").replaceAll(SECRET_CLOSE, "");
+  if (!plain.includes("://") && !plain.startsWith("{{")) url = `http://${url}`;
+  const has = (name: string) => headers.some(([n]) => n.toLowerCase() === name);
+  const implied = { json: "application/json", xml: "application/xml", text: "text/plain", formUrlEncoded: "application/x-www-form-urlencoded" } as Record<string, string>;
+  if (r.body.enabled && r.body.text.trim() && implied[r.body.mode] && !has("content-type")) headers.push(["Content-Type", implied[r.body.mode]]);
+  if (!has("user-agent")) headers.push(["User-Agent", "HttpDesk/0.1.0"]);
+  if (!has("accept-encoding")) headers.push(["Accept-Encoding", "gzip, deflate, br, zstd"]);
+  if (r.body.enabled) resolve(r.body.text);
+  const hostVars = [...url.split(/[/?#]/, url.includes("://") ? 3 : 1).join("/").matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((m) => m[1]);
+  const error = hostVars.length
+    ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
+    : null;
+  const warnings = undefinedNames.size ? [`Undefined variables: ${[...undefinedNames].sort().join(", ")}`] : [];
+  for (const chain of new Set(circular.map((c) => c.join(" → ")))) warnings.push(`Circular variable reference: ${chain}`);
+  if (environment && !own.environments.some((e) => e.name === environment)) {
+    const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
+    warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
+  }
+  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
+}
+/**
+ * A rough stand-in for the core's `workspace::usages` (tested for real in Rust):
+ * every `{{name}}` in the files (open documents as given), then in the env values.
+ */
+function findUsages(name: string, open: { path: string; file: any }[]) {
+  const out: unknown[] = [];
+  const refs = (text: string) =>
+    [...text.matchAll(/\{\{(.*?)\}\}/g)].filter((m) => m[1].trim() === name).map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
+  for (const [path, disk] of Object.entries(files) as [string, any][]) {
+    const f = open.find((o) => o.path === path)?.file ?? disk;
+    f.header.variables.forEach((v: any, index: number) => refs(v.value).forEach((p) => out.push({ kind: "fileVariable", path, index, name: v.name, ...p })));
+    f.requests.forEach((r: Request, index: number) => {
+      const hit = { kind: "request", path, index, name: r.name.trim() || `${r.method} ${r.url}`, method: r.method, url: r.url };
+      const fields: [unknown, string, boolean][] = [
+        ...r.variables.map((v, i): [unknown, string, boolean] => [{ kind: "variable", index: i, name: v.name }, v.value, false]),
+        [{ kind: "url" }, r.url, false],
+      ];
+      for (const [kind, s] of [["param", r.query], ["header", r.headers]] as const)
+        s.items.forEach((kv, i) => {
+          for (const part of ["name", "value"] as const) fields.push([{ kind, index: i, name: kv.name, part }, kv[part], !s.enabled || !kv.enabled]);
+        });
+      const a = r.auth;
+      const apiKey: AuthPart[] = a.keyLocation === "query" ? ["keyName", "keyValue"] : ["keyValue"];
+      const auth = ({ none: [], basic: ["username", "password"], bearer: ["token"], apiKey } as Record<string, AuthPart[]>)[a.kind];
+      for (const part of auth) fields.push([{ kind: "auth", part }, a[part], !a.enabled]);
+      if (r.body.mode !== "none") fields.push([{ kind: "body" }, r.body.text, !r.body.enabled]);
+      for (const [field, text, off] of fields)
+        for (const p of refs(text)) {
+          const line = text.slice(text.lastIndexOf("\n", p.start - 1) + 1).trimStart();
+          out.push({ ...hit, field, disabled: off || ((field as any).kind === "body" && line.startsWith("#~")), ...p });
+        }
+    });
+  }
+  for (const dir of ["", ...Object.keys(folderPairs).sort()]) {
+    const pair = pairOf(dir)!;
+    const envs: [string, MockEnvVar[]][] = [["$shared", pair.shared], ...pair.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
+    const folder = dir ? `${ROOT}/${dir}` : ROOT;
+    for (const [env, vars] of envs)
+      for (const v of vars)
+        for (const p of refs(v.value))
+          out.push({ kind: "environment", path: `${folder}/http-client${v.secret ? ".private" : ""}.env.json`, env, name: v.name, secret: v.secret, ...p });
+  }
+  return out;
+}
+type EnvMap = Record<string, Record<string, unknown>>;
 /**
  * What saving writes to http-client.env.json (`shared`) and
  * http-client.private.env.json (`private`), like `env::save` in the Rust core:
@@ -66,12 +277,17 @@ let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   recentWorkspaces: [ROOT],
   environments: { [ROOT]: "local" },
+  environmentSettings: {} as Record<string, Record<string, { production?: boolean; color?: string | null }>>,
   theme: new URLSearchParams(location.search).get("theme") ?? "system",
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,
   sidebarWidth: 280,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
+  showResolved: false,
+  // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
+  envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
+  envMatrixWidths: {},
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -82,20 +298,33 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
+/** The `promptValues` each `send_request` got, in order. */
+const sentPrompts: Record<string, string>[] = [];
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
 const shapeRequests: string[] = [];
 let settingsServed = false;
 let prettyRequests = 0;
+let previewRequests = 0;
+let windowTitle: string | null = null;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
+  sentPrompts,
+  /** The window title the app last set. */
+  get title() {
+    return windowTitle;
+  },
   /** How many times the viewer called `pretty_response`; a test may reset it. */
   get prettyRequests() {
     return prettyRequests;
   },
   set prettyRequests(n: number) {
     prettyRequests = n;
+  },
+  /** How many times the resolved preview called `preview_request`. */
+  get previewRequests() {
+    return previewRequests;
   },
   /** Whether the app has been given its settings yet. */
   get settingsServed() {
@@ -123,6 +352,10 @@ let prettyRequests = 0;
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
     return clone(envFiles);
+  },
+  /** Each folder's own pair of env files below the root, as last saved, by folder ("api"). */
+  get folderPairs() {
+    return clone(folderPairs);
   },
 };
 
@@ -188,6 +421,10 @@ const sendErrors: SendErrorFixtures = {
     message:
       "The URL's scheme or host uses undefined variables: baseUrl. Pick an environment that defines them, or declare them as file variables.",
     details: { names: ["baseUrl"] },
+  },
+  circularVariable: {
+    message: "The URL's scheme or host uses a circular variable reference: baseUrl → host → baseUrl.",
+    details: { chains: [["baseUrl", "host", "baseUrl"]] },
   },
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
@@ -450,6 +687,12 @@ mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
+      case "plugin:clipboard-manager|read_text":
+        // The browser's clipboard (tests replace navigator.clipboard to control it).
+        return navigator.clipboard.readText().catch(() => "");
+      case "plugin:window|set_title":
+        windowTitle = args.value;
+        return null;
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);
         await settingsReleased;
@@ -466,11 +709,24 @@ mockIPC(
       case "get_tree":
         return tree;
       case "load_environments":
-        return clone(envSet);
-      case "save_environments":
-        envSet = args.set;
+        if (args?.dir && !findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
+        return clone(loadFor([args?.dir ?? ""], () => ""));
+      case "load_folder_environments":
+        return clone(folderEnvironments());
+      case "save_environments": {
+        // Sources are what loading reports; saving ignores them.
+        const set = clone(args.set) as MockSet & { sharedSource?: unknown; environments: { source?: unknown }[] };
+        delete set.sharedSource;
+        for (const e of set.environments) delete e.source;
+        if (args.dir) {
+          if (!findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
+          folderPairs[args.dir] = set;
+          return { gitignoreUpdated: false };
+        }
+        envSet = set;
         envFiles = splitEnvFiles(envSet, envFiles);
         return { gitignoreUpdated: false };
+      }
       case "read_http_file":
         return clone(files[args.path]);
       case "save_http_file":
@@ -496,9 +752,13 @@ mockIPC(
       case "delete_permanently":
         removeNode(args.path);
         return null;
+      case "preview_request":
+        previewRequests++;
+        return previewRequest(args as unknown as PreviewArgs);
       case "render_request": {
         const r = args.request;
-        return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+        const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
+        return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
@@ -511,8 +771,11 @@ mockIPC(
           }),
         );
       }
+      case "find_usages":
+        return findUsages(String(args.name), args.open ?? []);
       case "send_request": {
         sent.push(clone(args.request));
+        sentPrompts.push(clone(args.promptValues ?? {}));
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
