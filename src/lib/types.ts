@@ -171,6 +171,16 @@ export interface EnvironmentSet {
   privateFileIgnored: boolean | null;
 }
 
+/**
+ * The environments of the requests in a folder below the workspace root that has env
+ * files of its own (and in its subfolders that have none): core `env::FolderEnvironments`.
+ */
+export interface FolderEnvironments {
+  /** Relative to the workspace root, `/`-separated (`api/users`). */
+  dir: string;
+  set: EnvironmentSet;
+}
+
 export interface SentRequest {
   method: string;
   url: string;

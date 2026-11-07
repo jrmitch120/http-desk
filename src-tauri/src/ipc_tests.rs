@@ -4,6 +4,7 @@
 
 mod confinement;
 mod deleting;
+mod folder_envs;
 mod paths;
 mod preview;
 mod usages;

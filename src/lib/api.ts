@@ -7,6 +7,7 @@ import type {
   FormatMode,
   JsonShape,
   EnvironmentSet,
+  FolderEnvironments,
   GenerateOptions,
   GenerateReport,
   HttpFile,
@@ -51,6 +52,8 @@ export const api = {
   pathExists: (path: string) => invoke<boolean>("path_exists", { path }),
 
   loadEnvironments: () => invoke<EnvironmentSet>("load_environments"),
+  /** Each folder below the root with env files, with the environments its requests get (ADR-0004). */
+  loadFolderEnvironments: () => invoke<FolderEnvironments[]>("load_folder_environments"),
   saveEnvironments: (set: EnvironmentSet) => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set }),
 
   sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),

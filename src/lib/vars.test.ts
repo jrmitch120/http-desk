@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
 import type { EnvironmentSet, EnvVar, Variable } from "./types";
 import { DYNAMIC_VARIABLES, envVariables, makeVarProvider, varSegments } from "./vars";
+import { environmentsFor } from "./envFolders";
 
 type EnvFile = Record<string, Record<string, string>>;
 interface Case {
   case: string;
   envFiles?: { public?: EnvFile; private?: EnvFile };
+  /** The same pair for folders below the root, by relative path. */
+  folders?: Record<string, { public?: EnvFile; private?: EnvFile }>;
+  /** The folder of the request's file (default: the root). */
+  dir?: string;
   environment?: string | null;
   file?: Variable[];
   request?: Variable[];
@@ -20,10 +25,15 @@ interface Case {
 }
 
 /**
- * The environment set the core's `load_environments` hands the frontend for these
- * files: public then private, a private value overriding and marking a Secret.
+ * The environment set the core hands the frontend for a request in folder `dir`
+ * (`env::load_for`): for each environment name, the nearest folder whose file
+ * defines it, public and private files looked up separately; public then private,
+ * a private value overriding and marking a Secret.
  */
-function loaded(files: Case["envFiles"]): EnvironmentSet {
+function loaded(c: Case, dir = ""): EnvironmentSet {
+  const files = (d: string) => (d ? c.folders?.[d] : c.envFiles);
+  const chain = dir.split("/").filter(Boolean).map((_, i, all) => all.slice(0, i + 1).join("/"));
+  chain.unshift("");
   const set: EnvironmentSet = { shared: [], environments: [], privateFileIgnored: null };
   const vars = (env: string): EnvVar[] => {
     if (env === "$shared") return set.shared;
@@ -31,8 +41,11 @@ function loaded(files: Case["envFiles"]): EnvironmentSet {
     if (!e) set.environments.push((e = { name: env, variables: [] }));
     return e.variables;
   };
-  for (const [file, secret] of [[files?.public, false], [files?.private, true]] as const) {
-    for (const [env, entries] of Object.entries(file ?? {})) {
+  for (const [kind, secret] of [["public", false], ["private", true]] as const) {
+    // Farthest first, so a nearer file replaces the whole environment.
+    const nearest = new Map<string, Record<string, string>>();
+    for (const d of chain) for (const [env, entries] of Object.entries(files(d)?.[kind] ?? {})) nearest.set(env, entries);
+    for (const [env, entries] of nearest) {
       const list = vars(env);
       for (const [name, value] of Object.entries(entries)) {
         const v = list.find((x) => x.name === name);
@@ -214,11 +227,17 @@ describe("what hovering a Prompt variable shows", () => {
   });
 });
 
+/** What the frontend picks for the case's request from what the core gives it: the root's set and each folder's. */
+function requestEnvironments(c: Case): EnvironmentSet | null {
+  const folders = Object.keys(c.folders ?? {}).map((dir) => ({ dir, set: loaded(c, dir) }));
+  return environmentsFor(loaded(c), folders, c.dir ?? "");
+}
+
 describe("the frontend resolver agrees with the core on the shared cases", () => {
   it.each((shared.cases as Case[]).map((c) => [c.case, c] as const))("%s", (_, c) => {
     const environment = c.environment ?? null;
     const provider = makeVarProvider({
-      env: envVariables(loaded(c.envFiles), environment),
+      env: envVariables(requestEnvironments(c), environment),
       fileVars: c.file ?? [],
       requestVars: c.request ?? [],
       envName: environment,

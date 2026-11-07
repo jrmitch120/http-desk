@@ -1,6 +1,7 @@
 //! The core resolver against the cases in `fixtures/resolution-cases.json`, which
 //! `src/lib/vars.test.ts` also runs the frontend resolver through: if either
-//! resolver drifts from the expected answers, its side fails.
+//! resolver drifts from the expected answers, its side fails. Env files are read from
+//! disk the way a send reads them (`env::load_for` for the request's folder).
 
 use httpdesk_core::env;
 use std::collections::HashMap;
@@ -20,6 +21,12 @@ struct Case {
     case: String,
     #[serde(default)]
     env_files: EnvFiles,
+    /// Env files of folders below the root, by relative path.
+    #[serde(default)]
+    folders: HashMap<String, EnvFiles>,
+    /// The folder of the request's file, relative to the root.
+    #[serde(default)]
+    dir: String,
     #[serde(default)]
     environment: Option<String>,
     #[serde(default)]
@@ -77,20 +84,26 @@ fn the_core_resolver_gives_the_shared_answers() {
     let cases: Cases = serde_json::from_str(&text).unwrap();
     assert!(!cases.cases.is_empty());
     for c in cases.cases {
-        let dir = tempfile::tempdir().unwrap();
-        if let Some(public) = &c.env_files.public {
-            std::fs::write(dir.path().join(env::ENV_FILE), public.to_string()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for (folder, files) in std::iter::once(("", &c.env_files)).chain(c.folders.iter().map(|(d, f)| (d.as_str(), f)))
+        {
+            let dir = root.path().join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(public) = &files.public {
+                std::fs::write(dir.join(env::ENV_FILE), public.to_string()).unwrap();
+            }
+            if let Some(private) = &files.private {
+                std::fs::write(dir.join(env::PRIVATE_ENV_FILE), private.to_string()).unwrap();
+            }
         }
-        if let Some(private) = &c.env_files.private {
-            std::fs::write(dir.path().join(env::PRIVATE_ENV_FILE), private.to_string()).unwrap();
-        }
-        let set = env::load(dir.path()).unwrap();
+        let dir = root.path().join(&c.dir);
+        let set = env::load_for(root.path(), &dir).unwrap();
         let vars = env::variables(&set, c.environment.as_deref());
         let prompts: Vec<Prompt> =
             c.prompts.iter().map(|p| Prompt { name: p.name.clone(), description: String::new() }).collect();
         let answers: HashMap<String, String> =
             c.prompts.iter().filter_map(|p| Some((p.name.clone(), p.value.clone()?))).collect();
-        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(dir.path())).with_prompts(&prompts, &answers);
+        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(&dir)).with_prompts(&prompts, &answers);
         let value = r.resolve(&c.text);
         assert!(
             value == c.value || matches_with_dynamics(&c.value, &value),
