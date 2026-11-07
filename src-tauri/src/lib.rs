@@ -72,6 +72,20 @@ struct AppSettings {
     /// How the Environments modal shows variables.
     #[serde(deserialize_with = "or_default")]
     env_view: EnvView,
+    /// Per workspace: the Environments matrix's column widths, as the user resized them.
+    #[serde(deserialize_with = "or_default")]
+    env_matrix_widths: HashMap<String, MatrixWidths>,
+}
+
+/// Column widths of the Environments matrix in one workspace, px. Columns not
+/// listed keep their default width.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct MatrixWidths {
+    /// The Variable column.
+    variable: Option<f64>,
+    /// By column: `$shared` for the shared variables, else the environment's name.
+    columns: HashMap<String, f64>,
 }
 
 /// How the Environments modal shows variables (`envView` in the settings file).
@@ -130,6 +144,7 @@ impl Default for AppSettings {
             split_ratio: SplitRatio::default(),
             show_resolved: false,
             env_view: EnvView::Matrix,
+            env_matrix_widths: HashMap::new(),
         }
     }
 }

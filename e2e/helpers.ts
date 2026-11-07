@@ -75,6 +75,7 @@ export interface MockState {
     exec: Record<string, unknown>;
     showResolved: boolean;
     envView: "matrix" | "list";
+    envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
   };
   /** `.http` file models by path, as last saved. */

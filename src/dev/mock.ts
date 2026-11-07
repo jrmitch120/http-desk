@@ -286,6 +286,7 @@ let settings = {
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   envView: "matrix",
+  envMatrixWidths: {},
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test

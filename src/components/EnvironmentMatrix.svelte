@@ -45,10 +45,9 @@
     if (!row) rowObjects.set(name, (row = { name, value: "" }));
     return row;
   };
-  // The rows' order is kept here, not re-derived from `set` alone: filling or
-  // unsetting a cell changes where a name is first seen, and the row must not
-  // jump while it's being typed in. New names go at the end. A new set (another
-  // folder, or the files reloaded) starts from its own order.
+  // The rows shown so far are kept here, not re-derived from `set` alone, so a
+  // row whose last cell was unset stays until the modal closes. A new set
+  // (another folder, or the files reloaded) starts afresh.
   let order: string[] = [];
   let orderOf: EnvironmentSet | null = null;
   const names = $derived.by(() => {
@@ -85,11 +84,50 @@
   const ariaSort = { asc: "ascending", desc: "descending" } as const;
   /** The last column: wide enough for its header's "+ Environment"; its body cells are empty. */
   const ADD_WIDTH = 112;
+  /** Default widths: the Variable column's, and each value column's least (they share the rest). */
+  const VARIABLE_WIDTH = 150;
+  const VALUE_WIDTH = 170;
+
+  // Column widths the user set (dragged, keys, fitted), remembered per workspace in
+  // the app settings; `live` is the one being dragged, saved when the drag ends.
+  // The Variable column's key is null, a value column's is its column (`$shared`, an environment).
+  const saved = $derived(app.matrixWidths());
+  let live = $state<{ key: string | null; width: number } | null>(null);
+  const widthOf = (key: string | null): number | undefined =>
+    live && live.key === key ? live.width : ((key === null ? saved.variable : saved.columns[key]) ?? undefined);
+  function resized(key: string | null, width: number, done: boolean) {
+    if (!done) return void (live = { key, width });
+    live = null;
+    void app.saveMatrixWidth(key, width);
+  }
+  const resizeLabel = (key: string | null) => `Resize ${key === null ? "Variable" : columnLabel(key)} column`;
+  const resize = (key: string | null) => ({ label: resizeLabel(key), onresize: (width: number, done: boolean) => resized(key, width, done) });
+  const variableWidth = $derived(widthOf(null) ?? VARIABLE_WIDTH);
+  const valueWidths = $derived(columns.map((column) => widthOf(column)));
+  /** The narrowest the matrix gets before it scrolls sideways. */
+  const minWidth = $derived(variableWidth + ADD_WIDTH + valueWidths.reduce<number>((sum, w) => sum + (w ?? VALUE_WIDTH), 0));
+
   const gridColumns = $derived<Column<MatrixRow>[]>([
-    { id: "name", header: "Variable", width: "150px", cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort] },
-    ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell, headerCell: columnHeader })),
-    // Only the header's "+ Environment"; a row's actions are in its Variable cell.
-    { id: "actions", header: "", width: `${ADD_WIDTH}px`, cell: emptyCell, headerCell: onaddenvironment && addEnvironmentHeader },
+    { id: "name", header: "Variable", width: `${variableWidth}px`, cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort], resize: resize(null) },
+    ...columns.map(
+      (column, i): Column<MatrixRow> => ({
+        id: `m${i}`,
+        header: columnLabel(column),
+        width: valueWidths[i] === undefined ? `minmax(${VALUE_WIDTH}px, 1fr)` : `${valueWidths[i]}px`,
+        cell: valueCell,
+        headerCell: columnHeader,
+        resize: resize(column),
+      }),
+    ),
+    // Only the header's "+ Environment"; a row's actions are in its Variable cell. When
+    // every value column has a set width, it takes what's left, so the rows reach the edge.
+    {
+      id: "actions",
+      header: "",
+      width: valueWidths.every((w) => w !== undefined) ? `minmax(${ADD_WIDTH}px, 1fr)` : `${ADD_WIDTH}px`,
+      cell: emptyCell,
+      headerCell: onaddenvironment && addEnvironmentHeader,
+    },
   ]);
 
   function menuFor(name: string): MenuItem[] {
@@ -144,6 +182,7 @@
 {#snippet variableHeader()}
   <button
     class="head-btn sort"
+    data-fit
     use:tooltip={sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for A to Z"}
     onclick={() => (app.envMatrixSort = nextSort(sort))}
   >
@@ -156,7 +195,7 @@
   {@const actions = column === SHARED ? undefined : environmentActions}
   <!-- svelte-ignore a11y_no_static_element_interactions (the menu is also the header's actions button) -->
   <div class="m-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
-    <span class="m-head-label ellipsis">{columnLabel(column)}</span>
+    <span class="m-head-label ellipsis" data-fit>{columnLabel(column)}</span>
     {#if actions}
       <button
         class="icon-btn actions"
@@ -180,7 +219,7 @@
 {#snippet nameCell({ row }: GridCell<MatrixRow>)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="m-var" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>
-    <span class="cell m-name ellipsis">{row.name}</span>
+    <span class="cell m-name ellipsis" data-fit>{row.name}</span>
     <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
       <Icon name="more" size={13} />
     </button>
@@ -237,7 +276,7 @@
 
 {#snippet emptyCell()}{/snippet}
 
-<div class="matrix" bind:this={root} style:--matrix-min="{150 + ADD_WIDTH + columns.length * 170}px">
+<div class="matrix" bind:this={root} style:--matrix-min="{minWidth}px">
   <KeyValueGrid
     items={rows}
     columns={gridColumns}

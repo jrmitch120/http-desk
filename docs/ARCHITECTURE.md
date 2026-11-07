@@ -601,7 +601,12 @@ Decisions made during implementation, beyond the plan above:
   (`sortNames`), for the app session (`app.envMatrixSort`, not saved). The sort
   compares names only, so typing a value never moves a row, and a new variable
   appears at its sorted place. The header's last cell, "+
-  Environment", adds an environment as a new column. "Add variable to all
+  Environment", adds an environment as a new column. Every other column resizes (drag
+  its header's right edge, or its separator's arrow keys; double-click or Enter fits it
+  to its widest value), and the widths are remembered per workspace in the app
+  settings (`envMatrixWidths`: the Variable column, then by column, `$shared` or the
+  environment's name). A value that doesn't fit shows in full in a tooltip, never a
+  masked Secret's. "Add variable to all
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,

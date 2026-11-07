@@ -42,6 +42,7 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
+| A grid column the user can resize | a [KeyValueGrid](#keyvaluegrid) column's `resize` ([ColumnResizer](#columnresizer)) |
 | A short label next to an item (method, status, OFF, version) | [Badge](#badge) |
 | A message about the state of a screen | [Banner](#banner) |
 | The outcome of something the user just did | toast (`app.toast(kind, message)`) |
@@ -210,6 +211,9 @@ paths), File variable values and environment values.
   single-line safeguard in ARCHITECTURE §2 never sees one).
 - While it has focus the editor owns the text; a `value` change from elsewhere shows
   once focus leaves.
+- Text that doesn't fit shows in full in a [Tooltip](#tooltip): on hover over the
+  static rendering (not over a `{{variable}}`, whose card shows instead), and on
+  keyboard focus of the editor. Never for a `masked` field.
 - It sets no padding, font or border: the owner gives those through `class` (a grid
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
@@ -365,7 +369,11 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   custom column's `headerCell` snippet (given the column's id) renders its header instead of the `header`
   text (a button: the matrix's Variable sort, its "+ Environment"), and `sort`
   (`"ascending"`, `"descending"` or `"none"`) makes the header a `columnheader` with
-  that `aria-sort`; the caller sorts `items` itself.
+  that `aria-sort`; the caller sorts `items` itself. A custom column's `resize`
+  (`{ label, onresize(width, done) }`) puts a [ColumnResizer](#columnresizer) at its
+  header cell's right edge; the caller stores the width and passes it back as the
+  column's `width` (`"240px"`). Fitting measures each cell's text (a VarField's, or
+  an element marked `data-fit`) at its natural width, header included.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
@@ -408,9 +416,26 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     id) has an actions button ("Actions for environment <name>", shown on hover or
     focus) and the same menu on a right-click: Rename…, Duplicate, Delete
     environment… (`environmentActions`, the List view's own functions). Shared's
-    header has none.
+    header has none. Every column but the last is resizable (`resize`); the widths
+    are remembered per workspace (`app.saveMatrixWidth`, the `envMatrixWidths` app
+    setting), and a value column without one shares the free space.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
+
+### ColumnResizer
+
+`ColumnResizer.svelte`. The resize handle at the right edge of a resizable
+[KeyValueGrid](#keyvaluegrid) column's header cell (KeyValueGrid renders it; use a
+column's `resize`). A focusable `separator` (`aria-orientation="vertical"`,
+`aria-valuenow` the column's width in px), like SplitPane's.
+
+- Drag it, or focus it and use Left/Right (16px a step; Home/End go to the limits,
+  100px and 1200px). Double-click it, or press Enter, to fit the column to its
+  widest value.
+- `onresize(width, done)`: `done` is false while a drag is under way and true once
+  it's settled (a key, a fit, the end of a drag), so save it then. A press without a
+  move changes nothing.
+- The line shows on hover, while dragging and on keyboard focus (with the focus ring).
 
 ### SplitPane
 
@@ -522,6 +547,8 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 - `<span use:tooltip={text}>`: explicit text, linked as the element's description.
   A `\n` in the text starts a new line (e.g. the status pill: explanation, then version
   and final URL).
+- `use:tooltip={() => text | null}`: asked each time it would show, so it can depend
+  on the moment (a VarField's text, only while it's cut off).
 - `use:tooltip={null}` or `""`: none. A component forwarding an optional tooltip prop
   passes `prop ?? null`, because `undefined` means "use the aria-label".
 - Components can't take `use:`, so owned controls that wrap a button expose a prop

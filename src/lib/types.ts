@@ -387,6 +387,16 @@ export interface AppSettings {
   showResolved: boolean;
   /** How the Environments modal shows variables: every environment side by side, or one at a time. */
   envView: "matrix" | "list";
+  /** Per workspace root: the Environments matrix's column widths, as resized. */
+  envMatrixWidths: Record<string, MatrixWidths>;
+}
+
+/** Column widths of the Environments matrix in one workspace, px. A column not listed keeps its default width. */
+export interface MatrixWidths {
+  /** The Variable column. */
+  variable?: number | null;
+  /** By column: `$shared` for the shared variables, else the environment's name. */
+  columns: Record<string, number>;
 }
 
 // ---- OpenAPI

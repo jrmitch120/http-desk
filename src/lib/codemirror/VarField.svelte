@@ -13,6 +13,9 @@
   // A `masked` field (a password or a Secret) draws its text as discs and marks
   // nothing, so neither the marks nor a hover card give the text away;
   // autocomplete still works.
+  //
+  // Text that doesn't fit shows in full in a tooltip, on hover (the static
+  // rendering) or keyboard focus (the editor); never for a masked field.
   import { flushSync } from "svelte";
   import { Compartment, EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
@@ -20,6 +23,7 @@
   import { extractHolds } from "./extract";
   import { varSegments } from "../vars";
   import { popup } from "../popup/popup";
+  import { hideTooltip, tip, tooltip } from "../popup/tooltip.svelte";
 
   interface Props {
     value: string;
@@ -100,12 +104,16 @@
       const { clientX, clientY, screenX, screenY, button, buttons, detail, shiftKey, altKey, ctrlKey, metaKey } = e;
       view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX, clientY, screenX, screenY, button, buttons, detail, shiftKey, altKey, ctrlKey, metaKey }));
     }
+    // Focus from the keyboard: the whole text in a tooltip if it doesn't fit (a click doesn't pop one).
+    const v = view;
+    const tipOnFocus = e ? null : tooltip(v.contentDOM, () => (!masked && v.scrollDOM.scrollWidth > v.scrollDOM.clientWidth ? v.state.doc.toString() : null));
     if (!view.hasFocus) {
       view.focus();
       view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
     }
     return {
       destroy() {
+        tipOnFocus?.destroy();
         view?.destroy();
         view = null;
       },
@@ -133,6 +141,11 @@
     else staticEl?.focus();
   }
 
+  // ---- the static rendering's tooltip: the whole text, when it doesn't fit and isn't masked.
+  // Not over a `{{variable}}`, whose hover card says more.
+  let overMark = false;
+  const cutText = () => (!masked && !overMark && staticEl && staticEl.scrollWidth > staticEl.clientWidth ? value : null);
+
   // ---- hover cards on the static rendering (the editor has its own)
   let card = $state<{ anchor: HTMLElement; name: string } | null>(null);
   let showTimer: ReturnType<typeof setTimeout> | undefined;
@@ -140,6 +153,8 @@
 
   function onpointerover(e: PointerEvent) {
     const mark = (e.target as Element).closest<HTMLElement>("[data-var]");
+    overMark = !!mark;
+    if (mark && tip.anchor === staticEl) hideTooltip(false);
     clearTimeout(showTimer);
     if (!mark) {
       if (card) hideSoon();
@@ -191,6 +206,7 @@
       data-placeholder={placeholder}
       onfocus={() => (editing = true)}
       onmousedown={startFromPointer}
+      use:tooltip={cutText}
       {onpointerover}
       onpointerleave={hideSoon}
     >{#each segments as s, i (i)}{#if s.name !== undefined}<span class={s.cls} data-var={s.name}>{s.text}</span>{:else}{s.text}{/if}{/each}</div>
