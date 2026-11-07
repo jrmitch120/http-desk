@@ -67,6 +67,8 @@ struct AppSettings {
     sidebar_width: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
+    /// Show the resolved preview under the URL bar.
+    show_resolved: bool,
 }
 
 /// Settings of one environment (see `AppSettings::environment_settings`).
@@ -106,6 +108,7 @@ impl Default for AppSettings {
             show_descriptions: true,
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
+            show_resolved: false,
         }
     }
 }
@@ -344,6 +347,49 @@ struct SendProgress {
     received: usize,
 }
 
+/// The variables a request is sent with (the environment from disk, then File
+/// variables, then its own), and the folder its relative paths start from.
+/// Shared by send and preview so the two can't disagree.
+fn request_resolver(
+    root: Option<&Path>,
+    request: &Request,
+    file_path: Option<&Path>,
+    file_variables: &[Variable],
+    environment: Option<&str>,
+) -> Result<(Resolver, PathBuf), ExecError> {
+    let base_dir = file_path
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| root.map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let env_set = match root {
+        Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
+        None => EnvironmentSet::default(),
+    };
+    let env_vars = env::variables(&env_set, environment);
+    let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir));
+    Ok((resolver, base_dir))
+}
+
+/// The resolved preview: what `send_request` would send, without sending it (see
+/// `exec::preview`). Off the main thread, since it reads the environment files.
+#[tauri::command]
+async fn preview_request<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    request: Request,
+    file_path: Option<PathBuf>,
+    file_variables: Vec<Variable>,
+    environment: Option<String>,
+) -> CmdResult<exec::RequestPreview> {
+    off_main(app, move |state| {
+        let root = state.root.lock().unwrap().clone();
+        let (resolver, _) =
+            request_resolver(root.as_deref(), &request, file_path.as_deref(), &file_variables, environment.as_deref())
+                .map_err(err)?;
+        Ok(exec::preview(&request, resolver))
+    })
+    .await
+}
+
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
 #[tauri::command]
@@ -357,20 +403,11 @@ async fn send_request<R: tauri::Runtime>(
     environment: Option<String>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
-    let base_dir = file_path
-        .as_ref()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| root.clone())
-        .unwrap_or_else(|| PathBuf::from("."));
     let settings = state.settings.lock().unwrap().exec.clone();
 
     let (prepared, ssl) = {
-        let env_set = match &root {
-            Some(r) => env::load(r).map_err(|e| ExecError::Other(e.to_string()))?,
-            None => EnvironmentSet::default(),
-        };
-        let env_vars = env::variables(&env_set, environment.as_deref());
-        let resolver = Resolver::for_request(&env_vars, &file_variables, &request.variables, Some(&base_dir));
+        let (resolver, base_dir) =
+            request_resolver(root.as_deref(), &request, file_path.as_deref(), &file_variables, environment.as_deref())?;
         let prepared = exec::prepare(&request, &resolver, &base_dir, &settings)?;
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, e),
@@ -696,6 +733,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             load_environments,
             save_environments,
             send_request,
+            preview_request,
             cancel_request,
             save_response_body,
             format_body,
