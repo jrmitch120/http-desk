@@ -101,13 +101,16 @@ test("Edit on a File variable opens the request's Settings with its row focused"
   await expect.poll(() => focusedRow(page)).toEqual({ name: "petId", value: "7" });
 });
 
-test("a variable with no row to edit, or a dynamic one, has no Edit", async ({ page }) => {
+test("a variable with no row to edit, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
   await openSection(page, "Headers");
   const cell = await headerValue(page, "{{nope}} {{$uuid}}");
-  for (const name of ["{{nope}}", "{{$uuid}}"]) {
+  for (const [name, buttons] of [
+    ["{{nope}}", ["Find usages"]],
+    ["{{$uuid}}", []],
+  ] as const) {
     await cell.locator(".cm-var", { hasText: name }).hover();
     await expect(card(page)).toBeVisible();
-    await expect(card(page).getByRole("button")).toHaveCount(0);
+    await expect(card(page).getByRole("button")).toHaveText([...buttons]);
     await page.mouse.move(0, 0);
     await expect(card(page)).toHaveCount(0);
   }

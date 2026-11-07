@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, HttpFile, HttpResponse } from "./types";
+import type { AppSettings, HttpFile, HttpResponse, Usage } from "./types";
 import { newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   deletePermanently: vi.fn(),
   pathExists: vi.fn(),
   searchRequests: vi.fn(),
+  findUsages: vi.fn(),
   sendRequest: vi.fn(),
   cancelRequest: vi.fn(),
   saveSettings: vi.fn(),
@@ -33,6 +34,7 @@ const {
   deletePermanently,
   pathExists,
   searchRequests,
+  findUsages,
   openWorkspace,
   getSettings,
   loadEnvironments,
@@ -1217,5 +1219,71 @@ describe("environment settings", () => {
     expect(app.envColor).toBeNull();
     app.envName = null;
     expect(app.envColor).toBeNull();
+  });
+});
+
+describe("find usages", () => {
+  const usage = (index: number, name: string, url: string): Usage => ({
+    kind: "request",
+    path: PATH,
+    index,
+    name,
+    method: "GET",
+    url,
+    field: { kind: "header", index: 0, name: "Authorization", part: "value" },
+    disabled: false,
+    start: 7,
+    end: 16,
+  });
+
+  it("searches open documents as they are on screen and lists what the backend found", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "{{host}}/books"; // unsaved
+    findUsages.mockResolvedValue([usage(0, "List", "{{host}}/books")]);
+
+    await app.findUsages("host");
+
+    const [name, open] = findUsages.mock.lastCall!;
+    expect(name).toBe("host");
+    expect(open).toHaveLength(1);
+    expect(open[0].path).toBe(PATH);
+    expect(open[0].file.requests[0].url).toBe("{{host}}/books");
+    expect(app.usages).toEqual({ name: "host", usages: [usage(0, "List", "{{host}}/books")] });
+  });
+
+  it("keeps only the latest search when two overlap", async () => {
+    findUsages.mockImplementationOnce(() => later(30, [usage(0, "Old", "x")])).mockImplementationOnce(() => later(5, []));
+    const first = app.findUsages("a");
+    await app.findUsages("b");
+    await first;
+    expect(app.usages).toEqual({ name: "b", usages: [] });
+  });
+
+  it("opens a usage's request on the field that holds it, even after unsaved edits moved it", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    await app.duplicateRequest(PATH, list.key); // "Get" moves to index 2
+    const u = usage(1, "Get", "https://x/books/1");
+
+    await app.openUsage(u);
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("Get");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "header", index: 0, name: "Authorization", part: "value" } });
+  });
+
+  it("opens a File variable's row in its file's request Settings", async () => {
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+
+    await app.openUsage({ kind: "fileVariable", path: PATH, index: 0, name: "base", start: 0, end: 8 });
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("List");
+    expect(app.requestSettingsFor).toBe(app.activeTabId);
+    expect(app.definitionWanted).toEqual({ kind: "file", name: "base" });
+  });
+
+  it("opens an environment value's row in the Environments modal", async () => {
+    await app.openUsage({ kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 8 });
+
+    expect(app.modal).toBe("env");
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
   });
 });

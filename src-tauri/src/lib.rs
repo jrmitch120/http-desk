@@ -12,7 +12,7 @@ use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::vars::Resolver;
-use httpdesk_core::workspace::{self, SearchHit, TreeNode};
+use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -232,6 +232,21 @@ async fn get_tree<R: tauri::Runtime>(app: AppHandle<R>) -> CmdResult<TreeNode> {
 #[tauri::command]
 async fn search_requests<R: tauri::Runtime>(app: AppHandle<R>, query: String) -> CmdResult<Vec<SearchHit>> {
     off_main(app, move |state| Ok(workspace::search(&state.root()?, &query))).await
+}
+
+/// A document as the app has it, unsaved edits included.
+#[derive(Debug, Deserialize)]
+struct OpenDoc {
+    path: PathBuf,
+    file: HttpFile,
+}
+
+/// Find usages: every `{{name}}` reference in the workspace's `.http` files and
+/// env files. `open` documents are searched as given instead of from disk.
+#[tauri::command]
+async fn find_usages<R: tauri::Runtime>(app: AppHandle<R>, name: String, open: Vec<OpenDoc>) -> CmdResult<Vec<Usage>> {
+    let open: Vec<_> = open.into_iter().map(|d| (d.path, d.file)).collect();
+    off_main(app, move |state| Ok(workspace::usages(&state.root()?, &name, &open))).await
 }
 
 // ------------------------------------------------------------------ files
@@ -721,6 +736,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             open_workspace,
             get_tree,
             search_requests,
+            find_usages,
             read_http_file,
             save_http_file,
             render_request,

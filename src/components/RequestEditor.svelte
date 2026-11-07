@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
@@ -36,7 +36,7 @@
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = { env: app.envVariables, fileVars: fileVariables(doc.file), headerVars: doc.file.header.variables, requestVars: req?.variables ?? [], envName: app.envName };
-    return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d) };
+    return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d), findUsages: (name: string) => app.findUsages(name) };
   });
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
@@ -53,6 +53,32 @@
 
   let showSource = $state(false);
   let source = $state("");
+
+  // A Find usages result: show the field holding the reference. A request's own
+  // `@name` lines have no field of their own, so its .http source shows them.
+  let urlInput = $state<UrlInput>();
+  let paramsGrid = $state<KeyValueGrid<KeyValue>>();
+  let headersGrid = $state<KeyValueGrid<KeyValue>>();
+  let panel = $state<HTMLElement>();
+  const AUTH_LABELS = { username: "Username", password: "Password", token: "Token", keyValue: "Value" };
+  $effect(() => {
+    const want = app.fieldWanted;
+    if (want?.tabId !== tab.id || !req) return;
+    app.fieldWanted = null;
+    const field = want.field;
+    showSource = field.kind === "variable";
+    if (field.kind === "url") {
+      tick().then(() => urlInput?.focus());
+      return;
+    }
+    if (field.kind === "variable") return;
+    section = field.kind === "param" ? "params" : field.kind === "header" ? "headers" : field.kind;
+    tick().then(() => {
+      if (field.kind === "param") paramsGrid?.focusValue(req.query.items[field.index]);
+      else if (field.kind === "header") headersGrid?.focusValue(req.headers.items[field.index]);
+      else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_LABELS[field.part]}"]`)?.focus();
+    });
+  });
   $effect(() => {
     if (!showSource || !req) return;
     const snap = JSON.stringify(req);
@@ -139,6 +165,7 @@
         mono
       />
       <UrlInput
+        bind:this={urlInput}
         value={composeUrl(req)}
         onchange={(v) => applyUrlText(req, v)}
         onenter={() => app.send(tab.id)}
@@ -182,14 +209,14 @@
         </button>
       </nav>
 
-      <div class="panel" class:fill={section === "body"}>
+      <div class="panel" class:fill={section === "body"} bind:this={panel}>
         {#if section === "params"}
           <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
-          <KeyValueGrid bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" {variables} />
+          <KeyValueGrid bind:this={paramsGrid} bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" {variables} />
           <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
         {:else if section === "headers"}
           <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueGrid bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} {variables} />
+          <KeyValueGrid bind:this={headersGrid} bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} {variables} />
           {#if req.auth.kind !== "none" && req.auth.enabled}
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}

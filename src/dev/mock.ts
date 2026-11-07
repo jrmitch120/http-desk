@@ -88,6 +88,45 @@ function previewRequest({ request: r, fileVariables, environment }: PreviewArgs)
   const warnings = unresolved.size ? [`Unresolved variables: ${[...unresolved].sort().join(", ")}`] : [];
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
 }
+/**
+ * A rough stand-in for the core's `workspace::usages` (tested for real in Rust):
+ * every `{{name}}` in the files (open documents as given), then in the env values.
+ */
+function findUsages(name: string, open: { path: string; file: any }[]) {
+  const out: unknown[] = [];
+  const refs = (text: string) =>
+    [...text.matchAll(/\{\{(.*?)\}\}/g)].filter((m) => m[1].trim() === name).map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
+  for (const [path, disk] of Object.entries(files) as [string, any][]) {
+    const f = open.find((o) => o.path === path)?.file ?? disk;
+    f.header.variables.forEach((v: any, index: number) => refs(v.value).forEach((p) => out.push({ kind: "fileVariable", path, index, name: v.name, ...p })));
+    f.requests.forEach((r: Request, index: number) => {
+      const hit = { kind: "request", path, index, name: r.name.trim() || `${r.method} ${r.url}`, method: r.method, url: r.url };
+      const fields: [unknown, string, boolean][] = [
+        ...r.variables.map((v, i): [unknown, string, boolean] => [{ kind: "variable", index: i, name: v.name }, v.value, false]),
+        [{ kind: "url" }, r.url, false],
+      ];
+      for (const [kind, s] of [["param", r.query], ["header", r.headers]] as const)
+        s.items.forEach((kv, i) => {
+          for (const part of ["name", "value"] as const) fields.push([{ kind, index: i, name: kv.name, part }, kv[part], !s.enabled || !kv.enabled]);
+        });
+      const a = r.auth;
+      const auth = { none: [], basic: ["username", "password"], bearer: ["token"], apiKey: ["keyValue"] }[a.kind] as ("username" | "password" | "token" | "keyValue")[];
+      for (const part of auth) fields.push([{ kind: "auth", part }, a[part], !a.enabled]);
+      if (r.body.mode !== "none") fields.push([{ kind: "body" }, r.body.text, !r.body.enabled]);
+      for (const [field, text, off] of fields)
+        for (const p of refs(text)) {
+          const line = text.slice(text.lastIndexOf("\n", p.start - 1) + 1).trimStart();
+          out.push({ ...hit, field, disabled: off || ((field as any).kind === "body" && line.startsWith("#~")), ...p });
+        }
+    });
+  }
+  const envs: [string, MockEnvVar[]][] = [["$shared", envSet.shared], ...envSet.environments.map((e): [string, MockEnvVar[]] => [e.name, e.variables])];
+  for (const [env, vars] of envs)
+    for (const v of vars)
+      for (const p of refs(v.value))
+        out.push({ kind: "environment", path: `${ROOT}/http-client${v.secret ? ".private" : ""}.env.json`, env, name: v.name, secret: v.secret, ...p });
+  return out;
+}
 type EnvMap = Record<string, Record<string, unknown>>;
 type MockEnvVar = { name: string; value: string; secret: boolean };
 /**
@@ -586,6 +625,8 @@ mockIPC(
           }),
         );
       }
+      case "find_usages":
+        return findUsages(String(args.name), args.open ?? []);
       case "send_request": {
         sent.push(clone(args.request));
         if (slowDownload) {

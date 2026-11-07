@@ -73,6 +73,18 @@ pub(crate) fn segments(text: &str) -> Vec<Segment<'_>> {
     out
 }
 
+/// The `{{…}}` references in `text`: the byte range of each, braces included,
+/// with its trimmed name (as [`segments`] reads them).
+pub(crate) fn references(text: &str) -> impl Iterator<Item = (std::ops::Range<usize>, &str)> {
+    segments(text).into_iter().filter_map(move |s| match s {
+        Segment::Reference { whole, name } => {
+            let start = whole.as_ptr() as usize - text.as_ptr() as usize;
+            Some((start..start + whole.len(), name))
+        }
+        Segment::Text(_) => None,
+    })
+}
+
 /// Dynamic variables that generate a new value on every send. The others
 /// (`$processEnv`, `$dotenv`, `$env.X`) read a value that's already there.
 const GENERATED: &[&str] = &[
