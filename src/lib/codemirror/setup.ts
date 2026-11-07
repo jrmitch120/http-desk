@@ -7,8 +7,9 @@ import { html } from "@codemirror/lang-html";
 import { xml } from "@codemirror/lang-xml";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, VAR_RE } from "../http";
+import { varClass } from "../vars";
 import {
   Decoration,
   drawSelection,
@@ -114,7 +115,7 @@ export interface VarProvider {
 function varDecorations(provider: VarProvider) {
   const decorator = new MatchDecorator({
     regexp: VAR_RE,
-    decoration: (m) => Decoration.mark({ class: `cm-var cm-var-${provider.info(m[1]).state}` }),
+    decoration: (m) => Decoration.mark({ class: varClass(provider.info(m[1])) }),
   });
   return ViewPlugin.fromClass(
     class {
@@ -137,34 +138,37 @@ function varTooltip(provider: VarProvider) {
       const from = line.from + m.index!;
       const to = from + m[0].length;
       if (pos < from || pos > to) continue;
-      const info = provider.info(m[1]);
-      return {
-        pos: from,
-        end: to,
-        create() {
-          const dom = document.createElement("div");
-          dom.style.cssText = "padding:6px 10px;font-size:12px;max-width:420px;font-family:var(--font)";
-          const title = document.createElement("div");
-          title.style.cssText = "font-weight:600;margin-bottom:3px";
-          title.textContent = m[1];
-          const body = document.createElement("div");
-          body.style.cssText = "font-family:var(--mono);word-break:break-all;color:var(--text-2)";
-          if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
-          else if (info.state === "bad") body.textContent = "Unresolved — not defined in the environment or file";
-          else body.textContent = info.secret ? "•••••••• (secret)" : info.value || "(empty)";
-          dom.append(title, body);
-          if (info.source) {
-            const src = document.createElement("div");
-            src.style.cssText = "color:var(--muted);margin-top:3px";
-            src.textContent = `from ${info.source}`;
-            dom.append(src);
-          }
-          return { dom };
-        },
-      };
+      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1])) }) };
     }
     return null;
   });
+}
+
+/**
+ * The hover card's content for `{{name}}`: its value (Secrets masked) and where
+ * it comes from. Shared by editors' hover tooltips and VarField's static
+ * rendering, so both show the same card.
+ */
+export function varCard(name: string, info: VarInfo): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = "var-card";
+  dom.style.cssText = "padding:6px 10px;font-size:12px;max-width:420px;font-family:var(--font)";
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:600;margin-bottom:3px";
+  title.textContent = name;
+  const body = document.createElement("div");
+  body.style.cssText = "font-family:var(--mono);word-break:break-all;color:var(--text-2)";
+  if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
+  else if (info.state === "bad") body.textContent = "Unresolved — not defined in the environment or file";
+  else body.textContent = info.secret ? "•••••••• (secret)" : info.value || "(empty)";
+  dom.append(title, body);
+  if (info.source) {
+    const src = document.createElement("div");
+    src.style.cssText = "color:var(--muted);margin-top:3px";
+    src.textContent = `from ${info.source}`;
+    dom.append(src);
+  }
+  return dom;
 }
 
 const DYNAMIC = ["$uuid", "$random.uuid", "$timestamp", "$isoTimestamp", "$randomInt", "$random.integer(0, 100)", "$random.email", "$datetime iso8601", "$processEnv NAME"];
@@ -244,6 +248,48 @@ export const bodySyntaxHighlight: Extension = [
 ];
 
 // ---------------------------------------------------------------- presets
+
+/**
+ * Keeps the text on one line: line breaks in anything inserted (typing, a paste,
+ * a drop) are removed, along with the whitespace around them, so a pasted
+ * wrapped token joins up. The rest of the text is left alone.
+ */
+export const singleLine = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || tr.newDoc.lines === 1) return tr;
+  const changes: { from: number; to: number; insert: string }[] = [];
+  let broken = false;
+  tr.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    broken ||= inserted.lines > 1;
+    changes.push({ from, to, insert: inserted.sliceString(0).replace(/\s*\n\s*/g, "") });
+  });
+  if (!broken) return tr;
+  const set = tr.startState.changes(changes);
+  return { changes: set, selection: tr.startState.selection.map(set, 1), scrollIntoView: true, userEvent: tr.annotation(Transaction.userEvent) };
+});
+
+/**
+ * The editing core of a single-line field (the URL bar, VarField): no line
+ * breaks and history. Enter runs `onenter` (or nothing); ⌘/Ctrl+Enter runs
+ * `onenter` too, and without it reaches the app's Send shortcut. Tab isn't
+ * bound, so it moves focus as in a text input.
+ */
+export function singleLineExtensions(opts: { placeholder?: string; label?: string; onenter?: () => void }): Extension {
+  const enter = opts.onenter;
+  return [
+    singleLine,
+    history(),
+    drawSelection(),
+    placeholderExt(opts.placeholder ?? ""),
+    EditorView.contentAttributes.of({ "aria-multiline": "false", ...(opts.label ? { "aria-label": opts.label } : {}) }),
+    keymap.of([
+      { key: "Enter", run: () => (enter?.(), true) },
+      ...(enter ? [{ key: "Mod-Enter", run: () => (enter(), true) }] : []),
+      ...completionKeymap,
+      ...defaultKeymap.filter((b) => !b.key?.includes("Enter")),
+      ...historyKeymap,
+    ]),
+  ];
+}
 
 export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }): Extension {
   const ext: Extension[] = [

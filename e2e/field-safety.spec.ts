@@ -9,10 +9,14 @@ test("single-line fields drop pasted line breaks", async ({ page }) => {
   await name.fill("List\npets");
   await expect(name).not.toHaveValue(/\n/);
 
+  // Header values are variable-aware fields; e2e/variable-fields.spec.ts covers typing and pasting line breaks.
   await page.locator(".subtab", { hasText: "Headers" }).click();
-  const value = page.getByPlaceholder("Value").first();
-  await value.fill("*/*\nX-Injected: 1");
-  await expect(value).not.toHaveValue(/\n/);
+  const value = page.locator(".kv-row").first().locator(".c-value");
+  await value.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText("*/*\nX-Injected: 1");
+  await expect(value.locator(".cm-line")).toHaveCount(1);
+  await expect(value).toHaveText("*/*X-Injected: 1");
 });
 
 test("header names that would break the file show an inline error", async ({ page }) => {

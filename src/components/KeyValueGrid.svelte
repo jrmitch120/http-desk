@@ -47,6 +47,8 @@
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
+  import VarField from "../lib/codemirror/VarField.svelte";
+  import type { VarProvider } from "../lib/codemirror/setup";
 
   interface Props {
     items: R[];
@@ -74,6 +76,8 @@
     showDescriptions?: boolean;
     /** Called after every edit made in the grid, with the rows. */
     onchange?: (items: R[]) => void;
+    /** Makes the built-in value cells variable-aware fields (VarField) with these variables. */
+    variables?: VarProvider | null;
   }
   let {
     items = $bindable(),
@@ -91,6 +95,7 @@
     bulkEdit = true,
     showDescriptions = true,
     onchange,
+    variables,
   }: Props = $props();
 
   type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]> };
@@ -275,7 +280,11 @@
               use:suggest={{ options: suggestions, label: `${namePlaceholder} suggestions` }}
             />
           {:else if t.id === "value"}
-            <input class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
+            {#if variables}
+              <VarField class="cell c-value{divider(c) ? ' divider' : ''}" value={row.value} placeholder={valuePlaceholder} label={valuePlaceholder} {variables} onchange={(value) => set(row, { value } as Partial<R>)} />
+            {:else}
+              <input class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
+            {/if}
           {:else if t.id === "delete"}
             <span class="c-del">
               {#if !isGhost}
@@ -356,7 +365,7 @@
     padding-top: var(--space-2);
   }
   .kv-row > .c-name,
-  .kv-row > .c-value,
+  .kv-row > :global(.c-value),
   .kv-row > .c-extra,
   .kv-row > .c-del {
     grid-row: 1;
@@ -475,21 +484,26 @@
     font-size: 12.5px;
     padding: 0 var(--space-2) 0 10px;
   }
-  .kv .divider {
+  .kv :global(.divider) {
     border-right: 1px solid var(--border);
   }
-  .kv :global(.cell:focus) {
+  .kv :global(.cell:focus),
+  .kv :global(.var-field.cell:focus-within) {
     background: var(--panel-2);
   }
-  /* Text cells match :focus-visible on a click too, so they keep the ring then. */
-  .kv :global(.cell:focus-visible) {
+  /* Text cells match :focus-visible on a click too, so they keep the ring then.
+     A VarField cell shows it while its editor (or static rendering) has focus. */
+  .kv :global(.cell:focus-visible),
+  .kv :global(.var-field.cell:focus-within) {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }
   .kv :global(.cell::placeholder) {
     color: var(--faint);
   }
-  .kv-row.off :global(.cell) {
+  /* A VarField's editor sits in a flex box, which a decoration doesn't reach. */
+  .kv-row.off :global(.cell),
+  .kv-row.off :global(.cell .cm-line) {
     color: var(--faint);
     text-decoration: line-through;
     text-decoration-color: color-mix(in srgb, var(--faint) 60%, transparent);

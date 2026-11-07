@@ -37,6 +37,7 @@ Also not native: confirmation and text prompts go through `app.choose(...)` and
 | Including rows or items in a set (enable a row, pick operations), or an option sentence in a form | [Checkbox](#checkbox) |
 | A number with limits and a unit | [NumberField](#numberfield) |
 | Free text, paths, or values with their own syntax (`30s`) | [`.input`](#buttons-inputs-and-links) |
+| A single-line value that can hold `{{variables}}` | [VarField](#varfield) |
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
@@ -165,6 +166,43 @@ spinners.
 - Use for numeric settings. A value with its own syntax, such as a per-request `@timeout`
   (`500 ms`, `2m`), is a plain `.input`.
 
+### VarField
+
+`src/lib/codemirror/VarField.svelte`. A single-line, variable-aware text field: `{{name}}`
+is marked by state, hovering one shows the variable's card (value, Secrets masked, and
+where it is defined), and typing `{{` offers the names in scope. It is the URL bar's
+editor generalised (both build on `singleLineExtensions` in
+`src/lib/codemirror/setup.ts`). Params and header values use it.
+
+- Props: `value`, `onchange(value)` (every edit, with the whole text), `variables?` (a
+  `VarProvider`; without one the field is plain text), `placeholder?`, `label?`
+  (accessible name), `onenter?`, `class?`. Through `bind:this`, `focus()`.
+- Cheap enough for hundreds of rows: without focus it is a static rendering of the text
+  (a focusable `textbox` with the same marks and hover cards), and the CodeMirror editor
+  exists only while it has focus. The two line up to the pixel, so focusing doesn't
+  shift the text.
+- Keyboard: like a text input. Tab and Shift+Tab move focus on (Tab into it selects the
+  text), arrows move the caret, Enter runs `onenter` or does nothing, ⌘/Ctrl+Enter
+  reaches the app's Send shortcut unless `onenter` takes it. When the `{{` list is open,
+  Up/Down, Enter and Escape go to the list.
+- A click puts the caret, or starts a drag selection, where it lands.
+- It never holds a line break: typed or pasted line breaks are removed with the
+  whitespace around them, so a pasted wrapped token joins up (the save-time
+  single-line safeguard in ARCHITECTURE §2 never sees one).
+- While it has focus the editor owns the text; a `value` change from elsewhere shows
+  once focus leaves.
+- It sets no padding, font or border: the owner gives those through `class` (a grid
+  passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
+- Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
+  (Undefined variable), `cm-var-dyn` (dynamic), plus `cm-var-secret` on a defined
+  Secret. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
+  body editor, so change it there.
+- In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
+  become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write
+  through `set`.
+- In e2e tests, `fill()` and `toHaveValue()` don't work on it: click the cell, type with
+  `page.keyboard`, and assert `toHaveText()` on the cell (static or editing).
+
 ### use:suggestions
 
 `src/lib/popup/suggestions.svelte.ts`. An action that makes a text `<input>` a
@@ -255,10 +293,11 @@ variables, form-urlencoded fields, multipart parts and environment variables.
 - Other props: `items` (bindable), `blank` (a new empty row), `carry` (fields bulk text
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
-  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`.
+  filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`,
+  `variables` (makes the built-in value cells [VarFields](#varfield)).
 - How it's configured today:
   - Params and headers: enable, name, value, description, delete. Headers add
-    name suggestions.
+    name suggestions. Values are VarFields.
   - File variables: name, value, delete.
   - Form fields and multipart parts: enable, name, value, delete. A disabled field is
     kept as `#~` lines in the body text (ARCHITECTURE §5). Multipart adds a part type
