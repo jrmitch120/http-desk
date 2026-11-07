@@ -1,6 +1,6 @@
 // Shared CodeMirror configuration: theme (driven by CSS variables so it follows
 // the app theme), syntax highlighting, languages, and {{variable}} support.
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, pickedCompletion, type Completion, type CompletionContext } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
@@ -16,6 +16,7 @@ import {
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
+  closeHoverTooltips,
   hoverTooltip,
   keymap,
   lineNumbers,
@@ -70,6 +71,21 @@ export const theme = EditorView.theme({
   ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { borderRadius: "5px", padding: "2px 6px" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent-soft)", color: "var(--text)" },
   ".cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "8px" },
+  // After the label, a dynamic variable's argument hint; after the source, a value preview, a
+  // dynamic variable's description, or "secret" in place of a Secret's value.
+  ".cm-completionArgs": { color: "var(--muted)", marginLeft: "6px" },
+  ".cm-completionPreview, .cm-completionDescription, .cm-completionSecret": {
+    display: "inline-block",
+    maxWidth: "300px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    verticalAlign: "bottom",
+    marginLeft: "10px",
+    color: "var(--text-2)",
+  },
+  ".cm-completionDescription": { fontFamily: "var(--font)" },
+  ".cm-completionSecret": { color: "var(--var-secret)", fontStyle: "italic", fontFamily: "var(--font)" },
   ".cm-placeholder": { color: "var(--faint)" },
 });
 
@@ -112,7 +128,16 @@ export interface VarInfo {
   source?: string;
   secret?: boolean;
   chain?: string[];
+  /** Where the definition in use can be edited, if the app has a row for it. */
+  definition?: Definition;
 }
+
+/**
+ * A variable's definition that has a row in the app: a File variable in the
+ * request's Settings (the `@name` lines at the top of the file), or a variable of an
+ * environment in the Environments modal (`env` is `$shared` for the shared variables).
+ */
+export type Definition = { kind: "file"; name: string } | { kind: "env"; env: string; name: string };
 
 /**
  * `text` with its references resolved, as the core's resolver does it; dynamic
@@ -126,10 +151,30 @@ export interface Resolution {
   secret: boolean;
 }
 
+/**
+ * An autocomplete entry: a name in scope, with where it comes from and a short
+ * preview of its resolved value (none for a Secret, or a value a Secret went
+ * into), or a dynamic variable with its argument hint and description.
+ */
+export interface VarCompletion {
+  name: string;
+  source: "file" | "environment" | "shared" | "dynamic";
+  preview?: string;
+  secret?: boolean;
+  /** Dynamic variables: the argument hint (empty without arguments). */
+  args?: string;
+  description?: string;
+  /** Dynamic variables that generate nothing without their argument. */
+  required?: boolean;
+}
+
 export interface VarProvider {
   info: (name: string) => VarInfo;
   resolve: (text: string) => Resolution;
-  names: () => { name: string; detail: string }[];
+  /** What `{{` offers: the names in scope (one entry each), then the dynamic variables. */
+  completions: () => VarCompletion[];
+  /** Opens a definition's row (the hover card's Edit); without it the card has no Edit. */
+  edit?: (definition: Definition) => void;
 }
 
 function varDecorations(provider: VarProvider) {
@@ -158,41 +203,72 @@ function varTooltip(provider: VarProvider) {
       const from = line.from + m.index!;
       const to = from + m[0].length;
       if (pos < from || pos > to) continue;
-      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1])) }) };
+      const close = () => view.dispatch({ effects: closeHoverTooltips });
+      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1]), { edit: provider.edit, close }) }) };
     }
     return null;
   });
 }
 
 /**
- * The hover card's content for `{{name}}`: its value (Secrets masked) and where
- * it comes from. Shared by editors' hover tooltips and VarField's static
- * rendering, so both show the same card.
+ * The hover card's content for `{{name}}`: its value and where it comes from. A
+ * Secret (or a value a Secret went into) is masked until Reveal, in this card
+ * only. With `edit` and a definition that has a row in the app, Edit closes the
+ * card (`close`) and opens that row. Shared by editors' hover tooltips and
+ * VarField's static rendering, so both show the same card.
  */
-export function varCard(name: string, info: VarInfo): HTMLElement {
-  const dom = document.createElement("div");
-  dom.className = "var-card";
-  dom.style.cssText = "padding:6px 10px;font-size:12px;max-width:420px;font-family:var(--font)";
-  const title = document.createElement("div");
-  title.style.cssText = "font-weight:600;margin-bottom:3px";
-  title.textContent = name;
-  const body = document.createElement("div");
-  body.style.cssText = "font-family:var(--mono);word-break:break-all;color:var(--text-2)";
+export function varCard(name: string, info: VarInfo, actions: { edit?: (d: Definition) => void; close?: () => void } = {}): HTMLElement {
+  const div = (cls: string, text = "") => {
+    const el = document.createElement("div");
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+  const dom = div("var-card");
+  const body = div("var-card-value");
+  const masked = info.state === "ok" && !!info.secret;
+  let revealed = false;
+  const showValue = () => (body.textContent = masked && !revealed ? "•••••••• (secret)" : info.value || "(empty)");
   if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
-  else if (info.state === "bad") body.textContent = "Undefined — not defined in the request, the file or the environment";
+  else if (info.state === "bad")
+    body.textContent = name.startsWith("$") ? "Undefined — not a dynamic variable" : "Undefined — not defined in the request, the file or the environment";
   else if (info.state === "circular") body.textContent = `Circular: ${info.chain!.join(" → ")}`;
-  else body.textContent = info.secret ? "•••••••• (secret)" : info.value || "(empty)";
-  dom.append(title, body);
-  if (info.source) {
-    const src = document.createElement("div");
-    src.style.cssText = "color:var(--muted);margin-top:3px";
-    src.textContent = `from ${info.source}`;
-    dom.append(src);
+  else showValue();
+  dom.append(div("var-card-name", name), body);
+  if (info.source) dom.append(div("var-card-source", `from ${info.source}`));
+
+  const buttons: HTMLButtonElement[] = [];
+  const button = (label: string, onclick: (b: HTMLButtonElement) => void) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn small ghost";
+    b.textContent = label;
+    b.addEventListener("click", () => onclick(b));
+    buttons.push(b);
+  };
+  if (masked)
+    button("Reveal", (b) => {
+      revealed = !revealed;
+      b.textContent = revealed ? "Hide" : "Reveal";
+      showValue();
+    });
+  const { edit, close } = actions;
+  const definition = info.definition;
+  if (edit && definition)
+    button("Edit", () => {
+      close?.();
+      edit(definition);
+    });
+  if (buttons.length) {
+    const row = div("var-card-actions");
+    row.append(...buttons);
+    dom.append(row);
+    // A press in the card keeps focus where it is: an editor that lost it would
+    // close, taking its card (and the click) with it.
+    dom.addEventListener("mousedown", (e) => e.preventDefault());
   }
   return dom;
 }
-
-const DYNAMIC = ["$uuid", "$random.uuid", "$timestamp", "$isoTimestamp", "$randomInt", "$random.integer(0, 100)", "$random.email", "$datetime iso8601", "$processEnv NAME"];
 
 function varCompletion(provider: VarProvider) {
   return (ctx: CompletionContext) => {
@@ -203,13 +279,60 @@ function varCompletion(provider: VarProvider) {
     const close = after === "}}" ? "" : "}}";
     return {
       from: start,
-      options: [
-        ...provider.names().map((v) => ({ label: v.name, detail: v.detail, type: "variable", apply: v.name + close })),
-        ...DYNAMIC.map((d) => ({ label: d, detail: "dynamic", type: "function", apply: d + close })),
-      ],
+      options: provider.completions().map((c): VarOption => {
+        // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
+        const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
+        return {
+          label: c.name,
+          detail: c.source,
+          type: c.source === "dynamic" ? "function" : "variable",
+          // The names in scope before the dynamic variables, which would sort first (`$`).
+          boost: c.source === "dynamic" ? -1 : 0,
+          apply: c.required ? applyWithCaret(text, close) : text + close,
+          entry: c,
+        };
+      }),
     };
   };
 }
+
+type VarOption = Completion & { entry: VarCompletion };
+
+function applyWithCaret(text: string, close: string) {
+  return (view: EditorView, completion: Completion, from: number, to: number) =>
+    view.dispatch({
+      changes: { from, to, insert: text + close },
+      selection: { anchor: from + text.length },
+      annotations: [pickedCompletion.of(completion), Transaction.userEvent.of("input.complete")],
+    });
+}
+
+/** An autocomplete option's argument hint (after the name) and its value preview or description (after the source). */
+const completionColumns = [
+  {
+    position: 60,
+    render(c: Completion) {
+      const args = (c as VarOption).entry?.args;
+      if (!args) return null;
+      const el = document.createElement("span");
+      el.className = "cm-completionArgs";
+      el.textContent = args;
+      return el;
+    },
+  },
+  {
+    position: 90,
+    render(c: Completion) {
+      const e = (c as VarOption).entry;
+      const text = e?.secret ? "secret" : (e?.description ?? e?.preview);
+      if (!text) return null;
+      const el = document.createElement("span");
+      el.className = e.secret ? "cm-completionSecret" : e.description ? "cm-completionDescription" : "cm-completionPreview";
+      el.textContent = text;
+      return el;
+    },
+  },
+];
 
 /**
  * Hover tooltips and autocomplete render into the shared popup layer, so a
@@ -226,7 +349,7 @@ export function variableExtensions(provider: VarProvider, { marks = true }: { ma
   return [
     layerTooltips(),
     marks ? [varDecorations(provider), varTooltip(provider)] : [],
-    autocompletion({ override: [varCompletion(provider)], icons: false }),
+    autocompletion({ override: [varCompletion(provider)], icons: false, addToOptions: completionColumns }),
   ];
 }
 

@@ -8,6 +8,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { envVariables } from "./vars";
+import type { Definition } from "./codemirror/setup";
 import type { AppSettings, EnvironmentSet, EnvironmentSettings, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
@@ -126,6 +127,9 @@ class AppStore {
    *  whose request editor should show its Settings, and the environment picker. */
   settingsSection = $state<SettingsSection | null>(null);
   requestSettingsFor = $state<string | null>(null);
+  /** A variable definition whose row a hover card's Edit asked for: the request's
+   *  Settings or the Environments modal focuses it and clears this. */
+  definitionWanted = $state<Definition | null>(null);
   envPickerWanted = $state(false);
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
@@ -963,6 +967,15 @@ class AppStore {
   openSettings(section: SettingsSection | null = null) {
     this.settingsSection = section;
     this.modal = "settings";
+  }
+
+  /** Opens the row of a variable's definition (a hover card's Edit): a File
+   *  variable in the tab's Settings section, or an environment's variable in the
+   *  Environments modal, on that environment. */
+  editDefinition(tabId: string, definition: Definition) {
+    this.definitionWanted = definition;
+    if (definition.kind === "file") this.showRequestSettings(tabId);
+    else this.modal = "env";
   }
 
   /** Switches the tab's request editor to its Settings section (timeouts). */

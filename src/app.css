@@ -496,6 +496,34 @@ kbd {
   background: color-mix(in srgb, var(--var-secret) 12%, transparent);
 }
 
+/* A variable's hover card (varCard in src/lib/codemirror/setup.ts), in an
+   editor's tooltip or VarField's popup. */
+.var-card {
+  padding: 6px 10px;
+  font-size: 12px;
+  max-width: 420px;
+  font-family: var(--font);
+}
+.var-card-name {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.var-card-value {
+  font-family: var(--mono);
+  word-break: break-all;
+  color: var(--text-2);
+}
+.var-card-source {
+  color: var(--muted);
+  margin-top: 3px;
+}
+.var-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 4px -6px -2px 0;
+}
+
 /* Shared popup layer (src/lib/popup/layer.ts): a zero-size fixed stacking
    context at the end of <body>, above modals (100) and toasts (200). Every
    popup inside it is position: fixed in viewport coordinates. */

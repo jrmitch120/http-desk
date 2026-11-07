@@ -208,6 +208,21 @@ paths), File variable values and environment values.
   (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
   reference), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
+- The hover card shows the resolved value and where it comes from ("this file",
+  "this request", `environment "staging"`, "shared variables"). A Secret, or a value a
+  Secret went into, is masked until **Reveal**, in that card only. **Edit** opens the
+  definition's row when the app has one: a File variable at the top of the file in
+  the request's Settings section, an environment's variable in the Environments modal
+  on that environment (or the shared variables). It comes from the provider's `edit`
+  (the request editor wires it to `app.editDefinition`), and the info's `definition`;
+  a request's own `@name`, a dynamic or an Undefined variable has none. A press in the
+  card keeps focus where it was, so an editor (and its card) stays open.
+- Autocomplete lists the names in scope, each with its source (file, environment,
+  shared) and a short preview of its resolved value ("secret" instead of a Secret's),
+  then every dynamic variable with its argument hint and a description. The list is
+  `crates/httpdesk-core/dynamic-variables.json`, which a core test keeps equal to what
+  the core generates. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
+  leaves the caret before `}}`.
 - In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
   become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write
   through `set`.
@@ -305,7 +320,9 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   can't show, kept by name), `label` (the grid's `group` name), `sectionEnabled`,
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
   filter), `bulkEdit` (default on), `showDescriptions` (default on), `onchange(items)`,
-  `variables` (makes the built-in value cells [VarFields](#varfield)).
+  `variables` (makes the built-in value cells [VarFields](#varfield)). Through
+  `bind:this`, `focusValue(row)` puts focus in a row's value cell (a hover card's Edit
+  lands there).
 - How it's configured today:
   - Params and headers: enable, name, value, description, delete. Headers add
     name suggestions. Values are VarFields.

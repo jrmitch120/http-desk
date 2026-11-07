@@ -11,10 +11,12 @@
   import Icon from "./Icon.svelte";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import { tick } from "svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import { envVariables, makeVarProvider } from "../lib/vars";
+  import type { Definition } from "../lib/codemirror/setup";
 
   const SHARED = "$shared";
 
@@ -51,8 +53,12 @@
     if (selectedEnv) selectedEnv.variables = list;
     else set.shared = list;
   }
-  /** What the values being edited can refer to: the environment shown (as edited, saved or not) and the shared variables. */
-  const variables = $derived(makeVarProvider({ env: envVariables(set, selectedEnv?.name ?? null), fileVars: [], requestVars: [], envName: selected }));
+  /** What the values being edited can refer to: the environment shown (as edited, saved or not) and the shared variables.
+   *  A hover card's Edit focuses the defining row here (e.g. a shared variable used in an environment's value). */
+  const variables = $derived({
+    ...makeVarProvider({ env: envVariables(set, selectedEnv?.name ?? null), fileVars: [], requestVars: [], envName: selected }),
+    edit: (d: Definition) => (app.definitionWanted = d),
+  });
   /** Production and colour per environment name. Saved to the app settings, not
    *  the env files; renames and deletes below carry or drop them. */
   let meta = $state<Record<string, EnvironmentSettings>>(
@@ -180,6 +186,21 @@
     if (activeEnv !== app.envName) await app.selectEnvironment(activeEnv);
     app.modal = null;
   }
+
+  // A hover card's Edit: show the environment that supplies the variable, and focus its row.
+  let grid = $state<KeyValueGrid<EnvVar>>();
+  $effect(() => {
+    const want = app.definitionWanted;
+    if (want?.kind !== "env" || !grid) return;
+    app.definitionWanted = null;
+    if (want.env !== SHARED && !set.environments.some((e) => e.name === want.env)) return;
+    selected = want.env;
+    filter = "";
+    tick().then(() => {
+      const row = vars.filter((v) => v.name === want.name).at(-1);
+      if (row) grid?.focusValue(row);
+    });
+  });
 
   async function requestClose() {
     if (app.dialog) return; // a nested prompt/confirm is handling this keypress
@@ -313,6 +334,7 @@
 
       <div class="vars">
         <KeyValueGrid
+          bind:this={grid}
           bind:items={() => vars, setVars}
           columns={[{ id: "name", width: "34%" }, valueColumn, lockColumn, "delete"]}
           blank={blankVar}

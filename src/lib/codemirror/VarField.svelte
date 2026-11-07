@@ -159,7 +159,7 @@
     card = null;
   }
   function fill(node: HTMLElement, c: { name: string }) {
-    const render = (c: { name: string }) => variables && node.replaceChildren(varCard(c.name, variables.info(c.name)));
+    const render = (c: { name: string }) => variables && node.replaceChildren(varCard(c.name, variables.info(c.name), { edit: variables.edit, close: hideNow }));
     render(c);
     return { update: render };
   }

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
+  import { app } from "../lib/store.svelte";
   import type { HttpFile, KeyValue, Request } from "../lib/types";
   import { getDirective, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
@@ -33,6 +34,17 @@
     untrack(() => {
       if (JSON.stringify(vars) !== JSON.stringify(file.header.variables)) file.header.variables = vars;
     });
+  });
+
+  // A hover card's Edit on a File variable: focus its row.
+  let grid = $state<KeyValueGrid<KeyValue>>();
+  $effect(() => {
+    const want = app.definitionWanted;
+    if (want?.kind !== "file" || !grid) return;
+    app.definitionWanted = null;
+    // The last of a repeated name is the one in use.
+    const row = fileVars.filter((v) => v.name === want.name).at(-1);
+    if (row) tick().then(() => grid?.focusValue(row));
   });
 
   const preserved = $derived(
@@ -91,6 +103,7 @@
     <h3>File variables</h3>
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
     <KeyValueGrid
+      bind:this={grid}
       bind:items={fileVars}
       columns={["name", "value", "delete"]}
       label="File variables"

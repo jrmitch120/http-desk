@@ -9,6 +9,40 @@ use chrono::{Duration, Local, Utc};
 
 use crate::model::Variable;
 
+/// Every dynamic variable the resolver generates, without the `$`; `env.` takes a
+/// name after it. Anything else after `$` is an Undefined variable. Autocomplete's
+/// list (`dynamic-variables.json`, with descriptions and argument hints) must name
+/// exactly these, in this order: a test checks.
+pub const DYNAMIC_VARIABLES: &[&str] = &[
+    "uuid",
+    "guid",
+    "random.uuid",
+    "timestamp",
+    "isoTimestamp",
+    "randomInt",
+    "random.integer",
+    "random.float",
+    "random.alphabetic",
+    "random.alphanumeric",
+    "random.hexadecimal",
+    "random.email",
+    "datetime",
+    "localDatetime",
+    "processEnv",
+    "dotenv",
+    "env.",
+];
+
+fn is_dynamic(name: &str) -> bool {
+    DYNAMIC_VARIABLES.iter().any(|d| {
+        if d.ends_with('.') {
+            name.len() > d.len() && name.starts_with(d)
+        } else {
+            name == *d
+        }
+    })
+}
+
 /// A run of plain text, or one `{{…}}` reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Segment<'a> {
@@ -215,6 +249,9 @@ impl Resolver {
     /// `Ok(None)` when the variable is unknown or unset; `Err` when its arguments are bad.
     fn dynamic(&self, expr: &str) -> Result<Option<String>, String> {
         let (name, args) = split_call(expr);
+        if !is_dynamic(name) {
+            return Ok(None);
+        }
         let arg = |i: usize| args.get(i).map(String::as_str);
         let int = |i: usize, default: i64| arg(i).map_or(Ok(default), parse_int);
         Ok(Some(match name {
@@ -487,6 +524,44 @@ mod tests {
         std::env::set_var("HTTPDESK_TEST_VAR", "yes");
         assert_eq!(r.resolve("{{$processEnv HTTPDESK_TEST_VAR}}"), "yes");
         assert_eq!(r.resolve("{{$env.HTTPDESK_TEST_VAR}}"), "yes");
+    }
+
+    /// Autocomplete offers the dynamic variables listed in `dynamic-variables.json`.
+    /// The resolver generates nothing outside `DYNAMIC_VARIABLES`, so a dynamic
+    /// variable added to the core without its entry there fails here.
+    #[test]
+    fn autocomplete_lists_every_dynamic_variable() {
+        #[derive(serde::Deserialize)]
+        struct Catalogue {
+            variables: Vec<Entry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            name: String,
+        }
+        let listed: Catalogue = serde_json::from_str(include_str!("../dynamic-variables.json")).unwrap();
+        let listed: Vec<String> = listed.variables.into_iter().map(|e| e.name).collect();
+        let generated: Vec<String> = DYNAMIC_VARIABLES.iter().map(|n| format!("${n}")).collect();
+        assert_eq!(listed, generated);
+    }
+
+    #[test]
+    fn the_resolver_generates_every_listed_dynamic_variable_and_nothing_else() {
+        std::env::set_var("HTTPDESK_LISTED_VAR", "yes");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "HTTPDESK_LISTED_VAR=yes\n").unwrap();
+        let r = Resolver::for_request(&HashMap::new(), &[], &[], Some(dir.path()));
+        for name in DYNAMIC_VARIABLES {
+            let reference = match *name {
+                "processEnv" | "dotenv" => format!("{{{{${name} HTTPDESK_LISTED_VAR}}}}"),
+                "env." => "{{$env.HTTPDESK_LISTED_VAR}}".to_string(),
+                _ => format!("{{{{${name}}}}}"),
+            };
+            assert!(!r.resolve(&reference).contains("{{"), "{reference} was not generated");
+        }
+        assert!(r.unresolved().is_empty() && r.errors().is_empty(), "{:?} {:?}", r.unresolved(), r.errors());
+        assert_eq!(r.resolve("{{$nope}}"), "{{$nope}}");
+        assert_eq!(r.unresolved(), vec!["$nope"]);
     }
 
     /// Resolves `text` with a fresh resolver and returns its errors.

@@ -6,6 +6,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
   import { fileVariables, methodClass } from "../lib/http";
+  import { isDynamic } from "../lib/vars";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Toggle from "./Toggle.svelte";
@@ -53,7 +54,7 @@
       if (!text) return [];
       if (i % 2 === 0) return [{ text }];
       const name = text.slice(2, -2).trim();
-      return [{ text, kind: name.startsWith("$") ? "dynamic" : circular.has(name) ? "circular" : "undefined" }];
+      return [{ text, kind: isDynamic(name) ? "dynamic" : circular.has(name) ? "circular" : "undefined" }];
     });
   }
   const NOTES: Record<Kind, string> = {

@@ -32,6 +32,8 @@
   export type Column<R> = BuiltinColumn | { id: BuiltinColumn; width: string } | CustomColumn<R>;
 
   const WIDTHS: Record<BuiltinColumn, string> = { enable: "34px", name: "38%", value: "1fr", description: "", delete: "34px" };
+  /** What can take focus in a value cell: an input, or a VarField's static rendering. */
+  const FOCUSABLE = 'input, textarea, [tabindex]:not([tabindex="-1"])';
 </script>
 
 <script lang="ts" generics="R extends GridRow">
@@ -222,6 +224,21 @@
     return { destroy: () => el.removeEventListener("input", fit) };
   }
 
+  let root: HTMLDivElement;
+  /**
+   * Puts focus in `row`'s value cell, scrolled into view (a hover card's Edit
+   * lands here). False when the row isn't shown (bulk edit, or filtered out).
+   */
+  export function focusValue(row: R): boolean {
+    const i = bulk ? -1 : rows.findIndex((r) => r.row === row);
+    const cell = root.querySelectorAll(":scope > .kv-row")[i]?.querySelector<HTMLElement>(".c-value");
+    const target = cell?.matches(FOCUSABLE) ? cell : cell?.querySelector<HTMLElement>(FOCUSABLE);
+    if (!target) return false;
+    target.scrollIntoView({ block: "nearest" });
+    target.focus();
+    return true;
+  }
+
   const allOn = $derived(items.length > 0 && items.every((r) => r.enabled));
   function enableAll(on: boolean) {
     items.forEach((r) => (r.enabled = on));
@@ -229,7 +246,7 @@
   }
 </script>
 
-<div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label}>
+<div class="kv" class:section-off={!sectionEnabled} role={label ? "group" : undefined} aria-label={label} bind:this={root}>
   <div class="kv-head" style:grid-template-columns={template}>
     {#if bulk}
       {#if hasEnable}<span class="c-check"></span>{/if}

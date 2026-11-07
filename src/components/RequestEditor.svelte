@@ -10,6 +10,7 @@
   import type { KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
+  import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
@@ -32,9 +33,11 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
-  const variables = $derived(
-    doc ? makeVarProvider({ env: app.envVariables, fileVars: fileVariables(doc.file), requestVars: req?.variables ?? [], envName: app.envName }) : null,
-  );
+  const variables = $derived.by(() => {
+    if (!doc) return null;
+    const scope = { env: app.envVariables, fileVars: fileVariables(doc.file), headerVars: doc.file.header.variables, requestVars: req?.variables ?? [], envName: app.envName };
+    return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d) };
+  });
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
   $effect(() => {
