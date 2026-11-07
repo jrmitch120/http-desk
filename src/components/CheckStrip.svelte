@@ -61,7 +61,7 @@
     /* Three entries; more scroll, so a long list doesn't push the sections away. */
     max-height: 150px;
     overflow: auto;
-    margin: 0 14px 8px 16px;
+    margin: 0 14px var(--space-2) var(--space-4);
     border: 1px solid color-mix(in srgb, var(--tone) 35%, transparent);
     border-radius: var(--radius);
     background: color-mix(in srgb, var(--tone) 10%, transparent);

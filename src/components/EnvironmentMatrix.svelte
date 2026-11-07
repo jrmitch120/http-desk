@@ -196,7 +196,7 @@
     height: 22px;
   }
   .lock {
-    margin-right: 4px;
+    margin-right: var(--space-1);
     opacity: 0.55;
   }
   .lock.active,
@@ -206,8 +206,8 @@
   }
   .actions {
     margin: auto;
-    width: 24px;
-    height: 24px;
+    width: var(--control-h-sm);
+    height: var(--control-h-sm);
     opacity: 0;
   }
   /* Like the list's delete button: shown on hover, and while the row has focus. */
@@ -216,7 +216,7 @@
     opacity: 1;
   }
   .empty {
-    padding: 14px 4px;
+    padding: 14px var(--space-1);
     font-size: 12px;
   }
 </style>
