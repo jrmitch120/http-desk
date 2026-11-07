@@ -195,6 +195,10 @@ const sendErrors: SendErrorFixtures = {
       "The URL's scheme or host uses undefined variables: baseUrl. Pick an environment that defines them, or declare them as file variables.",
     details: { names: ["baseUrl"] },
   },
+  circularVariable: {
+    message: "The URL's scheme or host uses a circular variable reference: baseUrl → host → baseUrl.",
+    details: { chains: [["baseUrl", "host", "baseUrl"]] },
+  },
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
   other: { message: "Something unexpected went wrong", details: null },

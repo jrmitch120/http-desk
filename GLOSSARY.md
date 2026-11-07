@@ -22,6 +22,11 @@ A `{{name}}` reference with no definition in scope: not in the request, the file
 A circular reference and an unanswered Prompt variable are reported separately, not as undefined.
 _Avoid_: unresolved variable, missing variable
 
+**Circular reference**:
+A `{{name}}` whose value leads back to a name already being resolved, such as `a → b → a`, or a request's `@host = {{host}}/v2`.
+It is reported with the chain followed, never as an Undefined variable.
+_Avoid_: cycle, recursive variable
+
 **Prompt variable**:
 A variable declared with `# @prompt name [description]` whose value the user types when sending the request.
 It overrides any other variable of the same name, and its value is never saved.

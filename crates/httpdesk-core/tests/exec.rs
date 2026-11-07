@@ -477,6 +477,43 @@ fn unresolved_host_names_the_variables_and_suggests_an_environment() {
     assert!(msg.contains("environment"), "{msg}");
 }
 
+#[test]
+fn a_circular_host_fails_the_send_with_its_own_error_and_chain() {
+    let s = ExecSettings::default();
+    let req = parse("GET {{baseUrl}}/users\n").requests.remove(0);
+    let r = Resolver::new(env(&[("baseUrl", "https://{{host}}"), ("host", "{{api}}"), ("api", "{{host}}")]));
+    let err = prepare(&req, &r, Path::new("."), &s).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("baseUrl → host → api → host") && !msg.contains("undefined"), "{msg}");
+    let r = report(&err);
+    assert_eq!(
+        (&r["kind"], &r["details"]),
+        (&"circularVariable".into(), &serde_json::json!({ "chains": [["baseUrl", "host", "api", "host"]] }))
+    );
+
+    // An undefined host variable next to a circular one is still reported as undefined.
+    let req = parse("GET {{scheme}}://{{a}}/x\n").requests.remove(0);
+    let r = Resolver::new(env(&[("a", "{{a}}")]));
+    let err = prepare(&req, &r, Path::new("."), &s).unwrap_err();
+    assert!(matches!(&err, ExecError::UnresolvedHost(vars) if vars == &["scheme"]), "{err}");
+}
+
+#[test]
+fn a_circular_reference_outside_the_host_is_its_own_warning() {
+    let s = ExecSettings::default();
+    let req = parse("GET http://h/{{a}}?q={{missing}}\nX-Me: {{me}}\n").requests.remove(0);
+    let r = Resolver::new(env(&[("a", "{{b}}"), ("b", "{{a}}"), ("me", "{{me}}")]));
+    let prepared = prepare(&req, &r, Path::new("."), &s).unwrap();
+    assert_eq!(
+        prepared.warnings,
+        [
+            "Unresolved variables: missing",
+            "Circular variable reference: me → me",
+            "Circular variable reference: a → b → a"
+        ]
+    );
+}
+
 // ---------------------------------------------------------------- query encoding (ADR-0001)
 
 /// Sends `text` (one request, URL relative to `{{base}}`) and returns the raw query the server saw.
