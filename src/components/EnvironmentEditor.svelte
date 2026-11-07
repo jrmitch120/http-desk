@@ -373,9 +373,12 @@
     ];
   }
 
-  /** A matrix row's own actions. Find usages lists, in the sidebar behind this modal, what
-   *  references the variable, so it closes the modal (the search reads env files from disk,
-   *  so unsaved edits are asked about first). */
+  /** A variable's own actions, in both views (a matrix row's menu, a List row's actions
+   *  button and its name field's right-click menu). Find usages lists, in the sidebar behind
+   *  this modal, what references the variable, so it closes the modal (the search reads env
+   *  files from disk, so unsaved edits are asked about first). Rename everywhere… renames it
+   *  in every environment of the folder and its references; typing in a List row's name
+   *  field only renames it in that environment. */
   function rowActions(name: string): MenuItem[] {
     return [
       {
@@ -385,7 +388,7 @@
           if (await requestClose()) void app.findUsages(name);
         },
       },
-      { label: "Rename…", icon: "edit", action: () => void renameVariable(name) },
+      { label: "Rename everywhere…", icon: "edit", action: () => void renameVariable(name) },
     ];
   }
 </script>
@@ -551,6 +554,7 @@
               visible={matches}
               bulkEdit={false}
               namePlaceholder="Variable"
+              rowActions={(row) => rowActions(row.name.trim())}
             />
           </div>
         </section>

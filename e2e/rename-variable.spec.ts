@@ -1,4 +1,4 @@
-// Rename variable (#86): a matrix row's "Rename…" renames the variable in every
+// Rename variable (#86): a variable's "Rename everywhere…" renames the variable in every
 // environment and, optionally, every `{{name}}` reference Find usages finds. Files
 // without unsaved edits are saved at once; one with unsaved edits gets the rename
 // in memory and stays unsaved. The mock has `local` (baseUrl, Secret token) and
@@ -10,13 +10,13 @@ import { dialog, mockState, openApp, openRequest, showEnvironmentMatrix, tab, ur
 const PETS = "/demo/api/pets.http";
 const JETBRAINS = "/demo/samples/jetbrains.http";
 
-/** Opens the Environments modal on the matrix and picks "Rename…" from variable `name`'s row actions. */
+/** Opens the Environments modal on the matrix and picks "Rename everywhere…" from variable `name`'s row actions. */
 async function startRename(page: Page, name: string): Promise<Locator> {
   await page.getByRole("button", { name: "Manage environments" }).click();
   await showEnvironmentMatrix(page);
   const matrix = dialog(page, "Environments").getByRole("group", { name: "Environments matrix" });
   await matrix.locator(".kv-row").filter({ hasText: name }).getByRole("button", { name: `Actions for ${name}` }).click();
-  await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Rename everywhere…", exact: true }).click();
   const form = dialog(page, "Rename variable");
   await expect(form).toBeVisible();
   return form;
@@ -101,14 +101,14 @@ test("with unsaved environment changes, Rename asks to save them first", async (
   await page.keyboard.type("/v2");
   await page.keyboard.press("Tab");
   await modal.locator(".kv-row").filter({ hasText: "baseUrl" }).getByRole("button", { name: "Actions for baseUrl" }).click();
-  await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Rename everywhere…", exact: true }).click();
 
   const ask = dialog(page, "Save changes first?");
   await ask.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog(page, "Rename variable")).toHaveCount(0);
 
   await modal.locator(".kv-row").filter({ hasText: "baseUrl" }).getByRole("button", { name: "Actions for baseUrl" }).click();
-  await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Rename everywhere…", exact: true }).click();
   await dialog(page, "Save changes first?").getByRole("button", { name: "Save" }).click();
   const form = dialog(page, "Rename variable");
   await expect(form).toBeVisible();
@@ -117,4 +117,26 @@ test("with unsaved environment changes, Rename asks to save them first", async (
   await page.keyboard.press("Escape");
   await expect(form).toHaveCount(0);
   await expect(modal).toBeVisible();
+});
+
+test("a List row's Rename everywhere… renames the variable in every environment, not just the one shown", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  const modal = dialog(page, "Environments");
+  const grid = modal.getByRole("group", { name: "Variables" });
+  await grid.locator("input.c-name").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename everywhere…", exact: true }).click();
+  const form = dialog(page, "Rename variable");
+  await expect(form.getByLabel("New name")).toHaveValue("baseUrl");
+  await form.getByLabel("New name").fill("apiUrl");
+  await form.getByRole("checkbox", { name: "Update references" }).click();
+  await form.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(form).toHaveCount(0);
+
+  const envFiles = await mockState(page, "envFiles");
+  expect(envFiles.shared.local).toEqual({ apiUrl: "http://127.0.0.1:8765" });
+  expect(envFiles.shared.staging).toEqual({ apiUrl: "https://staging.example.com" });
+  // The List shows the new name, saved.
+  await expect(grid.locator(".kv-row:not(.ghost) input.c-name").first()).toHaveValue("apiUrl");
+  await expect(modal.getByRole("button", { name: "Save" })).toBeDisabled();
 });

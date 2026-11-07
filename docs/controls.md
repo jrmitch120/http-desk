@@ -413,7 +413,10 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   `namePlaceholder`, `valuePlaceholder`, `suggestions`, `nameError`, `visible` (a row
   filter), `bulkEdit` (default on), `addRows` (the ghost row, default on),
   `showDescriptions` (default on), `onchange(items)`,
-  `variables` (makes the built-in value cells [VarFields](#varfield)). Through
+  `variables` (makes the built-in value cells [VarFields](#varfield)), `rowActions(row)`
+  (a named row's own menu items: an actions button, "Actions for <name>", at the name
+  cell's right edge, shown on row hover and focus but out of the Tab order, and the
+  same items after Cut, Copy, Paste and Select all in the name field's edit menu). Through
   `bind:this`, `focusValue(row)` puts focus in a row's value cell (a hover card's Edit
   lands there).
 - How it's configured today:
@@ -428,7 +431,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     with a reveal button), a Secret lock column, and a search filter (`visible`). The
     VarFields see the environment being edited, as edited, plus the shared variables
     (not the environment selected in the top bar). Bulk edit is off, because it would
-    show Secret values as plain text.
+    show Secret values as plain text. `rowActions` gives each named row Find usages and
+    Rename everywhere….
   - The Environments matrix (`EnvironmentMatrix.svelte`): one row per variable name,
     a read-only Variable column (the name, and the row's actions button at the cell's
     right edge, shown on row hover and focus), one VarField column per environment

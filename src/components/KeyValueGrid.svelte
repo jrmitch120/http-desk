@@ -70,6 +70,8 @@
   import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
+  import { menu, type MenuItem } from "../lib/menu.svelte";
+  import { addMenuItems } from "../lib/editMenu";
 
   interface Props {
     items: R[];
@@ -101,6 +103,10 @@
     onchange?: (items: R[]) => void;
     /** Makes the built-in value cells variable-aware fields (VarField) with these variables. */
     variables?: VarProvider | null;
+    /** A named row's own commands: an actions button at the right edge of its name cell, and
+     *  the same items after Cut, Copy and Paste when the name field is right-clicked (or gets
+     *  Shift+F10). The button is out of the Tab order, so Tab still goes from name to value. */
+    rowActions?: (row: R) => MenuItem[];
   }
   let {
     items = $bindable(),
@@ -120,6 +126,7 @@
     showDescriptions = true,
     onchange,
     variables,
+    rowActions,
   }: Props = $props();
 
   type Track = {
@@ -377,16 +384,32 @@
               {@render t.cell({ row, index: i, ghost: isGhost, set: (patch) => set(row, patch), column: t.id })}
             </div>
           {:else if t.id === "name"}
-            <input
-              class="cell c-name"
-              class:divider={divider(c)}
-              value={row.name}
-              placeholder={isGhost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
-              spellcheck="false"
-              aria-invalid={error ? "true" : undefined}
-              oninput={(e) => set(row, { name: e.currentTarget.value } as Partial<R>)}
-              use:suggest={{ options: suggestions, label: `${namePlaceholder} suggestions` }}
-            />
+            {#snippet nameInput(cls: string, actions: MenuItem[])}
+              <input
+                class="cell c-name {cls}"
+                value={row.name}
+                placeholder={isGhost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
+                spellcheck="false"
+                aria-invalid={error ? "true" : undefined}
+                oninput={(e) => set(row, { name: e.currentTarget.value } as Partial<R>)}
+                oncontextmenu={actions.length ? (e) => addMenuItems(e, actions) : undefined}
+                use:suggest={{ options: suggestions, label: `${namePlaceholder} suggestions` }}
+              />
+            {/snippet}
+            {#if rowActions}
+              {@const actions = !isGhost && row.name.trim() ? rowActions(row) : []}
+              <div class="c-name-cell" class:divider={divider(c)}>
+                {@render nameInput("", actions)}
+                {#if actions.length}
+                  {@const what = `Actions for ${row.name.trim()}`}
+                  <button class="icon-btn row-actions" tabindex="-1" aria-label={what} aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, actions, { anchor: e.currentTarget, align: "end", label: what })}>
+                    <Icon name="more" size={13} />
+                  </button>
+                {/if}
+              </div>
+            {:else}
+              {@render nameInput(divider(c) ? "divider" : "", [])}
+            {/if}
           {:else if t.id === "value"}
             {#if variables}
               <VarField class="cell c-value{divider(c) ? ' divider' : ''}" value={row.value} placeholder={valuePlaceholder} label={valuePlaceholder} {variables} onchange={(value) => set(row, { value } as Partial<R>)} />
@@ -483,6 +506,7 @@
     padding-top: var(--space-2);
   }
   .kv-row > .c-name,
+  .kv-row > .c-name-cell,
   .kv-row > :global(.c-value),
   .kv-row > .c-extra,
   .kv-row > .c-del {
@@ -495,6 +519,27 @@
   }
   .c-extra > :global(.cell) {
     flex: 1;
+  }
+  /* A name cell with row actions: the field, then the actions button at its right
+     edge, shown while the row is hovered or has focus. */
+  .c-name-cell {
+    display: flex;
+    align-items: center;
+  }
+  .c-name-cell > .c-name {
+    flex: 1;
+    align-self: stretch;
+  }
+  .row-actions {
+    flex: none;
+    margin-right: var(--space-1);
+    width: var(--control-h-sm);
+    height: var(--control-h-sm);
+    opacity: 0;
+  }
+  .kv-row:hover .row-actions,
+  .kv-row:focus-within .row-actions {
+    opacity: 1;
   }
   /* Description sub-row: spans to the right edge on a faint tint, with a
      hairline that closes off the key/value divider above it. */

@@ -144,7 +144,7 @@ test("a row's menu deletes the variable from every environment", async ({ page }
   await expect(matrix(modal).locator(".kv-row .c-actions").first()).toBeEmpty();
   await actions.click();
   await expect(page.getByRole("menuitem", { name: "Delete from all environments" })).toBeVisible();
-  await expect(itemsWithIcons(page)).toHaveText(["Find usages", "Rename…", "Delete from all environments"]);
+  await expect(itemsWithIcons(page)).toHaveText(["Find usages", "Rename everywhere…", "Delete from all environments"]);
   await page.keyboard.press("Escape");
   await expect(actions).toBeFocused();
 

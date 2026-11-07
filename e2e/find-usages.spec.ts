@@ -141,3 +141,34 @@ test("a matrix row's Find usages closes the Environments modal and lists the var
   await expect(modal).toHaveCount(0);
   await expect(usages(page)).toContainText("Usages of {{token}}");
 });
+
+test("a List row's actions and its name's right-click menu offer Find usages", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  const modal = dialog(page, "Environments");
+  const grid = modal.getByRole("group", { name: "Variables" });
+  const row = grid.locator(".kv-row").first();
+  await expect(row.locator("input.c-name")).toHaveValue("baseUrl");
+
+  // The actions button sits at the right edge of the name cell, shown on hover, and
+  // stays out of the Tab order: Tab goes from the name to the value.
+  const actions = row.getByRole("button", { name: "Actions for baseUrl" });
+  await expect(actions).toHaveCSS("opacity", "0");
+  await row.hover();
+  await expect(actions).toHaveCSS("opacity", "1");
+  await row.locator("input.c-name").focus();
+  await page.keyboard.press("Tab");
+  await expect(actions).not.toBeFocused();
+  await expect(grid.locator(".kv-row.ghost").getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+
+  await actions.click();
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Find usages", "Rename everywhere…"]);
+  await page.keyboard.press("Escape");
+
+  // The name field's right-click menu has the edit items, then the same two.
+  await row.locator("input.c-name").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Cut", "Copy", "Paste", "Select all", "Find usages", "Rename everywhere…"]);
+  await page.getByRole("menuitem", { name: "Find usages", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(usages(page)).toContainText("Usages of {{baseUrl}}");
+});

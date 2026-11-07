@@ -613,9 +613,12 @@ Decisions made during implementation, beyond the plan above:
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,
-  since the search reads the env files from disk), Rename… (see
+  since the search reads the env files from disk), Rename everywhere… (see
   [Rename variable](#rename-variable)) and "Delete from all environments" (Shared and
-  every environment of the folder, unsaved until Save). A "Filter variables" box above
+  every environment of the folder, unsaved until Save). A List row has the first two
+  too (its actions button, out of the Tab order, or its name field's right-click menu,
+  after the edit items); typing in that name field renames the variable only in the
+  environment shown, without touching references. A "Filter variables" box above
   the matrix narrows the rows to names, or shareable values in any column, containing
   the text (never matching a Secret's value; `rowMatches`).
   The matrix edits the modal's unsaved set
@@ -674,8 +677,8 @@ Decisions made during implementation, beyond the plan above:
   send, each chain is its own warning ("Circular variable reference: a → b → a"); one in
   the URL's scheme or host fails the send with kind `circularVariable`, unless an
   Undefined variable is also there, which is reported first.
-* <a id="find-usages"></a>**Find usages** (a hover card's button, or a row's menu in the
-  Environments matrix) lists every
+* <a id="find-usages"></a>**Find usages** (a hover card's button, or a variable's menu in
+  the Environments modal, either view) lists every
   `{{name}}` reference in the workspace in the sidebar, in place of the tree, until
   closed. The search is the core's `workspace::usages(root, name, open)` behind the
   `find_usages` command: each `.http`/`.rest` file the explorer lists (open documents as
@@ -696,7 +699,8 @@ Decisions made during implementation, beyond the plan above:
   `@name`), a File variable's row in Settings, or an environment value's cell in the
   Environments matrix (its row in the list view), on the folder of its env file; the
   list names that folder for values below the root (`Environment "dev" · api/`).
-* <a id="rename-variable"></a>**Rename variable** (a matrix row's Rename…) renames an
+* <a id="rename-variable"></a>**Rename variable** (a variable's Rename everywhere… in the
+  Environments modal, either view) renames an
   environment variable in Shared and every environment of the folder the Environments
   modal shows (`app.renameVariable(name, dir)`) and, with "Update references"
   (on by default), the references that mean that variable. Which ones follows
