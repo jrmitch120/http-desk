@@ -49,13 +49,20 @@ test("a Basic auth username containing ':' shows an inline error", async ({ page
   await page.getByRole("combobox", { name: "Authorization type" }).click();
   await page.getByRole("option", { name: "Basic Auth" }).click();
 
-  const username = page.getByPlaceholder("{{username}}");
-  await username.fill("dom:ain");
+  // A variable-aware field (#80): typed into; the textbox is its editor while it has focus.
+  const username = page.getByRole("textbox", { name: "Username" });
+  await username.click();
+  await page.keyboard.type("dom:ain");
   await expect(username).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("alert")).toHaveText("Basic auth usernames can't contain ':'");
+  await page.keyboard.press("Tab");
+  await expect(username).toHaveAttribute("aria-invalid", "true");
 
-  await username.fill("domain");
+  await username.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("domain");
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(username).not.toHaveAttribute("aria-invalid", "true");
 });
 
 test("a body line starting with ### shows an inline warning", async ({ page }) => {

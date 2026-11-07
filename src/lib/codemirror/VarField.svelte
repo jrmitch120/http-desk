@@ -9,10 +9,14 @@
   // selects all, as in a text input; a click puts the caret (or starts a drag
   // selection) where it lands. The editor owns the text while it has focus;
   // `value` changes from elsewhere show once it loses focus.
+  //
+  // A `masked` field (a password or a Secret) draws its text as discs and marks
+  // nothing, so neither the marks nor a hover card give the text away;
+  // autocomplete still works.
   import { flushSync } from "svelte";
   import { Compartment, EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
-  import { singleLineExtensions, theme, varCard, variableExtensions, type VarProvider } from "./setup";
+  import { masked as maskedExt, singleLineExtensions, theme, varCard, variableExtensions, type VarProvider } from "./setup";
   import { varSegments } from "../vars";
   import { popup } from "../popup/popup";
 
@@ -27,21 +31,29 @@
     label?: string;
     /** Enter (and ⌘/Ctrl+Enter). Without it Enter does nothing and ⌘/Ctrl+Enter reaches the app's shortcut. */
     onenter?: () => void;
+    /** Draws the text as discs, as a password input does. */
+    masked?: boolean;
+    /** Marks the field `aria-invalid` (the owner shows the error and the red border). */
+    invalid?: boolean;
     /** Classes on the root, e.g. a grid's `cell`. The root sets no padding or font: they come from here. */
     class?: string;
   }
-  let { value, onchange, variables = null, placeholder = "", label, onenter, class: cls = "" }: Props = $props();
+  let { value, onchange, variables = null, placeholder = "", label, onenter, masked = false, invalid = false, class: cls = "" }: Props = $props();
 
-  let root: HTMLDivElement;
+  let root: HTMLDivElement | undefined;
   let staticEl = $state<HTMLDivElement>();
   let editing = $state(false);
   let view: EditorView | null = null;
   /** The press that started editing, replayed on the editor so the caret lands under the pointer. */
   let press: MouseEvent | null = null;
   const varC = new Compartment();
-  const vars = (p: VarProvider | null) => (p ? variableExtensions(p) : []);
+  const vars = (p: VarProvider | null, masked: boolean, invalid: boolean) => [
+    p ? variableExtensions(p, { marks: !masked }) : [],
+    masked ? maskedExt : [],
+    invalid ? EditorView.contentAttributes.of({ "aria-invalid": "true" }) : [],
+  ];
 
-  const segments = $derived(varSegments(value, variables));
+  const segments = $derived(masked ? (value ? [{ text: "•".repeat([...value].length) }] : []) : varSegments(value, variables));
 
   function startFromPointer(e: MouseEvent) {
     if (e.button !== 0) return;
@@ -49,6 +61,13 @@
     press = e;
     editing = true;
     flushSync();
+  }
+
+  // A press on the field's own padding (outside the text) focuses it too, as in an input.
+  function onrootdown(e: MouseEvent) {
+    if (e.target !== root) return;
+    if (editing) e.preventDefault();
+    else startFromPointer(e);
   }
 
   function editor(host: HTMLDivElement) {
@@ -67,7 +86,7 @@
             ".cm-line": { padding: "0" },
           }),
           singleLineExtensions({ placeholder, label, onenter }),
-          varC.of(vars(variables)),
+          varC.of(vars(variables, masked, invalid)),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange(u.state.doc.toString());
           }),
@@ -93,15 +112,16 @@
   }
 
   $effect(() => {
-    const p = variables;
-    view?.dispatch({ effects: varC.reconfigure(vars(p)) });
+    const ext = vars(variables, masked, invalid);
+    view?.dispatch({ effects: varC.reconfigure(ext) });
   });
 
   // Back to the static rendering once focus has really left: not while the
   // window is in the background (the field keeps focus then, as an input does).
   function onfocusout() {
     setTimeout(() => {
-      if (editing && !root.contains(document.activeElement)) editing = false;
+      // `root` is gone when the field was removed with focus in it (a modal closing).
+      if (editing && root && !root.contains(document.activeElement)) editing = false;
     });
   }
 
@@ -152,7 +172,8 @@
   });
 </script>
 
-<div class="var-field {cls}" class:editing bind:this={root} {onfocusout}>
+<!-- svelte-ignore a11y_no_static_element_interactions (the textbox inside is the field; this only widens its pointer target) -->
+<div class="var-field {cls}" class:editing bind:this={root} {onfocusout} onmousedown={onrootdown}>
   {#if editing}
     <div class="vf-editor" use:editor></div>
   {:else}
@@ -164,6 +185,7 @@
       aria-label={label}
       aria-placeholder={placeholder || undefined}
       aria-multiline="false"
+      aria-invalid={invalid ? "true" : undefined}
       data-placeholder={placeholder}
       onfocus={() => (editing = true)}
       onmousedown={startFromPointer}
