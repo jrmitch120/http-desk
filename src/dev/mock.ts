@@ -286,6 +286,7 @@ let settings = {
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   envView: "matrix",
+  envMatrixWidths: {},
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -685,6 +686,9 @@ mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
+      case "plugin:clipboard-manager|read_text":
+        // The browser's clipboard (tests replace navigator.clipboard to control it).
+        return navigator.clipboard.readText().catch(() => "");
       case "plugin:window|set_title":
         windowTitle = args.value;
         return null;

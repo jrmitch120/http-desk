@@ -11,6 +11,7 @@
     "core:window:allow-set-theme",
     "core:window:allow-destroy",
     "dialog:default",
+    "clipboard-manager:allow-read-text",
     "opener:allow-reveal-item-in-dir",
     "updater:default",
     "process:allow-restart"

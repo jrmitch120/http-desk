@@ -13,13 +13,17 @@
   // A `masked` field (a password or a Secret) draws its text as discs and marks
   // nothing, so neither the marks nor a hover card give the text away;
   // autocomplete still works.
+  //
+  // Text that doesn't fit shows in full in a tooltip, on hover (the static
+  // rendering) or keyboard focus (the editor); never for a masked field.
   import { flushSync } from "svelte";
   import { Compartment, EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { masked as maskedExt, singleLineExtensions, theme, varCard, variableExtensions, type VarProvider } from "./setup";
-  import { extractHolds } from "./extract";
+  import { isHeld } from "./holds";
   import { varSegments } from "../vars";
   import { popup } from "../popup/popup";
+  import { hideTooltip, tip, tooltip } from "../popup/tooltip.svelte";
 
   interface Props {
     value: string;
@@ -47,6 +51,8 @@
   let view: EditorView | null = null;
   /** The press that started editing, replayed on the editor so the caret lands under the pointer. */
   let press: MouseEvent | null = null;
+  /** Where a right-click that started editing was: the caret goes there. */
+  let caretAt: { x: number; y: number } | null = null;
   const varC = new Compartment();
   const vars = (p: VarProvider | null, masked: boolean, invalid: boolean) => [
     p ? variableExtensions(p, { marks: !masked }) : [],
@@ -57,6 +63,8 @@
   const segments = $derived(masked ? (value ? [{ text: "•".repeat([...value].length) }] : []) : varSegments(value, variables));
 
   function startFromPointer(e: MouseEvent) {
+    // A right-click doesn't focus the field (which would select all): its menu puts the caret instead.
+    if (e.button === 2) e.preventDefault();
     if (e.button !== 0) return;
     e.preventDefault();
     press = e;
@@ -100,12 +108,19 @@
       const { clientX, clientY, screenX, screenY, button, buttons, detail, shiftKey, altKey, ctrlKey, metaKey } = e;
       view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX, clientY, screenX, screenY, button, buttons, detail, shiftKey, altKey, ctrlKey, metaKey }));
     }
+    // Focus from the keyboard: the whole text in a tooltip if it doesn't fit (a click doesn't pop one).
+    const v = view;
+    const tipOnFocus = e ? null : tooltip(v.contentDOM, () => (!masked && v.scrollDOM.scrollWidth > v.scrollDOM.clientWidth ? v.state.doc.toString() : null));
+    const at = caretAt;
+    caretAt = null;
     if (!view.hasFocus) {
       view.focus();
-      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      const pos = at && view.posAtCoords(at);
+      view.dispatch({ selection: pos === null || pos === undefined ? { anchor: 0, head: view.state.doc.length } : { anchor: pos } });
     }
     return {
       destroy() {
+        tipOnFocus?.destroy();
         view?.destroy();
         view = null;
       },
@@ -119,12 +134,27 @@
 
   // Back to the static rendering once focus has really left: not while the
   // window is in the background (the field keeps focus then, as an input does),
-  // nor while its Extract to variable menu or form has it (the answer replaces the selection).
+  // nor while its edit menu or Extract to variable form has it (holds.ts: a Paste
+  // or the answer replaces the selection).
   function onfocusout() {
     setTimeout(() => {
       // `root` is gone when the field was removed with focus in it (a modal closing).
-      if (editing && root && !root.contains(document.activeElement) && !(view && extractHolds(view))) editing = false;
+      if (editing && root && !root.contains(document.activeElement) && !(view && isHeld(view))) editing = false;
     });
+  }
+
+  // A right-click on the static rendering (or the field's padding) opens the edit
+  // menu of the editor, with the caret where it was clicked (src/lib/editMenu.ts).
+  function onmenu(e: MouseEvent) {
+    if (e.target instanceof Element && e.target.closest(".cm-editor")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!editing) {
+      caretAt = { x: e.clientX, y: e.clientY };
+      editing = true;
+      flushSync();
+    }
+    view?.contentDOM.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY }));
   }
 
   /** Puts focus in the field (and selects its text). */
@@ -133,6 +163,11 @@
     else staticEl?.focus();
   }
 
+  // ---- the static rendering's tooltip: the whole text, when it doesn't fit and isn't masked.
+  // Not over a `{{variable}}`, whose hover card says more.
+  let overMark = false;
+  const cutText = () => (!masked && !overMark && staticEl && staticEl.scrollWidth > staticEl.clientWidth ? value : null);
+
   // ---- hover cards on the static rendering (the editor has its own)
   let card = $state<{ anchor: HTMLElement; name: string } | null>(null);
   let showTimer: ReturnType<typeof setTimeout> | undefined;
@@ -140,6 +175,8 @@
 
   function onpointerover(e: PointerEvent) {
     const mark = (e.target as Element).closest<HTMLElement>("[data-var]");
+    overMark = !!mark;
+    if (mark && tip.anchor === staticEl) hideTooltip(false);
     clearTimeout(showTimer);
     if (!mark) {
       if (card) hideSoon();
@@ -175,7 +212,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions (the textbox inside is the field; this only widens its pointer target) -->
-<div class="var-field {cls}" class:editing bind:this={root} {onfocusout} onmousedown={onrootdown}>
+<div class="var-field {cls}" class:editing bind:this={root} {onfocusout} onmousedown={onrootdown} oncontextmenu={onmenu}>
   {#if editing}
     <div class="vf-editor" use:editor></div>
   {:else}
@@ -191,6 +228,7 @@
       data-placeholder={placeholder}
       onfocus={() => (editing = true)}
       onmousedown={startFromPointer}
+      use:tooltip={cutText}
       {onpointerover}
       onpointerleave={hideSoon}
     >{#each segments as s, i (i)}{#if s.name !== undefined}<span class={s.cls} data-var={s.name}>{s.text}</span>{:else}{s.text}{/if}{/each}</div>

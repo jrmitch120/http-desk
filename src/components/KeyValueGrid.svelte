@@ -28,10 +28,16 @@
     /** A CSS grid track size, e.g. `80px` or `1fr`. */
     width: string;
     cell: Snippet<[GridCell<R>]>;
-    /** Renders the header cell instead of `header`: a button that sorts by the column, or a command. */
-    headerCell?: Snippet;
+    /** Renders the header cell instead of `header` (a button that sorts by the column, or a command). It gets the column's id. */
+    headerCell?: Snippet<[string]>;
     /** Makes the header a `columnheader` with this `aria-sort`, for a column the rows can be sorted by. */
     sort?: "ascending" | "descending" | "none";
+    /**
+     * Makes the column resizable: a ColumnResizer at its header cell's right edge,
+     * named `label`. `onresize` reports the new width in px (`done` once a drag ends,
+     * or at once for keys and fitting); the caller stores it and passes it back as `width`.
+     */
+    resize?: { label: string; onresize: (width: number, done: boolean) => void };
   }
 
   /** A built-in column by name, a built-in with its own width, or a custom column. */
@@ -40,6 +46,11 @@
   const WIDTHS: Record<BuiltinColumn, string> = { enable: "34px", name: "38%", value: "1fr", description: "", delete: "34px" };
   /** What can take focus in a value cell: an input, or a VarField's static rendering. */
   const FOCUSABLE = 'input, textarea, [tabindex]:not([tabindex="-1"])';
+  /** Limits of a resizable column, px, and one arrow-key step. */
+  export const COLUMN_LIMITS = { min: 100, max: 1200, step: 16 };
+  /** The element whose text sets a cell's width when its column is fitted: a VarField's
+   *  text (static, or its editor's line), or an element the caller marks `data-fit`. */
+  const FIT_TEXT = "[data-fit], .vf-static, .cm-line";
 </script>
 
 <script lang="ts" generics="R extends GridRow">
@@ -52,6 +63,8 @@
   import { SvelteSet } from "svelte/reactivity";
   import { formatBulk, KEY_VALUE_ROWS, parseBulk } from "../lib/http";
   import Checkbox from "./Checkbox.svelte";
+  import ColumnResizer from "./ColumnResizer.svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
@@ -109,7 +122,15 @@
     variables,
   }: Props = $props();
 
-  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]>; headerCell?: Snippet; sort?: CustomColumn<R>["sort"] };
+  type Track = {
+    id: string;
+    width: string;
+    header: string;
+    cell?: Snippet<[GridCell<R>]>;
+    headerCell?: Snippet<[string]>;
+    sort?: CustomColumn<R>["sort"];
+    resize?: CustomColumn<R>["resize"];
+  };
 
   const tracks: Track[] = $derived(
     columns.flatMap((c): Track[] => {
@@ -117,7 +138,7 @@
       if (col.id === "description") return [];
       const header = "header" in col ? col.header : col.id === "name" ? namePlaceholder : col.id === "value" ? valuePlaceholder : "";
       const custom = "cell" in col ? col : undefined;
-      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: custom?.cell, headerCell: custom?.headerCell, sort: custom?.sort }];
+      return [{ id: col.id, width: col.width || WIDTHS[col.id as BuiltinColumn], header, cell: custom?.cell, headerCell: custom?.headerCell, sort: custom?.sort, resize: custom?.resize }];
     }),
   );
   const hasColumn = (id: BuiltinColumn) => columns.some((c) => (typeof c === "string" ? c : c.id) === id);
@@ -249,6 +270,50 @@
     return true;
   }
 
+  // ---- resizable columns
+  /** Each resizable column's width as laid out, px (its separator's value). */
+  const laidOut = new SvelteMap<string, number>();
+  function measure(node: HTMLElement, id: string) {
+    // The layout size, not the bounding box, which a transform (the modal opening) scales.
+    const observer = new ResizeObserver(([entry]) => laidOut.set(id, Math.round(entry.borderBoxSize[0].inlineSize)));
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
+  /** Takes the new width at once, so the next key press steps from it rather than from the last layout. */
+  function resized(id: string, resize: NonNullable<Track["resize"]>, width: number, done: boolean) {
+    laidOut.set(id, width);
+    resize.onresize(width, done);
+  }
+
+  /** How much wider (or, negative, narrower) `text` would need to be to show all of its text. */
+  function shortfall(text: HTMLElement): number {
+    if (text.matches(".cm-line")) {
+      const scroller = text.closest<HTMLElement>(".cm-scroller");
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      // Room for the caret at the end.
+      return scroller ? range.getBoundingClientRect().width + 2 - scroller.clientWidth : 0;
+    }
+    const before = text.getBoundingClientRect().width;
+    const { width, flex, maxWidth } = text.style;
+    Object.assign(text.style, { width: "max-content", flex: "none", maxWidth: "none" });
+    const natural = text.getBoundingClientRect().width;
+    Object.assign(text.style, { width, flex, maxWidth });
+    return natural - before;
+  }
+
+  /** The width that shows the widest value of column `id` (its header included) in full. */
+  function fitWidth(id: string): number {
+    const c = CSS.escape(`c-${id}`);
+    let widest = COLUMN_LIMITS.min;
+    for (const cell of root.querySelectorAll<HTMLElement>(`:scope > .kv-head > .${c}, :scope > .kv-row > .${c}`)) {
+      const text = cell.querySelector<HTMLElement>(FIT_TEXT);
+      if (text) widest = Math.max(widest, cell.getBoundingClientRect().width + shortfall(text));
+    }
+    return Math.min(COLUMN_LIMITS.max, Math.ceil(widest));
+  }
+
   const allOn = $derived(items.length > 0 && items.every((r) => r.enabled));
   function enableAll(on: boolean) {
     items.forEach((r) => (r.enabled = on));
@@ -270,7 +335,23 @@
             {/if}
           </span>
         {:else}
-          <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell()}{:else}{t.header}{/if}</span>
+          {#if t.resize}
+            {@const resize = t.resize}
+            <span class="c-{t.id} resizable" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort} use:measure={t.id}>
+              {#if t.headerCell}{@render t.headerCell(t.id)}{:else}{t.header}{/if}
+              <ColumnResizer
+                label={resize.label}
+                width={laidOut.get(t.id) ?? 0}
+                min={COLUMN_LIMITS.min}
+                max={COLUMN_LIMITS.max}
+                step={COLUMN_LIMITS.step}
+                onresize={(width, done) => resized(t.id, resize, width, done)}
+                onfit={() => resized(t.id, resize, fitWidth(t.id), true)}
+              />
+            </span>
+          {:else}
+            <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell(t.id)}{:else}{t.header}{/if}</span>
+          {/if}
         {/if}
       {/each}
     {/if}
@@ -371,6 +452,10 @@
     padding-left: 11px;
     overflow: hidden;
     white-space: nowrap;
+  }
+  /* A resizable column's header holds its resize handle at the right edge. */
+  .kv-head > span.resizable {
+    position: relative;
   }
   /* A header with its own control (a sort button, a command) lays it out itself. */
   .kv-head > span.has-control {

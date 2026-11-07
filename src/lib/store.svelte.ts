@@ -16,6 +16,7 @@ import type {
   AppSettings,
   EnvironmentSet,
   EnvironmentSettings,
+  MatrixWidths,
   FolderEnvironments,
   HttpFile,
   HttpResponse,
@@ -223,7 +224,7 @@ class AppStore {
   definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
   /** How the Environments matrix sorts its rows (its Variable header): for this app session only, never saved. */
-  envMatrixSort = $state<MatrixSort>("none");
+  envMatrixSort = $state<MatrixSort>("asc");
   /** Find usages results shown in the sidebar (`usages` null while searching); null when closed. */
   usages = $state<{ name: string; usages: Usage[] | null } | null>(null);
   private usagesSeq = 0;
@@ -1171,6 +1172,19 @@ class AppStore {
   /** The settings of an environment of the open workspace (production, colour). */
   environmentSettings(name: string): EnvironmentSettings {
     return (this.root && this.settings?.environmentSettings?.[this.root]?.[name]) || {};
+  }
+
+  /** The open workspace's Environments matrix column widths (empty: every column at its default). */
+  matrixWidths(): MatrixWidths {
+    return (this.root && this.settings?.envMatrixWidths?.[this.root]) || { columns: {} };
+  }
+
+  /** Remembers a matrix column's width for the open workspace: `column` is `$shared` or an environment's name, null for the Variable column. */
+  async saveMatrixWidth(column: string | null, width: number): Promise<boolean> {
+    if (!this.root || !this.settings) return false;
+    const current = this.matrixWidths();
+    const next: MatrixWidths = column === null ? { ...current, variable: width } : { ...current, columns: { ...current.columns, [column]: width } };
+    return this.updateSettings({ envMatrixWidths: { ...this.settings.envMatrixWidths, [this.root]: next } });
   }
 
   /** The selected environment's colour, if it has one. */

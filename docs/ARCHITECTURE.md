@@ -583,24 +583,30 @@ Decisions made during implementation, beyond the plan above:
   (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
   bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
   name keeps the text colour).
-* **Environments matrix.** The Environments modal opens on a matrix (a Matrix | List
+* **Environments matrix.** The Environments modal opens on a matrix (a List | Matrix
   switch, remembered as the `envView` app setting): one row per variable name, a
   column for Shared and one per environment, each cell a VarField that sees its own
   column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
   doesn't define the variable and Shared doesn't either; an environment cell Shared
   supplies says "Uses shared", and the Shared column is never a gap. A variable defined
-  with an empty value isn't a gap. Typing into a gap, or locking it, adds the variable
+  with an empty value isn't a gap: it reads "Empty" (dim and italic), so set-but-empty
+  and not set look different. Typing into a gap, or locking it, adds the variable
   to that environment only; each cell has its own Secret lock. A set cell's Unset
-  button (shown on hover or focus) or its context menu ("Unset in local", "Unset in
-  Shared") removes the variable from that column (`unsetCell`), so it's "Not set" there
+  button (shown on hover or focus) or its edit menu ("Unset in local", "Unset in
+  Shared", after Cut, Copy, Paste and Select all) removes the variable from that column (`unsetCell`), so it's "Not set" there
   (a gap when nothing else supplies it) and Save leaves it out of both of the folder's
-  files; clearing the text only leaves an empty value. Rows keep their places while
-  the modal is open: filling or unsetting a cell changes where a name is first seen,
-  and must not move its row (`matrixNames` with the previous order), so new names go
-  at the end, and a row unset in every column stays until the modal closes. The
-  Variable header sorts the rows by name (file order → A→Z → Z→A; `sortNames`), for
-  the app session (`app.envMatrixSort`, not saved). The header's last cell, "+
-  Environment", adds an environment as a new column. "Add variable to all
+  files; clearing the text only leaves an empty value. A row unset in every
+  column stays until the modal closes (`matrixNames` with the previous rows). Rows
+  are sorted by name, A→Z by default; the Variable header flips it to Z→A and back
+  (`sortNames`), for the app session (`app.envMatrixSort`, not saved). The sort
+  compares names only, so typing a value never moves a row, and a new variable
+  appears at its sorted place. The header's last cell, "+
+  Environment", adds an environment as a new column. Every other column resizes (drag
+  its header's right edge, or its separator's arrow keys; double-click or Enter fits it
+  to its widest value), and the widths are remembered per workspace in the app
+  settings (`envMatrixWidths`: the Variable column, then by column, `$shared` or the
+  environment's name). A value that doesn't fit shows in full in a tooltip, never a
+  masked Secret's. "Add variable to all
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,
@@ -611,8 +617,10 @@ Decisions made during implementation, beyond the plan above:
   the text (never matching a Secret's value; `rowMatches`).
   The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
-  the private file. Environment-level actions (rename, duplicate, delete, Use,
-  production, colour) stay in the list.
+  the private file. An environment's column header has Rename…, Duplicate and
+  Delete environment… (its actions button, shown on hover or focus, or a right-click;
+  the same actions as the List view's buttons, so Delete confirms the same way); the
+  Shared header has none. Use, production and colour stay in the list.
 * **Variable precedence:** File variables > selected environment > `$shared`. Within an
   environment, a value in the private file overrides one in the shared file. Among File
   variables, the request's own declaration wins over a same-named one elsewhere in the

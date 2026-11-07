@@ -34,7 +34,7 @@ const destination = (page: Page, name: string) => form(page).getByRole("radiogro
 test("the URL bar's context menu extracts the host into a File variable, as an unsaved edit", async ({ page }) => {
   await selectHost(page);
   await rightClickSelection(page, page.locator(".url-input"));
-  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Cut", "Copy", "Extract to variable…"]);
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Cut", "Copy", "Paste", "Select all", "Extract to variable…"]);
   await page.getByRole("menuitem", { name: "Extract to variable…" }).click();
 
   await expect(form(page).getByText(HOST, { exact: true })).toBeVisible();
@@ -141,7 +141,7 @@ test("works in a header value with the shortcut, into the selected environment",
   await expect(activeTab(page).locator(".dot")).toBeVisible();
 });
 
-test("a masked field offers no extraction; without a selection the field keeps the webview's menu", async ({ page }) => {
+test("a masked field offers no extraction, nor does the menu without a selection", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.locator(".subtab", { hasText: "Authorization" }).click();
@@ -153,8 +153,11 @@ test("a masked field offers no extraction; without a selection the field keeps t
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("ControlOrMeta+Alt+KeyV");
   await expect(form(page)).toHaveCount(0);
+  await password.click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Cut", "Copy", "Paste", "Select all"]);
+  await page.keyboard.press("Escape");
 
   await urlBar(page).click();
   await urlBar(page).click({ button: "right" });
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Cut", "Copy", "Paste", "Select all"]);
 });

@@ -788,6 +788,29 @@ fn the_environments_view_defaults_to_the_matrix_and_is_remembered() {
     assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("matrix"), Some("light")));
 }
 
+/// #39: the Environments matrix's column widths are remembered per workspace.
+#[test]
+fn the_environments_matrix_column_widths_are_remembered_per_workspace() {
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["envMatrixWidths"], json!({}));
+    settings["envMatrixWidths"] =
+        json!({ "/work": { "variable": 180.0, "columns": { "$shared": 120.0, "local": 240.5 } } });
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    let widths = &h.ok("get_settings", json!({}))["envMatrixWidths"]["/work"];
+    assert_eq!(widths["variable"], 180.0);
+    assert_eq!(widths["columns"], json!({ "$shared": 120.0, "local": 240.5 }));
+
+    // A hand-edited value the app can't read is dropped, keeping the other settings.
+    let odd: super::AppSettings =
+        serde_json::from_str(r#"{"envMatrixWidths":{"/work":"wide"},"theme":"light"}"#).unwrap();
+    let json = serde_json::to_value(&odd).unwrap();
+    assert_eq!((json["envMatrixWidths"].clone(), json["theme"].as_str()), (json!({}), Some("light")));
+}
+
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.
 fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec<String> {
     let mut out = Vec::new();

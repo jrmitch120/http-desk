@@ -6,6 +6,7 @@
   import type { EnvironmentSet } from "../lib/types";
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
+  import { addMenuItems } from "../lib/editMenu";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { envValueProvider, SHARED } from "../lib/vars";
   import type { Definition, VarProvider } from "../lib/codemirror/setup";
@@ -26,8 +27,10 @@
     inherited?: EnvironmentSet | null;
     /** The header's last cell, "+ Environment": adds an environment (a new column). */
     onaddenvironment?: () => void;
+    /** An environment column's header menu (its actions button, or a right-click): the List view's Rename, Duplicate and Delete. Shared has none. */
+    environmentActions?: (name: string) => MenuItem[];
   }
-  let { set, filter = "", rowActions = () => [], inherited = null, onaddenvironment }: Props = $props();
+  let { set, filter = "", rowActions = () => [], inherited = null, onaddenvironment, environmentActions }: Props = $props();
 
   /** A row: just the variable's name. Its cells are looked up in `set`. */
   interface MatrixRow {
@@ -43,10 +46,9 @@
     if (!row) rowObjects.set(name, (row = { name, value: "" }));
     return row;
   };
-  // The rows' order is kept here, not re-derived from `set` alone: filling or
-  // unsetting a cell changes where a name is first seen, and the row must not
-  // jump while it's being typed in. New names go at the end. A new set (another
-  // folder, or the files reloaded) starts from its own order.
+  // The rows shown so far are kept here, not re-derived from `set` alone, so a
+  // row whose last cell was unset stays until the modal closes. A new set
+  // (another folder, or the files reloaded) starts afresh.
   let order: string[] = [];
   let orderOf: EnvironmentSet | null = null;
   const names = $derived.by(() => {
@@ -80,14 +82,53 @@
   const revealed = new SvelteSet<string>();
   const key = (column: string, name: string) => JSON.stringify([column, name]);
 
-  const ariaSort = { none: "none", asc: "ascending", desc: "descending" } as const;
-  /** The last column: wide enough for its header's "+ Environment". */
-  const ACTIONS_WIDTH = 124;
+  const ariaSort = { asc: "ascending", desc: "descending" } as const;
+  /** The last column: wide enough for its header's "+ Environment"; its body cells are empty. */
+  const ADD_WIDTH = 112;
+  /** Default widths: the Variable column's, and each value column's least (they share the rest). */
+  const VARIABLE_WIDTH = 150;
+  const VALUE_WIDTH = 170;
+
+  // Column widths the user set (dragged, keys, fitted), remembered per workspace in
+  // the app settings; `live` is the one being dragged, saved when the drag ends.
+  // The Variable column's key is null, a value column's is its column (`$shared`, an environment).
+  const saved = $derived(app.matrixWidths());
+  let live = $state<{ key: string | null; width: number } | null>(null);
+  const widthOf = (key: string | null): number | undefined =>
+    live && live.key === key ? live.width : ((key === null ? saved.variable : saved.columns[key]) ?? undefined);
+  function resized(key: string | null, width: number, done: boolean) {
+    if (!done) return void (live = { key, width });
+    live = null;
+    void app.saveMatrixWidth(key, width);
+  }
+  const resizeLabel = (key: string | null) => `Resize ${key === null ? "Variable" : columnLabel(key)} column`;
+  const resize = (key: string | null) => ({ label: resizeLabel(key), onresize: (width: number, done: boolean) => resized(key, width, done) });
+  const variableWidth = $derived(widthOf(null) ?? VARIABLE_WIDTH);
+  const valueWidths = $derived(columns.map((column) => widthOf(column)));
+  /** The narrowest the matrix gets before it scrolls sideways. */
+  const minWidth = $derived(variableWidth + ADD_WIDTH + valueWidths.reduce<number>((sum, w) => sum + (w ?? VALUE_WIDTH), 0));
+
   const gridColumns = $derived<Column<MatrixRow>[]>([
-    { id: "name", header: "Variable", width: "150px", cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort] },
-    ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell })),
-    // Each row's actions button, under the header's "+ Environment".
-    { id: "actions", header: "", width: `${ACTIONS_WIDTH}px`, cell: actionsCell, headerCell: onaddenvironment && addEnvironmentHeader },
+    { id: "name", header: "Variable", width: `${variableWidth}px`, cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort], resize: resize(null) },
+    ...columns.map(
+      (column, i): Column<MatrixRow> => ({
+        id: `m${i}`,
+        header: columnLabel(column),
+        width: valueWidths[i] === undefined ? `minmax(${VALUE_WIDTH}px, 1fr)` : `${valueWidths[i]}px`,
+        cell: valueCell,
+        headerCell: columnHeader,
+        resize: resize(column),
+      }),
+    ),
+    // Only the header's "+ Environment"; a row's actions are in its Variable cell. When
+    // every value column has a set width, it takes what's left, so the rows reach the edge.
+    {
+      id: "actions",
+      header: "",
+      width: valueWidths.every((w) => w !== undefined) ? `minmax(${ADD_WIDTH}px, 1fr)` : `${ADD_WIDTH}px`,
+      cell: emptyCell,
+      headerCell: onaddenvironment && addEnvironmentHeader,
+    },
   ]);
 
   function menuFor(name: string): MenuItem[] {
@@ -114,11 +155,11 @@
     el.querySelector<HTMLElement>(".lock")?.focus();
   }
 
-  /** A set cell's context menu. A cell that isn't set keeps the webview's own menu. */
+  /** A set cell adds "Unset in <column>" to its field's edit menu (or, outside the field, it's the menu). */
   function cellMenu(e: MouseEvent, column: string, name: string) {
     if (matrixCell(set, column, name).state !== "set") return;
     const el = e.currentTarget as HTMLElement;
-    menu.show(e, [{ label: `Unset in ${columnLabel(column)}`, icon: "x", action: () => unset(column, name, el) }]);
+    addMenuItems(e, [{ label: `Unset in ${columnLabel(column)}`, icon: "x", action: () => unset(column, name, el) }]);
   }
 
   let root: HTMLDivElement;
@@ -142,11 +183,32 @@
 {#snippet variableHeader()}
   <button
     class="head-btn sort"
-    use:tooltip={sort === "none" ? "Sort by name, A to Z" : sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for the file order"}
+    data-fit
+    use:tooltip={sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for A to Z"}
     onclick={() => (app.envMatrixSort = nextSort(sort))}
   >
-    Variable{#if sort !== "none"}<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />{/if}
+    Variable<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />
   </button>
+{/snippet}
+
+{#snippet columnHeader(id: string)}
+  {@const column = columnAt(id)}
+  {@const actions = column === SHARED ? undefined : environmentActions}
+  <!-- svelte-ignore a11y_no_static_element_interactions (the menu is also the header's actions button) -->
+  <div class="col-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
+    <span class="col-head-label ellipsis" data-fit>{columnLabel(column)}</span>
+    {#if actions}
+      <button
+        class="icon-btn actions"
+        aria-label="Actions for environment {column}"
+        aria-haspopup="menu"
+        use:tooltip={"Environment actions"}
+        onclick={(e) => menu.show(e, actions(column), { anchor: e.currentTarget, align: "end", label: `Environment ${column}` })}
+      >
+        <Icon name="more" size={13} />
+      </button>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet addEnvironmentHeader()}
@@ -157,7 +219,12 @@
 
 {#snippet nameCell({ row }: GridCell<MatrixRow>)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <span class="cell m-name ellipsis" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>{row.name}</span>
+  <div class="m-var" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>
+    <span class="cell m-name ellipsis" data-fit>{row.name}</span>
+    <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
+      <Icon name="more" size={13} />
+    </button>
+  </div>
 {/snippet}
 
 {#snippet valueCell({ row, column: id }: GridCell<MatrixRow>)}
@@ -167,11 +234,11 @@
   {@const shown = !variable?.secret || revealed.has(key(column, row.name))}
   {@const label = columnLabel(column)}
   <!-- svelte-ignore a11y_no_static_element_interactions (the menu's command is also the cell's Unset button) -->
-  <div class="m-cell" class:gap={cell.state === "gap"} data-column={id} data-name={row.name} oncontextmenu={(e) => cellMenu(e, column, row.name)}>
+  <div class="m-cell" class:gap={cell.state === "gap"} class:set={cell.state === "set"} data-column={id} data-name={row.name} oncontextmenu={(e) => cellMenu(e, column, row.name)}>
     <VarField
       class="cell"
       value={variable?.value ?? ""}
-      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : ""}
+      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : "Empty"}
       label="{row.name} in {label}"
       masked={!shown}
       variables={providers.get(column)}
@@ -208,13 +275,9 @@
   </div>
 {/snippet}
 
-{#snippet actionsCell({ row }: GridCell<MatrixRow>)}
-  <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
-    <Icon name="more" size={13} />
-  </button>
-{/snippet}
+{#snippet emptyCell()}{/snippet}
 
-<div class="matrix" bind:this={root} style:--matrix-min="{150 + ACTIONS_WIDTH + columns.length * 170}px">
+<div class="matrix" bind:this={root} style:--matrix-min="{minWidth}px">
   <KeyValueGrid
     items={rows}
     columns={gridColumns}
@@ -233,9 +296,16 @@
   .matrix :global(.kv) {
     min-width: var(--matrix-min);
   }
+  /* The Variable cell: the name, then the row's actions at its right edge. */
+  .m-var {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+  }
   .m-name {
     display: block;
-    align-self: center;
+    flex: 1;
     line-height: 31px;
     color: var(--text);
     cursor: default;
@@ -253,6 +323,11 @@
   .m-cell.gap {
     background: color-mix(in srgb, var(--warning) 14%, transparent);
     box-shadow: inset 2px 0 0 var(--warning);
+  }
+  /* Set to an empty value: "Empty", in italics, so it doesn't read as "Not set". */
+  .m-cell.set :global(.vf-static:empty::before),
+  .m-cell.set :global(.cm-placeholder) {
+    font-style: italic;
   }
   .reveal,
   .unset,
@@ -311,15 +386,31 @@
     margin-right: var(--space-1);
   }
   .actions {
-    margin: auto 0 auto var(--space-1);
+    flex: none;
+    margin-right: var(--space-1);
     width: var(--control-h-sm);
     height: var(--control-h-sm);
     opacity: 0;
   }
-  /* Like the list's delete button: shown on hover, and while the row has focus. */
+  /* Like the list's delete button: shown on hover, and while the row (or header cell) has focus. */
   .matrix :global(.kv-row:hover .actions),
-  .matrix :global(.kv-row:focus-within .actions) {
+  .matrix :global(.kv-row:focus-within .actions),
+  .col-head:hover .actions,
+  .col-head:focus-within .actions {
     opacity: 1;
+  }
+  /* An environment's header: its name, then its actions at the right edge. */
+  .col-head {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+  }
+  .col-head-label {
+    flex: 1;
+    min-width: 0;
+    padding-left: 7px;
   }
   .empty {
     padding: 14px var(--space-1);
