@@ -172,7 +172,7 @@
         {/each}
       </div>
     {:else if app.usages}
-      {@const rows = app.usages.usages && usageRows(app.usages.usages)}
+      {@const rows = app.usages.usages && usageRows(app.usages.usages, app.root ?? "")}
       <section class="usages" aria-label="Usages of {app.usages.name}">
         <div class="usages-head">
           <span class="usages-title ellipsis">Usages of <code>{`{{${app.usages.name}}}`}</code></span>

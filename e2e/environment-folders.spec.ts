@@ -62,6 +62,28 @@ test("Edit on a value a parent folder supplies opens that folder", async ({ page
   await expect(cellField(modal(page), "token", "local")).toBeFocused();
 });
 
+test("the strip's Add to environment fix adds it in the folder that supplies the environment", async ({ page }) => {
+  await openApp(page, "?folderEnvs=1");
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await selectEnvironment(page, "qa");
+  const rootFiles = await mockState(page, "envFiles");
+  await page.getByRole("region", { name: "Pre-send checks" }).getByRole("button", { name: "Add token to qa" }).click();
+
+  const m = modal(page);
+  await expect(folderPicker(page)).toHaveText("api/");
+  await expect(cellField(m, "token", "qa")).toBeFocused();
+  await page.keyboard.type("qa-tok");
+  await m.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(m).toHaveCount(0);
+  const qa = (await mockState(page, "folderPairs")).api.environments.find((e) => e.name === "qa");
+  expect(qa?.variables.map((v) => [v.name, v.value])).toEqual([
+    ["baseUrl", "https://qa.example.com"],
+    ["token", "qa-tok"],
+  ]);
+  expect(await mockState(page, "envFiles")).toEqual(rootFiles);
+  await expect(page.getByRole("region", { name: "Pre-send checks" })).toHaveCount(0);
+});
+
 test("the modal opens on the active request's nearest folder with env files, and the selector lists every folder", async ({ page }) => {
   await openApp(page, "?folderEnvs=1");
   await openRequest(page, ["samples", "jetbrains.http"], "Get request with a header");
