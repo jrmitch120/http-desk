@@ -41,18 +41,25 @@
     return () => clearTimeout(t);
   });
 
-  type Part = { text: string; kind?: "dynamic" | "undefined" };
-  /** Splits shown text so `{{$uuid}}` placeholders and undefined `{{name}}`s can be marked. */
+  type Kind = "dynamic" | "undefined" | "circular";
+  type Part = { text: string; kind?: Kind };
+  /** Names a circular reference stops at (left as written), from the preview's warnings. */
+  const circular = $derived(
+    new Set((preview?.warnings ?? []).flatMap((w) => (w.startsWith("Circular variable reference: ") ? [w.split(" → ").at(-1)!] : []))),
+  );
+  /** Splits shown text so `{{$uuid}}` placeholders and `{{name}}`s left unresolved can be marked. */
   function parts(text: string): Part[] {
     return text.split(/(\{\{.*?\}\})/).flatMap((text, i): Part[] => {
       if (!text) return [];
       if (i % 2 === 0) return [{ text }];
-      return [{ text, kind: /^\{\{\s*\$/.test(text) ? "dynamic" : "undefined" }];
+      const name = text.slice(2, -2).trim();
+      return [{ text, kind: name.startsWith("$") ? "dynamic" : circular.has(name) ? "circular" : "undefined" }];
     });
   }
-  const NOTES: Record<string, string> = {
+  const NOTES: Record<Kind, string> = {
     dynamic: "Dynamic variable: a new value is generated on every send",
     undefined: "Undefined variable: sent as written",
+    circular: "Circular reference: sent as written",
   };
 
   /** Where a header the request doesn't list itself comes from. */
@@ -186,7 +193,8 @@
   .var.dynamic {
     color: var(--var-dyn);
   }
-  .var.undefined {
+  .var.undefined,
+  .var.circular {
     color: var(--var-bad);
     text-decoration: underline wavy;
     text-underline-offset: 2px;

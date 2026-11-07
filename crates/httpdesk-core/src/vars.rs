@@ -9,8 +9,6 @@ use chrono::{Duration, Local, Utc};
 
 use crate::model::Variable;
 
-const MAX_DEPTH: usize = 10;
-
 /// A run of plain text, or one `{{…}}` reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Segment<'a> {
@@ -70,6 +68,7 @@ pub struct Resolver {
     vars: HashMap<String, String>,
     base_dir: Option<PathBuf>,
     unresolved: std::cell::RefCell<BTreeSet<String>>,
+    circular: std::cell::RefCell<Vec<Vec<String>>>,
     errors: std::cell::RefCell<Vec<String>>,
     /// Set by [`Resolver::previewing`]: generated dynamic variables, as written.
     placeholders: Option<std::cell::RefCell<Vec<String>>>,
@@ -133,12 +132,19 @@ impl Resolver {
     }
 
     pub fn resolve(&self, text: &str) -> String {
-        self.resolve_depth(text, 0)
+        self.resolve_chain(text, &mut Vec::new())
     }
 
-    /// Variable names that could not be resolved so far.
+    /// Undefined variables met so far: names with no definition in scope. Circular
+    /// references are reported by [`Self::circular`] instead.
     pub fn unresolved(&self) -> Vec<String> {
         self.unresolved.borrow().iter().cloned().collect()
+    }
+
+    /// Circular references met so far, each as the chain of names followed from the
+    /// reference as written to the name that repeats (`["a", "b", "a"]`), in the order found.
+    pub fn circular(&self) -> Vec<Vec<String>> {
+        self.circular.borrow().clone()
     }
 
     /// Dynamic variables that failed (bad or out-of-range arguments), as messages.
@@ -146,7 +152,9 @@ impl Resolver {
         self.errors.borrow().clone()
     }
 
-    fn resolve_depth(&self, text: &str, depth: usize) -> String {
+    /// Resolves `text`, where `chain` is the names being resolved around it. A name
+    /// already on the chain is a circular reference: it's recorded and left as written.
+    fn resolve_chain(&self, text: &str, chain: &mut Vec<String>) -> String {
         let mut out = String::with_capacity(text.len());
         for segment in segments(text) {
             let (whole, inner) = match segment {
@@ -176,10 +184,22 @@ impl Resolver {
                         continue;
                     }
                 }
-            } else if depth < MAX_DEPTH {
-                self.vars.get(inner).map(|v| self.resolve_depth(v, depth + 1))
+            } else if chain.iter().any(|n| n == inner) {
+                let mut cycle = chain.clone();
+                cycle.push(inner.to_string());
+                let mut circular = self.circular.borrow_mut();
+                if !circular.contains(&cycle) {
+                    circular.push(cycle);
+                }
+                out.push_str(whole);
+                continue;
             } else {
-                None
+                self.vars.get(inner).map(|v| {
+                    chain.push(inner.to_string());
+                    let resolved = self.resolve_chain(v, chain);
+                    chain.pop();
+                    resolved
+                })
             };
             match value {
                 Some(v) => out.push_str(&v),
@@ -407,10 +427,36 @@ mod tests {
     }
 
     #[test]
-    fn cycles_terminate() {
+    fn a_cycle_is_reported_as_circular_with_its_chain_not_as_undefined() {
         let r = resolver(&[("a", "{{b}}"), ("b", "{{a}}")]);
-        let out = r.resolve("{{a}}");
-        assert!(out.contains("{{"));
+        assert_eq!(r.resolve("{{a}}"), "{{a}}");
+        assert_eq!(r.circular(), vec![vec!["a", "b", "a"]]);
+        assert!(r.unresolved().is_empty(), "{:?}", r.unresolved());
+    }
+
+    #[test]
+    fn the_chain_starts_at_the_reference_and_a_self_reference_is_circular() {
+        let r = resolver(&[("url", "https://{{a}}/x"), ("a", "{{b}}"), ("b", "{{a}}"), ("me", "{{me}}")]);
+        assert_eq!(r.resolve("{{url}} {{me}}"), "https://{{a}}/x {{me}}");
+        assert_eq!(r.circular(), vec![vec!["url", "a", "b", "a"], vec!["me", "me"]]);
+        assert!(r.unresolved().is_empty(), "{:?}", r.unresolved());
+    }
+
+    #[test]
+    fn a_long_chain_without_a_cycle_resolves() {
+        let pairs: Vec<(String, String)> = (0..15).map(|i| (format!("v{i}"), format!("{{{{v{}}}}}", i + 1))).collect();
+        let mut map: HashMap<String, String> = pairs.into_iter().collect();
+        map.insert("v15".into(), "end".into());
+        let r = Resolver::new(map);
+        assert_eq!(r.resolve("{{v0}}"), "end");
+        assert!(r.circular().is_empty() && r.unresolved().is_empty());
+    }
+
+    #[test]
+    fn a_name_used_twice_side_by_side_is_not_circular() {
+        let r = resolver(&[("host", "h"), ("both", "{{host}}{{host}}")]);
+        assert_eq!(r.resolve("{{both}}"), "hh");
+        assert!(r.circular().is_empty());
     }
 
     #[test]

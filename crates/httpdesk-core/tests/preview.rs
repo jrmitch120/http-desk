@@ -173,6 +173,16 @@ fn a_request_that_cant_be_sent_is_still_shown_with_the_reason() {
         (&"unresolvedVariable".into(), &serde_json::json!(["baseUrl"]))
     );
 
+    let req = request("GET {{base}}/users\n");
+    let env = vars(&[("base", "{{host}}"), ("host", "{{base}}")]);
+    let sent = prepare(&req, &Resolver::new(env.clone()), Path::new("."), &ExecSettings::default()).unwrap_err();
+    let shown = preview(&req, Resolver::new(env));
+    assert_eq!(shown.url, "{{base}}/users");
+    assert_eq!(shown.warnings, ["Circular variable reference: base → host → base"]);
+    let error = serde_json::to_value(shown.error.expect("a circular host can't be sent")).unwrap();
+    assert_eq!(error, serde_json::to_value(sent).unwrap(), "the same error as the send");
+    assert_eq!(error["kind"], "circularVariable");
+
     let shown = preview(&request("GET /users\n"), Resolver::new(HashMap::new()));
     assert_eq!(shown.url, "/users");
     assert!(shown.error.unwrap().to_string().contains("Host header"));

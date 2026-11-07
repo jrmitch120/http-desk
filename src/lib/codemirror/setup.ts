@@ -99,15 +99,35 @@ export function languageExtension(lang: Language): Extension {
 
 // ---------------------------------------------------------------- variables
 
+/**
+ * A `{{name}}` as it resolves: `ok` (with its fully resolved `value`), `bad` (an
+ * Undefined variable), `dyn` (generated at send time) or `circular` (it leads back to
+ * a name already being resolved; `chain` is the names followed, e.g. `a → b → a`).
+ * `secret` when a Secret went into the value.
+ */
 export interface VarInfo {
-  state: "ok" | "bad" | "dyn";
+  state: "ok" | "bad" | "dyn" | "circular";
   value?: string;
   source?: string;
   secret?: boolean;
+  chain?: string[];
+}
+
+/**
+ * `text` with its references resolved, as the core's resolver does it; dynamic
+ * variables and references that don't resolve are left as written. `undefined` is
+ * sorted; `circular` lists each chain once, in the order found.
+ */
+export interface Resolution {
+  value: string;
+  undefined: string[];
+  circular: string[][];
+  secret: boolean;
 }
 
 export interface VarProvider {
   info: (name: string) => VarInfo;
+  resolve: (text: string) => Resolution;
   names: () => { name: string; detail: string }[];
 }
 
@@ -150,7 +170,8 @@ function varTooltip(provider: VarProvider) {
           const body = document.createElement("div");
           body.style.cssText = "font-family:var(--mono);word-break:break-all;color:var(--text-2)";
           if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
-          else if (info.state === "bad") body.textContent = "Unresolved — not defined in the environment or file";
+          else if (info.state === "bad") body.textContent = "Undefined — not defined in the request, the file or the environment";
+          else if (info.state === "circular") body.textContent = `Circular: ${info.chain!.join(" → ")}`;
           else body.textContent = info.secret ? "•••••••• (secret)" : info.value || "(empty)";
           dom.append(title, body);
           if (info.source) {

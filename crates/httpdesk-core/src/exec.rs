@@ -61,8 +61,16 @@ pub enum ExecError {
     /// Unresolved variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
+    /// Circular references in the URL's scheme or host, each as the chain followed.
+    #[error("The URL's scheme or host uses a circular variable reference: {}.", chains_text(.0))]
+    CircularHost(Vec<Vec<String>>),
     #[error("{}", .0.join("\n"))]
     DynamicVariable(Vec<String>),
+}
+
+/// `a → b → a`, chains separated by `; `.
+fn chains_text(chains: &[Vec<String>]) -> String {
+    chains.iter().map(|c| c.join(" → ")).collect::<Vec<_>>().join("; ")
 }
 
 fn human_ms(ms: u64) -> String {
@@ -87,6 +95,7 @@ pub enum ErrorKind {
     TimeoutConnect,
     InvalidUrl,
     UnresolvedVariable,
+    CircularVariable,
     File,
     Other,
 }
@@ -102,6 +111,7 @@ impl ExecError {
             ExecError::ConnectTimeout(_) => ErrorKind::TimeoutConnect,
             ExecError::InvalidUrl { .. } => ErrorKind::InvalidUrl,
             ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
+            ExecError::CircularHost(_) => ErrorKind::CircularVariable,
             ExecError::File { .. } => ErrorKind::File,
             ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
@@ -124,6 +134,7 @@ impl ExecError {
             ExecError::ReadTimeout(ms) | ExecError::ConnectTimeout(ms) => json!({ "timeoutMs": ms }),
             ExecError::InvalidUrl { url, reason } => json!({ "url": url, "reason": reason }),
             ExecError::UnresolvedHost(names) => json!({ "names": names }),
+            ExecError::CircularHost(chains) => json!({ "chains": chains }),
             ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
             _ => serde_json::Value::Null,
         }
@@ -341,6 +352,25 @@ fn variable_names(text: &str) -> Vec<String> {
     names
 }
 
+/// Fails when references are left in the URL's scheme or host after resolving: as
+/// undefined variables if any of them is undefined, else as circular references.
+/// A circular reference stops at the name that repeats, so that's the name left in the
+/// URL; the chains reported are the ones ending at a name left there.
+fn host_check(url: &str, resolver: &Resolver) -> Result<(), ExecError> {
+    let left = variable_names(origin(url));
+    if left.is_empty() {
+        return Ok(());
+    }
+    let chains: Vec<Vec<String>> =
+        resolver.circular().into_iter().filter(|c| c.last().is_some_and(|name| left.contains(name))).collect();
+    let undefined: Vec<String> =
+        left.into_iter().filter(|name| !chains.iter().any(|c| c.last() == Some(name))).collect();
+    if !undefined.is_empty() || chains.is_empty() {
+        return Err(ExecError::UnresolvedHost(undefined));
+    }
+    Err(ExecError::CircularHost(chains))
+}
+
 /// A query param as sent (ADR-0001): written as in the file, variables resolved, then
 /// percent-encoded unless the request has `# @no-auto-encoding`. Escaping and encoding
 /// go part by part, so `&`, `=` or `#` from a variable can't split the param.
@@ -444,11 +474,11 @@ fn auth_param(auth: &Auth, resolver: &Resolver, auto_encode: bool) -> Option<Str
         .then(|| wire_param(&KeyValue::new(&auth.key_name, &auth.key_value), resolver, auto_encode))
 }
 
-/// Why a URL can't be sent: variables left in its scheme or host, or it doesn't parse.
-fn url_error(url: &str) -> Option<ExecError> {
-    let host_vars = variable_names(origin(url));
-    if !host_vars.is_empty() {
-        return Some(ExecError::UnresolvedHost(host_vars));
+/// Why a URL can't be sent: undefined or circular variables left in its scheme or
+/// host (see [`host_check`]), or it doesn't parse.
+fn url_error(url: &str, resolver: &Resolver) -> Option<ExecError> {
+    if let Err(e) = host_check(url, resolver) {
+        return Some(e);
     }
     url::Url::parse(url).err().map(|e| ExecError::InvalidUrl { url: url.to_string(), reason: e.to_string() })
 }
@@ -475,6 +505,9 @@ fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) ->
     if !unresolved.is_empty() {
         warnings.push(format!("Unresolved variables: {}", unresolved.join(", ")));
     }
+    for chain in resolver.circular() {
+        warnings.push(format!("Circular variable reference: {}", chain.join(" → ")));
+    }
     if req.body.enabled && req.body.mode == BodyMode::Multipart {
         let ct =
             headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.as_str()).unwrap_or("");
@@ -497,7 +530,7 @@ pub fn prepare(
         return Err(e);
     }
     dynamic_errors(resolver)?;
-    if let Some(e) = url_error(&url) {
+    if let Some(e) = url_error(&url, resolver) {
         return Err(e);
     }
 
@@ -549,7 +582,7 @@ pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let resolver = resolver.previewing();
     let (method, url, mut headers, error) = head(req, &resolver);
     // A placeholder stands for a plain value, so check the URL with one in its place.
-    let error = error.or_else(|| url_error(&resolver.replace_placeholders(&url, |_| "0".into())));
+    let error = error.or_else(|| url_error(&resolver.replace_placeholders(&url, |_| "0".into()), &resolver));
     // Built only so its undefined variables are reported as at send; files read as empty.
     let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
     add_default_headers(&req.body, &mut headers);

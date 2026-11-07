@@ -53,6 +53,9 @@ struct AppSettings {
     recent_workspaces: Vec<PathBuf>,
     /// Last selected environment per workspace.
     environments: HashMap<String, String>,
+    /// Per workspace, then per environment name: settings that aren't variables
+    /// (production, colour), kept here so the env files only hold variables.
+    environment_settings: HashMap<String, HashMap<String, EnvironmentSettings>>,
     /// "system" (follow the OS appearance), "light" or "dark".
     theme: String,
     layout: String,
@@ -66,6 +69,16 @@ struct AppSettings {
     split_ratio: SplitRatio,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
+}
+
+/// Settings of one environment (see `AppSettings::environment_settings`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct EnvironmentSettings {
+    /// Sending anything but GET, HEAD or OPTIONS asks for confirmation first.
+    production: bool,
+    /// A colour name from the frontend's palette (src/lib/envColors.ts), or none.
+    color: Option<String>,
 }
 
 /// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
@@ -88,6 +101,7 @@ impl Default for AppSettings {
             exec: ExecSettings::default(),
             recent_workspaces: vec![],
             environments: HashMap::new(),
+            environment_settings: HashMap::new(),
             theme: "system".into(),
             layout: "horizontal".into(),
             check_updates: true,
