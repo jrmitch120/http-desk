@@ -612,8 +612,10 @@ Decisions made during implementation, beyond the plan above:
   the text (never matching a Secret's value; `rowMatches`).
   The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
-  the private file. Environment-level actions (rename, duplicate, delete, Use,
-  production, colour) stay in the list.
+  the private file. An environment's column header has Rename…, Duplicate and
+  Delete environment… (its actions button, shown on hover or focus, or a right-click;
+  the same actions as the List view's buttons, so Delete confirms the same way); the
+  Shared header has none. Use, production and colour stay in the list.
 * **Variable precedence:** File variables > selected environment > `$shared`. Within an
   environment, a value in the private file overrides one in the shared file. Among File
   variables, the request's own declaration wins over a same-named one elsewhere in the

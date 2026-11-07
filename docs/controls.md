@@ -362,7 +362,7 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   of other state that the cell edits directly (the Environments matrix). Inputs given
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
   replaces the value input, and one with `id: "name"` replaces the name input. A
-  custom column's `headerCell` snippet renders its header instead of the `header`
+  custom column's `headerCell` snippet (given the column's id) renders its header instead of the `header`
   text (a button: the matrix's Variable sort, its "+ Environment"), and `sort`
   (`"ascending"`, `"descending"` or `"none"`) makes the header a `columnheader` with
   that `aria-sort`; the caller sorts `items` itself.
@@ -404,7 +404,11 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     button (`headerCell`, with `sort` for `aria-sort`) that flips A→Z ⇄ Z→A (an
     arrow icon shows which), kept in `app.envMatrixSort` for the session. The header's "+ Environment" (accessible
     name "New environment") adds an environment; the List view keeps its own +
-    button.
+    button. An environment's header cell (a `headerCell`, which gets the column's
+    id) has an actions button ("Actions for environment <name>", shown on hover or
+    focus) and the same menu on a right-click: Rename…, Duplicate, Delete
+    environment… (`environmentActions`, the List view's own functions). Shared's
+    header has none.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions".
 

@@ -28,8 +28,8 @@
     /** A CSS grid track size, e.g. `80px` or `1fr`. */
     width: string;
     cell: Snippet<[GridCell<R>]>;
-    /** Renders the header cell instead of `header`: a button that sorts by the column, or a command. */
-    headerCell?: Snippet;
+    /** Renders the header cell instead of `header` (a button that sorts by the column, or a command). It gets the column's id. */
+    headerCell?: Snippet<[string]>;
     /** Makes the header a `columnheader` with this `aria-sort`, for a column the rows can be sorted by. */
     sort?: "ascending" | "descending" | "none";
   }
@@ -109,7 +109,7 @@
     variables,
   }: Props = $props();
 
-  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]>; headerCell?: Snippet; sort?: CustomColumn<R>["sort"] };
+  type Track = { id: string; width: string; header: string; cell?: Snippet<[GridCell<R>]>; headerCell?: Snippet<[string]>; sort?: CustomColumn<R>["sort"] };
 
   const tracks: Track[] = $derived(
     columns.flatMap((c): Track[] => {
@@ -270,7 +270,7 @@
             {/if}
           </span>
         {:else}
-          <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell()}{:else}{t.header}{/if}</span>
+          <span class="c-{t.id}" class:has-control={!!t.headerCell} role={t.sort ? "columnheader" : undefined} aria-sort={t.sort}>{#if t.headerCell}{@render t.headerCell(t.id)}{:else}{t.header}{/if}</span>
         {/if}
       {/each}
     {/if}

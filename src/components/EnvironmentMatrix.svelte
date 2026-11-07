@@ -26,8 +26,10 @@
     inherited?: EnvironmentSet | null;
     /** The header's last cell, "+ Environment": adds an environment (a new column). */
     onaddenvironment?: () => void;
+    /** An environment column's header menu (its actions button, or a right-click): the List view's Rename, Duplicate and Delete. Shared has none. */
+    environmentActions?: (name: string) => MenuItem[];
   }
-  let { set, filter = "", rowActions = () => [], inherited = null, onaddenvironment }: Props = $props();
+  let { set, filter = "", rowActions = () => [], inherited = null, onaddenvironment, environmentActions }: Props = $props();
 
   /** A row: just the variable's name. Its cells are looked up in `set`. */
   interface MatrixRow {
@@ -85,7 +87,7 @@
   const ADD_WIDTH = 112;
   const gridColumns = $derived<Column<MatrixRow>[]>([
     { id: "name", header: "Variable", width: "150px", cell: nameCell, headerCell: variableHeader, sort: ariaSort[sort] },
-    ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell })),
+    ...columns.map((column, i): Column<MatrixRow> => ({ id: `m${i}`, header: columnLabel(column), width: "minmax(170px, 1fr)", cell: valueCell, headerCell: columnHeader })),
     // Only the header's "+ Environment"; a row's actions are in its Variable cell.
     { id: "actions", header: "", width: `${ADD_WIDTH}px`, cell: emptyCell, headerCell: onaddenvironment && addEnvironmentHeader },
   ]);
@@ -147,6 +149,26 @@
   >
     Variable<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />
   </button>
+{/snippet}
+
+{#snippet columnHeader(id: string)}
+  {@const column = columnAt(id)}
+  {@const actions = column === SHARED ? undefined : environmentActions}
+  <!-- svelte-ignore a11y_no_static_element_interactions (the menu is also the header's actions button) -->
+  <div class="m-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
+    <span class="m-head-label ellipsis">{columnLabel(column)}</span>
+    {#if actions}
+      <button
+        class="icon-btn actions"
+        aria-label="Actions for environment {column}"
+        aria-haspopup="menu"
+        use:tooltip={"Environment actions"}
+        onclick={(e) => menu.show(e, actions(column), { anchor: e.currentTarget, align: "end", label: `Environment ${column}` })}
+      >
+        <Icon name="more" size={13} />
+      </button>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet addEnvironmentHeader()}
@@ -330,10 +352,25 @@
     height: var(--control-h-sm);
     opacity: 0;
   }
-  /* Like the list's delete button: shown on hover, and while the row has focus. */
+  /* Like the list's delete button: shown on hover, and while the row (or header cell) has focus. */
   .matrix :global(.kv-row:hover .actions),
-  .matrix :global(.kv-row:focus-within .actions) {
+  .matrix :global(.kv-row:focus-within .actions),
+  .m-head:hover .actions,
+  .m-head:focus-within .actions {
     opacity: 1;
+  }
+  /* An environment's header: its name, then its actions at the right edge. */
+  .m-head {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+  }
+  .m-head-label {
+    flex: 1;
+    min-width: 0;
+    padding-left: 7px;
   }
   .empty {
     padding: 14px var(--space-1);

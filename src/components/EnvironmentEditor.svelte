@@ -360,6 +360,16 @@
     }
   }
 
+  /** A matrix column header's menu: the same Rename, Duplicate and Delete as the List view's buttons. */
+  function environmentActions(name: string): MenuItem[] {
+    return [
+      { label: "Rename…", icon: "edit", action: () => void renameEnv(name) },
+      { label: "Duplicate", icon: "copy", action: () => duplicateEnv(name) },
+      { separator: true },
+      { label: "Delete environment…", icon: "trash", danger: true, action: () => void deleteEnv(name) },
+    ];
+  }
+
   /** A matrix row's own actions. Find usages lists, in the sidebar behind this modal, what
    *  references the variable, so it closes the modal (the search reads env files from disk,
    *  so unsaved edits are asked about first). */
@@ -439,7 +449,7 @@
       <section class="matrix-pane">
         {@render secretsWarning()}
         <div class="vars">
-          <EnvironmentMatrix bind:this={matrix} {set} {inherited} {filter} {rowActions} onaddenvironment={addEnv} />
+          <EnvironmentMatrix bind:this={matrix} {set} {inherited} {filter} {rowActions} {environmentActions} onaddenvironment={addEnv} />
         </div>
       </section>
     {:else}
