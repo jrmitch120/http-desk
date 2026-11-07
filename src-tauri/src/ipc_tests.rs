@@ -768,24 +768,24 @@ fn saving_matrix_changes_keeps_secrets_only_in_the_private_file() {
     assert!(secrets(1).iter().all(|(_, secret)| !*secret), "{:?}", secrets(1));
 }
 
-/// #83: the Environments modal opens on the matrix unless the user picked the
-/// list, and that choice survives a restart.
+/// #39: the Environments modal opens on the list unless the user picked the
+/// matrix, and that choice survives a restart.
 #[test]
-fn the_environments_view_defaults_to_the_matrix_and_is_remembered() {
+fn the_environments_view_defaults_to_the_list_and_is_remembered() {
     let h = Harness::new();
     let mut settings = h.ok("get_settings", json!({}));
-    assert_eq!(settings["envView"], "matrix");
-    settings["envView"] = json!("list");
+    assert_eq!(settings["envView"], "list");
+    settings["envView"] = json!("matrix");
     h.ok("save_settings", json!({ "settings": settings }));
 
     *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
     super::load_settings(h.app.handle());
-    assert_eq!(h.ok("get_settings", json!({}))["envView"], "list");
+    assert_eq!(h.ok("get_settings", json!({}))["envView"], "matrix");
 
-    // A hand-edited value the app doesn't know opens the matrix, keeping the other settings.
+    // A hand-edited value the app doesn't know opens the list, keeping the other settings.
     let odd: super::AppSettings = serde_json::from_str(r#"{"envView":"grid","theme":"light"}"#).unwrap();
     let json = serde_json::to_value(&odd).unwrap();
-    assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("matrix"), Some("light")));
+    assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("list"), Some("light")));
 }
 
 /// #39: the Environments matrix's column widths are remembered per workspace.

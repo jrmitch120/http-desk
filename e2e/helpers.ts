@@ -135,9 +135,18 @@ export function dialog(page: Page, title: string): Locator {
   return page.getByRole("dialog", { name: title, exact: true });
 }
 
-/** Switches the open Environments modal to its list (one environment at a time); it opens on the matrix. */
+/** Switches the open Environments modal to its matrix (every environment side by side); it opens on the list. */
+export async function showEnvironmentMatrix(page: Page): Promise<void> {
+  const modal = dialog(page, "Environments");
+  await modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "Matrix" }).click();
+  await expect(modal.getByRole("group", { name: "Environments matrix" })).toBeVisible();
+}
+
+/** Switches the open Environments modal back to its list (one environment at a time). */
 export async function showEnvironmentList(page: Page): Promise<void> {
-  await dialog(page, "Environments").getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" }).click();
+  const modal = dialog(page, "Environments");
+  await modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" }).click();
+  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
 }
 
 /** Right-clicks a sidebar row and picks an item from its context menu. */

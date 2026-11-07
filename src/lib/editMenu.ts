@@ -101,6 +101,7 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
   const copy: MenuItem = { label: "Copy", icon: "copy", disabled: none, action: () => void writeClipboard(selected()) };
   const selectAll: MenuItem = {
     label: "Select all",
+    icon: "select-all",
     action: () => {
       view.focus();
       view.dispatch({ selection: { anchor: 0, head: view.state.doc.length }, userEvent: "select" });
@@ -110,6 +111,7 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
   return [
     {
       label: "Cut",
+      icon: "cut",
       disabled: none,
       action: () => {
         void writeClipboard(selected());
@@ -119,6 +121,7 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
     copy,
     {
       label: "Paste",
+      icon: "paste",
       action: async () => {
         const text = await readClipboard();
         if (!text || !view.dom.isConnected) return;
@@ -138,6 +141,7 @@ function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
   const copy: MenuItem = { label: "Copy", icon: "copy", disabled: none, action: () => void writeClipboard(selected()) };
   const selectAll: MenuItem = {
     label: "Select all",
+    icon: "select-all",
     action: () => {
       el.focus();
       el.select();
@@ -147,6 +151,7 @@ function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
   return [
     {
       label: "Cut",
+      icon: "cut",
       disabled: none,
       action: () => {
         void writeClipboard(selected());
@@ -157,6 +162,7 @@ function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
     copy,
     {
       label: "Paste",
+      icon: "paste",
       action: async () => {
         const text = await readClipboard();
         if (!text || !el.isConnected) return;

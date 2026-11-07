@@ -1230,6 +1230,24 @@ describe("environment settings", () => {
     });
   });
 
+  it("carry a matrix column's width to a renamed environment, and drop those of environments gone", async () => {
+    app.settings!.envMatrixWidths = {
+      "/other": { columns: { local: 300 } },
+      "/ws": { variable: 120, columns: { $shared: 180, local: 100, staging: 116 } },
+    };
+    expect(await app.carryMatrixWidth("local", "dev")).toBe(true);
+    // The old name keeps it until saved: another folder may still have a `local`.
+    expect(app.matrixWidths()).toEqual({ variable: 120, columns: { $shared: 180, local: 100, staging: 116, dev: 100 } });
+    expect(await app.carryMatrixWidth("qa", "test")).toBe(true);
+    expect(app.matrixWidths().columns.test).toBeUndefined();
+
+    expect(await app.keepMatrixWidths(["dev"])).toBe(true);
+    expect(api.saveSettings.mock.lastCall![0].envMatrixWidths).toEqual({
+      "/other": { columns: { local: 300 } },
+      "/ws": { variable: 120, columns: { $shared: 180, dev: 100 } },
+    });
+  });
+
   it("give the selected environment's colour, ignoring names outside the palette", () => {
     app.settings!.environmentSettings["/ws"] = { a: { color: "green" }, b: { color: "#123456" } };
     app.envName = "a";

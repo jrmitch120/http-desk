@@ -25,8 +25,8 @@
   import type { MenuItem } from "../lib/menu.svelte";
   import { environmentsFor, folderLabel, workspaceFolders } from "../lib/envFolders";
 
-  /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
-  const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
+  /** List (one environment at a time) unless the user picked the matrix; remembered in the app settings. */
+  const view = $derived(app.settings?.envView === "matrix" ? "matrix" : "list");
   const viewOptions = [
     { value: "list", label: "List", icon: "rows" },
     { value: "matrix", label: "Matrix", icon: "columns" },
@@ -154,8 +154,9 @@
     const env = set.environments.find((e) => e.name === name);
     if (!env) return;
     env.name = next;
-    // Another folder may still have `name`; its settings are dropped on save if none does.
+    // Another folder may still have `name`; its settings (and matrix column width) are dropped on save if none does.
     if (meta[name]) meta[next] = { ...meta[name] };
+    void app.carryMatrixWidth(name, next);
     if (selected === name) selected = next;
     if (activeEnv === name) activeEnv = next;
   }
@@ -203,6 +204,8 @@
       const settings = cleanMeta();
       if (!(await app.saveEnvironmentSettings(settings))) return false;
       savedMetaJson = JSON.stringify(settings);
+      // So do the matrix's column widths, kept for the environments still in the workspace.
+      if (!(await app.keepMatrixWidths(metaNames()))) return false;
       app.toast("success", "Environments saved");
       return true;
     } finally {

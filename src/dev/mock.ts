@@ -285,7 +285,8 @@ let settings = {
   sidebarWidth: 280,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
-  envView: "matrix",
+  // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
+  envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
 };
 // Saved settings survive a reload of the page (like the real settings file), so

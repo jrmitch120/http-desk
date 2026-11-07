@@ -3,16 +3,16 @@
 // fixes. The mocked workspace starts on `local` (baseUrl, Secret token); `staging`
 // has only baseUrl. Create pet has a Content-Type header and a JSON body.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, sentRequests, showEnvironmentList } from "./helpers";
+import { dialog, openApp, openRequest, sentRequests } from "./helpers";
 
 const strip = (page: Page) => page.getByRole("region", { name: "Pre-send checks" });
 const subtab = (page: Page, name: string) => page.locator(".subtab", { hasText: name });
 /** The Undefined-variable count on a section tab. */
 const count = (page: Page, name: string) => subtab(page, name).locator(".undefined-count");
 
-/** Opens Create pet's Headers and retypes the first header's value. */
-async function headerValue(page: Page, text: string): Promise<Locator> {
-  await openApp(page);
+/** Opens the app (with `query`), then Create pet's Headers, and retypes the first header's value. */
+async function headerValue(page: Page, text: string, query = ""): Promise<Locator> {
+  await openApp(page, query);
   await openRequest(page, ["api", "pets.http"], "Create pet");
   await subtab(page, "Headers").click();
   const cell = page.locator(".kv-row").first().locator(".c-value");
@@ -80,8 +80,26 @@ test("the strip never blocks sending", async ({ page }) => {
   await expect(strip(page)).toBeVisible();
 });
 
-test("Add to the selected environment adds an empty cell in the matrix and focuses it", async ({ page }) => {
-  await headerValue(page, "{{token}}");
+test("Add to the selected environment adds an empty variable there and focuses its value", async ({ page }) => {
+  await headerValue(page, "{{apiKey}}");
+  await strip(page).getByRole("button", { name: "Add apiKey to local" }).click();
+
+  // The list (the default view).
+  const modal = dialog(page, "Environments");
+  await expect(modal.locator(".main-head .title")).toHaveText("local");
+  const grid = modal.getByRole("group", { name: "Variables" });
+  await expect.poll(() => names(grid)).toEqual(["baseUrl", "token", "apiKey"]);
+  await expect.poll(() => focusedRow(page)).toEqual({ name: "apiKey", inValue: true });
+
+  await page.keyboard.type("k-123");
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(strip(page)).toHaveCount(0);
+  await expect(count(page, "Headers")).toHaveCount(0);
+});
+
+test("Add to the selected environment adds an empty cell in the matrix and focuses it (matrix view)", async ({ page }) => {
+  await headerValue(page, "{{token}}", "?envView=matrix");
   await selectEnvironment(page, "staging");
   await strip(page).getByRole("button", { name: "Add token to staging" }).click();
 
@@ -95,28 +113,6 @@ test("Add to the selected environment adds an empty cell in the matrix and focus
   await expect(page.getByRole("textbox", { name: "token in local", exact: true })).toHaveText("•••••••••••••");
 
   await page.keyboard.type("stg-1");
-  await modal.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(modal).toHaveCount(0);
-  await expect(strip(page)).toHaveCount(0);
-  await expect(count(page, "Headers")).toHaveCount(0);
-});
-
-test("Add to the selected environment adds an empty variable there and focuses its value (list view)", async ({ page }) => {
-  await headerValue(page, "{{apiKey}}");
-  await page.getByRole("button", { name: "Manage environments" }).click();
-  await showEnvironmentList(page);
-  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("list");
-  await page.keyboard.press("Escape");
-  await expect(dialog(page, "Environments")).toHaveCount(0);
-  await strip(page).getByRole("button", { name: "Add apiKey to local" }).click();
-
-  const modal = dialog(page, "Environments");
-  await expect(modal.locator(".main-head .title")).toHaveText("local");
-  const grid = modal.getByRole("group", { name: "Variables" });
-  await expect.poll(() => names(grid)).toEqual(["baseUrl", "token", "apiKey"]);
-  await expect.poll(() => focusedRow(page)).toEqual({ name: "apiKey", inValue: true });
-
-  await page.keyboard.type("k-123");
   await modal.getByRole("button", { name: "Save", exact: true }).click();
   await expect(modal).toHaveCount(0);
   await expect(strip(page)).toHaveCount(0);

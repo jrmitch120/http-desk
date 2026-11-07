@@ -2,7 +2,7 @@
 // with a lock column that makes a variable a Secret. The mocked `local`
 // environment has a Secret (`token`).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { mockState, openApp, showEnvironmentList } from "./helpers";
+import { mockState, openApp } from "./helpers";
 
 const warning = /http-client\.private\.env\.json is not ignored by git/;
 
@@ -10,7 +10,6 @@ const warning = /http-client\.private\.env\.json is not ignored by git/;
 async function variables(page: Page): Promise<Locator> {
   await openApp(page);
   await page.getByRole("button", { name: "Manage environments" }).click();
-  await showEnvironmentList(page);
   return page.getByRole("dialog", { name: "Environments" }).getByRole("group", { name: "Variables" });
 }
 

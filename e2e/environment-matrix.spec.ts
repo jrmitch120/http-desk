@@ -2,11 +2,12 @@
 // as columns, edited in place. The mock has shared `version`, `local` with
 // `baseUrl` and a Secret `token`, and `staging` with only `baseUrl`.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, mockState, openApp } from "./helpers";
+import { dialog, mockState, openApp, showEnvironmentMatrix } from "./helpers";
 
-/** Opens the Environments modal, which shows the matrix unless the list was picked. */
+/** Opens the Environments modal on the matrix (it opens on the list unless the matrix was picked). */
 async function open(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: "Manage environments" }).click();
+  await showEnvironmentMatrix(page);
   return dialog(page, "Environments");
 }
 
@@ -15,6 +16,8 @@ const matrix = (modal: Locator) => modal.getByRole("group", { name: "Environment
 const cell = (modal: Locator, name: string, column: string) =>
   matrix(modal).locator(".m-cell").filter({ has: modal.page().getByRole("textbox", { name: `${name} in ${column}`, exact: true }) });
 const envFiles = (page: Page) => mockState(page, "envFiles");
+/** The open menu's items that draw an icon. */
+const itemsWithIcons = (page: Page) => page.getByRole("menu").getByRole("menuitem").filter({ has: page.locator(".ico svg path:not([d=''])") });
 
 test("shows every variable across Shared and the environments, with gaps highlighted", async ({ page }) => {
   await openApp(page);
@@ -141,6 +144,7 @@ test("a row's menu deletes the variable from every environment", async ({ page }
   await expect(matrix(modal).locator(".kv-row .c-actions").first()).toBeEmpty();
   await actions.click();
   await expect(page.getByRole("menuitem", { name: "Delete from all environments" })).toBeVisible();
+  await expect(itemsWithIcons(page)).toHaveText(["Find usages", "Rename…", "Delete from all environments"]);
   await page.keyboard.press("Escape");
   await expect(actions).toBeFocused();
 
@@ -167,23 +171,26 @@ test("a hover card's Edit focuses the cell that defines the variable", async ({ 
 
 test("the List / Matrix choice is remembered, and the filter narrows rows", async ({ page }) => {
   await openApp(page);
-  let modal = await open(page);
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  let modal = dialog(page, "Environments");
+
+  // List first, Matrix second; the list is the default.
+  const view = modal.getByRole("radiogroup", { name: "View" });
+  await expect(view.getByRole("radio")).toHaveText(["List", "Matrix"]);
+  await expect(view.getByRole("radio", { name: "List" })).toBeChecked();
+  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
+  await expect(matrix(modal)).toHaveCount(0);
+  await view.getByRole("radio", { name: "Matrix" }).click();
+  await expect(modal.getByRole("group", { name: "Variables" })).toHaveCount(0);
+  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("matrix");
   await modal.getByPlaceholder("Filter variables").fill("staging.example");
   await expect(matrix(modal).locator(".kv-row .m-name")).toHaveText(["baseUrl"]);
 
-  // List first, Matrix second; the matrix is the default.
-  const view = modal.getByRole("radiogroup", { name: "View" });
-  await expect(view.getByRole("radio")).toHaveText(["List", "Matrix"]);
-  await expect(view.getByRole("radio", { name: "Matrix" })).toBeChecked();
-  await view.getByRole("radio", { name: "List" }).click();
-  await expect(matrix(modal)).toHaveCount(0);
-  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
-  await expect.poll(async () => (await mockState(page, "settings")).envView).toBe("list");
-
   await page.reload();
-  modal = await open(page);
-  await expect(modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" })).toBeChecked();
-  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage environments" }).click();
+  modal = dialog(page, "Environments");
+  await expect(modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "Matrix" })).toBeChecked();
+  await expect(matrix(modal)).toBeVisible();
 });
 
 test("the header's last cell adds an environment as a new column", async ({ page }) => {
@@ -319,6 +326,7 @@ test("an environment's header has Rename, Duplicate and Delete, from its actions
   await expect(actions).toHaveCSS("opacity", "1");
   await actions.click();
   await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename…", "Duplicate", "Delete environment…"]);
+  await expect(itemsWithIcons(page)).toHaveText(["Rename…", "Duplicate", "Delete environment…"]);
   await page.getByRole("menuitem", { name: "Rename…" }).click();
   const ask = dialog(page, "Rename environment");
   await ask.getByRole("textbox").fill("dev");
@@ -402,6 +410,37 @@ test("a column resizes by dragging or the keyboard, double-click fits its widest
   await expect(resizer(modal, "Variable")).toHaveCount(1);
   await expect(resizer(modal, "Shared")).toHaveCount(1);
   await expect(matrix(modal).getByRole("separator")).toHaveCount(4);
+});
+
+test("a renamed environment keeps its column width, and a deleted one's is dropped when saved", async ({ page }) => {
+  await openApp(page);
+  let modal = await open(page);
+  await resizer(modal, "local").focus();
+  await page.keyboard.press("Home");
+  await resizer(modal, "staging").focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  const widths = async () => (await mockState(page, "settings")).envMatrixWidths?.["/demo"]?.columns;
+  await expect.poll(widths).toEqual({ local: 100, staging: 116 });
+
+  const head = (name: string) => matrix(modal).locator(".kv-head > span").filter({ hasText: new RegExp(`^\\s*${name}\\s*$`) });
+  await head("local").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await dialog(page, "Rename environment").getByRole("textbox").fill("dev");
+  await dialog(page, "Rename environment").getByRole("button", { name: "OK" }).click();
+  await expect(head("dev")).toBeVisible();
+  await expect.poll(() => headWidth(modal, "dev")).toBe(100);
+
+  await head("staging").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete environment…" }).click();
+  await dialog(page, "Delete environment").getByRole("button", { name: "Delete" }).click();
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(widths).toEqual({ dev: 100 });
+
+  // The mock's env files don't survive a reload, so reopen instead.
+  modal = await open(page);
+  await expect.poll(() => headWidth(modal, "dev")).toBe(100);
 });
 
 test("a cut-off value shows in full in a tooltip, except a masked Secret", async ({ page }) => {
