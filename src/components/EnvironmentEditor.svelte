@@ -13,6 +13,8 @@
   import { SvelteSet } from "svelte/reactivity";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
+  import VarField from "../lib/codemirror/VarField.svelte";
+  import { envVariables, makeVarProvider } from "../lib/vars";
 
   const SHARED = "$shared";
 
@@ -49,6 +51,8 @@
     if (selectedEnv) selectedEnv.variables = list;
     else set.shared = list;
   }
+  /** What the values being edited can refer to: the environment shown (as edited, saved or not) and the shared variables. */
+  const variables = $derived(makeVarProvider({ env: envVariables(set, selectedEnv?.name ?? null), fileVars: [], requestVars: [], envName: selected }));
   /** Production and colour per environment name. Saved to the app settings, not
    *  the env files; renames and deletes below carry or drop them. */
   let meta = $state<Record<string, EnvironmentSettings>>(
@@ -192,7 +196,7 @@
 
 {#snippet valueCell({ row, ghost, set: setRow }: GridCell<EnvVar>)}
   {@const shown = !row.secret || revealed.has(row)}
-  <input class="cell" type={shown ? "text" : "password"} value={row.value} placeholder="Value" spellcheck="false" oninput={(e) => setRow({ value: e.currentTarget.value })} />
+  <VarField class="cell" value={row.value} placeholder="Value" label="Value" masked={!shown} {variables} onchange={(value) => setRow({ value })} />
   {#if row.secret && !ghost}
     <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(row) : revealed.add(row))}>
       <Icon name={shown ? "eye-off" : "eye"} size={13} />

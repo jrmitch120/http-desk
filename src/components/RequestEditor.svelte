@@ -188,11 +188,11 @@
             <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
           {/if}
         {:else if section === "auth"}
-          <AuthEditor auth={req.auth} />
+          <AuthEditor auth={req.auth} {variables} />
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} file={doc.file} />
+          <RequestSettings {req} file={doc.file} {variables} />
         {/if}
       </div>
     {/if}

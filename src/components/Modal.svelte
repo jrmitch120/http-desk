@@ -57,7 +57,10 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.key === "Escape") close();
+    // Not when a field in the modal took the Escape (e.g. to close its autocomplete list).
+    if (e.key === "Escape") {
+      if (!(e.defaultPrevented && box?.contains(e.target as Node))) close();
+    }
     else trapTab(e);
   }}
 />
