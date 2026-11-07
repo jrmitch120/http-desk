@@ -6,6 +6,7 @@ import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
+import { envVariables } from "./vars";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
@@ -130,15 +131,7 @@ class AppStore {
   );
 
   /** Variables of the selected environment (for highlighting/autocomplete). */
-  envVariables = $derived.by(() => {
-    const out: Record<string, { value: string; secret: boolean; source: string }> = {};
-    const set = this.envSet;
-    if (!set) return out;
-    for (const v of set.shared) out[v.name] = { value: v.value, secret: v.secret, source: "$shared" };
-    const env = set.environments.find((e) => e.name === this.envName);
-    for (const v of env?.variables ?? []) out[v.name] = { value: v.value, secret: v.secret, source: env!.name };
-    return out;
-  });
+  envVariables = $derived(envVariables(this.envSet, this.envName));
 
   // ---------------------------------------------------------------- lifecycle
 

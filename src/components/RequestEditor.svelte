@@ -31,7 +31,9 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
-  const variables = $derived(doc ? makeVarProvider(app.envVariables, fileVariables(doc.file), app.envName) : null);
+  const variables = $derived(
+    doc ? makeVarProvider({ env: app.envVariables, fileVars: fileVariables(doc.file), requestVars: req?.variables ?? [], envName: app.envName }) : null,
+  );
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
   $effect(() => {

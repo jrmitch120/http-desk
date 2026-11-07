@@ -259,6 +259,8 @@ export type SendError = { message: string } & (
   | { kind: "timeoutIdle" | "timeoutConnect"; details: { timeoutMs: number } }
   | { kind: "invalidUrl"; details: { url: string; reason: string } }
   | { kind: "unresolvedVariable"; details: { names: string[] } }
+  /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
+  | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
   | { kind: "other"; details: null }
 );

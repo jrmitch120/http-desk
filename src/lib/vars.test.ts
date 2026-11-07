@@ -1,0 +1,106 @@
+import { describe, expect, it } from "vitest";
+import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
+import type { EnvironmentSet, EnvVar, Variable } from "./types";
+import { envVariables, makeVarProvider } from "./vars";
+
+type EnvFile = Record<string, Record<string, string>>;
+interface Case {
+  case: string;
+  envFiles?: { public?: EnvFile; private?: EnvFile };
+  environment?: string | null;
+  file?: Variable[];
+  request?: Variable[];
+  text: string;
+  value: string;
+  undefined?: string[];
+  circular?: string[][];
+}
+
+/**
+ * The environment set the core's `load_environments` hands the frontend for these
+ * files: public then private, a private value overriding and marking a Secret.
+ */
+function loaded(files: Case["envFiles"]): EnvironmentSet {
+  const set: EnvironmentSet = { shared: [], environments: [], privateFileIgnored: null };
+  const vars = (env: string): EnvVar[] => {
+    if (env === "$shared") return set.shared;
+    let e = set.environments.find((x) => x.name === env);
+    if (!e) set.environments.push((e = { name: env, variables: [] }));
+    return e.variables;
+  };
+  for (const [file, secret] of [[files?.public, false], [files?.private, true]] as const) {
+    for (const [env, entries] of Object.entries(file ?? {})) {
+      const list = vars(env);
+      for (const [name, value] of Object.entries(entries)) {
+        const v = list.find((x) => x.name === name);
+        if (v) Object.assign(v, { value, secret: v.secret || secret });
+        else list.push({ name, value, secret });
+      }
+    }
+  }
+  return set;
+}
+
+describe("what hovering a reference shows", () => {
+  const set: EnvironmentSet = {
+    shared: [{ name: "scheme", value: "https", secret: false }],
+    environments: [
+      {
+        name: "dev",
+        variables: [
+          { name: "baseUrl", value: "{{scheme}}://{{host}}/api", secret: false },
+          { name: "host", value: "dev.example", secret: false },
+          { name: "token", value: "s3cret", secret: true },
+          { name: "auth", value: "Bearer {{token}}", secret: false },
+          { name: "a", value: "{{b}}", secret: false },
+          { name: "b", value: "{{a}}", secret: false },
+        ],
+      },
+    ],
+    privateFileIgnored: null,
+  };
+  const provider = (requestVars: Variable[] = [], fileVars: Variable[] = requestVars, envName: string | null = "dev") =>
+    makeVarProvider({ env: envVariables(set, envName), fileVars, requestVars, envName });
+
+  it("shows the fully resolved value and where the name is defined", () => {
+    expect(provider().info("baseUrl")).toEqual({ state: "ok", value: "https://dev.example/api", secret: false, source: 'environment "dev"' });
+    expect(provider().info("scheme")).toMatchObject({ state: "ok", source: "shared variables" });
+  });
+
+  it("takes the request's own declaration over one elsewhere in the file", () => {
+    const own = [{ name: "host", value: "own.example" }];
+    const file = [{ name: "host", value: "header.example" }, ...own, { name: "host", value: "later.example" }];
+    expect(provider(own, file).info("baseUrl")).toMatchObject({ value: "https://own.example/api" });
+    expect(provider(own, file).info("host")).toMatchObject({ value: "own.example", source: "this request" });
+    expect(provider([], file).info("host")).toMatchObject({ value: "later.example", source: "this file" });
+  });
+
+  it("counts a value as secret when a Secret went into it", () => {
+    expect(provider().info("auth")).toMatchObject({ state: "ok", secret: true });
+  });
+
+  it("reports a circular reference with its chain, not as undefined", () => {
+    expect(provider().info("a")).toMatchObject({ state: "circular", chain: ["a", "b", "a"] });
+    expect(provider().info("nope")).toEqual({ state: "bad", source: undefined });
+    expect(provider([], [], null).info("nope")).toEqual({ state: "bad", source: "no environment selected" });
+    expect(provider().info("$uuid")).toEqual({ state: "dyn" });
+  });
+});
+
+describe("the frontend resolver agrees with the core on the shared cases", () => {
+  it.each((shared.cases as Case[]).map((c) => [c.case, c] as const))("%s", (_, c) => {
+    const environment = c.environment ?? null;
+    const provider = makeVarProvider({
+      env: envVariables(loaded(c.envFiles), environment),
+      fileVars: c.file ?? [],
+      requestVars: c.request ?? [],
+      envName: environment,
+    });
+    const r = provider.resolve(c.text);
+    expect({ value: r.value, undefined: r.undefined, circular: r.circular }).toEqual({
+      value: c.value,
+      undefined: c.undefined ?? [],
+      circular: c.circular ?? [],
+    });
+  });
+});
