@@ -87,7 +87,7 @@ fn preview_request_shows_what_send_request_sends() {
     assert_eq!(shown["method"], "POST");
     assert_eq!(shown["url"], format!("{server}/items?page=2&q=a%26b"));
     assert_eq!(shown["auth"], json!([["Token", secret("s3cret")]]), "the Secret from the private file, marked");
-    assert_eq!(shown["warnings"], json!(["Unresolved variables: id"]));
+    assert_eq!(shown["warnings"], json!(["Undefined variables: id"]));
     assert_eq!(shown["error"], json!(null));
     let headers = shown["headers"].as_array().unwrap();
     assert!(headers.contains(&json!(["Authorization", format!("Bearer {}", secret("s3cret"))])), "{headers:?}");

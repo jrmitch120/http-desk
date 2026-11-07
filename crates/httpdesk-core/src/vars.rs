@@ -126,7 +126,7 @@ fn percent_encoded(c: char) -> String {
 pub struct Resolver {
     vars: HashMap<String, String>,
     base_dir: Option<PathBuf>,
-    unresolved: std::cell::RefCell<BTreeSet<String>>,
+    undefined: std::cell::RefCell<BTreeSet<String>>,
     circular: std::cell::RefCell<Vec<Vec<String>>>,
     errors: std::cell::RefCell<Vec<String>>,
     /// Set by [`Resolver::previewing`]: generated dynamic variables, as written.
@@ -262,8 +262,8 @@ impl Resolver {
 
     /// Undefined variables met so far: names with no definition in scope. Circular
     /// references are reported by [`Self::circular`] instead.
-    pub fn unresolved(&self) -> Vec<String> {
-        self.unresolved.borrow().iter().cloned().collect()
+    pub fn undefined(&self) -> Vec<String> {
+        self.undefined.borrow().iter().cloned().collect()
     }
 
     /// Unanswered Prompt variables met so far: asked when the request is sent.
@@ -355,7 +355,7 @@ impl Resolver {
             match value {
                 Some(v) => out.push_str(&v),
                 None => {
-                    self.unresolved.borrow_mut().insert(inner.to_string());
+                    self.undefined.borrow_mut().insert(inner.to_string());
                     out.push_str(whole);
                 }
             }
@@ -574,10 +574,10 @@ mod tests {
     }
 
     #[test]
-    fn resolves_nested_and_reports_unresolved() {
+    fn resolves_nested_and_reports_undefined() {
         let r = resolver(&[("host", "example.com"), ("base", "https://{{host}}/api")]);
         assert_eq!(r.resolve("{{base}}/users/{{ id }}"), "https://example.com/api/users/{{ id }}");
-        assert_eq!(r.unresolved(), vec!["id"]);
+        assert_eq!(r.undefined(), vec!["id"]);
     }
 
     #[test]
@@ -585,7 +585,7 @@ mod tests {
         let r = resolver(&[("a", "{{b}}"), ("b", "{{a}}")]);
         assert_eq!(r.resolve("{{a}}"), "{{a}}");
         assert_eq!(r.circular(), vec![vec!["a", "b", "a"]]);
-        assert!(r.unresolved().is_empty(), "{:?}", r.unresolved());
+        assert!(r.undefined().is_empty(), "{:?}", r.undefined());
     }
 
     #[test]
@@ -593,7 +593,7 @@ mod tests {
         let r = resolver(&[("url", "https://{{a}}/x"), ("a", "{{b}}"), ("b", "{{a}}"), ("me", "{{me}}")]);
         assert_eq!(r.resolve("{{url}} {{me}}"), "https://{{a}}/x {{me}}");
         assert_eq!(r.circular(), vec![vec!["url", "a", "b", "a"], vec!["me", "me"]]);
-        assert!(r.unresolved().is_empty(), "{:?}", r.unresolved());
+        assert!(r.undefined().is_empty(), "{:?}", r.undefined());
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
         map.insert("v15".into(), "end".into());
         let r = Resolver::new(map);
         assert_eq!(r.resolve("{{v0}}"), "end");
-        assert!(r.circular().is_empty() && r.unresolved().is_empty());
+        assert!(r.circular().is_empty() && r.undefined().is_empty());
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
         assert!(r.resolve("{{$datetime rfc1123}}").ends_with("GMT"));
         assert!(r.resolve("{{$isoTimestamp}}").ends_with('Z'));
         assert_eq!(r.resolve("{{$random.hexadecimal(8)}}").len(), 8);
-        assert!(r.unresolved().is_empty());
+        assert!(r.undefined().is_empty());
         std::env::set_var("HTTPDESK_TEST_VAR", "yes");
         assert_eq!(r.resolve("{{$processEnv HTTPDESK_TEST_VAR}}"), "yes");
         assert_eq!(r.resolve("{{$env.HTTPDESK_TEST_VAR}}"), "yes");
@@ -689,9 +689,9 @@ mod tests {
             };
             assert!(!r.resolve(&reference).contains("{{"), "{reference} was not generated");
         }
-        assert!(r.unresolved().is_empty() && r.errors().is_empty(), "{:?} {:?}", r.unresolved(), r.errors());
+        assert!(r.undefined().is_empty() && r.errors().is_empty(), "{:?} {:?}", r.undefined(), r.errors());
         assert_eq!(r.resolve("{{$nope}}"), "{{$nope}}");
-        assert_eq!(r.unresolved(), vec!["$nope"]);
+        assert_eq!(r.undefined(), vec!["$nope"]);
     }
 
     /// Resolves `text` with a fresh resolver and returns its errors.

@@ -52,7 +52,7 @@ test("the resolved preview shows remembered values, and Forget prompted values a
   await page.getByRole("switch", { name: "Resolved" }).click();
   await expect(preview(page).locator(".target")).toHaveText("GET {{baseUrl}}/pets?limit=20");
   await expect(preview(page).locator(".var.prompt")).toHaveText("{{baseUrl}}");
-  await expect(preview(page)).not.toContainText("Unresolved");
+  await expect(preview(page)).not.toContainText("Undefined");
 
   await send(page);
   await answer(page, "http://typed.example", "s3cret");

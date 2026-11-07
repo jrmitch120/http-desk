@@ -37,7 +37,7 @@
   });
   const layout = $derived(app.settings?.layout ?? "horizontal");
 
-  // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an unresolved-variable error, open the picker.
+  // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
   $effect(() => {
     if (app.envPickerWanted && envSelect) {

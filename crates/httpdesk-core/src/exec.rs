@@ -58,7 +58,7 @@ pub enum ExecError {
     /// Any other failure, as its error chain.
     #[error("{0}")]
     Other(String),
-    /// Unresolved variables in the URL's scheme or host.
+    /// Undefined variables in the URL's scheme or host.
     #[error("The URL's scheme or host uses undefined variables: {}. Pick an environment that defines them, or declare them as file variables.", .0.join(", "))]
     UnresolvedHost(Vec<String>),
     /// Circular references in the URL's scheme or host, each as the chain followed.
@@ -503,9 +503,9 @@ fn add_default_headers(body: &Body, headers: &mut Vec<(String, String)>) {
 
 fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) -> Vec<String> {
     let mut warnings = Vec::new();
-    let unresolved = resolver.unresolved();
-    if !unresolved.is_empty() {
-        warnings.push(format!("Unresolved variables: {}", unresolved.join(", ")));
+    let undefined = resolver.undefined();
+    if !undefined.is_empty() {
+        warnings.push(format!("Undefined variables: {}", undefined.join(", ")));
     }
     for chain in resolver.circular() {
         warnings.push(format!("Circular variable reference: {}", chain.join(" → ")));

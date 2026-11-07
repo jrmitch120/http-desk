@@ -115,7 +115,7 @@
     <VarField
       class="cell"
       value={variable?.value ?? ""}
-      placeholder={cell.state === "gap" ? "Missing" : cell.state === "shared" ? "Uses shared" : cell.state === "unset" ? "Not set" : ""}
+      placeholder={cell.state === "gap" || cell.state === "unset" ? "Not set" : cell.state === "shared" ? "Uses shared" : ""}
       label="{row.name} in {label}"
       masked={!shown}
       variables={providers.get(column)}

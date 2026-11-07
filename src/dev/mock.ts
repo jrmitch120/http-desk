@@ -195,7 +195,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, prom
   const error = hostVars.length
     ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
     : null;
-  const warnings = undefinedNames.size ? [`Unresolved variables: ${[...undefinedNames].sort().join(", ")}`] : [];
+  const warnings = undefinedNames.size ? [`Undefined variables: ${[...undefinedNames].sort().join(", ")}`] : [];
   for (const chain of new Set(circular.map((c) => c.join(" → ")))) warnings.push(`Circular variable reference: ${chain}`);
   if (environment && !own.environments.some((e) => e.name === environment)) {
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";

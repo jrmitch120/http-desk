@@ -586,7 +586,7 @@ Decisions made during implementation, beyond the plan above:
 * **Environments matrix.** The Environments modal opens on a matrix (a Matrix | List
   switch, remembered as the `envView` app setting): one row per variable name, a
   column for Shared and one per environment, each cell a VarField that sees its own
-  column's scope. A cell is a gap (tinted, placeholder "Missing") when the environment
+  column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
   doesn't define the variable and Shared doesn't either; an environment cell Shared
   supplies says "Uses shared", and the Shared column is never a gap. A variable defined
   with an empty value isn't a gap. Typing into a gap, or locking it, adds the variable
@@ -617,11 +617,12 @@ Decisions made during implementation, beyond the plan above:
   resolvers. Autocomplete lists them from `crates/httpdesk-core/dynamic-variables.json`
   (with a description and an argument hint each), and a core test fails if that list
   and `DYNAMIC_VARIABLES` differ.
-* **Unresolved variables:** if the URL's scheme or host still contains an unresolved
-  `{{variable}}` (typically `{{baseUrl}}` with no environment selected), the send fails
+* **Undefined variables at send:** if the URL's scheme or host still contains an
+  Undefined variable (typically `{{baseUrl}}` with no environment selected), the send fails
   with an error naming the variables and suggesting an environment that defines them.
-  Anywhere else, unresolved variables are sent as written (in the query they are
-  percent-encoded like any other text) and reported as a warning on the response.
+  Anywhere else, Undefined variables are sent as written (in the query they are
+  percent-encoded like any other text) and reported as a warning on the response
+  ("Undefined variables: a, b", from `Resolver::undefined`).
 * **Undefined-variable checks** catch them before sending, without blocking it.
   `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
   the enabled auth's fields, an API key's name only as a query param; the enabled body

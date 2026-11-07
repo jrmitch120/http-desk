@@ -76,7 +76,7 @@ fn an_environment_the_folder_doesnt_define_sends_with_no_environment_and_says_so
 
     let sent = h.ok("send_request", args);
     received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-    assert_eq!(sent["warnings"], json!([warning, "Unresolved variables: host"]));
+    assert_eq!(sent["warnings"], json!([warning, "Undefined variables: host"]));
 }
 
 /// #88: the Environments modal loads and saves one folder's own pair (`dir`, relative to

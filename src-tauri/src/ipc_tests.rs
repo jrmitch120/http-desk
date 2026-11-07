@@ -160,7 +160,7 @@ fn vertical_slice_over_ipc() {
     );
     assert_eq!(resp["status"], 200);
     assert_eq!(resp["bodyText"], r#"{"ok":true}"#);
-    assert_eq!(resp["warnings"][0], "Unresolved variables: token");
+    assert_eq!(resp["warnings"][0], "Undefined variables: token");
     let raw = received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(raw.starts_with("GET /items?page=1 HTTP/1.1"), "{raw}");
     assert!(raw.to_lowercase().contains("accept: application/json"));

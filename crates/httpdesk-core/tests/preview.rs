@@ -166,7 +166,7 @@ fn the_authorization_section_shows_each_field_resolved() {
 fn a_request_that_cant_be_sent_is_still_shown_with_the_reason() {
     let shown = preview(&request("GET {{baseUrl}}/users?id={{id}}\n"), Resolver::new(HashMap::new()));
     assert_eq!(shown.url, "{{baseUrl}}/users?id=%7B%7Bid%7D%7D", "as the send would build it");
-    assert_eq!(shown.warnings, ["Unresolved variables: baseUrl, id"]);
+    assert_eq!(shown.warnings, ["Undefined variables: baseUrl, id"]);
     let error = serde_json::to_value(shown.error.expect("an undefined host can't be sent")).unwrap();
     assert_eq!(
         (&error["kind"], &error["details"]["names"]),
