@@ -799,7 +799,19 @@ Decisions made during implementation, beyond the plan above:
   from the body mode (`implied_content_type`). A request that couldn't be sent (an
   undefined or circular host, a relative URL without Host) is still shown, with the classified
   error a send would give. `$processEnv`, `$dotenv` and `$env.X` read existing values,
-  so they are resolved.
+  so they are resolved. Secrets are masked as in hover cards: `request_resolver` tells
+  the resolver which names are Secrets (`env::secret_names`, less any a File variable
+  replaces; `Resolver::with_secrets`), and in the preview every reference whose value a
+  Secret went into, directly or through other variables (`Authorization: {{auth}}` with
+  `auth = Bearer {{token}}`), resolves to its value between two private-use marks
+  (`vars::SECRET_MARKS`; query-encoded marks are turned back, Basic credentials holding
+  one are shown unencoded like a placeholder, and the scheme and URL checks read the
+  value). The preview shows each marked value as `••••••••` with one Reveal Secrets /
+  Hide Secrets button for the whole preview; an error message never reveals it (the
+  URL in it is masked). A masked Prompt variable stays `••••••••` with no reveal.
+  The header-origin notes beside each header (from Authorization, from Body, default)
+  and the "Can't be sent: …" line for a request that would fail before the network are
+  part of the preview too.
 * **The Request tab shows the final hop.** After redirects, the core rebuilds the request
   that reached the final server with reqwest's rules: 301/302 turn a POST into a GET
   and 303 anything but HEAD, dropping the body and its Content-* headers; a hop to

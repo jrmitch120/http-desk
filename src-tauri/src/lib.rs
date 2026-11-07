@@ -424,7 +424,12 @@ fn request_resolver(
         _ => None,
     };
     let env_vars = env::variables(&env_set, environment);
+    // A File variable of a Secret's name replaces it, so it's no Secret.
+    let secrets = env::secret_names(&env_set, environment)
+        .into_iter()
+        .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
     let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
+        .with_secrets(secrets)
         .with_prompts(&request.prompts(), prompt_values);
     Ok(RequestScope { resolver, base_dir, env_warning })
 }

@@ -6,8 +6,9 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { base64DecodedLength } from "../lib/http";
-import type { AuthPart, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
+import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been evicted. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -132,41 +133,46 @@ type PreviewArgs = {
   environment: string | null;
   promptValues?: Record<string, string>;
 };
-/** Dynamic variables that generate a value on every send: the preview shows them as written. */
-const GENERATED = /^\$(uuid|guid|random\.|randomInt|timestamp|isoTimestamp|datetime|localDatetime)/;
 /**
- * A rough stand-in for the core's `exec::preview` (tested for real in Rust):
- * `$shared`, then the environment, then File variables; generated dynamic
- * variables kept as written; query values percent-encoded; the Content-Type
- * the body implies; the default headers. Prompt variables: remembered values over
- * everything (masked ones masked), unanswered ones kept as written.
+ * A rough stand-in for the core's `exec::preview` (tested for real in Rust), resolving
+ * through the frontend's resolver (`makeVarProvider`, kept in step with the core's):
+ * dynamic variables kept as written; each value a Secret went into between the Secret
+ * marks; a masked prompted value masked, unanswered ones kept as written; query values
+ * percent-encoded; the Content-Type the body implies; the default headers.
  */
 function previewRequest({ request: r, filePath, fileVariables, environment, promptValues = {} }: PreviewArgs) {
-  const prompts = r.directives.filter((d) => d.name.toLowerCase() === "prompt").map((d) => d.value.trim().split(/\s+/)[0]);
-  const own = envSetFor(filePath);
-  const env = own.environments.find((e) => e.name === environment)?.variables ?? [];
-  const vars = new Map([...own.shared, ...env, ...fileVariables, ...r.variables].map((v) => [v.name, v.value]));
-  const unresolved = new Set<string>();
-  const resolve = (text: string, depth = 0): string =>
-    text.replace(/\{\{\s*(.*?)\s*\}\}/g, (whole, name: string) => {
-      if (GENERATED.test(name)) return whole;
-      if (prompts.includes(name)) {
-        if (!(name in promptValues)) return whole;
-        return /^(password|passwd|pass)$/i.test(name) ? "••••••••" : promptValues[name];
-      }
-      const value = vars.get(name);
-      if (value === undefined || depth >= 10) return unresolved.add(name), whole;
-      return resolve(value, depth + 1);
-    });
+  const own = envSetFor(filePath) as EnvironmentSet;
+  const prompts = requestPrompts(r);
+  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues });
+  const undefinedNames = new Set<string>();
+  const circular: string[][] = [];
+  // Reference by reference, as the core marks each one a Secret went into.
+  const resolve = (text: string): string =>
+    segments(text)
+      .map(({ text: whole, ref }) => {
+        if (ref === undefined) return whole;
+        if (prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
+        const res = vars.resolve(whole);
+        res.undefined.forEach((n) => undefinedNames.add(n));
+        circular.push(...res.circular);
+        return res.secret ? `${SECRET_OPEN}${res.value}${SECRET_CLOSE}` : res.value;
+      })
+      .join("");
   const encode = (text: string) =>
-    text.split(/(\{\{\s*\$.*?\}\})/).map((part, i) => (i % 2 && GENERATED.test(part.slice(2).trim()) ? part : encodeURIComponent(resolve(part)))).join("");
+    segments(text)
+      .map(({ text, ref }) => (ref !== undefined && isDynamic(ref) ? text : encodeURIComponent(resolve(text))))
+      .join("")
+      .replaceAll(encodeURIComponent(SECRET_OPEN), SECRET_OPEN)
+      .replaceAll(encodeURIComponent(SECRET_CLOSE), SECRET_CLOSE);
   const a = r.auth;
   const headers: [string, string][] = [];
   const auth: [string, string][] = [];
   const params = r.query.enabled ? r.query.items.filter((p) => p.enabled && p.name).map((p) => `${encode(p.name)}=${encode(p.value)}`) : [];
   if (a.enabled && a.kind === "basic") {
     auth.push(["Username", resolve(a.username)], ["Password", resolve(a.password)]);
-    headers.push(["Authorization", `Basic ${btoa(`${auth[0][1]}:${auth[1][1]}`)}`]);
+    // Like the core: credentials with a Secret are shown unencoded, so it can be masked.
+    const creds = `${auth[0][1]}:${auth[1][1]}`;
+    headers.push(["Authorization", `Basic ${creds.includes(SECRET_OPEN) ? `base64(${creds})` : btoa(creds)}`]);
   } else if (a.enabled && a.kind === "bearer") {
     auth.push(["Token", resolve(a.token.trim())]);
     headers.push(["Authorization", `Bearer ${auth[0][1]}`]);
@@ -177,7 +183,8 @@ function previewRequest({ request: r, filePath, fileVariables, environment, prom
   }
   if (r.headers.enabled) for (const h of r.headers.items.filter((h) => h.enabled && h.name)) headers.push([resolve(h.name), resolve(h.value)]);
   let url = resolve(r.url.trim()) + (params.length ? `?${params.join("&")}` : "");
-  if (!url.includes("://") && !url.startsWith("{{")) url = `http://${url}`;
+  const plain = url.replaceAll(SECRET_OPEN, "").replaceAll(SECRET_CLOSE, "");
+  if (!plain.includes("://") && !plain.startsWith("{{")) url = `http://${url}`;
   const has = (name: string) => headers.some(([n]) => n.toLowerCase() === name);
   const implied = { json: "application/json", xml: "application/xml", text: "text/plain", formUrlEncoded: "application/x-www-form-urlencoded" } as Record<string, string>;
   if (r.body.enabled && r.body.text.trim() && implied[r.body.mode] && !has("content-type")) headers.push(["Content-Type", implied[r.body.mode]]);
@@ -188,7 +195,8 @@ function previewRequest({ request: r, filePath, fileVariables, environment, prom
   const error = hostVars.length
     ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
     : null;
-  const warnings = unresolved.size ? [`Unresolved variables: ${[...unresolved].sort().join(", ")}`] : [];
+  const warnings = undefinedNames.size ? [`Unresolved variables: ${[...undefinedNames].sort().join(", ")}`] : [];
+  for (const chain of new Set(circular.map((c) => c.join(" → ")))) warnings.push(`Circular variable reference: ${chain}`);
   if (environment && !own.environments.some((e) => e.name === environment)) {
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
     warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);

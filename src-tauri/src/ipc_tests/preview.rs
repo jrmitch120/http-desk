@@ -5,6 +5,56 @@ use serde_json::json;
 
 use super::{capture_server, Harness};
 
+const MARKS: (char, char) = httpdesk_core::vars::SECRET_MARKS;
+
+/// `value` as the preview marks a value a Secret went into.
+fn secret(value: &str) -> String {
+    format!("{}{value}{}", MARKS.0, MARKS.1)
+}
+
+#[test]
+fn every_value_a_secret_went_into_is_marked_wherever_it_ends_up() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let file_path = root.join("api.http");
+    std::fs::write(
+        &file_path,
+        "@host = example.com\n\n### Get\nGET {{base}}/x?k={{key}}&h={{host}}\nAuthorization: Basic me {{pw}}\nX-Auth: {{auth}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("http-client.env.json"),
+        json!({ "local": { "auth": "Bearer {{token}}", "host": "" } }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("http-client.private.env.json"),
+        json!({ "local": { "base": "https://secret.example", "token": "t0k", "key": "a b", "pw": "p", "host": "env-host" } })
+            .to_string(),
+    )
+    .unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let path = file_path.to_string_lossy().to_string();
+    let file = h.ok("read_http_file", json!({ "path": path }));
+    let args = json!({ "request": file["requests"][0], "filePath": path, "fileVariables": file["header"]["variables"], "environment": "local" });
+
+    let shown = h.ok("preview_request", args);
+    // A Secret base URL keeps its scheme (no http:// added), a query value is marked
+    // around its encoded form, and a File variable over a Secret's name isn't secret.
+    assert_eq!(shown["url"], format!("{}/x?k={}&h=example.com", secret("https://secret.example"), secret("a%20b")));
+    assert_eq!(shown["error"], json!(null));
+    let headers = shown["headers"].as_array().unwrap();
+    assert!(
+        headers.contains(&json!(["X-Auth", secret("Bearer t0k")])),
+        "the whole value a Secret went into: {headers:?}"
+    );
+    assert!(
+        headers.contains(&json!(["Authorization", format!("Basic base64(me:{})", secret("p"))])),
+        "Basic credentials with a Secret are shown unencoded, so it can be masked: {headers:?}"
+    );
+}
+
 #[test]
 fn preview_request_shows_what_send_request_sends() {
     let h = Harness::new();
@@ -36,20 +86,21 @@ fn preview_request_shows_what_send_request_sends() {
     let shown = h.ok("preview_request", args.clone());
     assert_eq!(shown["method"], "POST");
     assert_eq!(shown["url"], format!("{server}/items?page=2&q=a%26b"));
-    assert_eq!(shown["auth"], json!([["Token", "s3cret"]]), "the Secret from the private file");
+    assert_eq!(shown["auth"], json!([["Token", secret("s3cret")]]), "the Secret from the private file, marked");
     assert_eq!(shown["warnings"], json!(["Unresolved variables: id"]));
     assert_eq!(shown["error"], json!(null));
     let headers = shown["headers"].as_array().unwrap();
-    assert!(headers.contains(&json!(["Authorization", "Bearer s3cret"])), "{headers:?}");
+    assert!(headers.contains(&json!(["Authorization", format!("Bearer {}", secret("s3cret"))])), "{headers:?}");
     assert!(headers.contains(&json!(["Content-Type", "application/json"])), "implied by the body: {headers:?}");
 
     let mut send = args.clone();
     send["runId"] = json!("r1");
     let sent = h.ok("send_request", send);
     received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let unmarked = |v: &serde_json::Value| json!(v.to_string().replace([MARKS.0, MARKS.1], ""));
     assert_eq!(
-        (&shown["method"], &shown["url"], &shown["headers"]),
-        (&sent["request"]["method"], &sent["request"]["url"], &sent["request"]["headers"])
+        (&shown["method"], &shown["url"], unmarked(&shown["headers"])),
+        (&sent["request"]["method"], &sent["request"]["url"], unmarked(&sent["request"]["headers"]))
     );
 
     // A body file that doesn't exist isn't read, so the preview still works.

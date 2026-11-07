@@ -8,8 +8,8 @@ import { xml } from "@codemirror/lang-xml";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
-import { bodySyntaxWarnings, VAR_RE } from "../http";
-import { varClass } from "../vars";
+import { bodySyntaxWarnings, segments } from "../http";
+import { MASK, varClass } from "../vars";
 import {
   Decoration,
   drawSelection,
@@ -20,7 +20,6 @@ import {
   hoverTooltip,
   keymap,
   lineNumbers,
-  MatchDecorator,
   placeholder as placeholderExt,
   tooltips,
   ViewPlugin,
@@ -196,19 +195,31 @@ export interface VarProvider {
   extract?: (value: string) => Promise<string | null>;
 }
 
+/** The `{{…}}` references on the visible lines, as `segments` reads them (like the resolver): document range and name. */
+function* visibleReferences(view: EditorView): Generator<{ from: number; to: number; name: string }> {
+  for (const { from, to } of view.visibleRanges) {
+    for (let pos = from; pos <= to; ) {
+      const line = view.state.doc.lineAt(pos);
+      for (const s of segments(line.text)) if (s.ref !== undefined) yield { from: line.from + s.from, to: line.from + s.from + s.text.length, name: s.ref };
+      pos = line.to + 1;
+    }
+  }
+}
+
 function varDecorations(provider: VarProvider) {
-  const decorator = new MatchDecorator({
-    regexp: VAR_RE,
-    decoration: (m) => Decoration.mark({ class: varClass(provider.info(m[1])) }),
-  });
+  const build = (view: EditorView) => {
+    const b = new RangeSetBuilder<Decoration>();
+    for (const r of visibleReferences(view)) b.add(r.from, r.to, Decoration.mark({ class: varClass(provider.info(r.name)) }));
+    return b.finish();
+  };
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       constructor(view: EditorView) {
-        this.decorations = decorator.createDeco(view);
+        this.decorations = build(view);
       }
       update(u: ViewUpdate) {
-        this.decorations = decorator.updateDeco(u, this.decorations);
+        if (u.docChanged || u.viewportChanged) this.decorations = build(u.view);
       }
     },
     { decorations: (v) => v.decorations },
@@ -218,12 +229,12 @@ function varDecorations(provider: VarProvider) {
 function varTooltip(provider: VarProvider) {
   return hoverTooltip((view, pos) => {
     const line = view.state.doc.lineAt(pos);
-    for (const m of line.text.matchAll(VAR_RE)) {
-      const from = line.from + m.index!;
-      const to = from + m[0].length;
+    for (const s of segments(line.text)) {
+      if (s.ref === undefined) continue;
+      const [from, to, name] = [line.from + s.from, line.from + s.from + s.text.length, s.ref];
       if (pos < from || pos > to) continue;
       const close = () => view.dispatch({ effects: closeHoverTooltips });
-      return { pos: from, end: to, create: () => ({ dom: varCard(m[1], provider.info(m[1]), { edit: provider.edit, findUsages: provider.findUsages, close }) }) };
+      return { pos: from, end: to, create: () => ({ dom: varCard(name, provider.info(name), { edit: provider.edit, findUsages: provider.findUsages, close }) }) };
     }
     return null;
   });
@@ -252,7 +263,7 @@ export function varCard(
   const body = div("var-card-value");
   const masked = info.state === "ok" && !!info.secret;
   let revealed = false;
-  const showValue = () => (body.textContent = masked && !revealed ? "•••••••• (secret)" : info.value || "(empty)");
+  const showValue = () => (body.textContent = masked && !revealed ? `${MASK} (secret)` : info.value || "(empty)");
   if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
   else if (info.state === "bad")
     body.textContent = name.startsWith("$") ? "Undefined — not a dynamic variable" : "Undefined — not defined in the request, the file or the environment";

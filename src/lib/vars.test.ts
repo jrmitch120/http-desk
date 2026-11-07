@@ -250,6 +250,20 @@ describe("what hovering a Prompt variable shows", () => {
   });
 });
 
+describe("field marks", () => {
+  it("read references exactly as the resolver does, so a mark never disagrees with what's resolved", () => {
+    const provider = makeVarProvider({ env: {}, fileVars: [{ name: "a", value: "x" }], requestVars: [], envName: null });
+    const text = "{{a{b}} {{ a }} {{ unclosed";
+    const marked = varSegments(text, provider).filter((s) => s.name !== undefined);
+    expect(marked.map((s) => [s.text, s.cls])).toEqual([
+      ["{{a{b}}", "cm-var cm-var-bad"],
+      ["{{ a }}", "cm-var cm-var-ok"],
+    ]);
+    expect(provider.resolve(text).undefined).toEqual(marked.filter((s) => s.cls!.includes("bad")).map((s) => s.name));
+    expect(varSegments(text, provider).map((s) => s.text).join("")).toBe(text);
+  });
+});
+
 /** What the frontend picks for the case's request from what the core gives it: the root's set and each folder's. */
 function requestEnvironments(c: Case): EnvironmentSet | null {
   const folders = Object.keys(c.folders ?? {}).map((dir) => ({ dir, set: loaded(c, dir) }));

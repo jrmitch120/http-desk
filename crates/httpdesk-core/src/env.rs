@@ -8,7 +8,7 @@
 //!
 //! Non-scalar entries such as `SSLConfiguration` are preserved on save.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -279,6 +279,16 @@ pub fn variables(set: &EnvironmentSet, env_name: Option<&str>) -> HashMap<String
         out.extend(env.variables.iter().map(|v| (v.name.clone(), v.value.clone())));
     }
     out
+}
+
+/// The names [`variables`] gives a Secret's value for (an environment's own variable
+/// replaces a same-named shared one, Secret or not).
+pub fn secret_names(set: &EnvironmentSet, env_name: Option<&str>) -> HashSet<String> {
+    let mut secret: HashMap<&str, bool> = set.shared.iter().map(|v| (v.name.as_str(), v.secret)).collect();
+    if let Some(env) = env_name.and_then(|n| set.environments.iter().find(|e| e.name == n)) {
+        secret.extend(env.variables.iter().map(|v| (v.name.as_str(), v.secret)));
+    }
+    secret.into_iter().filter(|(_, s)| *s).map(|(n, _)| n.to_string()).collect()
 }
 
 fn build_object(
@@ -635,6 +645,23 @@ mod tests {
         std::fs::write(plain.path().join(PRIVATE_ENV_FILE), "{}").unwrap();
         assert_eq!(load(plain.path()).unwrap().private_file_ignored, None);
         assert!(!ensure_gitignored(plain.path()).unwrap());
+    }
+
+    #[test]
+    fn secret_names_are_those_whose_value_in_use_is_a_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(ENV_FILE),
+            r#"{ "$shared": { "key": "", "plain": "p" }, "dev": { "key": "public", "url": "u" } }"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(PRIVATE_ENV_FILE), r#"{ "$shared": { "key": "k" }, "dev": { "token": "t" } }"#)
+            .unwrap();
+        let set = load(dir.path()).unwrap();
+        let mut dev: Vec<_> = secret_names(&set, Some("dev")).into_iter().collect();
+        dev.sort();
+        assert_eq!(dev, ["token"], "dev's shareable key is in use over the shared Secret");
+        assert_eq!(secret_names(&set, None).into_iter().collect::<Vec<_>>(), ["key"]);
     }
 
     #[test]
