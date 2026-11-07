@@ -576,8 +576,10 @@ Decisions made during implementation, beyond the plan above:
   env files, so other tools don't see extra keys they'd read as variables. Renaming an
   environment in the modal carries them over, deleting it drops them, and duplicating it
   copies them. Sending anything but GET, HEAD or OPTIONS with a production environment
-  selected first asks through the shared Dialog (Cancel focused), naming the environment
-  and the method; Cancel doesn't send. The colour comes from a fixed palette
+  first asks through the shared Dialog (Cancel focused), naming the environment
+  and the method; Cancel doesn't send. What counts is the environment the request is
+  sent with (`app.sentEnvironment(path)`): a request whose folders don't define the
+  selected environment is sent with none (ADR-0004), so it isn't asked about. The colour comes from a fixed palette
   (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
   bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
   name keeps the text colour).

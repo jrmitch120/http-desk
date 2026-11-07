@@ -1130,7 +1130,19 @@ describe("production guard", () => {
       environmentSettings: { "/ws": { prod: { production: true }, staging: { color: "blue" } } },
     } as unknown as AppSettings;
     app.envName = "prod";
+    const env = (name: string) => ({ name, variables: [] });
+    app.envSet = { shared: [], environments: [env("prod"), env("staging")], privateFileIgnored: null };
+    app.envFolders = [];
     api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("doesn't ask when the request's folder doesn't define the selected production environment (it's sent with none)", async () => {
+    // books.http is in api/, whose env files define only dev (ADR-0004).
+    app.envFolders = [{ dir: "api", set: { shared: [], environments: [{ name: "dev", variables: [] }], privateFileIgnored: null } }];
+    const tab = await tabFor("POST");
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
   });
 
   async function tabFor(method: string) {

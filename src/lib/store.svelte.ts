@@ -1040,7 +1040,8 @@ class AppStore {
         this.confirmingSend.delete(tabId);
       }
     }
-    if (this.guardsMethod(req.method) && !(await this.confirmProductionSend(tabId, req.method))) return;
+    const env = this.sentEnvironment(tab.path);
+    if (env && this.guardsMethod(env, req.method) && !(await this.confirmProductionSend(tabId, env, req.method))) return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
@@ -1060,15 +1061,21 @@ class AppStore {
   /** Tabs whose send is waiting on the prompt form or the production confirmation. */
   private confirmingSend = new Set<string>();
 
-  /** Whether sending `method` needs confirming: a production environment is
-   *  selected and the method isn't GET, HEAD or OPTIONS. */
-  private guardsMethod(method: string): boolean {
-    return !!this.envName && !!this.environmentSettings(this.envName).production && !SAFE_METHODS.has(verbOf(method));
+  /** The environment a request in the file at `path` is sent with: the selected one if
+   *  the request's folders define it, else none (ADR-0004; the send warns about it). */
+  sentEnvironment(path: string): string | null {
+    const name = this.envName;
+    return name && this.envSetFor(path)?.environments.some((e) => e.name === name) ? name : null;
   }
 
-  /** Asks before sending to the selected (production) environment. True to go ahead. */
-  private async confirmProductionSend(tabId: string, method: string): Promise<boolean> {
-    const env = this.envName;
+  /** Whether sending `method` with environment `env` needs confirming: `env` is a
+   *  production environment and the method isn't GET, HEAD or OPTIONS. */
+  private guardsMethod(env: string, method: string): boolean {
+    return !!this.environmentSettings(env).production && !SAFE_METHODS.has(verbOf(method));
+  }
+
+  /** Asks before sending with production environment `env`. True to go ahead. */
+  private async confirmProductionSend(tabId: string, env: string, method: string): Promise<boolean> {
     const verb = verbOf(method);
     this.confirmingSend.add(tabId);
     try {
