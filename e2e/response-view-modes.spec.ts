@@ -1,7 +1,7 @@
 // Pretty is offered only where the core can format the body (JSON and XML).
 // For HTML or plain text it would show the same text as Raw, so it isn't there.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { openApp, openRequest, setMockResponse } from "./helpers";
 
 async function send(page: Page, response: string): Promise<void> {
   await openApp(page, `?response=${response}`);
@@ -25,14 +25,9 @@ test("an HTML response offers Raw and Preview, not Pretty, and opens in Raw", as
   await expect(page.locator(".body .cm-content")).toContainText("<h1>Pets</h1>");
 });
 
-test("going back from Preview to Raw colours every line in view on the first frame", async ({ page }) => {
-  await send(page, "longHtml");
-  await views(page).getByRole("radio", { name: "Preview" }).click();
-  await expect(page.locator("iframe[title='HTML preview']")).toBeVisible();
-
-  // Count the lines in view that have no highlighted tokens, one frame after
-  // Raw is picked (before CodeMirror's background parse could have run).
-  const uncoloured = await page.evaluate(async () => {
+/** Lines of the Raw editor in view, and how many have no highlighted tokens, one frame after picking Raw. */
+async function pickRawAndCountUncoloured(page: Page): Promise<{ inView: number; uncoloured: number }> {
+  return page.evaluate(async () => {
     const raw = [...document.querySelectorAll<HTMLElement>('[role="radiogroup"][aria-label="Response view"] [role="radio"]')].find(
       (r) => r.textContent?.trim() === "Raw",
     );
@@ -45,8 +40,42 @@ test("going back from Preview to Raw colours every line in view on the first fra
     });
     return { inView: lines.length, uncoloured: lines.filter((l) => !l.querySelector("span[class]")).length };
   });
-  expect(uncoloured.inView).toBeGreaterThan(10);
-  expect(uncoloured.uncoloured).toBe(0);
+}
+
+test("a response first shown in Preview builds Raw only when picked, coloured on the first frame", async ({ page }) => {
+  await send(page, "longHtml");
+  await views(page).getByRole("radio", { name: "Preview" }).click();
+  // The next response in this tab opens in Preview, with no Raw editor behind it yet.
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(page.locator("iframe[title='HTML preview']")).toBeVisible();
+  await expect(page.locator(".body .cm-editor")).toHaveCount(0);
+
+  // Before CodeMirror's background parse could run, every line in view is coloured.
+  const lines = await pickRawAndCountUncoloured(page);
+  expect(lines.inView).toBeGreaterThan(10);
+  expect(lines.uncoloured).toBe(0);
+});
+
+test("a tab set to Pretty shows an HTML response in Raw, and the next JSON response in Pretty again", async ({ page }) => {
+  await send(page, "bigint");
+  await expect(views(page).getByRole("radio", { name: "Pretty" })).toBeChecked();
+
+  await setMockResponse(page, "html");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(page.locator(".body .cm-content")).toContainText("<h1>Pets</h1>");
+  await expect(views(page).getByRole("radio", { name: "Raw" })).toBeChecked();
+
+  await setMockResponse(page, "bigint");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(page.locator(".body .cm-content")).toContainText('"price": 10.50,');
+  await expect(views(page).getByRole("radio", { name: "Pretty" })).toBeChecked();
+});
+
+test("a binary body without a preview still names its view: Hex", async ({ page }) => {
+  await openApp(page, "?bigBinary=1");
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(views(page).getByRole("radio")).toHaveText(["Hex"]);
 });
 
 test("Raw and Preview stay mounted, so switching back keeps Raw's scroll position and Preview's page", async ({ page }) => {

@@ -22,8 +22,11 @@
   }
   let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
 
-  /** The most time spent colouring the visible text when an editor is created. */
-  const PARSE_ON_MOUNT_MS = 50;
+  /**
+   * The most time spent colouring the visible text when an editor is created:
+   * CodeMirror's own per-update parse budget, well inside a frame.
+   */
+  const PARSE_ON_MOUNT_MS = 20;
 
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);

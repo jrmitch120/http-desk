@@ -77,6 +77,10 @@ export class BodyView {
     return mode;
   });
   readonly dataUrl = $derived(this.res?.bodyBase64 ? `data:${this.res.contentType ?? "application/octet-stream"};base64,${this.res.bodyBase64}` : null);
+  /** Whether Preview shows the body itself: HTML from its text, other kinds from base64 (too large a body has none, so it shows Hex). */
+  readonly showingPreview = $derived(this.effectiveMode === "preview" && (this.kind === "html" || !!this.dataUrl));
+  /** Whether a preview may stay mounted while hidden. Audio and video don't, so switching away stops them playing. */
+  readonly previewStaysMounted = $derived(this.kind !== "media");
 
   // Text the core renders for the editor, from the body the shell stored:
   // Pretty JSON/XML from its lossless formatter (numbers and text stay as the

@@ -36,18 +36,20 @@
   const dataUrl = $derived(view.dataUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
-  // Raw and Preview stay mounted once shown and are switched by hiding one, so
-  // going back to Raw doesn't rebuild the editor (it keeps its scroll, find bar
-  // and colouring) and going back to Preview doesn't reload the page. The preview
-  // mounts the first time it's opened for a response. Audio and video unmount
-  // when hidden, so they stop playing.
-  const previewable = $derived(kind === "html" || !!dataUrl);
-  const showingPreview = $derived(effectiveMode === "preview" && previewable);
+  // Raw and Preview are each built the first time they're shown for a response,
+  // then stay mounted and are switched by hiding one: going back to Raw doesn't
+  // rebuild the editor (it keeps its scroll, find bar and colouring) and going
+  // back to Preview doesn't reload the page. Nothing is built for a view that
+  // was never shown (an image opened in Preview has no Hex editor behind it).
+  const showingPreview = $derived(view.showingPreview);
   let previewShownFor = $state<string | null>(null);
+  let editorShownFor = $state<string | null>(null);
   $effect(() => {
     if (showingPreview) previewShownFor = res.id;
+    else editorShownFor = res.id;
   });
-  const mountPreview = $derived(showingPreview || (previewShownFor === res.id && previewable && view.canPreview && kind !== "media"));
+  const mountPreview = $derived(showingPreview || (previewShownFor === res.id && view.previewStaysMounted));
+  const mountEditor = $derived(!showingPreview || editorShownFor === res.id);
 
   const viewOptions = $derived<SegmentedOption<BodyMode>[]>([
     ...(view.canPretty && !isBinary ? [{ value: "pretty" as const, label: "Pretty" }] : []),
@@ -90,8 +92,8 @@
 
 <div class="toolbar">
   <!-- Filter matches are always pretty-printed, so the view is fixed while they show. -->
-  <!-- A single view (plain text: Raw only) needs no switch. -->
-  {#if viewOptions.length > 1}
+  <!-- Plain text has only Raw, so no switch; a binary body keeps its single "Hex" so the view is named. -->
+  {#if viewOptions.length > 1 || isBinary}
     <span class="tip" use:tooltip={filtered ? "Filter matches are always pretty-printed" : ""}>
       <SegmentedControl label="Response view" options={viewOptions} value={filtered ? "pretty" : effectiveMode} disabled={!!filtered} onchange={(m) => (mode = m)} />
     </span>
@@ -130,15 +132,17 @@
       {/if}
     </div>
   {/if}
-  <div class="pane" class:hidden={showingPreview}>
-    {#if res.bodySize === 0}
-      <div class="empty-state small">The response has no body.</div>
-    {:else if view.formatting}
-      <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
-    {:else}
-      <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} extensions={bodyKeys} />
-    {/if}
-  </div>
+  {#if mountEditor}
+    <div class="pane" class:hidden={showingPreview}>
+      {#if res.bodySize === 0}
+        <div class="empty-state small">The response has no body.</div>
+      {:else if view.formatting}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
+      {:else}
+        <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} extensions={bodyKeys} />
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -153,12 +157,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 10px 6px 16px;
+    padding: var(--bar-pad-y) var(--bar-pad-end) var(--bar-pad-y) var(--bar-pad-start);
     flex: none;
   }
   .filter-row {
     display: flex;
-    padding: 0 10px 6px 16px;
+    padding: 0 var(--bar-pad-end) var(--bar-pad-y) var(--bar-pad-start);
     flex: none;
   }
   .lang {

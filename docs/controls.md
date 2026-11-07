@@ -192,7 +192,8 @@ spinners.
 panel shows: the Headers tab's name filter and the Body tab's JSONPath filter bar. With
 `icon="search"` it is the Find field of the editors' find bar
 (`src/lib/codemirror/FindBar.svelte`), which replaces CodeMirror's default search panel
-because that one builds native checkboxes at runtime.
+because that one builds native checkboxes at runtime. An invalid regular expression there
+gets `invalid` plus an inline message named by `describedby`, like the JSONPath bar.
 
 - Props: `value`, `oninput(value)` (the owner keeps the value and decides what typing
   does), `label` (accessible name), `placeholder?`, `icon?` (`filter`, the default, or
@@ -214,6 +215,8 @@ Global classes in `src/app.css`, not components:
   (`--control-h-sm`, for rows and banners).
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
+  `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
+  conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
   toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
@@ -224,7 +227,8 @@ Global classes in `src/app.css`, not components:
   cookies, the sent request). Inside it, `td.k` is a bold name column sized to its
   content, `td.v` a monospace value column, and `th` heads columns where a table has
   them.
-- `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values.
+- `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
+  `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
   Focus shows `--focus-ring`.
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.
   Icons are `aria-hidden`, so the button around them carries the name.
@@ -366,7 +370,9 @@ New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `--control-h` (30px), `--control-h-sm` (24px) and `--control-h-icon` (26px) for heights;
 `--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
 also for the size of small fixed elements that are not controls (a badge's height, a
-Toggle's track); `--radius` and `--radius-sm`;
+Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared
+by the bars above the response body (its toolbar, the JSONPath filter row, the editor's
+find bar), so their edges line up; `--radius` and `--radius-sm`;
 `outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
 `:focus-visible` for focus (a control flush against an edge that clips, such as a tab
 in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of

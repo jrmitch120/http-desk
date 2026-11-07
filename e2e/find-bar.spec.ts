@@ -46,12 +46,15 @@ test("typing finds matches, Enter and the buttons move between them, and toggles
   await expect(page.locator(".cm-searchMatch")).toHaveCount(0);
 });
 
-test("an invalid regular expression marks the field invalid", async ({ page }) => {
+test("an invalid regular expression marks the field invalid and says why", async ({ page }) => {
   await openFindInResponse(page);
   const bar = findBar(page);
   await bar.getByRole("button", { name: "Regular expression" }).click();
   await bar.getByRole("textbox", { name: "Find" }).fill("(");
-  await expect(bar.getByRole("textbox", { name: "Find" })).toHaveAttribute("aria-invalid", "true");
+  const field = bar.getByRole("textbox", { name: "Find" });
+  await expect(field).toHaveAttribute("aria-invalid", "true");
+  await expect(field).toHaveAccessibleDescription("Not a valid regular expression");
+  await expect(bar.getByRole("alert")).toHaveText("Not a valid regular expression");
 });
 
 test("Escape and the close button close the find bar", async ({ page }) => {
@@ -79,4 +82,18 @@ test("in an editable body the find bar can replace", async ({ page }) => {
   await bar.getByRole("textbox", { name: "Replace" }).fill("dog");
   await bar.getByRole("button", { name: "Replace all" }).click();
   await expect(editor).toHaveText('{"a": "dog", "b": "dog"}');
+});
+
+test("the find bar stays open and keeps its query when wrap is toggled", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await openFindInResponse(page);
+  const field = findBar(page).getByRole("textbox", { name: "Find" });
+  await field.fill("price");
+
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(findBar(page).getByRole("textbox", { name: "Find" })).toHaveValue("price");
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(findBar(page).getByRole("textbox", { name: "Find" })).toHaveValue("price");
+  expect(errors).toEqual([]);
 });

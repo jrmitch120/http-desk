@@ -35,7 +35,7 @@
 <div class="filter-field">
   <span class="icon" aria-hidden="true"><Icon name={icon} size={13} /></span>
   <input
-    class="input"
+    class="input small"
     class:mono
     type="text"
     spellcheck="false"
@@ -69,8 +69,6 @@
   }
   .input {
     flex: 1;
-    min-width: 0;
-    height: var(--control-h-sm);
     padding-left: var(--space-6);
   }
   .input[aria-invalid="true"] {

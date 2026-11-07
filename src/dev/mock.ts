@@ -116,6 +116,10 @@ let prettyRequests = 0;
   get shapeRequests() {
     return [...shapeRequests];
   },
+  /** The `?response=` kind the next send uses. */
+  set response(kind: string | null) {
+    responseKind = kind;
+  },
   /** The two env files as last written (see `splitEnvFiles`). */
   get envFiles() {
     return clone(envFiles);
@@ -203,7 +207,15 @@ const extraHeaders: [string, string][] = manyHeaders
 //   "sold" from the second send on (filter tests).
 // `?response=html`: an HTML page; `?response=longHtml`: a 200-line one. `?response=text`: a plain-text body. `?response=truncated`: a JSON body cut off at the size limit.
 // `?response=nested`: `{"a":{"odd key":[{"b":1}]}}` (Copy path tests).
-const responseKind = new URLSearchParams(location.search).get("response");
+/** The content type and body kind of the non-JSON text responses, by `?response=` kind; anything else is JSON. */
+const TEXT_RESPONSE_TYPES: Record<string, { contentType: string; bodyKind: ResponseKind }> = {
+  json: { contentType: "application/json", bodyKind: "json" },
+  html: { contentType: "text/html; charset=utf-8", bodyKind: "html" },
+  longHtml: { contentType: "text/html; charset=utf-8", bodyKind: "html" },
+  text: { contentType: "text/plain; charset=utf-8", bodyKind: "text" },
+};
+// A test may switch it between sends with `__mock.response = "..."` (setMockResponse in e2e/helpers.ts).
+let responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
 // events (bytes so far) every 100 ms, like the shell emits for a slow download.
 const slowDownload = new URLSearchParams(location.search).get("download") === "slow";
@@ -552,8 +564,7 @@ mockIPC(
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
         const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        const contentType = responseKind === "html" || responseKind === "longHtml" ? "text/html; charset=utf-8" : responseKind === "text" ? "text/plain; charset=utf-8" : "application/json";
-        const bodyKind: ResponseKind = responseKind === "html" || responseKind === "longHtml" ? "html" : responseKind === "text" ? "text" : "json";
+        const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
         textBodies.set(id, { body, kind: bodyKind });
         const cookies = responseKind === "cookies" ? mockCookies : [];
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);

@@ -95,6 +95,13 @@ export function resetPrettyRequests(page: Page): Promise<void> {
   });
 }
 
+/** Makes the mock's next sends answer like `?response=<kind>` (null: the default JSON). */
+export function setMockResponse(page: Page, kind: string | null): Promise<void> {
+  return page.evaluate((k) => {
+    (window as unknown as { __mock: { response: string | null } }).__mock.response = k;
+  }, kind);
+}
+
 /** Lets settings held by `?settingsDelay=hold` through. */
 export function releaseSettings(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());

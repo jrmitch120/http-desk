@@ -63,6 +63,11 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  /* the inset of the bars above the response body (its toolbar, the JSONPath
+     filter row and the editor's find bar), so their edges line up */
+  --bar-pad-y: 6px;
+  --bar-pad-start: 16px;
+  --bar-pad-end: 10px;
 
   /* the one floating surface: context menu, tooltips, selects, suggestion
      lists and CodeMirror tooltips (.popup-surface below) */
@@ -184,6 +189,9 @@ textarea,
 .input::placeholder {
   color: var(--faint);
 }
+.input.small {
+  height: var(--control-h-sm);
+}
 .input.mono {
   font-family: var(--mono);
   font-size: 12.5px;
@@ -274,6 +282,11 @@ textarea.input {
 }
 .icon-btn.active {
   color: var(--accent);
+}
+/* A short text glyph instead of an icon (the find bar's Aa, .*, ab toggles). */
+.icon-btn.glyph {
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
 .link {
