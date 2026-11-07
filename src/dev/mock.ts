@@ -201,7 +201,7 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
 // `?response=store`: items with a `status` and 19-digit IDs, and item 2 becomes
 //   "sold" from the second send on (filter tests).
-// `?response=html`: an HTML page. `?response=truncated`: a JSON body cut off at the size limit.
+// `?response=html`: an HTML page. `?response=text`: a plain-text body. `?response=truncated`: a JSON body cut off at the size limit.
 // `?response=nested`: `{"a":{"odd key":[{"b":1}]}}` (Copy path tests).
 const responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
@@ -539,6 +539,8 @@ mockIPC(
                 ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
                 : responseKind === "html"
                   ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
+                  : responseKind === "text"
+                    ? "pets: 2\nRex, Tom\n"
                   : responseKind === "truncated"
                     ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
                     : responseKind === "nested"
@@ -548,8 +550,8 @@ mockIPC(
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
         const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : "application/json";
-        const bodyKind: ResponseKind = responseKind === "html" ? "html" : "json";
+        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : responseKind === "text" ? "text/plain; charset=utf-8" : "application/json";
+        const bodyKind: ResponseKind = responseKind === "html" ? "html" : responseKind === "text" ? "text" : "json";
         textBodies.set(id, { body, kind: bodyKind });
         const cookies = responseKind === "cookies" ? mockCookies : [];
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
@@ -558,7 +560,7 @@ mockIPC(
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
-          bodyText: body, prettyText: largeBody || responseKind === "html" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
+          bodyText: body, prettyText: largeBody || bodyKind === "html" || bodyKind === "text" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,

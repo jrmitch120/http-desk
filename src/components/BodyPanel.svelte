@@ -37,7 +37,7 @@
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
   const viewOptions = $derived<SegmentedOption<BodyMode>[]>([
-    ...(isBinary ? [] : [{ value: "pretty" as const, label: "Pretty" }]),
+    ...(view.canPretty && !isBinary ? [{ value: "pretty" as const, label: "Pretty" }] : []),
     { value: "raw", label: isBinary ? "Hex" : "Raw" },
     ...(view.canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),
   ]);
@@ -77,9 +77,12 @@
 
 <div class="toolbar">
   <!-- Filter matches are always pretty-printed, so the view is fixed while they show. -->
-  <span class="tip" use:tooltip={filtered ? "Filter matches are always pretty-printed" : ""}>
-    <SegmentedControl label="Response view" options={viewOptions} value={filtered ? "pretty" : effectiveMode} disabled={!!filtered} onchange={(m) => (mode = m)} />
-  </span>
+  <!-- A single view (plain text: Raw only) needs no switch. -->
+  {#if viewOptions.length > 1}
+    <span class="tip" use:tooltip={filtered ? "Filter matches are always pretty-printed" : ""}>
+      <SegmentedControl label="Response view" options={viewOptions} value={filtered ? "pretty" : effectiveMode} disabled={!!filtered} onchange={(m) => (mode = m)} />
+    </span>
+  {/if}
   {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
   <span class="spacer"></span>
   {#if effectiveMode !== "preview"}

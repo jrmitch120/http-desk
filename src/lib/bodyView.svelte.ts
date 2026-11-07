@@ -15,16 +15,21 @@ export type BodyMode = "pretty" | "raw" | "preview";
 /** Typing pauses this long before the filter runs again on the same response. */
 export const FILTER_DEBOUNCE_MS = 120;
 
-/** Per kind of body: its editor highlighting, and the extension Save suggests (`null`: from the content type). */
-export const KIND_INFO: Record<ResponseKind, { language: Language; ext: string | null; preview: boolean }> = {
-  json: { language: "json", ext: "json", preview: false },
-  xml: { language: "xml", ext: "xml", preview: false },
-  html: { language: "html", ext: "html", preview: true },
-  image: { language: "text", ext: null, preview: true },
-  pdf: { language: "text", ext: null, preview: true },
-  media: { language: "text", ext: null, preview: true },
-  text: { language: "text", ext: null, preview: false },
-  binary: { language: "text", ext: null, preview: false },
+/**
+ * Per kind of body: its editor highlighting, the extension Save suggests (`null`:
+ * from the content type), whether the core can format it for Pretty (only JSON
+ * and XML; for anything else Pretty would show the raw text), and whether it has
+ * a Preview.
+ */
+export const KIND_INFO: Record<ResponseKind, { language: Language; ext: string | null; pretty: boolean; preview: boolean }> = {
+  json: { language: "json", ext: "json", pretty: true, preview: false },
+  xml: { language: "xml", ext: "xml", pretty: true, preview: false },
+  html: { language: "html", ext: "html", pretty: false, preview: true },
+  image: { language: "text", ext: null, pretty: false, preview: true },
+  pdf: { language: "text", ext: null, pretty: false, preview: true },
+  media: { language: "text", ext: null, pretty: false, preview: true },
+  text: { language: "text", ext: null, pretty: false, preview: false },
+  binary: { language: "text", ext: null, pretty: false, preview: false },
 };
 
 /** The file name Save suggests for a response: `response.<ext>`, the extension by kind or else from the content type. */
@@ -54,14 +59,22 @@ export class BodyView {
 
   readonly res = $derived(this.#input().res);
   readonly kind = $derived<ResponseKind>(this.res?.bodyKind ?? "binary");
+  readonly canPretty = $derived(KIND_INFO[this.kind].pretty);
   readonly canPreview = $derived(KIND_INFO[this.kind].preview);
   /** A body that isn't text (still-encoded bytes count as binary). */
   readonly isBinary = $derived(!!this.res && this.res.bodyText === null);
-  /** The view actually shown: a binary body has Hex (or Preview), and Preview only where there is one. */
+  /**
+   * The view actually shown. A binary body has Hex (or Preview); otherwise a view
+   * the body doesn't have (Pretty for HTML or text, Preview for JSON) falls back to
+   * one it does. The tab's remembered choice is left alone, so the next JSON
+   * response in it opens in Pretty again.
+   */
   readonly effectiveMode = $derived.by<BodyMode>(() => {
     const mode = this.#input().mode;
     if (this.isBinary) return this.canPreview && mode !== "raw" ? "preview" : "raw";
-    return mode === "preview" && !this.canPreview ? "pretty" : mode;
+    if (mode === "pretty" && !this.canPretty) return "raw";
+    if (mode === "preview" && !this.canPreview) return this.canPretty ? "pretty" : "raw";
+    return mode;
   });
   readonly dataUrl = $derived(this.res?.bodyBase64 ? `data:${this.res.contentType ?? "application/octet-stream"};base64,${this.res.bodyBase64}` : null);
 
@@ -77,7 +90,7 @@ export class BodyView {
     const res = this.res;
     if (!res) return null;
     if (res.bodyText === null) return this.effectiveMode === "preview" && this.dataUrl ? null : `hex:${res.id}`;
-    if (this.effectiveMode === "pretty" && (this.kind === "json" || this.kind === "xml")) return `${this.kind}:${res.id}`;
+    if (this.effectiveMode === "pretty" && this.canPretty) return `${this.kind}:${res.id}`;
     return null;
   });
   #rendered = $state<{ key: string; text: string } | null>(null);
