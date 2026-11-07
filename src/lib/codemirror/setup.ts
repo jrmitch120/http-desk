@@ -137,9 +137,11 @@ export interface VarInfo {
 /**
  * A variable's definition that has a row in the app: a File variable in the
  * request's Settings (the `@name` lines at the top of the file), or a variable of an
- * environment in the Environments modal (`env` is `$shared` for the shared variables).
+ * environment in the Environments modal (`env` is `$shared` for the shared variables),
+ * in the pair of env files of folder `dir` (relative to the workspace root, `""` for
+ * the root; without it, the folder the modal shows or would open on).
  */
-export type Definition = { kind: "file"; name: string } | { kind: "env"; env: string; name: string };
+export type Definition = { kind: "file"; name: string } | { kind: "env"; env: string; name: string; dir?: string };
 
 /**
  * `text` with its references resolved, as the core's resolver does it; dynamic

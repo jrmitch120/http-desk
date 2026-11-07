@@ -7,7 +7,7 @@ import { basename, dirname, displayName, fileVariables, joinPath, nameError, new
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
-import { environmentNames, environmentsFor, requestFolder } from "./envFolders";
+import { environmentNames, environmentsFor, nearestEnvFolder, requestFolder, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type {
@@ -694,10 +694,11 @@ class AppStore {
 
   /** Shows where a Find usages result is: the request on the field holding it
    *  (found as `openSearchHit` finds it), a File variable's row in its file's
-   *  request Settings, or an environment value's row in the Environments modal. */
+   *  request Settings, or an environment value's row in the Environments modal (on
+   *  the folder of the env file holding it). */
   async openUsage(usage: Usage) {
     if (usage.kind === "environment") {
-      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name };
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.root ? requestFolder(this.root, usage.path) : "" };
       this.modal = "env";
       return;
     }
@@ -1161,23 +1162,35 @@ class AppStore {
     const choice = await new Promise<ExtractChoice | null>((resolve) => (this.extraction = { tabId, value, resolve }));
     if (!choice) return null;
     const { name, target } = choice;
-    if (target.kind !== "file") return (await this.extractToEnvironments(target, name, value)) ? name : null;
     const tab = this.tabs.find((t) => t.id === tabId);
+    if (target.kind !== "file") return tab && (await this.extractToEnvironments(tab.path, target, name, value)) ? name : null;
     const doc = tab && this.docs[tab.path];
     if (!tab || !doc) return null;
     extractToFile(doc.file, this.requestFor(tab), name, value);
     return name;
   }
 
-  /** Writes an extracted variable to the env files right away (they have no unsaved state). */
-  private async extractToEnvironments(target: ExtractTarget, name: string, value: string): Promise<boolean> {
-    if (!this.envSet) return false;
-    const set = $state.snapshot(this.envSet) as EnvironmentSet;
-    const envs = targetEnvironments(target, set);
-    extractToEnvironments(set, envs, name, value);
+  /** Writes an extracted variable to the env files right away (they have no unsaved state):
+   *  for each target environment of the request in the file at `path`, the pair of
+   *  files of the folder that supplies it to that request (`writeFolder`). */
+  private async extractToEnvironments(path: string, target: ExtractTarget, name: string, value: string): Promise<boolean> {
+    const effective = this.envSetFor(path);
+    if (!effective) return false;
+    const envs = targetEnvironments(target, effective);
+    const byFolder = new Map<string, string[]>();
+    for (const env of envs) {
+      const dir = this.envWriteFolder(path, env, name);
+      byFolder.set(dir, [...(byFolder.get(dir) ?? []), env]);
+    }
     try {
-      const report = await api.saveEnvironments(set);
-      if (report.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+      for (const [dir, names] of byFolder) {
+        const set = dir || !this.envSet ? await api.loadEnvironments(dir) : ($state.snapshot(this.envSet) as EnvironmentSet);
+        // An environment the folder's own files don't have yet is added there.
+        for (const env of names) if (!set.environments.some((e) => e.name === env)) set.environments.push({ name: env, variables: [] });
+        extractToEnvironments(set, names, name, value);
+        const report = await api.saveEnvironments(set, dir);
+        if (report.gitignoreUpdated) this.toast("info", "Added http-client.private.env.json to .gitignore");
+      }
     } catch (e) {
       this.toast("error", `Could not save environments: ${errorMessage(e)}`);
       return false;
@@ -1185,6 +1198,18 @@ class AppStore {
     await this.loadEnvironments();
     this.toast("success", target.kind === "all" ? `Added ${name} to every environment` : `Added ${name} to ${envs[0]}`);
     return true;
+  }
+
+  /** The folder whose own env files a value of `name` in `env` goes to, for the request in
+   *  the file at `path`: where its environments say (`writeFolder`), else the nearest folder
+   *  with env files at or above the request's (where the Environments modal opens for it). */
+  envWriteFolder(path: string, env: string, name: string): string {
+    return writeFolder(this.envSetFor(path), env, name) ?? this.envFolderFor(path);
+  }
+
+  /** The nearest folder with env files at or above the file at `path`'s ("" for the root). */
+  envFolderFor(path: string): string {
+    return nearestEnvFolder(this.envFolders, this.root ? requestFolder(this.root, path) : "");
   }
 
   /** Answers the Extract to variable form on screen (null: cancelled). */

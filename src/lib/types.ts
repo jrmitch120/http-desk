@@ -163,12 +163,27 @@ export interface EnvVar {
 export interface Environment {
   name: string;
   variables: EnvVar[];
+  /** The folders whose files supply it, in the sets the core loads for requests; ignored on save. */
+  source?: EnvSource;
+}
+
+/**
+ * Which folders supply an environment (or the shared variables) to a folder's
+ * requests (ADR-0004): the nearest whose public file defines it and the nearest whose
+ * private file does, relative to the workspace root (`""` for the root). A Secret's
+ * value comes from `private`, any other from `public` (core `env::EnvSource`).
+ */
+export interface EnvSource {
+  public?: string | null;
+  private?: string | null;
 }
 
 export interface EnvironmentSet {
   shared: EnvVar[];
   environments: Environment[];
   privateFileIgnored: boolean | null;
+  /** The folders supplying the shared variables (see `Environment.source`). */
+  sharedSource?: EnvSource | null;
 }
 
 /**

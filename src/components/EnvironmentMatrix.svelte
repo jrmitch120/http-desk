@@ -22,8 +22,10 @@
     filter?: string;
     /** More commands for a variable's row menu (right-click on its name, or its actions button), listed before Delete. */
     rowActions?: (name: string) => MenuItem[];
+    /** What else the values can refer to, under `set`'s own: below the root, the environments the folder's requests get (ADR-0004). */
+    inherited?: EnvironmentSet | null;
   }
-  let { set, filter = "", rowActions = () => [] }: Props = $props();
+  let { set, filter = "", rowActions = () => [], inherited = null }: Props = $props();
 
   /** A row: just the variable's name. Its cells are looked up in `set`. */
   interface MatrixRow {
@@ -45,13 +47,18 @@
   /** Grid column ids are positional (`m0`, `m1`…), since environment names can hold anything. */
   const columnAt = (id: string) => columns[Number(id.slice(1))];
 
-  /** What each column's values can refer to: that environment (as edited) over the shared variables. */
+  /** What each column's values can refer to: that environment (as edited) over the shared variables, over what's inherited. */
   const providers = $derived(
     new Map<string, VarProvider>(
       columns.map((column) => [
         column,
         {
-          ...makeVarProvider({ env: envVariables(set, column === SHARED ? null : column), fileVars: [], requestVars: [], envName: column }),
+          ...makeVarProvider({
+            env: { ...envVariables(inherited, column === SHARED ? null : column), ...envVariables(set, column === SHARED ? null : column) },
+            fileVars: [],
+            requestVars: [],
+            envName: column,
+          }),
           edit: (d: Definition) => {
             app.definitionWanted = d;
           },

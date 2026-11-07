@@ -67,7 +67,7 @@
     if (fix.kind === "selectEnvironment") app.selectEnvironment(fix.env);
     else if (fix.kind === "chooseEnvironment") app.chooseEnvironment();
     else if (check.kind !== "undefined") return;
-    else if (fix.kind === "addToEnvironment") app.editDefinition(tab.id, { kind: "env", env: fix.env, name: check.name, add: true });
+    else if (fix.kind === "addToEnvironment") app.editDefinition(tab.id, { kind: "env", env: fix.env, name: check.name, dir: fix.dir, add: true });
     else app.editDefinition(tab.id, { kind: "file", name: check.name, add: true });
   }
 

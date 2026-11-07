@@ -1286,11 +1286,16 @@ describe("find usages", () => {
     expect(app.definitionWanted).toEqual({ kind: "file", name: "base" });
   });
 
-  it("opens an environment value's row in the Environments modal", async () => {
+  it("opens an environment value's row in the Environments modal, on the folder of its env file", async () => {
+    app.root = "/ws";
     await app.openUsage({ kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 8 });
 
     expect(app.modal).toBe("env");
-    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url", dir: "" });
+
+    // One in a nested folder's file opens that folder's environments.
+    await app.openUsage({ kind: "environment", path: "/ws/api/users/http-client.private.env.json", env: "dev", name: "token", secret: true, start: 0, end: 8 });
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "token", dir: "api/users" });
   });
 });
 
@@ -1574,6 +1579,58 @@ describe("Extract to variable", () => {
     expect(await extract(tab.id, "https://api.example.com", null)).toBeNull();
     expect(app.docs[PATH].file.header.variables).toEqual([]);
     expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("from a request in a nested folder: writes to the folders whose env files supply each environment to it", async () => {
+    // PATH is in api/. dev's public file is the root's, its private one api/'s; qa is api/'s only.
+    const rootPair = () => ({ shared: [], environments: [{ name: "dev", variables: [{ name: "host", value: "h", secret: false }] }], privateFileIgnored: true });
+    const apiPair = () => ({
+      shared: [],
+      environments: [
+        { name: "dev", variables: [{ name: "token", value: "old", secret: true }] },
+        { name: "qa", variables: [] },
+      ],
+      privateFileIgnored: true,
+    });
+    app.envSet = rootPair();
+    app.envFolders = [
+      {
+        dir: "api",
+        set: {
+          shared: [],
+          environments: [
+            { name: "dev", source: { public: "", private: "api" }, variables: [{ name: "host", value: "h", secret: false }, { name: "token", value: "old", secret: true }] },
+            { name: "qa", source: { public: "api" }, variables: [] },
+          ],
+          privateFileIgnored: true,
+        },
+      },
+    ];
+    loadEnvironments.mockImplementation(async (dir?: string) => (dir === "api" ? apiPair() : rootPair()));
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+    expect(api.saveEnvironments.mock.calls).toEqual([
+      [
+        {
+          shared: [],
+          environments: [
+            { name: "dev", variables: [{ name: "token", value: "abc", secret: true }] },
+            { name: "qa", variables: [{ name: "token", value: "abc", secret: false }] },
+          ],
+          privateFileIgnored: true,
+        },
+        "api",
+      ],
+    ]);
+
+    // A new value of dev goes to the root, whose shareable file supplies dev here.
+    api.saveEnvironments.mockClear();
+    app.envName = "dev";
+    await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "dev" } });
+    expect(api.saveEnvironments.mock.calls[0][1]).toBe("");
+    expect(api.saveEnvironments.mock.calls[0][0].environments[0].variables).toContainEqual({ name: "baseUrl", value: "https://api.example.com", secret: false });
   });
 
   it("to a File variable that exists: replaces the value of the definition the request uses, adding no line", async () => {

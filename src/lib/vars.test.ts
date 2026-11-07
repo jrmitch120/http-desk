@@ -124,6 +124,29 @@ describe("what hovering a reference shows", () => {
     expect(p.info("nope").definition).toBeUndefined();
   });
 
+  it("says which folder supplies an environment value: the private file's for a Secret, else the public file's", () => {
+    // What the core gives a request in api/users/: dev's public file at the root, its private one in api/.
+    const nested: EnvironmentSet = {
+      shared: [{ name: "version", value: "v2", secret: false }],
+      sharedSource: { public: "api/users", private: null },
+      environments: [
+        {
+          name: "dev",
+          source: { public: "", private: "api" },
+          variables: [
+            { name: "host", value: "h", secret: false },
+            { name: "token", value: "t", secret: true },
+          ],
+        },
+      ],
+      privateFileIgnored: null,
+    };
+    const p = makeVarProvider({ env: envVariables(nested, "dev"), fileVars: [], requestVars: [], envName: "dev" });
+    expect(p.info("host").definition).toEqual({ kind: "env", env: "dev", name: "host", dir: "" });
+    expect(p.info("token").definition).toEqual({ kind: "env", env: "dev", name: "token", dir: "api" });
+    expect(p.info("version").definition).toEqual({ kind: "env", env: "$shared", name: "version", dir: "api/users" });
+  });
+
   it("marks a $name the core doesn't generate as undefined", () => {
     expect(provider().info("$datetime iso8601")).toEqual({ state: "dyn" });
     expect(provider().info("$random.integer(1, 5)")).toEqual({ state: "dyn" });

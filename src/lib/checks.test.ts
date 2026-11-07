@@ -102,6 +102,11 @@ describe("quick fixes for an Undefined variable", () => {
     ]);
   });
 
+  it("adds it in the folder whose env files supply the selected environment to the request", () => {
+    const nested: EnvironmentSet = { ...set, environments: [{ name: "staging", source: { public: "api" }, variables: [] }] };
+    expect(quickFixes("token", nested, "staging")[0]).toEqual({ kind: "addToEnvironment", env: "staging", dir: "api" });
+  });
+
   it("offers selecting an environment when none is selected", () => {
     expect(quickFixes("token", set, null)).toEqual([{ kind: "addFileVariable" }, { kind: "selectEnvironment", env: "local" }]);
   });

@@ -1,7 +1,8 @@
 <script lang="ts">
-  // Graphical editor for http-client.env.json / http-client.private.env.json.
+  // Graphical editor for http-client.env.json / http-client.private.env.json: one
+  // folder's own pair at a time (ADR-0004), picked with the Folder selector.
   import { api, errorMessage } from "../lib/api";
-  import { app } from "../lib/store.svelte";
+  import { app, type WantedDefinition } from "../lib/store.svelte";
   import type { EnvironmentSet, EnvironmentSettings, EnvVar } from "../lib/types";
   import { ENV_COLORS, envColor, envColorShade } from "../lib/envColors";
   import Badge from "./Badge.svelte";
@@ -11,7 +12,7 @@
   import Icon from "./Icon.svelte";
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import { SvelteSet } from "svelte/reactivity";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
@@ -21,6 +22,7 @@
   import EnvironmentMatrix from "./EnvironmentMatrix.svelte";
   import { addToAllEnvironments, setCell, SHARED } from "../lib/envMatrix";
   import type { MenuItem } from "../lib/menu.svelte";
+  import { environmentsFor, folderLabel, workspaceFolders } from "../lib/envFolders";
 
   /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
   const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
@@ -39,16 +41,27 @@
     };
   }
 
-  const initial: EnvironmentSet = app.envSet
-    ? structuredClone($state.snapshot(app.envSet) as EnvironmentSet)
-    : { shared: [], environments: [], privateFileIgnored: null };
+  const empty = (): EnvironmentSet => ({ shared: [], environments: [], privateFileIgnored: null });
+  const rootPair = (): EnvironmentSet => (app.envSet ? structuredClone($state.snapshot(app.envSet) as EnvironmentSet) : empty());
+  const firstSelected = (s: EnvironmentSet) =>
+    app.envName && s.environments.some((e) => e.name === app.envName) ? app.envName : (s.environments[0]?.name ?? SHARED);
+
+  // The folder whose own pair of files is shown, relative to the root ("" for the root):
+  // where a hover card's Edit points, else the active request's nearest folder with env files.
+  const opening = app.definitionWanted;
+  const firstFolder = opening?.kind === "env" && opening.dir !== undefined ? opening.dir : app.activeTab ? app.envFolderFor(app.activeTab.path) : "";
+  let folder = $state(firstFolder);
+  /** True while a folder's files are being read. */
+  let loading = $state(false);
+
+  const initial: EnvironmentSet = firstFolder === "" ? rootPair() : empty();
   /** What's on disk, to tell unsaved edits apart. */
   let savedJson = $state(JSON.stringify(clean(initial)));
+  /** The environments saved in this folder's files; sending only sees saved ones. */
+  const savedNames = $derived((JSON.parse(savedJson) as EnvironmentSet).environments.map((e) => e.name));
 
   let set = $state<EnvironmentSet>(initial);
-  let selected = $state<string>(
-    app.envName && initial.environments.some((e) => e.name === app.envName) ? app.envName : (initial.environments[0]?.name ?? SHARED),
-  );
+  let selected = $state<string>(firstSelected(initial));
   /** Environment that should be active after saving (tracks renames/deletes). */
   let activeEnv = $state<string | null>(app.envName);
   let filter = $state("");
@@ -62,38 +75,52 @@
     if (selectedEnv) selectedEnv.variables = list;
     else set.shared = list;
   }
+  /** Below the root, what this folder's requests get from its own files as saved and from farther
+   *  folders' files (ADR-0004): values here can refer to those, and their Edit opens the supplying folder. */
+  const inherited = $derived(folder === "" ? null : environmentsFor(app.envSet, app.envFolders, folder));
   /** What the values being edited can refer to: the environment shown (as edited, saved or not) and the shared variables.
    *  A hover card's Edit focuses the defining row here (e.g. a shared variable used in an environment's value). */
   const variables = $derived({
-    ...makeVarProvider({ env: envVariables(set, selectedEnv?.name ?? null), fileVars: [], requestVars: [], envName: selected }),
+    ...makeVarProvider({
+      env: { ...envVariables(inherited, selectedEnv?.name ?? null), ...envVariables(set, selectedEnv?.name ?? null) },
+      fileVars: [],
+      requestVars: [],
+      envName: selected,
+    }),
     edit: (d: Definition) => {
       app.definitionWanted = d;
     },
   });
-  /** Production and colour per environment name. Saved to the app settings, not
-   *  the env files; renames and deletes below carry or drop them. */
-  let meta = $state<Record<string, EnvironmentSettings>>(
-    Object.fromEntries(initial.environments.map((e) => [e.name, { ...app.environmentSettings(e.name) }])),
-  );
+  /** Production and colour per environment name, for every folder (they're keyed by name).
+   *  Saved to the app settings, not the env files; a rename below carries them over, and
+   *  an environment no folder has any more drops them when saved. */
+  let meta = $state<Record<string, EnvironmentSettings>>({});
+  /** The names settings are kept for: every environment in the workspace's files, and this folder's as edited. */
+  const metaNames = () => [...new Set([...app.envNames, ...set.environments.map((e) => e.name)])];
   /** The settings to save: the environments in the list, with what's set. */
   function cleanMeta(): Record<string, EnvironmentSettings> {
     const out: Record<string, EnvironmentSettings> = {};
-    for (const { name } of set.environments) {
+    for (const name of metaNames()) {
       const m = meta[name];
       const color = envColor(m?.color);
       if (m?.production || color) out[name] = { production: !!m?.production, color };
     }
     return out;
   }
-  let savedMetaJson = $state(JSON.stringify(cleanMeta()));
+  let savedMetaJson = $state("");
+  function resetMeta() {
+    meta = Object.fromEntries(metaNames().map((name) => [name, { ...app.environmentSettings(name) }]));
+    savedMetaJson = JSON.stringify(cleanMeta());
+  }
+  resetMeta();
   function setMeta(name: string, patch: EnvironmentSettings) {
     meta[name] = { ...meta[name], ...patch };
   }
   const colorOptions: SelectOption[] = [{ value: "", label: "No colour" }, ...ENV_COLORS.map((c) => ({ value: c.value, label: c.label, color: envColorShade(c.value, app.effectiveTheme) }))];
 
-  const dirty = $derived(
-    JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || JSON.stringify(cleanMeta()) !== savedMetaJson || activeEnv !== app.envName,
-  );
+  /** Unsaved edits to the folder's files or to the environments' settings. */
+  const filesDirty = $derived(JSON.stringify(clean($state.snapshot(set) as EnvironmentSet)) !== savedJson || JSON.stringify(cleanMeta()) !== savedMetaJson);
+  const dirty = $derived(filesDirty || activeEnv !== app.envName);
   const hasSecrets = $derived(set.shared.some((v) => v.secret) || set.environments.some((e) => e.variables.some((v) => v.secret)));
 
   /** The filter matches names, and the values of shareable variables (never a Secret's). */
@@ -128,10 +155,8 @@
     const env = set.environments.find((e) => e.name === name);
     if (!env) return;
     env.name = next;
-    if (meta[name]) {
-      meta[next] = meta[name];
-      delete meta[name];
-    }
+    // Another folder may still have `name`; its settings are dropped on save if none does.
+    if (meta[name]) meta[next] = { ...meta[name] };
     if (selected === name) selected = next;
     if (activeEnv === name) activeEnv = next;
   }
@@ -154,13 +179,12 @@
     ]);
     if (r.button !== "delete") return;
     set.environments = set.environments.filter((e) => e.name !== name);
-    delete meta[name];
     if (selected === name) selected = set.environments[0]?.name ?? SHARED;
     if (activeEnv === name) activeEnv = null;
   }
 
-  /** Whether an environment of this name is saved; sending only sees saved ones. */
-  const onDisk = (name: string) => !!app.envSet?.environments.some((e) => e.name === name);
+  /** Whether an environment of this name is saved in this folder; sending only sees saved ones. */
+  const onDisk = (name: string) => savedNames.includes(name);
 
   /** Switches to the environment right away. One that isn't saved yet (new or
    *  renamed) is saved first, along with the other edits, so it can be used. */
@@ -174,9 +198,9 @@
     saving = true;
     try {
       const cleaned = clean($state.snapshot(set) as EnvironmentSet);
-      const report = await api.saveEnvironments(cleaned);
+      const report = await api.saveEnvironments(cleaned, folder);
       savedJson = JSON.stringify(cleaned);
-      if (report.gitignoreUpdated) app.toast("info", "Added http-client.private.env.json to .gitignore");
+      if (report.gitignoreUpdated) app.toast("info", `Added ${filePrefix}http-client.private.env.json to .gitignore`);
       await app.loadEnvironments();
       // Production and colour go to the app settings (a failed save is reported there).
       const settings = cleanMeta();
@@ -213,10 +237,22 @@
   // adds an empty one first.
   let grid = $state<KeyValueGrid<EnvVar>>();
   let matrix = $state<EnvironmentMatrix>();
+  /** A definition to focus once its folder is showing. */
+  let wanted = $state<(WantedDefinition & { kind: "env" }) | null>(null);
   $effect(() => {
     const want = app.definitionWanted;
-    if (want?.kind !== "env" || !(grid || matrix)) return;
+    if (want?.kind !== "env") return;
     app.definitionWanted = null;
+    untrack(() => void takeWanted(want));
+  });
+  async function takeWanted(want: WantedDefinition & { kind: "env" }) {
+    if (want.dir !== undefined && want.dir !== folder && !(await switchFolder(want.dir))) return;
+    wanted = want;
+  }
+  $effect(() => {
+    const want = wanted;
+    if (!want || loading || !(grid || matrix)) return;
+    wanted = null;
     if (want.env !== SHARED && !set.environments.some((e) => e.name === want.env)) return;
     filter = "";
     if (matrix) {
@@ -232,6 +268,63 @@
       if (row) grid?.focusValue(row);
     });
   });
+
+  /** The folder's selector label: `api/users/`, or "Workspace root". */
+  const folderName = (dir: string) => (dir ? `${dir}/` : "Workspace root");
+  /** Where this folder's files are, for the hints: `api/` (nothing at the root). */
+  const filePrefix = $derived(folder ? `${folder}/` : "");
+  /** The root and every folder with env files; then one being added (no files yet), then the
+   *  workspace's other folders, where env files can be added. */
+  const folderOptions = $derived.by((): SelectOption[] => {
+    const withFiles = ["", ...app.envFolders.map((f) => f.dir)];
+    if (!withFiles.includes(folder)) withFiles.push(folder);
+    const others = workspaceFolders(app.tree, app.root ?? "").filter((d) => !withFiles.includes(d));
+    return [
+      ...withFiles.map((d) => ({ value: d, label: folderName(d) })),
+      ...others.map((d) => ({ value: d, label: folderName(d), note: "Add environment files here…" })),
+    ];
+  });
+
+  /** Shows folder `dir`'s own pair of files (read from disk; the root's as the app has it). False if it can't be read. */
+  async function openFolder(dir: string): Promise<boolean> {
+    loading = true;
+    try {
+      const next = dir === "" ? rootPair() : await api.loadEnvironments(dir);
+      folder = dir;
+      set = next;
+      savedJson = JSON.stringify(clean(next));
+      selected = firstSelected(next);
+      filter = "";
+      revealed.clear();
+      resetMeta();
+      return true;
+    } catch (e) {
+      app.toast("error", `Could not read the environments of ${folderLabel(dir)}: ${errorMessage(e)}`);
+      return false;
+    } finally {
+      loading = false;
+    }
+  }
+  if (firstFolder !== "") {
+    void openFolder(firstFolder).then((ok) => {
+      if (!ok) void openFolder("");
+    });
+  }
+
+  /** Switches to folder `dir`, asking first about unsaved changes; false if it stays on this one. */
+  async function switchFolder(dir: string): Promise<boolean> {
+    if (dir === folder) return true;
+    if (filesDirty) {
+      const r = await app.choose("Unsaved changes", `Save the changes to the environments of ${folderLabel(folder)} first?`, [
+        { label: "Cancel", value: "cancel" },
+        { label: "Discard", value: "discard", danger: true },
+        { label: "Save", value: "save", primary: true },
+      ]);
+      if (r.button === "cancel") return false;
+      if (r.button === "save" && !(await persist())) return false;
+    }
+    return openFolder(dir);
+  }
 
   /** Closes the modal, asking first about unsaved changes; false if it stays open. */
   async function requestClose(): Promise<boolean> {
@@ -293,7 +386,7 @@
 {#snippet secretsWarning()}
   {#if hasSecrets && set.privateFileIgnored === false}
     <Banner severity="warning">
-      <span class="mono">http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
+      <span class="mono">{filePrefix}http-client.private.env.json</span> is not ignored by git. Secrets could be committed — add it to <span class="mono">.gitignore</span>.
     </Banner>
   {/if}
 {/snippet}
@@ -301,6 +394,14 @@
 <Modal title="Environments" width="860px" height="560px" onclose={requestClose}>
   <div class="frame">
     <div class="view-bar">
+      <Select
+        class="env-folder"
+        options={folderOptions}
+        value={folder}
+        onchange={(d) => void switchFolder(d)}
+        label="Folder"
+        tooltip="Edit the env files of this folder: its requests (and those in its subfolders without env files) use them first"
+      />
       <SegmentedControl options={viewOptions} value={view} onchange={(v) => app.updateSettings({ envView: v })} label="View" />
       {#if view === "matrix"}
         <div class="spacer"></div>
@@ -318,7 +419,7 @@
       <section class="matrix-pane">
         {@render secretsWarning()}
         <div class="vars">
-          <EnvironmentMatrix bind:this={matrix} {set} {filter} {rowActions} />
+          <EnvironmentMatrix bind:this={matrix} {set} {inherited} {filter} {rowActions} />
         </div>
       </section>
     {:else}
@@ -426,7 +527,7 @@
 
   {#snippet footer()}
     <span class="hint muted">
-      Saved to <span class="mono">http-client.env.json</span> (shared) and <span class="mono">http-client.private.env.json</span> (secrets)
+      Saved to <span class="mono">{filePrefix}http-client.env.json</span> (shared) and <span class="mono">{filePrefix}http-client.private.env.json</span> (secrets)
     </span>
     <div class="spacer"></div>
     <button class="btn" onclick={requestClose}>Cancel</button>
@@ -447,6 +548,10 @@
     gap: 6px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--border);
+  }
+  .view-bar :global(.env-folder) {
+    min-width: 150px;
+    max-width: 240px;
   }
   .matrix-pane {
     flex: 1;

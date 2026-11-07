@@ -85,6 +85,8 @@ export interface MockState {
   shapeRequests: string[];
   /** The two env files as last written. */
   envFiles: { shared: EnvFile; private: EnvFile };
+  /** Each folder's own environments below the root, as last saved, by folder ("api"). */
+  folderPairs: Record<string, { shared: unknown[]; environments: { name: string; variables: { name: string; value: string; secret: boolean }[] }[] }>;
   /** How many times the viewer called `pretty_response`. */
   prettyRequests: number;
   /** How many times the resolved preview called `preview_request`. */

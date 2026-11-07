@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EnvironmentSet, FolderEnvironments } from "./types";
-import { environmentNames, environmentsFor, folderLabel, requestFolder } from "./envFolders";
+import type { EnvironmentSet, FolderEnvironments, TreeNode } from "./types";
+import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, requestFolder, workspaceFolders, writeFolder } from "./envFolders";
 
 const set = (...names: string[]): EnvironmentSet => ({
   shared: [],
@@ -41,5 +41,60 @@ describe("per-directory environments on the frontend", () => {
   it("the picker lists every environment name in the workspace once, the root's first", () => {
     expect(environmentNames(root, folders)).toEqual(["dev", "prod", "qa", "staging", "preview"]);
     expect(environmentNames(null, [])).toEqual([]);
+  });
+});
+
+describe("which folder's env files a new or changed value goes to", () => {
+  // A request in api/users/: dev's public file is the root's, its private one api/'s; qa is only in api/'s private file.
+  const effective: EnvironmentSet = {
+    shared: [{ name: "version", value: "v1", secret: false }],
+    sharedSource: { public: "api/users" },
+    environments: [
+      {
+        name: "dev",
+        source: { public: "", private: "api" },
+        variables: [
+          { name: "host", value: "h", secret: false },
+          { name: "token", value: "t", secret: true },
+        ],
+      },
+      { name: "qa", source: { private: "api" }, variables: [] },
+    ],
+    privateFileIgnored: null,
+  };
+
+  it("a value the environment has goes where it is: a Secret's to the private file's folder", () => {
+    expect(writeFolder(effective, "dev", "host")).toBe("");
+    expect(writeFolder(effective, "dev", "token")).toBe("api");
+    expect(writeFolder(effective, "$shared", "version")).toBe("api/users");
+  });
+
+  it("a new one goes to the folder whose shareable file supplies the environment, so no farther file is hidden", () => {
+    expect(writeFolder(effective, "dev", "port")).toBe("");
+    expect(writeFolder(effective, "$shared", "region")).toBe("api/users");
+    expect(writeFolder(effective, "qa", "port")).toBe("api");
+  });
+
+  it("is unknown for an environment the request doesn't get, or a set that doesn't say", () => {
+    expect(writeFolder(effective, "staging", "host")).toBeUndefined();
+    expect(writeFolder(set("dev"), "dev", "host")).toBeUndefined();
+    expect(writeFolder(null, "dev", "host")).toBeUndefined();
+  });
+
+  it("every folder of the workspace, in explorer order, relative to the root", () => {
+    const dir = (path: string, children: TreeNode[] = []): TreeNode => ({ name: path.split("/").at(-1)!, path, kind: "dir", children });
+    const tree = dir("/ws", [dir("/ws/api", [dir("/ws/api/users"), { name: "a.http", path: "/ws/api/a.http", kind: "file" }]), dir("/ws/web")]);
+    expect(workspaceFolders(tree, "/ws")).toEqual(["api", "api/users", "web"]);
+    expect(workspaceFolders(null, "/ws")).toEqual([]);
+  });
+
+  it("the Environments modal opens on the nearest folder with env files at or above the request's", () => {
+    const folders: FolderEnvironments[] = [
+      { dir: "api", set: set("dev") },
+      { dir: "api/users", set: set("dev") },
+    ];
+    expect(nearestEnvFolder(folders, "api/users/admin")).toBe("api/users");
+    expect(nearestEnvFolder(folders, "api/orders")).toBe("api");
+    expect(nearestEnvFolder(folders, "web")).toBe("");
   });
 });
