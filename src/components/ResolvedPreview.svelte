@@ -2,10 +2,12 @@
   // The Resolved toggle under the URL bar and the preview it shows: the request
   // as it will be sent (active environment and File variables applied), asked of
   // the shell's `preview_request`, which runs the same preparation as a send.
-  // Dynamic variables that generate a new value on every send stay as written.
+  // Dynamic variables that generate a new value on every send stay as written, and
+  // so do Prompt variables not answered yet. Remembered prompted values are shown
+  // (masked ones masked by the shell) and can be forgotten here.
   import { app, type Tab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
-  import { fileVariables, methodClass } from "../lib/http";
+  import { fileVariables, methodClass, requestPrompts } from "../lib/http";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Toggle from "./Toggle.svelte";
@@ -24,7 +26,7 @@
     const req = app.requestFor(tab);
     const doc = app.docs[tab.path];
     if (!show || !req || !doc) return null;
-    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSet]);
+    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSet, app.promptAnswers(tab)]);
   });
   let asked = 0;
   $effect(() => {
@@ -41,7 +43,15 @@
     return () => clearTimeout(t);
   });
 
-  type Kind = "dynamic" | "undefined" | "circular";
+  /** The request's prompts that have a remembered value, and those asked when sent. */
+  const prompts = $derived.by(() => {
+    const req = app.requestFor(tab);
+    const answers = app.promptAnswers(tab);
+    const all = req ? requestPrompts(req).map((p) => p.name) : [];
+    return { remembered: all.filter((n) => Object.hasOwn(answers, n)), asked: new Set(all.filter((n) => !Object.hasOwn(answers, n))) };
+  });
+
+  type Kind = "dynamic" | "undefined" | "circular" | "prompt";
   type Part = { text: string; kind?: Kind };
   /** Names a circular reference stops at (left as written), from the preview's warnings. */
   const circular = $derived(
@@ -53,13 +63,15 @@
       if (!text) return [];
       if (i % 2 === 0) return [{ text }];
       const name = text.slice(2, -2).trim();
-      return [{ text, kind: name.startsWith("$") ? "dynamic" : circular.has(name) ? "circular" : "undefined" }];
+      const kind = name.startsWith("$") ? "dynamic" : prompts.asked.has(name) ? "prompt" : circular.has(name) ? "circular" : "undefined";
+      return [{ text, kind }];
     });
   }
   const NOTES: Record<Kind, string> = {
     dynamic: "Dynamic variable: a new value is generated on every send",
     undefined: "Undefined variable: sent as written",
     circular: "Circular reference: sent as written",
+    prompt: "Prompt variable: asked when sent",
   };
 
   /** Where a header the request doesn't list itself comes from. */
@@ -105,6 +117,12 @@
       {#each preview.warnings as warning}
         <div class="problem warning">{warning}</div>
       {/each}
+      {#if prompts.remembered.length}
+        <div class="prompted">
+          <span class="muted">Prompted values remembered: {prompts.remembered.join(", ")}</span>
+          <button class="btn small" onclick={() => app.forgetPrompts(tab)}>Forget prompted values</button>
+        </div>
+      {/if}
       <div class="section" role="group" aria-label="Headers">
         <div class="heading">Headers</div>
         {#each preview.headers as [name, text]}
@@ -192,6 +210,17 @@
   }
   .var.dynamic {
     color: var(--var-dyn);
+  }
+  .var.prompt {
+    color: var(--var-prompt);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+  .prompted {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
   }
   .var.undefined,
   .var.circular {

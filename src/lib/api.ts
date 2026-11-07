@@ -26,6 +26,8 @@ export type RequestArgs = {
   filePath: string | null;
   fileVariables: Variable[];
   environment: string | null;
+  /** Values remembered for the request's Prompt variables, by name. Never written anywhere. */
+  promptValues: Record<string, string>;
 };
 
 export const api = {

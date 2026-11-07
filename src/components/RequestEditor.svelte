@@ -8,7 +8,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -33,7 +33,16 @@
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
   const variables = $derived(
-    doc ? makeVarProvider({ env: app.envVariables, fileVars: fileVariables(doc.file), requestVars: req?.variables ?? [], envName: app.envName }) : null,
+    doc
+      ? makeVarProvider({
+          env: app.envVariables,
+          fileVars: fileVariables(doc.file),
+          requestVars: req?.variables ?? [],
+          envName: app.envName,
+          prompts: req ? requestPrompts(req) : [],
+          answers: app.promptAnswers(tab),
+        })
+      : null,
   );
 
   let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");

@@ -195,7 +195,7 @@ editor generalised (both build on `singleLineExtensions` in
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
   (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
-  reference), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
+  reference), `cm-var-prompt` (an unanswered Prompt variable), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
 - In a [KeyValueGrid](#keyvaluegrid), pass `variables` and the built-in value cells
   become VarFields. In a custom value cell, render `<VarField class="cell" …>` and write
@@ -332,6 +332,9 @@ Popups opened inside a modal close first on Escape.
 
 For a question or a confirmation, don't build a modal: call `app.choose(title, message,
 buttons)` or `app.prompt(title, value, placeholder?)`, which render `Dialog.svelte`.
+A dialog can also hold a short form (`DialogState.fields`: label, help text, masked):
+each field has a reveal button, Enter in any field picks the primary button, and the
+values come back in order as `values`. The Prompt variables form uses it.
 
 ## Status
 

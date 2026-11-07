@@ -102,12 +102,13 @@ export function languageExtension(lang: Language): Extension {
 
 /**
  * A `{{name}}` as it resolves: `ok` (with its fully resolved `value`), `bad` (an
- * Undefined variable), `dyn` (generated at send time) or `circular` (it leads back to
- * a name already being resolved; `chain` is the names followed, e.g. `a → b → a`).
- * `secret` when a Secret went into the value.
+ * Undefined variable), `dyn` (generated at send time), `circular` (it leads back to
+ * a name already being resolved; `chain` is the names followed, e.g. `a → b → a`)
+ * or `prompt` (an unanswered Prompt variable, asked when sent).
+ * `secret` when a Secret (or a masked prompted value) went into the value.
  */
 export interface VarInfo {
-  state: "ok" | "bad" | "dyn" | "circular";
+  state: "ok" | "bad" | "dyn" | "circular" | "prompt";
   value?: string;
   source?: string;
   secret?: boolean;
@@ -123,6 +124,8 @@ export interface Resolution {
   value: string;
   undefined: string[];
   circular: string[][];
+  /** Unanswered Prompt variables met (sorted): asked when sent, not undefined. */
+  asked: string[];
   secret: boolean;
 }
 
@@ -181,6 +184,7 @@ export function varCard(name: string, info: VarInfo): HTMLElement {
   if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
   else if (info.state === "bad") body.textContent = "Undefined — not defined in the request, the file or the environment";
   else if (info.state === "circular") body.textContent = `Circular: ${info.chain!.join(" → ")}`;
+  else if (info.state === "prompt") body.textContent = "Asked when sent";
   else body.textContent = info.secret ? "•••••••• (secret)" : info.value || "(empty)";
   dom.append(title, body);
   if (info.source) {

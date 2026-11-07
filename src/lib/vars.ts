@@ -3,8 +3,8 @@
 // (src/lib/vars.test.ts drives both through the same cases), except that dynamic
 // variables are left as written: they're generated at send time.
 import type { Resolution, VarInfo, VarProvider } from "./codemirror/setup";
-import { VAR_RE } from "./http";
-import type { EnvironmentSet, Variable } from "./types";
+import { promptMasked, VAR_RE } from "./http";
+import type { EnvironmentSet, Prompt, Variable } from "./types";
 
 export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string }>;
 
@@ -32,6 +32,10 @@ export interface Scope {
   /** The request's own `@name` lines, which win over the rest of the file. */
   requestVars: Variable[];
   envName: string | null;
+  /** The request's Prompt variables (`requestPrompts`). */
+  prompts?: Prompt[];
+  /** Values remembered for them; a prompt without one is asked when sent. */
+  answers?: Record<string, string>;
 }
 
 interface Entry {
@@ -59,7 +63,11 @@ function segments(text: string): Segment[] {
   return out;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, envName, prompts = [], answers = {} }: Scope): VarProvider {
+  // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
+  const prompted = new Map<string, { value: string; masked: boolean } | null>();
+  for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
+
   // Later wins: environment, then the file, then the request's own declarations.
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
@@ -71,12 +79,22 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();
     const circular: string[][] = [];
+    const asked = new Set<string>();
     let secret = false;
     const walk = (text: string, chain: string[]): string =>
       segments(text)
         .map((s) => {
           if ("text" in s) return s.text;
           if (s.name.startsWith("$")) return s.whole;
+          const prompt = prompted.get(s.name);
+          if (prompt) {
+            secret ||= prompt.masked;
+            return prompt.value;
+          }
+          if (prompt === null) {
+            asked.add(s.name);
+            return s.whole;
+          }
           if (chain.includes(s.name)) {
             const cycle = [...chain, s.name];
             if (!circular.some((c) => c.join("\0") === cycle.join("\0"))) circular.push(cycle);
@@ -92,13 +110,16 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
         })
         .join("");
     const value = walk(text, []);
-    return { value, undefined: [...undefinedNames].sort(), circular, secret };
+    return { value, undefined: [...undefinedNames].sort(), circular, asked: [...asked].sort(), secret };
   }
 
   return {
     resolve,
     info(name): VarInfo {
       if (name.startsWith("$")) return { state: "dyn" };
+      const prompt = prompted.get(name);
+      if (prompt === null) return { state: "prompt", source: "a prompt: asked when sent" };
+      if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered until the app quits" };
       const entry = scope.get(name);
       if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
       const r = resolve(`{{${name}}}`);
@@ -109,6 +130,7 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
       const out = new Map<string, string>();
       for (const [k, v] of Object.entries(env)) out.set(k, v.secret ? "secret" : v.source);
       for (const v of [...fileVars, ...requestVars]) out.set(v.name, "file");
+      for (const p of prompts) out.set(p.name, "prompt");
       return [...out].map(([name, detail]) => ({ name, detail }));
     },
   };

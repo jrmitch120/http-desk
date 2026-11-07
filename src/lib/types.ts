@@ -13,6 +13,13 @@ export interface Directive {
   value: string;
 }
 
+/** A Prompt variable: `# @prompt name [description]` asks for a value at send. */
+export interface Prompt {
+  name: string;
+  /** Help text for the field; empty when the line has none. */
+  description: string;
+}
+
 export interface KeyValue {
   enabled: boolean;
   name: string;
