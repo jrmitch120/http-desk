@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
 import type { EnvironmentSet, EnvVar, Variable } from "./types";
-import { envVariables, makeVarProvider } from "./vars";
+import { envVariables, makeVarProvider, varSegments } from "./vars";
 
 type EnvFile = Record<string, Record<string, string>>;
 interface Case {
@@ -102,5 +102,40 @@ describe("the frontend resolver agrees with the core on the shared cases", () =>
       undefined: c.undefined ?? [],
       circular: c.circular ?? [],
     });
+  });
+});
+
+describe("varSegments (the static rendering of a variable-aware field)", () => {
+  const env = {
+    baseUrl: { value: "http://127.0.0.1:8765", secret: false, source: "local" },
+    token: { value: "dev-token-123", secret: true, source: "local" },
+    a: { value: "{{b}}", secret: false, source: "local" },
+    b: { value: "{{a}}", secret: false, source: "local" },
+  };
+  const provider = makeVarProvider({ env, fileVars: [{ name: "petId", value: "1" }], requestVars: [], envName: "local" });
+
+  it("splits text into plain runs and references, each reference classed by its state", () => {
+    expect(varSegments("Bearer {{token}} for {{petId}}, {{ nope }} at {{$uuid}} {{a}}!", provider)).toEqual([
+      { text: "Bearer " },
+      { text: "{{token}}", name: "token", cls: "cm-var cm-var-ok cm-var-secret" },
+      { text: " for " },
+      { text: "{{petId}}", name: "petId", cls: "cm-var cm-var-ok" },
+      { text: ", " },
+      { text: "{{ nope }}", name: "nope", cls: "cm-var cm-var-bad" },
+      { text: " at " },
+      { text: "{{$uuid}}", name: "$uuid", cls: "cm-var cm-var-dyn" },
+      { text: " " },
+      { text: "{{a}}", name: "a", cls: "cm-var cm-var-circular" },
+      { text: "!" },
+    ]);
+  });
+
+  it("is one plain run without references, and nothing for empty text", () => {
+    expect(varSegments("application/json", provider)).toEqual([{ text: "application/json" }]);
+    expect(varSegments("", provider)).toEqual([]);
+  });
+
+  it("leaves references plain when there is no provider", () => {
+    expect(varSegments("a {{token}}", null)).toEqual([{ text: "a {{token}}" }]);
   });
 });

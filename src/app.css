@@ -26,6 +26,7 @@
   --var-bad: #f2706b;
   --var-dyn: #c3a6ff;
   --var-circular: #f0954a;
+  --var-secret: #5fc4d6;
 
   --m-get: #6bdd9a;
   --m-post: #ffd65c;
@@ -108,6 +109,7 @@
   --var-bad: #c8352b;
   --var-dyn: #7b4fc4;
   --var-circular: #b35900;
+  --var-secret: #0b7d8f;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
   --tok-key: #0451a5;
   --tok-string: #a31515;
@@ -461,7 +463,8 @@ kbd {
   color: var(--text-2);
 }
 
-/* CodeMirror variable highlighting (shared by URL bar and body editor) */
+/* {{variable}} highlighting: CodeMirror marks in the URL bar, body editor and
+   VarField, and VarField's static rendering (same classes) */
 .cm-var {
   border-radius: 3px;
   padding: 0 1px;
@@ -484,6 +487,12 @@ kbd {
   background: color-mix(in srgb, var(--var-circular) 12%, transparent);
   text-decoration: underline dashed;
   text-underline-offset: 2px;
+}
+/* A defined value with a Secret in it (cm-var-ok cm-var-secret): a Secret, or a
+   variable whose value references one. */
+.cm-var-secret {
+  color: var(--var-secret);
+  background: color-mix(in srgb, var(--var-secret) 12%, transparent);
 }
 
 /* Shared popup layer (src/lib/popup/layer.ts): a zero-size fixed stacking

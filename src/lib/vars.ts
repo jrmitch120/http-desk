@@ -3,6 +3,7 @@
 // (src/lib/vars.test.ts drives both through the same cases), except that dynamic
 // variables are left as written: they're generated at send time.
 import type { Resolution, VarInfo, VarProvider } from "./codemirror/setup";
+import { VAR_RE } from "./http";
 import type { EnvironmentSet, Variable } from "./types";
 
 export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string }>;
@@ -111,4 +112,33 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
       return [...out].map(([name, detail]) => ({ name, detail }));
     },
   };
+}
+
+/** The classes of a `{{name}}` mark: `cm-var cm-var-<state>`, plus `cm-var-secret` when a Secret went into its value. */
+export function varClass(info: VarInfo): string {
+  return `cm-var cm-var-${info.state}${info.secret ? " cm-var-secret" : ""}`;
+}
+
+/** A run of a variable-aware field's text: plain, or a `{{name}}` reference with its name and mark classes. */
+export interface VarSegment {
+  text: string;
+  name?: string;
+  cls?: string;
+}
+
+/**
+ * The text split into plain runs and `{{name}}` references, marked the way the
+ * editor marks them, for rendering a field without an editor.
+ */
+export function varSegments(text: string, provider: VarProvider | null): VarSegment[] {
+  if (!provider) return text ? [{ text }] : [];
+  const out: VarSegment[] = [];
+  let at = 0;
+  for (const m of text.matchAll(VAR_RE)) {
+    if (m.index > at) out.push({ text: text.slice(at, m.index) });
+    out.push({ text: m[0], name: m[1], cls: varClass(provider.info(m[1])) });
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push({ text: text.slice(at) });
+  return out;
 }
