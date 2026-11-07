@@ -218,7 +218,8 @@ pub enum Part {
 
 /// Every `{{name}}` reference in the workspace: in the `.http` files, in explorer
 /// order (File variables at the top of a file, then each request), then in the
-/// values of the environment files at the root. `open` holds documents as the app
+/// values of each folder's own environment files (the root's, then every folder with env
+/// files in explorer order: [`crate::env::folders`]). `open` holds documents as the app
 /// has them (unsaved edits included); they're used instead of the files on disk at
 /// the same paths. Unreadable files and env files are skipped.
 pub fn usages(root: &Path, name: &str, open: &[(PathBuf, HttpFile)]) -> Vec<Usage> {
