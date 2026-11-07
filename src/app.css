@@ -476,9 +476,13 @@ kbd {
   color: var(--var-ok);
   background: color-mix(in srgb, var(--var-ok) 12%, transparent);
 }
+/* An Undefined variable: underlined everywhere it is marked, so it reads without colour too. */
 .cm-var-bad {
   color: var(--var-bad);
   background: color-mix(in srgb, var(--var-bad) 12%, transparent);
+  text-decoration: underline wavy;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
 }
 .cm-var-dyn {
   color: var(--var-dyn);

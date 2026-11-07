@@ -205,7 +205,7 @@ paths), File variable values and environment values.
 - It sets no padding, font or border: the owner gives those through `class` (a grid
   passes `cell`). The text colour is inherited too, so a grid's disabled row dims it.
 - Marks are the editors' `cm-var` classes: `cm-var-ok` (defined), `cm-var-bad`
-  (Undefined variable), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
+  (Undefined variable, red with a wavy underline), `cm-var-dyn` (dynamic), `cm-var-circular` (a circular
   reference), `cm-var-prompt` (an unanswered Prompt variable), plus `cm-var-secret` on a defined value with a Secret in it. The hover card is `varCard` in `setup.ts`, shared with the URL bar and the
   body editor, so change it there.
 - The hover card shows the resolved value and where it comes from ("this file",
@@ -402,6 +402,21 @@ private env file isn't git-ignored, TLS checks are off, a send failed.
 - Errors are `role="alert"`; warnings and info are `role="status"`.
 - For the outcome of an action ("Saved", "Could not save settings"), use a toast
   instead.
+
+### CheckStrip
+
+`CheckStrip.svelte`. The pre-send checks above a request's sections: one entry per
+problem the request would be sent with, each with its quick fixes as `.btn.small.ghost`
+buttons under the message. Today every entry is an Undefined variable ("`{{token}}` is
+undefined, used in Headers and Authorization"; ARCHITECTURE §10).
+
+- Props: `checks` (`Check[]` from `src/lib/checks.ts`; empty renders nothing) and
+  `onfix(check, fix)`. It is a `region` named "Pre-send checks", with a list item per
+  entry. It never blocks sending.
+- Warning-toned and boxed like an inline [Banner](#banner), but a list: a Banner is one
+  message with one set of actions. More than three entries scroll inside it.
+- A new kind of check is a new `Check` variant, rendered in its own `{#if check.kind}`
+  branch, with its own fixes.
 
 ## Floating UI
 
