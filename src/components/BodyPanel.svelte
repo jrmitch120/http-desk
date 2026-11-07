@@ -36,6 +36,19 @@
   const dataUrl = $derived(view.dataUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
+  // Raw and Preview stay mounted once shown and are switched by hiding one, so
+  // going back to Raw doesn't rebuild the editor (it keeps its scroll, find bar
+  // and colouring) and going back to Preview doesn't reload the page. The preview
+  // mounts the first time it's opened for a response. Audio and video unmount
+  // when hidden, so they stop playing.
+  const previewable = $derived(kind === "html" || !!dataUrl);
+  const showingPreview = $derived(effectiveMode === "preview" && previewable);
+  let previewShownFor = $state<string | null>(null);
+  $effect(() => {
+    if (showingPreview) previewShownFor = res.id;
+  });
+  const mountPreview = $derived(showingPreview || (previewShownFor === res.id && previewable && view.canPreview && kind !== "media"));
+
   const viewOptions = $derived<SegmentedOption<BodyMode>[]>([
     ...(view.canPretty && !isBinary ? [{ value: "pretty" as const, label: "Pretty" }] : []),
     { value: "raw", label: isBinary ? "Hex" : "Raw" },
@@ -102,27 +115,30 @@
 <!-- The body editor's context menu (Copy path); other content keeps the webview's. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="body" oncontextmenu={bodyMenu}>
-  {#if effectiveMode === "preview" && dataUrl}
-    {#if kind === "image"}
-      <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
-    {:else if kind === "html"}
-      <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
-    {:else if kind === "pdf"}
-      <iframe title="PDF preview" src={dataUrl}></iframe>
-    {:else if kind === "media"}
-      <div class="preview-img">
-        {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
-      </div>
-    {/if}
-  {:else if effectiveMode === "preview" && kind === "html"}
-    <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
-  {:else if res.bodySize === 0}
-    <div class="empty-state small">The response has no body.</div>
-  {:else if view.formatting}
-    <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
-  {:else}
-    <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} extensions={bodyKeys} />
+  {#if mountPreview}
+    <div class="pane" class:hidden={!showingPreview}>
+      {#if kind === "html"}
+        <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
+      {:else if kind === "image"}
+        <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
+      {:else if kind === "pdf"}
+        <iframe title="PDF preview" src={dataUrl}></iframe>
+      {:else if kind === "media"}
+        <div class="preview-img">
+          {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
+        </div>
+      {/if}
+    </div>
   {/if}
+  <div class="pane" class:hidden={showingPreview}>
+    {#if res.bodySize === 0}
+      <div class="empty-state small">The response has no body.</div>
+    {:else if view.formatting}
+      <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
+    {:else}
+      <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} extensions={bodyKeys} />
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -151,14 +167,25 @@
     letter-spacing: 0.04em;
   }
   .body {
+    position: relative;
     flex: 1;
     min-height: 0;
     border-top: 1px solid var(--border);
+  }
+  /* Raw and Preview are stacked in the same place; the hidden one keeps its
+     layout (visibility, not display: none), so switching needs no re-layout. */
+  .pane {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
   }
-  .body > :global(*) {
+  .pane > :global(*) {
     flex: 1;
+    min-height: 0;
+  }
+  .hidden {
+    visibility: hidden;
   }
   .spinner {
     width: 13px;

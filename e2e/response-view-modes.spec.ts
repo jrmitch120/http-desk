@@ -49,6 +49,27 @@ test("going back from Preview to Raw colours every line in view on the first fra
   expect(uncoloured.uncoloured).toBe(0);
 });
 
+test("Raw and Preview stay mounted, so switching back keeps Raw's scroll position and Preview's page", async ({ page }) => {
+  await send(page, "longHtml");
+  const scroller = page.locator(".body .cm-scroller");
+  await scroller.evaluate((el) => (el.scrollTop = 1500));
+
+  await views(page).getByRole("radio", { name: "Preview" }).click();
+  const frame = page.locator("iframe[title='HTML preview']");
+  await expect(frame).toBeVisible();
+  await expect(scroller).toBeHidden();
+  const frameHandle = await frame.elementHandle();
+
+  await views(page).getByRole("radio", { name: "Raw" }).click();
+  await expect(scroller).toBeVisible();
+  await expect(frame).toBeHidden();
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(1500);
+
+  await views(page).getByRole("radio", { name: "Preview" }).click();
+  // The same frame, not a reloaded one.
+  expect(await frame.evaluate((el, old) => el === old, frameHandle)).toBe(true);
+});
+
 test("a plain-text response has no view switch, only its text", async ({ page }) => {
   await send(page, "text");
   await expect(views(page)).toHaveCount(0);
