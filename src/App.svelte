@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -24,6 +25,11 @@
       // Production builds only: dev builds have no signed release to compare against.
       if (!import.meta.env.DEV && app.settings?.checkUpdates !== false) setTimeout(() => updates.check(false), 3000);
     });
+  });
+
+  // The native window's title follows the workspace and the active environment.
+  $effect(() => {
+    getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
 
   function onKey(e: KeyboardEvent) {
@@ -57,9 +63,24 @@
     if (k === "enter" && app.activeTabId) return () => app.activeTabId && app.send(app.activeTabId);
     if ((k === "p" || k === "k") && root) return () => app.focusSearch++;
     if (k === "t" && root) return () => (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(root));
-    if (k === "e" && root) return () => (app.modal = "env");
+    if (switchEnvironment(e)) return root ? () => app.chooseEnvironment() : null;
+    if (k === "e" && !e.altKey && root) return () => (app.modal = "env");
     if (k === ",") return () => (app.modal = "settings");
     return null;
+  }
+
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+  /**
+   * ⌘⌥E on macOS, Ctrl+Alt+E elsewhere: open the environment picker. On macOS
+   * ⌥E is a dead key, so the physical E key counts. Elsewhere the key must
+   * really be "e": Ctrl+Alt is how Windows reports AltGr, and AltGr+E types €
+   * on many layouts.
+   */
+  function switchEnvironment(e: KeyboardEvent): boolean {
+    if (!e.altKey || e.shiftKey) return false;
+    if (mac) return e.metaKey && !e.ctrlKey && (e.key.toLowerCase() === "e" || e.code === "KeyE");
+    return e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "e";
   }
 </script>
 
