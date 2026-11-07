@@ -1,5 +1,5 @@
 // Find usages results as the sidebar lists them.
-import { requestFolder } from "./envFolders";
+import { folderOf } from "./envFolders";
 import { basename } from "./http";
 import type { Usage, UsageField } from "./types";
 
@@ -50,7 +50,7 @@ export function usageRows(usages: Usage[], root = ""): UsageRow[] {
     } else if (u.kind === "fileVariable") {
       row = { key: `${u.path}\0@${u.index}`, title: `@${u.name}`, where: `${basename(u.path)} · File variable`, disabled: false };
     } else {
-      const dir = root ? requestFolder(root, u.path) : "";
+      const dir = root ? folderOf(root, u.path) : "";
       const where = [u.env === "$shared" ? "Shared variables" : `Environment "${u.env}"`, ...(dir ? [`${dir}/`] : []), ...(u.secret ? ["Secret"] : [])];
       row = { key: `${dir}\0${u.env}\0${u.name}`, title: u.name, where: where.join(" · "), disabled: false };
     }

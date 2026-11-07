@@ -7,8 +7,8 @@ import { basename, dirname, displayName, fileVariables, joinPath, nameError, new
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
-import { renameInEnvironments, renameInFile } from "./rename";
-import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, requestFolder, writeFolder } from "./envFolders";
+import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
+import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type {
@@ -107,9 +107,10 @@ export interface RenameChoice {
   usages: Usage[] | null;
 }
 
-/** A Rename variable form, for environment variable `name`. */
+/** A Rename variable form, for environment variable `name` of folder `dir`'s env files. */
 export interface Renaming {
   name: string;
+  dir: string;
   resolve: (choice: RenameChoice | null) => void;
 }
 
@@ -215,7 +216,12 @@ class AppStore {
 
   /** The environments a request in the file at `path` is sent with: its nearest folder's (ADR-0004). */
   envSetFor(path: string): EnvironmentSet | null {
-    return environmentsFor(this.envSet, this.envFolders, this.root ? requestFolder(this.root, path) : "");
+    return environmentsFor(this.envSet, this.envFolders, this.folderOf(path));
+  }
+
+  /** The folder holding the file at `path`, relative to the workspace root ("" at the root, or with no workspace). */
+  folderOf(path: string): string {
+    return this.root ? folderOf(this.root, path) : "";
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -719,7 +725,7 @@ class AppStore {
    *  the folder of the env file holding it). */
   async openUsage(usage: Usage) {
     if (usage.kind === "environment") {
-      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.root ? requestFolder(this.root, usage.path) : "" };
+      this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.folderOf(usage.path) };
       this.modal = "env";
       return;
     }
@@ -1204,28 +1210,26 @@ class AppStore {
    * Rename variable on environment variable `name` of folder `dir`'s env files (the
    * Environments modal's folder; the root's by default): asks for the new name and
    * whether to update references (`RenameVariable.svelte`), then renames it in
-   * every environment of that folder's pair through the normal environment save
-   * (references in that pair's values too; other folders' env files are left alone),
-   * and edits each file
-   * holding a reference Find usages found. A file with no unsaved edits is saved
-   * at once; one with unsaved edits gets the rename in memory only and stays
-   * unsaved, so the user's pending work isn't saved without them. The env files
-   * are saved first; if that fails, nothing else changes. False if cancelled or
-   * the env files couldn't be saved.
+   * every environment of that folder's pair through the normal environment save,
+   * and rewrites the references the rename covers (`renameTargets`): values in that
+   * pair, and `.http` files in or below `dir` that don't get the name from a nearer
+   * folder's env files (ADR-0004). A file with no unsaved edits is saved at once; one
+   * with unsaved edits gets the rename in memory only and stays unsaved, so the
+   * user's pending work isn't saved without them. The env files are saved first; if
+   * that fails, nothing else changes. False if cancelled or the env files couldn't be saved.
    */
   async renameVariable(name: string, dir = ""): Promise<boolean> {
-    const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, resolve }));
+    const choice = await new Promise<RenameChoice | null>((resolve) => (this.renaming = { name, dir, resolve }));
     if (!choice) return false;
-    const { name: next, usages } = choice;
+    const { name: next } = choice;
+    const usages = choice.usages ? await this.renameTargets(name, dir, choice.usages) : [];
     const set = await this.folderPair(dir);
     if (!set) return false;
-    // Find usages lists every folder's env values; only this folder's pair is renamed here.
-    const inPair = (usages ?? []).filter((u) => u.kind === "environment" && (this.root ? requestFolder(this.root, u.path) : "") === dir);
-    renameInEnvironments(set, inPair, name, next);
+    renameInEnvironments(set, usages, name, next);
     if (!(await this.writeEnvironments(set, dir))) return false;
 
     const byFile = new Map<string, Usage[]>();
-    for (const u of usages ?? []) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
+    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
     let edited = 0;
     const unsaved: string[] = [];
     for (const [path, list] of byFile) {
@@ -1246,6 +1250,26 @@ class AppStore {
     else if (unsaved.length) message += ` ${unsaved.slice(0, -1).join(", ")} and ${unsaved.at(-1)} had unsaved edits, so they were left unsaved.`;
     this.toast("success", message);
     return true;
+  }
+
+  /** What the Rename variable form shows for `name` in folder `dir`'s env files: that pair
+   *  (for the name check) and the usages renaming it would rewrite (`renameTargets`). */
+  async renamePlan(name: string, dir: string): Promise<{ pair: EnvironmentSet; usages: Usage[] }> {
+    const [pair, usages] = await Promise.all([this.folderPair(dir), this.searchUsages(name)]);
+    if (!pair) throw new Error(`Could not read the environments of ${folderLabel(dir)}`);
+    return { pair, usages: await this.renameTargets(name, dir, usages) };
+  }
+
+  /** The usages of `name` a rename in folder `dir`'s env files rewrites (`renameScope`):
+   *  folders below `dir` whose own env files define `name` too keep theirs. */
+  private async renameTargets(name: string, dir: string, usages: Usage[]): Promise<Usage[]> {
+    const shadowing: string[] = [];
+    for (const { dir: below } of this.envFolders) {
+      if (below === dir || !within(below, dir)) continue;
+      const pair = await this.folderPair(below);
+      if (pair && definesVariable(pair, name)) shadowing.push(below);
+    }
+    return renameScope(usages, { root: this.root ?? "", dir, shadowing });
   }
 
   /** Answers the Rename variable form on screen (null: cancelled). */
@@ -1308,7 +1332,7 @@ class AppStore {
 
   /** The nearest folder with env files at or above the file at `path`'s ("" for the root). */
   envFolderFor(path: string): string {
-    return nearestEnvFolder(this.envFolders, this.root ? requestFolder(this.root, path) : "");
+    return nearestEnvFolder(this.envFolders, this.folderOf(path));
   }
 
   /** Answers the Extract to variable form on screen (null: cancelled). */

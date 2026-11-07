@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
-import { renameInEnvironments, renameInFile, renameNameError, renamePreview } from "./rename";
+import { renameInEnvironments, renameInFile, renameNameError, renamePreview, renameScope } from "./rename";
 import type { EnvironmentSet, HttpFile, Request, Usage, UsageField } from "./types";
 
 const PATH = "/ws/api/users.http";
@@ -165,6 +165,40 @@ describe("renamePreview", () => {
       { path: other, detail: "1 request, 1 File variable" },
       { path: "/ws/http-client.env.json", detail: "2 environment values" },
       { path: "/ws/http-client.private.env.json", detail: "1 environment value" },
+    ]);
+  });
+});
+
+describe("renameScope", () => {
+  const at = (path: string): Usage => ({ ...inRequest({ ...newRequest("R"), url: "{{host}}" }, 0, { kind: "url" }, 0, 8), path });
+  const value = (path: string): Usage => ({ kind: "environment", path, env: "dev", name: "url", secret: false, start: 0, end: 8 });
+  const fileVar = (path: string): Usage => ({ kind: "fileVariable", path, index: 0, name: "api", start: 0, end: 8 });
+
+  it("renaming in the root's env files: every .http file, except below a nearer folder whose own env files define the name (ADR-0004)", () => {
+    const usages = [
+      at("/ws/a.http"),
+      at("/ws/api/b.http"),
+      at("/ws/api/v2/c.http"),
+      fileVar("/ws/web/d.http"),
+      at("/ws/apis/e.http"),
+      value("/ws/http-client.env.json"),
+      value("/ws/api/http-client.env.json"),
+    ];
+    // api/ has env files defining `host`; web/ has env files that don't.
+    expect(renameScope(usages, { root: "/ws", dir: "", shadowing: ["api"] }).map((u) => u.path)).toEqual([
+      "/ws/a.http",
+      "/ws/web/d.http",
+      "/ws/apis/e.http",
+      "/ws/http-client.env.json",
+    ]);
+  });
+
+  it("renaming in a nested folder's env files: only .http files under it, and only that folder's env values", () => {
+    const usages = [at("/ws/a.http"), at("/ws/api/b.http"), at("/ws/api/v2/c.http"), at("/ws/api/v3/x/d.http"), value("/ws/http-client.env.json"), value("/ws/api/http-client.private.env.json")];
+    expect(renameScope(usages, { root: "/ws", dir: "api", shadowing: ["api/v3"] }).map((u) => u.path)).toEqual([
+      "/ws/api/b.http",
+      "/ws/api/v2/c.http",
+      "/ws/api/http-client.private.env.json",
     ]);
   });
 });

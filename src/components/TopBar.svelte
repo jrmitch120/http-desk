@@ -3,7 +3,7 @@
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
-  import { folderLabel, requestFolder } from "../lib/envFolders";
+  import { folderLabel } from "../lib/envFolders";
   import { THEMES, themeLabel } from "../lib/themes";
   import { envColorShade } from "../lib/envColors";
   import Icon from "./Icon.svelte";
@@ -29,7 +29,7 @@
   const envOptions: SelectOption[] = $derived.by(() => {
     const tab = app.activeTab;
     const own = tab ? app.envSetFor(tab.path) : null;
-    const note = tab && app.root ? `not defined for ${folderLabel(requestFolder(app.root, tab.path))}` : "";
+    const note = tab && app.root ? `not defined for ${folderLabel(app.folderOf(tab.path))}` : "";
     return [
       { value: "", label: "No environment" },
       ...app.envNames.map((name) => ({ value: name, label: name, note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined })),

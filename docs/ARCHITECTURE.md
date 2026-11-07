@@ -671,15 +671,22 @@ Decisions made during implementation, beyond the plan above:
 * <a id="rename-variable"></a>**Rename variable** (a matrix row's Rename…) renames an
   environment variable in Shared and every environment of the folder the Environments
   modal shows (`app.renameVariable(name, dir)`) and, with "Update references"
-  (on by default), every reference Find usages finds. Renaming saves the env files, so
+  (on by default), the references that mean that variable. Which ones follows
+  ADR-0004's nearest-folder rule (`renameScope` in `src/lib/rename.ts`): renaming `old`
+  in folder D's env files rewrites `{{old}}` in D's own env values, and in the `.http`
+  files in D or below it, except those with a nearer folder (between the file and D)
+  whose own env files also define a variable named `old`: for those requests `{{old}}`
+  is that nearer folder's variable. Files outside D, and other folders' env files and
+  their same-named variables, are left alone. Renaming saves the env files, so
   unsaved edits in the Environments modal are saved first (the user is asked). The form
-  (`RenameVariable.svelte`, opened by `app.renameVariable(name)` through
-  `app.renaming`) refuses a name a reference can't use or one Shared or an environment
-  already has, and, since there is no undo beyond version control, shows the files that
-  will change with how many requests (File variables, environment values) in each
-  before anything is written. On Rename the store renames it in a copy of the saved
-  environment set of that folder, rewrites references in that folder's env values (other
-  folders' env files, and their same-named variables, are left alone), and saves it with the usual
+  (`RenameVariable.svelte`, opened by `app.renameVariable(name, dir)` through
+  `app.renaming`, which carries `dir`) gets D's pair and exactly the usages that will
+  change from `app.renamePlan(name, dir)`. It refuses a name a reference can't use or
+  one D's Shared or an environment already has, and, since there is no undo beyond
+  version control, shows the files that will change with how many requests (File
+  variables, environment values) in each before anything is written. On Rename the
+  store renames it in a copy of D's saved pair, rewrites the references in its values,
+  and saves it with the usual
   `save_environments` (a Secret stays in the private file); if that fails nothing else
   changes. Then each `.http` file with references is loaded, edited at the usages'
   ranges (`renameInFile` in `src/lib/rename.ts`: `{{ old }}` becomes `{{ new }}`, spacing

@@ -1411,6 +1411,60 @@ describe("renaming a variable", () => {
     expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment of api/.");
   });
 
+  describe("with env files in folders below (ADR-0004: the nearest folder wins)", () => {
+    const pair = (token: boolean): EnvironmentSet => ({
+      shared: [],
+      environments: [{ name: "dev", variables: token ? [{ name: "token", value: "own", secret: true }] : [{ name: "host", value: "h", secret: false }] }],
+      privateFileIgnored: true,
+    });
+    const files: Record<string, HttpFile> = {
+      "/ws/a.http": fileOf(["GET", "A", "{{token}}/a"]),
+      "/ws/api/b.http": fileOf(["GET", "B", "{{token}}/b"]),
+      "/ws/api/v2/c.http": fileOf(["GET", "C", "{{token}}/c"]),
+      "/ws/web/d.http": fileOf(["GET", "D", "{{token}}/d"]),
+    };
+    const usages = Object.entries(files).map(([path, f]) => inUrl(path, 0, f.requests[0].name, f.requests[0].url));
+
+    beforeEach(() => {
+      // api/ has env files defining token, web/ has some that don't.
+      app.envFolders = [
+        { dir: "api", set: pair(true) },
+        { dir: "web", set: pair(false) },
+      ];
+      loadEnvironments.mockImplementation(async (dir?: string) =>
+        dir === "api" ? pair(true) : dir === "web" ? pair(false) : structuredClone(saveEnvironments.mock.lastCall?.[0] ?? envSet()),
+      );
+      readHttpFile.mockImplementation(async (path: string) => structuredClone(files[path]));
+      findUsages.mockResolvedValue(usages);
+    });
+
+    it("renaming the root's variable rewrites only files that don't get the name from a nearer folder", async () => {
+      expect(await rename(usages)).toBe(true);
+      expect(saveHttpFile.mock.calls.map(([path, f]) => [path, f.requests[0].url])).toEqual([
+        ["/ws/a.http", "{{apiToken}}/a"],
+        ["/ws/web/d.http", "{{apiToken}}/d"],
+      ]);
+    });
+
+    it("renaming a folder's variable rewrites only files in or below it", async () => {
+      const done = app.renameVariable("token", "api");
+      app.closeRenaming({ name: "apiToken", usages });
+      expect(await done).toBe(true);
+      expect(saveEnvironments.mock.calls.map(([, dir]) => dir)).toEqual(["api"]);
+      expect(saveHttpFile.mock.calls.map(([path]) => path)).toEqual(["/ws/api/b.http", "/ws/api/v2/c.http"]);
+    });
+
+    it("the form is given that folder's env files (for the name check) and exactly the references that change", async () => {
+      const done = app.renameVariable("token", "web");
+      expect(app.renaming).toMatchObject({ name: "token", dir: "web" });
+      const plan = await app.renamePlan("token", "web");
+      expect(plan.pair).toEqual(pair(false));
+      expect(plan.usages.map((u) => u.path)).toEqual(["/ws/web/d.http"]);
+      app.closeRenaming(null);
+      await done;
+    });
+  });
+
   it("cancelling the form changes nothing", async () => {
     const done = app.renameVariable("token");
     app.closeRenaming(null);

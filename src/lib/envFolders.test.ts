@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentSet, FolderEnvironments, TreeNode } from "./types";
-import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, requestFolder, workspaceFolders, writeFolder } from "./envFolders";
+import { environmentNames, environmentsFor, folderLabel, nearestEnvFolder, folderOf, workspaceFolders, writeFolder } from "./envFolders";
 
 const set = (...names: string[]): EnvironmentSet => ({
   shared: [],
@@ -17,10 +17,10 @@ describe("per-directory environments on the frontend", () => {
   ];
 
   it("a request's folder is its file's folder relative to the workspace root, on either separator", () => {
-    expect(requestFolder("/ws", "/ws/api/users/list.http")).toBe("api/users");
-    expect(requestFolder("/ws", "/ws/top.http")).toBe("");
-    expect(requestFolder("C:\\ws", "C:\\ws\\api\\list.http")).toBe("api");
-    expect(requestFolder("/ws/", "/ws/api/list.http")).toBe("api");
+    expect(folderOf("/ws", "/ws/api/users/list.http")).toBe("api/users");
+    expect(folderOf("/ws", "/ws/top.http")).toBe("");
+    expect(folderOf("C:\\ws", "C:\\ws\\api\\list.http")).toBe("api");
+    expect(folderOf("/ws/", "/ws/api/list.http")).toBe("api");
   });
 
   it("names a folder the way the strip and warnings do", () => {

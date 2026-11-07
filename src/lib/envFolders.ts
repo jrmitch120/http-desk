@@ -8,8 +8,9 @@ import type { EnvironmentSet, EnvSource, FolderEnvironments, TreeNode } from "./
 
 const parts = (p: string) => p.split(/[\\/]/).filter(Boolean);
 
-/** The folder of the file at `path`, relative to workspace `root`, `/`-separated ("" at the root). */
-export function requestFolder(root: string, path: string): string {
+/** The folder holding the file at `path` (a request's, or an env file's), relative to
+ *  workspace `root`, `/`-separated ("" at the root). */
+export function folderOf(root: string, path: string): string {
   const r = parts(root);
   const p = parts(path).slice(0, -1);
   return r.every((x, i) => p[i] === x) ? p.slice(r.length).join("/") : "";
@@ -20,12 +21,16 @@ export function folderLabel(dir: string): string {
   return dir ? `${dir}/` : "the workspace root";
 }
 
+/** Whether relative folder `dir` is `folder` or inside it (everything is within the root, ""). */
+export function within(dir: string, folder: string): boolean {
+  return folder === "" || dir === folder || dir.startsWith(`${folder}/`);
+}
+
 /** The `folders` entry nearest at or above `dir`, if any. */
 function nearest(folders: FolderEnvironments[], dir: string): FolderEnvironments | undefined {
   let best: FolderEnvironments | undefined;
   for (const f of folders) {
-    const inside = dir === f.dir || dir.startsWith(`${f.dir}/`);
-    if (inside && (!best || f.dir.length > best.dir.length)) best = f;
+    if (within(dir, f.dir) && (!best || f.dir.length > best.dir.length)) best = f;
   }
   return best;
 }

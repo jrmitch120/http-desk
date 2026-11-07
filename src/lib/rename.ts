@@ -3,6 +3,7 @@
 // the store saves them.
 import { displayName } from "./http";
 import { extractNameError } from "./extract";
+import { folderOf, within } from "./envFolders";
 import type { EnvironmentSet, EnvVar, HttpFile, Request, Usage, UsageField } from "./types";
 
 type At = { start: number; end: number };
@@ -109,6 +110,34 @@ export function renameNameError(next: string, old: string, set: EnvironmentSet |
   if (set?.shared.some((v) => v.name === next)) return `The shared variables already have a variable named ${next}`;
   const env = set?.environments.find((e) => e.variables.some((v) => v.name === next));
   return env ? `${env.name} already has a variable named ${next}` : null;
+}
+
+/** Where a rename of a variable in folder `dir`'s env files applies (folders relative to `root`). */
+export interface RenameScope {
+  root: string;
+  /** The folder whose own env files are renamed in ("" for the root). */
+  dir: string;
+  /** Folders below `dir` whose own env files also define the name. */
+  shadowing: string[];
+}
+
+/**
+ * The usages a rename in folder `dir`'s env files changes. Env values: those in
+ * `dir`'s own files. `.http` files: those in `dir` or below it, except where a
+ * folder between the file and `dir` has env files defining the name too: the
+ * nearest folder wins (ADR-0004), so there `{{name}}` doesn't mean this variable.
+ */
+export function renameScope(usages: Usage[], { root, dir, shadowing }: RenameScope): Usage[] {
+  return usages.filter((u) => {
+    const folder = folderOf(root, u.path);
+    if (u.kind === "environment") return folder === dir;
+    return within(folder, dir) && !shadowing.some((s) => s !== dir && within(s, dir) && within(folder, s));
+  });
+}
+
+/** Whether `set` (one folder's own env files) defines `name`, in the shared variables or any environment. */
+export function definesVariable(set: EnvironmentSet, name: string): boolean {
+  return [set.shared, ...set.environments.map((e) => e.variables)].some((vars) => vars.some((v) => v.name === name));
 }
 
 /** A file a rename edits, and what in it. */
