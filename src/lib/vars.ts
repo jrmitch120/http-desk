@@ -2,9 +2,36 @@
 // autocomplete. It gives the same answers as the core's `vars::Resolver`
 // (src/lib/vars.test.ts drives both through the same cases), except that dynamic
 // variables are left as written: they're generated at send time.
-import type { Resolution, VarInfo, VarProvider } from "./codemirror/setup";
+import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
 import { VAR_RE } from "./http";
 import type { EnvironmentSet, Variable } from "./types";
+import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
+
+/**
+ * A dynamic variable the core generates, as autocomplete lists it. The list is
+ * the core's (`vars::DYNAMIC_VARIABLES`; a Rust test keeps the two equal).
+ */
+export interface DynamicVariable {
+  /** With the `$`. One ending in `.` (`$env.`) takes a name straight after it. */
+  name: string;
+  /** The argument hint, e.g. `[min max]`, `(length)`, `NAME`; empty without arguments. */
+  args: string;
+  description: string;
+  /** Nothing is generated without the argument. */
+  required?: boolean;
+}
+
+export const DYNAMIC_VARIABLES: DynamicVariable[] = catalogue.variables;
+
+/**
+ * Whether `{{reference}}` (the trimmed text between the braces) is a dynamic
+ * variable: its name, before `(` or a space, is one the core generates.
+ */
+export function isDynamic(reference: string): boolean {
+  if (!reference.startsWith("$")) return false;
+  const name = reference.includes("(") ? reference.slice(0, reference.indexOf("(")) : reference.split(/\s/, 1)[0];
+  return DYNAMIC_VARIABLES.some((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
+}
 
 export type EnvVarMap = Record<string, { value: string; secret: boolean; source: string }>;
 
@@ -31,13 +58,19 @@ export interface Scope {
   fileVars: Variable[];
   /** The request's own `@name` lines, which win over the rest of the file. */
   requestVars: Variable[];
+  /** The `@name` lines at the top of the file (some of `fileVars`): the ones the request's Settings edit. */
+  headerVars?: Variable[];
   envName: string | null;
 }
 
 interface Entry {
   value: string;
   secret: boolean;
+  /** How the hover card says where it's from. */
   source: string;
+  /** How autocomplete says it. */
+  origin: VarCompletion["source"];
+  definition?: Definition;
 }
 
 /** A run of text, or a `{{…}}` reference with its trimmed name. Mirrors the core's `vars::segments`. */
@@ -59,14 +92,19 @@ function segments(text: string): Segment[] {
   return out;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName }: Scope): VarProvider {
   // Later wins: environment, then the file, then the request's own declarations.
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
-    scope.set(name, { ...e, source: e.source === "$shared" ? "shared variables" : `environment "${e.source}"` });
+    const source = e.source === "$shared" ? "shared variables" : `environment "${e.source}"`;
+    const origin = e.source === "$shared" ? "shared" : "environment";
+    scope.set(name, { ...e, source, origin, definition: { kind: "env", env: e.source, name } });
   }
-  for (const v of fileVars) scope.set(v.name, { value: v.value, secret: false, source: "this file" });
-  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request" });
+  for (const v of fileVars) {
+    const definition: Definition | undefined = headerVars.includes(v) ? { kind: "file", name: v.name } : undefined;
+    scope.set(v.name, { value: v.value, secret: false, source: "this file", origin: "file", definition });
+  }
+  for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file" });
 
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();
@@ -76,7 +114,12 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
       segments(text)
         .map((s) => {
           if ("text" in s) return s.text;
-          if (s.name.startsWith("$")) return s.whole;
+          // A `$name` is generated at send time, or (unknown to the core) undefined; never looked up.
+          if (isDynamic(s.name)) return s.whole;
+          if (s.name.startsWith("$")) {
+            undefinedNames.add(s.name);
+            return s.whole;
+          }
           if (chain.includes(s.name)) {
             const cycle = [...chain, s.name];
             if (!circular.some((c) => c.join("\0") === cycle.join("\0"))) circular.push(cycle);
@@ -95,24 +138,39 @@ export function makeVarProvider({ env, fileVars, requestVars, envName }: Scope):
     return { value, undefined: [...undefinedNames].sort(), circular, secret };
   }
 
-  return {
-    resolve,
-    info(name): VarInfo {
-      if (name.startsWith("$")) return { state: "dyn" };
-      const entry = scope.get(name);
-      if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
-      const r = resolve(`{{${name}}}`);
-      if (r.circular.length) return { state: "circular", chain: r.circular[0], source: entry.source };
-      return { state: "ok", value: r.value, secret: r.secret, source: entry.source };
-    },
-    names() {
-      const out = new Map<string, string>();
-      for (const [k, v] of Object.entries(env)) out.set(k, v.secret ? "secret" : v.source);
-      for (const v of [...fileVars, ...requestVars]) out.set(v.name, "file");
-      return [...out].map(([name, detail]) => ({ name, detail }));
-    },
-  };
+  function info(name: string): VarInfo {
+    if (isDynamic(name)) return { state: "dyn" };
+    if (name.startsWith("$")) return { state: "bad" };
+    const entry = scope.get(name);
+    if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
+    const r = resolve(`{{${name}}}`);
+    if (r.circular.length) return { state: "circular", chain: r.circular[0], source: entry.source, definition: entry.definition };
+    return { state: "ok", value: r.value, secret: r.secret, source: entry.source, definition: entry.definition };
+  }
+
+  function completions(): VarCompletion[] {
+    const named = [...scope].map(([name, entry]): VarCompletion => {
+      const source = entry.origin;
+      const i = info(name);
+      if (i.secret) return { name, source, secret: true };
+      if (i.state !== "ok") return { name, source };
+      return { name, source, preview: shorten(i.value ?? "") };
+    });
+    const dynamic = DYNAMIC_VARIABLES.map(({ name, args, description, required }): VarCompletion => ({
+      name,
+      source: "dynamic",
+      args,
+      description,
+      ...(required ? { required } : {}),
+    }));
+    return [...named, ...dynamic];
+  }
+
+  return { resolve, info, completions };
 }
+
+const PREVIEW_LENGTH = 40;
+const shorten = (value: string) => (value.length > PREVIEW_LENGTH ? value.slice(0, PREVIEW_LENGTH - 1) + "…" : value);
 
 /** The classes of a `{{name}}` mark: `cm-var cm-var-<state>`, plus `cm-var-secret` when a Secret went into its value. */
 export function varClass(info: VarInfo): string {

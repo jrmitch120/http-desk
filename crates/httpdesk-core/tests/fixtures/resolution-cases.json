@@ -120,6 +120,12 @@
       "file": [{ "name": "base", "value": "https://example.com" }],
       "text": "{{base}}/{{$uuid}}?r={{requestId}}",
       "value": "https://example.com/{{$uuid}}?r=req-{{$randomInt 1 2}}"
+    },
+    {
+      "case": "a $name that isn't a dynamic variable is undefined, as written",
+      "text": "{{$nope}}/{{ $env. }}/{{$random.word(3)}}",
+      "value": "{{$nope}}/{{ $env. }}/{{$random.word(3)}}",
+      "undefined": ["$env.", "$nope", "$random.word(3)"]
     }
   ]
 }

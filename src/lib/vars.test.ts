@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
 import type { EnvironmentSet, EnvVar, Variable } from "./types";
-import { envVariables, makeVarProvider, varSegments } from "./vars";
+import { DYNAMIC_VARIABLES, envVariables, makeVarProvider, varSegments } from "./vars";
 
 type EnvFile = Record<string, Record<string, string>>;
 interface Case {
@@ -63,7 +63,13 @@ describe("what hovering a reference shows", () => {
     makeVarProvider({ env: envVariables(set, envName), fileVars, requestVars, envName });
 
   it("shows the fully resolved value and where the name is defined", () => {
-    expect(provider().info("baseUrl")).toEqual({ state: "ok", value: "https://dev.example/api", secret: false, source: 'environment "dev"' });
+    expect(provider().info("baseUrl")).toEqual({
+      state: "ok",
+      value: "https://dev.example/api",
+      secret: false,
+      source: 'environment "dev"',
+      definition: { kind: "env", env: "dev", name: "baseUrl" },
+    });
     expect(provider().info("scheme")).toMatchObject({ state: "ok", source: "shared variables" });
   });
 
@@ -84,6 +90,94 @@ describe("what hovering a reference shows", () => {
     expect(provider().info("nope")).toEqual({ state: "bad", source: undefined });
     expect(provider([], [], null).info("nope")).toEqual({ state: "bad", source: "no environment selected" });
     expect(provider().info("$uuid")).toEqual({ state: "dyn" });
+  });
+
+  it("says where to edit the definition in use, when it has a row in the app", () => {
+    const header = [{ name: "host", value: "header.example" }];
+    const own = [{ name: "id", value: "7" }];
+    const later = [{ name: "page", value: "2" }];
+    const p = makeVarProvider({ env: envVariables(set, "dev"), fileVars: [...header, ...own, ...later], headerVars: header, requestVars: own, envName: "dev" });
+    expect(p.info("token").definition).toEqual({ kind: "env", env: "dev", name: "token" });
+    expect(p.info("scheme").definition).toEqual({ kind: "env", env: "$shared", name: "scheme" });
+    // The header's File variable beats the environment's host: its row is in the request's Settings.
+    expect(p.info("host").definition).toEqual({ kind: "file", name: "host" });
+    // The request's own @id and another request's @page have no row to edit.
+    expect(p.info("id").definition).toBeUndefined();
+    expect(p.info("page").definition).toBeUndefined();
+    expect(p.info("a").definition).toEqual({ kind: "env", env: "dev", name: "a" });
+    expect(p.info("nope").definition).toBeUndefined();
+  });
+
+  it("marks a $name the core doesn't generate as undefined", () => {
+    expect(provider().info("$datetime iso8601")).toEqual({ state: "dyn" });
+    expect(provider().info("$random.integer(1, 5)")).toEqual({ state: "dyn" });
+    expect(provider().info("$env.HOME")).toEqual({ state: "dyn" });
+    expect(provider().info("$nope")).toMatchObject({ state: "bad" });
+    expect(provider().info("$env.")).toMatchObject({ state: "bad" });
+  });
+});
+
+describe("what autocomplete offers after {{", () => {
+  const set: EnvironmentSet = {
+    shared: [
+      { name: "scheme", value: "https", secret: false },
+      { name: "host", value: "shared.example", secret: false },
+    ],
+    environments: [
+      {
+        name: "dev",
+        variables: [
+          { name: "baseUrl", value: "{{scheme}}://{{host}}/api", secret: false },
+          { name: "token", value: "s3cret", secret: true },
+          { name: "auth", value: "Bearer {{token}}", secret: false },
+          { name: "long", value: "x".repeat(100), secret: false },
+          { name: "a", value: "{{a}}", secret: false },
+        ],
+      },
+    ],
+    privateFileIgnored: null,
+  };
+  const provider = makeVarProvider({
+    env: envVariables(set, "dev"),
+    fileVars: [{ name: "host", value: "file.example" }, { name: "id", value: "7" }],
+    requestVars: [{ name: "id", value: "8" }],
+    envName: "dev",
+  });
+  const offered = provider.completions();
+  const entry = (name: string) => offered.find((c) => c.name === name);
+
+  it("shows each name's source and a preview of its resolved value", () => {
+    expect(entry("baseUrl")).toEqual({ name: "baseUrl", source: "environment", preview: "https://file.example/api" });
+    expect(entry("scheme")).toEqual({ name: "scheme", source: "shared", preview: "https" });
+    // Declared in the file over the shared one; the request's own declaration wins.
+    expect(entry("host")).toEqual({ name: "host", source: "file", preview: "file.example" });
+    expect(entry("id")).toEqual({ name: "id", source: "file", preview: "8" });
+    expect(offered.filter((c) => c.name === "host")).toHaveLength(1);
+  });
+
+  it("shortens a long preview", () => {
+    expect(entry("long")!.preview).toBe("x".repeat(39) + "…");
+  });
+
+  it("never previews a Secret, or a value a Secret went into", () => {
+    expect(entry("token")).toEqual({ name: "token", source: "environment", secret: true });
+    expect(entry("auth")).toEqual({ name: "auth", source: "environment", secret: true });
+    expect(JSON.stringify(offered)).not.toContain("s3cret");
+  });
+
+  it("has no preview for a circular reference", () => {
+    expect(entry("a")).toEqual({ name: "a", source: "environment" });
+  });
+
+  it("lists every dynamic variable with a description and argument hints", () => {
+    const dynamic = offered.filter((c) => c.source === "dynamic");
+    expect(dynamic.map((c) => c.name)).toEqual(expect.arrayContaining(["$uuid", "$timestamp", "$randomInt", "$random.integer", "$random.email", "$isoTimestamp", "$datetime", "$processEnv", "$dotenv"]));
+    expect(dynamic.map((c) => c.name)).toEqual(DYNAMIC_VARIABLES.map((d) => d.name));
+    for (const c of dynamic) expect(c.description, c.name).toMatch(/\w{3}/);
+    expect(entry("$randomInt")).toMatchObject({ args: "[min max]" });
+    expect(entry("$random.integer")).toMatchObject({ args: "(from, to)" });
+    expect(entry("$processEnv")).toMatchObject({ args: "NAME", required: true });
+    expect(entry("$uuid")).toMatchObject({ args: "" });
   });
 });
 

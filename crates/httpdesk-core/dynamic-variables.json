@@ -1,0 +1,22 @@
+{
+  "about": "Every dynamic variable the core's resolver generates (vars::DYNAMIC_VARIABLES), with what autocomplete shows for it (src/lib/vars.ts). A test in vars.rs fails if the two lists differ. args is the argument hint; required means the variable is nothing without its argument. A name ending in '.' takes a name straight after it.",
+  "variables": [
+    { "name": "$uuid", "args": "", "description": "Random UUID (v4)" },
+    { "name": "$guid", "args": "", "description": "Random UUID (v4), as $uuid" },
+    { "name": "$random.uuid", "args": "", "description": "Random UUID (v4), as $uuid" },
+    { "name": "$timestamp", "args": "[offset unit]", "description": "Unix time in seconds, optionally offset (-1 d)" },
+    { "name": "$isoTimestamp", "args": "", "description": "Current UTC time in ISO 8601" },
+    { "name": "$randomInt", "args": "[min max]", "description": "Random integer, min ≤ n < max (0, 1000)" },
+    { "name": "$random.integer", "args": "(from, to)", "description": "Random integer, from ≤ n < to (0, 1000)" },
+    { "name": "$random.float", "args": "(from, to)", "description": "Random number, from ≤ n ≤ to (0, 1000)" },
+    { "name": "$random.alphabetic", "args": "(length)", "description": "Random letters (10 by default)" },
+    { "name": "$random.alphanumeric", "args": "(length)", "description": "Random letters and digits (10 by default)" },
+    { "name": "$random.hexadecimal", "args": "(length)", "description": "Random hex digits (10 by default)" },
+    { "name": "$random.email", "args": "", "description": "Random email address" },
+    { "name": "$datetime", "args": "[format] [offset unit]", "description": "Current UTC time: rfc1123, iso8601 or a pattern" },
+    { "name": "$localDatetime", "args": "[format] [offset unit]", "description": "Current local time, formatted as $datetime" },
+    { "name": "$processEnv", "args": "NAME", "required": true, "description": "An environment variable of HttpDesk's process" },
+    { "name": "$dotenv", "args": "NAME", "required": true, "description": "A value from the .env file beside the .http file" },
+    { "name": "$env.", "args": "NAME", "required": true, "description": "An environment variable, as $processEnv" }
+  ]
+}

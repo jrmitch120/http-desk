@@ -74,7 +74,12 @@ fn the_core_resolver_gives_the_shared_answers() {
         let vars = env::variables(&set, c.environment.as_deref());
         let r = Resolver::for_request(&vars, &c.file, &c.request, Some(dir.path()));
         let value = r.resolve(&c.text);
-        assert!(matches_with_dynamics(&c.value, &value), "{}: got {value:?}, expected {:?}", c.case, c.value);
+        assert!(
+            value == c.value || matches_with_dynamics(&c.value, &value),
+            "{}: got {value:?}, expected {:?}",
+            c.case,
+            c.value
+        );
         assert_eq!(r.unresolved(), c.undefined, "{}: undefined", c.case);
         assert_eq!(r.circular(), c.circular, "{}: circular", c.case);
         assert!(r.errors().is_empty(), "{}: {:?}", c.case, r.errors());
