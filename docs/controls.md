@@ -189,10 +189,14 @@ spinners.
 ### FilterField
 
 `FilterField.svelte`. A text field with a filter icon inside it, for narrowing what a
-panel shows: the Headers tab's name filter and the Body tab's JSONPath filter bar.
+panel shows: the Headers tab's name filter and the Body tab's JSONPath filter bar. With
+`icon="search"` it is the Find field of the editors' find bar
+(`src/lib/codemirror/FindBar.svelte`), which replaces CodeMirror's default search panel
+because that one builds native checkboxes at runtime.
 
 - Props: `value`, `oninput(value)` (the owner keeps the value and decides what typing
-  does), `label` (accessible name), `placeholder?`, `mono?` (for expressions),
+  does), `label` (accessible name), `placeholder?`, `icon?` (`filter`, the default, or
+  `search`), `mono?` (for expressions),
   `invalid?` with `describedby?` (a danger border, and the id of the inline error),
   `suggest?` (`use:suggestions` options, making it a combobox), `onfocus?`, `onkeydown?`.
 - Height `--control-h-sm`. It fills the space its owner gives it (`flex: 1`), so the

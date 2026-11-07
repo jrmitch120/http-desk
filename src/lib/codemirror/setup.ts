@@ -27,6 +27,7 @@ import {
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { popupLayer } from "../popup/layer";
+import { createFindPanel } from "./findPanel.svelte";
 
 export type Language = "json" | "xml" | "html" | "text";
 
@@ -50,25 +51,10 @@ export const theme = EditorView.theme({
   ".cm-searchMatch": { backgroundColor: "color-mix(in srgb, var(--warning) 35%, transparent)" },
   ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "color-mix(in srgb, var(--accent) 55%, transparent)" },
   ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--focus) 16%, transparent)" },
-  ".cm-panels": { backgroundColor: "var(--panel-2)", color: "var(--text)" },
+  // Panels (the find bar, findPanel.svelte.ts) sit on the editor's own surface, set off by a rule.
+  ".cm-panels": { backgroundColor: "var(--editor-bg, var(--panel))", color: "var(--text)" },
   ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
   ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
-  ".cm-search": { fontFamily: "var(--font)", fontSize: "12px", padding: "6px 8px" },
-  ".cm-search input, .cm-search button, .cm-search label": { fontSize: "12px" },
-  ".cm-textfield": {
-    backgroundColor: "var(--panel)",
-    border: "1px solid var(--border)",
-    borderRadius: "4px",
-    color: "var(--text)",
-    padding: "3px 6px",
-  },
-  ".cm-button": {
-    backgroundImage: "none",
-    backgroundColor: "var(--panel-3)",
-    border: "1px solid var(--border)",
-    borderRadius: "4px",
-    color: "var(--text)",
-  },
   // The shared popup surface (.popup-surface in app.css); tooltips render into the popup layer.
   ".cm-tooltip": {
     backgroundColor: "var(--popup-bg)",
@@ -267,7 +253,7 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
     drawSelection(),
     bracketMatching(),
     highlightSelectionMatches(),
-    search({ top: true }),
+    search({ top: true, createPanel: createFindPanel }),
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap]),
   ];
   if (opts.gutters !== false) ext.push(lineNumbers(), foldGutter(), highlightActiveLineGutter());
