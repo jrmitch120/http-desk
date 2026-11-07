@@ -595,7 +595,10 @@ Decisions made during implementation, beyond the plan above:
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,
   since the search reads the env files from disk), Rename… (see
-  [Rename variable](#rename-variable)) and deletes the variable everywhere.
+  [Rename variable](#rename-variable)) and "Delete from all environments" (Shared and
+  every environment of the folder, unsaved until Save). A "Filter variables" box above
+  the matrix narrows the rows to names, or shareable values in any column, containing
+  the text (never matching a Secret's value; `rowMatches`).
   The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
   the private file. Environment-level actions (rename, duplicate, delete, Use,
