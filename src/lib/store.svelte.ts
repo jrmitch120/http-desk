@@ -4,10 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
+import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
 import { envVariables } from "./vars";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
+import type { AppSettings, EnvironmentSet, EnvironmentSettings, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -71,6 +72,11 @@ export interface DialogState {
 export type ModalKind = "env" | "openapi" | "settings" | null;
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
+
+/** Methods that don't change data, so the production guard lets them through. */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+/** The method as sent: upper-cased, GET when blank. */
+const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
 
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
@@ -828,7 +834,9 @@ class AppStore {
     const req = this.requestFor(tab ?? null);
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
-    if (this.runs[tabId]?.loading) return;
+    if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
+    // Only awaited when it asks, so an ordinary send starts loading at once.
+    if (this.guardsMethod(req.method) && !(await this.confirmProductionSend(tabId, req.method))) return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
@@ -848,6 +856,31 @@ class AppStore {
         : { runId, loading: false, startedAt: 0, error: toSendError(e) };
     } finally {
       this.cancelled.delete(runId);
+    }
+  }
+
+  /** Tabs whose send is waiting on the production confirmation. */
+  private confirmingSend = new Set<string>();
+
+  /** Whether sending `method` needs confirming: a production environment is
+   *  selected and the method isn't GET, HEAD or OPTIONS. */
+  private guardsMethod(method: string): boolean {
+    return !!this.envName && !!this.environmentSettings(this.envName).production && !SAFE_METHODS.has(verbOf(method));
+  }
+
+  /** Asks before sending to the selected (production) environment. True to go ahead. */
+  private async confirmProductionSend(tabId: string, method: string): Promise<boolean> {
+    const env = this.envName;
+    const verb = verbOf(method);
+    this.confirmingSend.add(tabId);
+    try {
+      const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
+        { label: "Cancel", value: "cancel", focus: true },
+        { label: `Send ${verb}`, value: "send", danger: true },
+      ]);
+      return r.button === "send";
+    } finally {
+      this.confirmingSend.delete(tabId);
     }
   }
 
@@ -889,6 +922,29 @@ class AppStore {
       else delete envs[this.root];
       await this.updateSettings({ environments: envs });
     }
+  }
+
+  /** The settings of an environment of the open workspace (production, colour). */
+  environmentSettings(name: string): EnvironmentSettings {
+    return (this.root && this.settings?.environmentSettings?.[this.root]?.[name]) || {};
+  }
+
+  /** The selected environment's colour, if it has one. */
+  envColor = $derived<EnvColor | null>(this.envName ? envColor(this.environmentSettings(this.envName).color) : null);
+
+  /** Replaces the open workspace's environment settings, leaving out
+   *  environments with nothing set. False if the save failed (it was reported). */
+  async saveEnvironmentSettings(byName: Record<string, EnvironmentSettings>): Promise<boolean> {
+    if (!this.root || !this.settings) return false;
+    const kept: Record<string, EnvironmentSettings> = {};
+    for (const [name, s] of Object.entries(byName)) {
+      const color = envColor(s.color);
+      if (s.production || color) kept[name] = { ...(s.production ? { production: true } : {}), ...(color ? { color } : {}) };
+    }
+    const all = { ...this.settings.environmentSettings };
+    if (Object.keys(kept).length) all[this.root] = kept;
+    else delete all[this.root];
+    return this.updateSettings({ environmentSettings: all });
   }
 
   /** Opens the Settings modal, scrolled to `section` if given. */

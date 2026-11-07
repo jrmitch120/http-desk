@@ -32,6 +32,11 @@ A variable declared with `# @prompt name [description]` whose value the user typ
 It overrides any other variable of the same name, and its value is never saved.
 _Avoid_: input variable, ask variable
 
+**Production environment**:
+An environment the user has marked as production: sending anything but GET, HEAD or OPTIONS with it selected asks for confirmation first.
+The mark is an app setting, not part of the env files.
+_Avoid_: live environment, protected environment
+
 ### Editing
 
 **Orphaned tab**:
