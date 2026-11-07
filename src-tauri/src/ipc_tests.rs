@@ -674,6 +674,33 @@ fn saved_themes_load_unchanged_and_a_missing_theme_follows_the_system() {
     assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["theme"], "system");
 }
 
+/// #79: whether an environment is production, and its colour, live in the app
+/// settings keyed by workspace + environment name. They survive a restart and
+/// never touch the env files, so other tools don't see them as variables.
+#[test]
+fn environment_settings_survive_a_restart_and_leave_the_env_files_alone() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let env_file = r#"{ "prod": { "baseUrl": "https://api.example.com" } }"#;
+    std::fs::write(root.join("http-client.env.json"), env_file).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["environmentSettings"], json!({}));
+    let ws_key = root.to_string_lossy().to_string();
+    settings["environmentSettings"] = json!({ ws_key.clone(): { "prod": { "production": true, "color": "red" } } });
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    // A restart: the defaults, then whatever settings.json holds.
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    let reloaded = h.ok("get_settings", json!({}));
+    assert_eq!(reloaded["environmentSettings"][&ws_key]["prod"], json!({ "production": true, "color": "red" }));
+    assert_eq!(std::fs::read_to_string(root.join("http-client.env.json")).unwrap(), env_file);
+    assert!(!root.join("http-client.private.env.json").exists());
+}
+
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.
 fn changed_paths(rx: &mpsc::Receiver<String>, quiet: std::time::Duration) -> Vec<String> {
     let mut out = Vec::new();

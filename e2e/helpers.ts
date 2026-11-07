@@ -68,7 +68,11 @@ type EnvFile = Record<string, Record<string, unknown>>;
 export interface MockState {
   sent: { method: string; url: string }[];
   /** The settings it last saved. */
-  settings: { theme: string; exec: Record<string, unknown> };
+  settings: {
+    theme: string;
+    exec: Record<string, unknown>;
+    environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
+  };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
   /** What "Save body to file" wrote, by path. */
