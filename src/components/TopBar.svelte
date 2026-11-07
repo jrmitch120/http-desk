@@ -4,6 +4,7 @@
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
   import { THEMES, themeLabel } from "../lib/themes";
+  import { envColorShade } from "../lib/envColors";
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -71,7 +72,7 @@
     <Icon name="import" size={14} />Import OpenAPI
   </button>
 
-  <div class="env" class:none={!app.envName}>
+  <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
     <Icon name="globe" size={14} />
     <Select
       bind:this={envSelect}
@@ -189,6 +190,13 @@
   }
   .env.none {
     color: var(--muted);
+  }
+  /* The environment's own colour (Environments modal) on the icon and border,
+     with a faint wash behind; the name keeps --text, so it reads in both themes. */
+  .env.tinted {
+    color: var(--env-color);
+    border-color: var(--env-color);
+    background: color-mix(in srgb, var(--env-color) 12%, var(--panel-2));
   }
   .env :global(.env-select) {
     height: 28px;

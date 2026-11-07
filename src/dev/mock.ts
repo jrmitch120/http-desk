@@ -66,6 +66,7 @@ let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   recentWorkspaces: [ROOT],
   environments: { [ROOT]: "local" },
+  environmentSettings: {} as Record<string, Record<string, { production?: boolean; color?: string | null }>>,
   theme: new URLSearchParams(location.search).get("theme") ?? "system",
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
