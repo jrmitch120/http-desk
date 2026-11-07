@@ -405,9 +405,17 @@ fn implied_content_type(body: &Body) -> Option<&'static str> {
 }
 
 /// The method, URL and headers of a request: everything [`prepare`] and [`preview`]
-/// share except the body. A relative URL without a `Host` header is the one
-/// failure; it comes back alongside the URL as written so the preview can show it.
-fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, String)>, Option<ExecError>) {
+/// share except the body.
+struct Head {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    /// A relative URL without a `Host` header, the one failure: it comes alongside
+    /// the URL as written so the preview can show it.
+    error: Option<ExecError>,
+}
+
+fn head(req: &Request, resolver: &Resolver) -> Head {
     let method = req.method.trim().to_ascii_uppercase();
     let method = if method.is_empty() { "GET".to_string() } else { method };
 
@@ -442,7 +450,7 @@ fn head(req: &Request, resolver: &Resolver) -> (String, String, Vec<(String, Str
             error = Some(ExecError::InvalidUrl { url: url.clone(), reason: "relative URL needs a Host header".into() });
         }
     }
-    (method, url, headers, error)
+    Head { method, url, headers, error }
 }
 
 /// The header that enabled Basic, Bearer or header API-key auth adds.
@@ -527,7 +535,7 @@ pub fn prepare(
     base_dir: &Path,
     settings: &ExecSettings,
 ) -> Result<PreparedRequest, ExecError> {
-    let (method, url, mut headers, error) = head(req, resolver);
+    let Head { method, url, mut headers, error } = head(req, resolver);
     if let Some(e) = error {
         return Err(e);
     }
@@ -584,7 +592,7 @@ fn auth_fields(auth: &Auth, resolver: &Resolver) -> Vec<(String, String)> {
 /// read, but the Content-Type it implies is.
 pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let resolver = resolver.previewing();
-    let (method, url, mut headers, error) = head(req, &resolver);
+    let Head { method, url, mut headers, error } = head(req, &resolver);
     // A placeholder stands for a plain value, so check the URL with one in its place.
     let checked = resolver.unmarked(&resolver.replace_placeholders(&url, |_| "0".into()));
     // The message names the URL as shown, with any Secret in it masked.

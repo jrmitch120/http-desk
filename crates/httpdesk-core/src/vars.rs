@@ -85,24 +85,14 @@ pub(crate) fn references(text: &str) -> impl Iterator<Item = (std::ops::Range<us
     })
 }
 
-/// Dynamic variables that generate a new value on every send. The others
-/// (`$processEnv`, `$dotenv`, `$env.X`) read a value that's already there.
-const GENERATED: &[&str] = &[
-    "uuid",
-    "guid",
-    "random.uuid",
-    "timestamp",
-    "isoTimestamp",
-    "randomInt",
-    "random.integer",
-    "random.float",
-    "random.alphabetic",
-    "random.alphanumeric",
-    "random.hexadecimal",
-    "random.email",
-    "datetime",
-    "localDatetime",
-];
+/// Dynamic variables that read a value that's already there (`env.` takes a name).
+/// Every other one generates a new value on every send.
+const READING: &[&str] = &["processEnv", "dotenv", "env."];
+
+/// Whether dynamic variable `name` generates a new value on every send.
+fn generates(name: &str) -> bool {
+    is_dynamic(name) && !READING.iter().any(|r| name == *r || (r.ends_with('.') && name.starts_with(r)))
+}
 
 /// Brackets the index of a placeholder (see [`Resolver::previewing`]). Private-use
 /// characters, so they can't clash with real text and survive query encoding.
@@ -295,7 +285,7 @@ impl Resolver {
                 Segment::Reference { whole, name } => (whole, name),
             };
             let value = if let Some(dynamic) = inner.strip_prefix('$') {
-                if GENERATED.contains(&split_call(dynamic).0) {
+                if generates(split_call(dynamic).0) {
                     if let Some(placeholder) = self.placeholder(whole) {
                         out.push_str(&placeholder);
                         continue;

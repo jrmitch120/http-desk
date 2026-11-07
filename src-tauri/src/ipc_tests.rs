@@ -781,6 +781,11 @@ fn the_environments_view_defaults_to_the_matrix_and_is_remembered() {
     *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
     super::load_settings(h.app.handle());
     assert_eq!(h.ok("get_settings", json!({}))["envView"], "list");
+
+    // A hand-edited value the app doesn't know opens the matrix, keeping the other settings.
+    let odd: super::AppSettings = serde_json::from_str(r#"{"envView":"grid","theme":"light"}"#).unwrap();
+    let json = serde_json::to_value(&odd).unwrap();
+    assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("matrix"), Some("light")));
 }
 
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.

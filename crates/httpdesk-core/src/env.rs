@@ -267,7 +267,7 @@ pub fn folders(root: &Path) -> Result<Vec<PathBuf>, EnvError> {
 }
 
 /// `dir` relative to `root`, `/`-separated (`api/users`; `""` for the root itself).
-fn relative_dir(root: &Path, dir: &Path) -> String {
+pub fn relative_dir(root: &Path, dir: &Path) -> String {
     let rel = dir.strip_prefix(root).unwrap_or(dir);
     rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
@@ -318,8 +318,9 @@ fn build_object(
     obj
 }
 
-/// Saves `set` as `dir`'s own pair of files (`dir` being the workspace root).
-pub fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
+/// Saves `set` as `dir`'s own pair of files, `dir` being the workspace root: [`save_folder`]'s
+/// root case, for [`merge_variables`] (the shell saves through `save_folder`).
+fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
     save_folder(dir, dir, set)
 }
 
