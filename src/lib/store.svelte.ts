@@ -2,11 +2,11 @@
 // files; tabs point at a request inside a document by a frontend-only key.
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, errorMessage } from "./api";
+import { api, errorMessage, type RequestArgs } from "./api";
 import { basename, dirname, displayName, fileVariables, joinPath, nameError, newRequest, uid } from "./http";
 import { legacyPaneSizes } from "./panes";
 import { toSendError } from "./sendError";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, SearchHit, SendError, TreeNode } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Request, RequestPreview, SearchHit, SendError, TreeNode } from "./types";
 
 export interface Doc {
   path: string;
@@ -830,6 +830,24 @@ class AppStore {
 
   // ---------------------------------------------------------------- execution
 
+  /** The request with the scope it's sent in. Send and the resolved preview both use this, so they agree. */
+  private requestArgs(tab: Tab, req: Request, doc: Doc): RequestArgs {
+    return {
+      request: $state.snapshot(req) as Request,
+      filePath: tab.path,
+      fileVariables: $state.snapshot(fileVariables(doc.file)),
+      environment: this.envName,
+    };
+  }
+
+  /** What sending the tab's request would send, without sending it (see `api.previewRequest`). */
+  async preview(tab: Tab): Promise<RequestPreview | null> {
+    const req = this.requestFor(tab);
+    const doc = this.docs[tab.path];
+    if (!req || !doc) return null;
+    return api.previewRequest(this.requestArgs(tab, req, doc));
+  }
+
   async send(tabId: string) {
     const tab = this.tabs.find((t) => t.id === tabId);
     const req = this.requestFor(tab ?? null);
@@ -840,13 +858,7 @@ class AppStore {
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
-      const response = await api.sendRequest({
-        runId,
-        request: $state.snapshot(req) as Request,
-        filePath: tab.path,
-        fileVariables: $state.snapshot(fileVariables(doc.file)),
-        environment: this.envName,
-      });
+      const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc) });
       if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
     } catch (e) {
       if (this.runs[tabId]?.runId !== runId) return;

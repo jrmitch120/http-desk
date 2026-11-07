@@ -7,7 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength } from "../lib/http";
-import type { JsonShape, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import type { JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been evicted. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -35,6 +35,59 @@ let envSet = {
   // `?privateFileIgnored=false` simulates a private env file git doesn't ignore.
   privateFileIgnored: new URLSearchParams(location.search).get("privateFileIgnored") !== "false",
 };
+type PreviewArgs = { request: Request; fileVariables: { name: string; value: string }[]; environment: string | null };
+/** Dynamic variables that generate a value on every send: the preview shows them as written. */
+const GENERATED = /^\$(uuid|guid|random\.|randomInt|timestamp|isoTimestamp|datetime|localDatetime)/;
+/**
+ * A rough stand-in for the core's `exec::preview` (tested for real in Rust):
+ * `$shared`, then the environment, then File variables; generated dynamic
+ * variables kept as written; query values percent-encoded; the Content-Type
+ * the body implies; the default headers.
+ */
+function previewRequest({ request: r, fileVariables, environment }: PreviewArgs) {
+  const env = envSet.environments.find((e) => e.name === environment)?.variables ?? [];
+  const vars = new Map([...envSet.shared, ...env, ...fileVariables, ...r.variables].map((v) => [v.name, v.value]));
+  const unresolved = new Set<string>();
+  const resolve = (text: string, depth = 0): string =>
+    text.replace(/\{\{\s*(.*?)\s*\}\}/g, (whole, name: string) => {
+      if (GENERATED.test(name)) return whole;
+      const value = vars.get(name);
+      if (value === undefined || depth >= 10) return unresolved.add(name), whole;
+      return resolve(value, depth + 1);
+    });
+  const encode = (text: string) =>
+    text.split(/(\{\{\s*\$.*?\}\})/).map((part, i) => (i % 2 && GENERATED.test(part.slice(2).trim()) ? part : encodeURIComponent(resolve(part)))).join("");
+  const a = r.auth;
+  const headers: [string, string][] = [];
+  const auth: [string, string][] = [];
+  const params = r.query.enabled ? r.query.items.filter((p) => p.enabled && p.name).map((p) => `${encode(p.name)}=${encode(p.value)}`) : [];
+  if (a.enabled && a.kind === "basic") {
+    auth.push(["Username", resolve(a.username)], ["Password", resolve(a.password)]);
+    headers.push(["Authorization", `Basic ${btoa(`${auth[0][1]}:${auth[1][1]}`)}`]);
+  } else if (a.enabled && a.kind === "bearer") {
+    auth.push(["Token", resolve(a.token.trim())]);
+    headers.push(["Authorization", `Bearer ${auth[0][1]}`]);
+  } else if (a.enabled && a.kind === "apiKey") {
+    auth.push(["Key", a.keyName], ["Value", resolve(a.keyValue)]);
+    if (a.keyLocation === "header") headers.push([a.keyName, auth[1][1]]);
+    else params.push(`${encode(a.keyName)}=${encode(a.keyValue)}`);
+  }
+  if (r.headers.enabled) for (const h of r.headers.items.filter((h) => h.enabled && h.name)) headers.push([resolve(h.name), resolve(h.value)]);
+  let url = resolve(r.url.trim()) + (params.length ? `?${params.join("&")}` : "");
+  if (!url.includes("://") && !url.startsWith("{{")) url = `http://${url}`;
+  const has = (name: string) => headers.some(([n]) => n.toLowerCase() === name);
+  const implied = { json: "application/json", xml: "application/xml", text: "text/plain", formUrlEncoded: "application/x-www-form-urlencoded" } as Record<string, string>;
+  if (r.body.enabled && r.body.text.trim() && implied[r.body.mode] && !has("content-type")) headers.push(["Content-Type", implied[r.body.mode]]);
+  if (!has("user-agent")) headers.push(["User-Agent", "HttpDesk/0.1.0"]);
+  if (!has("accept-encoding")) headers.push(["Accept-Encoding", "gzip, deflate, br, zstd"]);
+  if (r.body.enabled) resolve(r.body.text);
+  const hostVars = [...url.split(/[/?#]/, url.includes("://") ? 3 : 1).join("/").matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((m) => m[1]);
+  const error = hostVars.length
+    ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
+    : null;
+  const warnings = unresolved.size ? [`Unresolved variables: ${[...unresolved].sort().join(", ")}`] : [];
+  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
+}
 type EnvMap = Record<string, Record<string, unknown>>;
 type MockEnvVar = { name: string; value: string; secret: boolean };
 /**
@@ -72,6 +125,7 @@ let settings = {
   showDescriptions: true,
   sidebarWidth: 280,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
+  showResolved: false,
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -88,6 +142,7 @@ const savedBodies: Record<string, string> = {};
 const shapeRequests: string[] = [];
 let settingsServed = false;
 let prettyRequests = 0;
+let previewRequests = 0;
 let windowTitle: string | null = null;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
@@ -101,6 +156,10 @@ let windowTitle: string | null = null;
   },
   set prettyRequests(n: number) {
     prettyRequests = n;
+  },
+  /** How many times the resolved preview called `preview_request`. */
+  get previewRequests() {
+    return previewRequests;
   },
   /** Whether the app has been given its settings yet. */
   get settingsServed() {
@@ -504,6 +563,9 @@ mockIPC(
       case "delete_permanently":
         removeNode(args.path);
         return null;
+      case "preview_request":
+        previewRequests++;
+        return previewRequest(args as unknown as PreviewArgs);
       case "render_request": {
         const r = args.request;
         return `### ${r.name}\n${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;

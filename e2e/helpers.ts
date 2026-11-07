@@ -68,7 +68,7 @@ type EnvFile = Record<string, Record<string, unknown>>;
 export interface MockState {
   sent: { method: string; url: string }[];
   /** The settings it last saved. */
-  settings: { theme: string; exec: Record<string, unknown> };
+  settings: { theme: string; exec: Record<string, unknown>; showResolved: boolean };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
   /** What "Save body to file" wrote, by path. */
@@ -79,6 +79,8 @@ export interface MockState {
   envFiles: { shared: EnvFile; private: EnvFile };
   /** How many times the viewer called `pretty_response`. */
   prettyRequests: number;
+  /** How many times the resolved preview called `preview_request`. */
+  previewRequests: number;
   /** Whether the app has been given its settings yet. */
   settingsServed: boolean;
   /** The window title the app last set (null before it sets one). */

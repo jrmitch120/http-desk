@@ -64,6 +64,8 @@ struct AppSettings {
     sidebar_width: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
+    /// Show the resolved preview under the URL bar.
+    show_resolved: bool,
 }
 
 /// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
@@ -92,6 +94,7 @@ impl Default for AppSettings {
             show_descriptions: true,
             sidebar_width: 280.0,
             split_ratio: SplitRatio::default(),
+            show_resolved: false,
         }
     }
 }

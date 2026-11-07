@@ -17,6 +17,7 @@
   import AuthEditor from "./AuthEditor.svelte";
   import BodyEditor from "./BodyEditor.svelte";
   import RequestSettings from "./RequestSettings.svelte";
+  import ResolvedPreview from "./ResolvedPreview.svelte";
   import Badge from "./Badge.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import Banner from "./Banner.svelte";
@@ -145,6 +146,8 @@
         <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={"Send (⌘/Ctrl Enter)"}><Icon name="send" size={13} />Send</button>
       {/if}
     </div>
+
+    <ResolvedPreview {tab} />
 
     {#if showSource}
       <div class="source">
