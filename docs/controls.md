@@ -452,7 +452,8 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     environment… (`environmentActions`, the List view's own functions). Shared's
     header has none. Every column but the last is resizable (`resize`); the widths
     are remembered per workspace (`app.saveMatrixWidth`, the `envMatrixWidths` app
-    setting), and a value column without one shares the free space.
+    setting; a rename carries a column's width over, and Save drops a deleted
+    environment's), and a value column without one shares the free space.
 - The description sub-row only shows with `showDescriptions`; the request editor passes
   Settings' "Show parameter descriptions". Focusing it (Tab, Shift+Tab or a click) edits
   it, caret at the end. It runs to the grid's clipping right edge, so its ring is inset.

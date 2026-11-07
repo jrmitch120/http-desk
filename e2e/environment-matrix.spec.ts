@@ -412,6 +412,37 @@ test("a column resizes by dragging or the keyboard, double-click fits its widest
   await expect(matrix(modal).getByRole("separator")).toHaveCount(4);
 });
 
+test("a renamed environment keeps its column width, and a deleted one's is dropped when saved", async ({ page }) => {
+  await openApp(page);
+  let modal = await open(page);
+  await resizer(modal, "local").focus();
+  await page.keyboard.press("Home");
+  await resizer(modal, "staging").focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  const widths = async () => (await mockState(page, "settings")).envMatrixWidths?.["/demo"]?.columns;
+  await expect.poll(widths).toEqual({ local: 100, staging: 116 });
+
+  const head = (name: string) => matrix(modal).locator(".kv-head > span").filter({ hasText: new RegExp(`^\\s*${name}\\s*$`) });
+  await head("local").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await dialog(page, "Rename environment").getByRole("textbox").fill("dev");
+  await dialog(page, "Rename environment").getByRole("button", { name: "OK" }).click();
+  await expect(head("dev")).toBeVisible();
+  await expect.poll(() => headWidth(modal, "dev")).toBe(100);
+
+  await head("staging").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete environment…" }).click();
+  await dialog(page, "Delete environment").getByRole("button", { name: "Delete" }).click();
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(widths).toEqual({ dev: 100 });
+
+  // The mock's env files don't survive a reload, so reopen instead.
+  modal = await open(page);
+  await expect.poll(() => headWidth(modal, "dev")).toBe(100);
+});
+
 test("a cut-off value shows in full in a tooltip, except a masked Secret", async ({ page }) => {
   await openApp(page);
   const modal = await open(page);

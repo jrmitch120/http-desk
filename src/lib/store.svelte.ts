@@ -12,6 +12,7 @@ import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFol
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
+import { SHARED } from "./vars";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -1185,6 +1186,25 @@ class AppStore {
     const current = this.matrixWidths();
     const next: MatrixWidths = column === null ? { ...current, variable: width } : { ...current, columns: { ...current.columns, [column]: width } };
     return this.updateSettings({ envMatrixWidths: { ...this.settings.envMatrixWidths, [this.root]: next } });
+  }
+
+  /** A renamed environment's matrix column keeps its width: environment `to` gets `from`'s.
+   *  `from` keeps it too, as another folder may still have an environment of that name;
+   *  `keepMatrixWidths` drops it when saved if none does. */
+  async carryMatrixWidth(from: string, to: string): Promise<boolean> {
+    const width = this.matrixWidths().columns[from];
+    return width === undefined || this.saveMatrixWidth(to, width);
+  }
+
+  /** Drops the open workspace's matrix widths of environments not in `names` (as production
+   *  and colour are dropped when saved); Shared's and the Variable column's stay. */
+  async keepMatrixWidths(names: string[]): Promise<boolean> {
+    if (!this.root || !this.settings) return false;
+    const current = this.matrixWidths();
+    const keep = new Set([SHARED, ...names]);
+    const columns = Object.fromEntries(Object.entries(current.columns).filter(([column]) => keep.has(column)));
+    if (Object.keys(columns).length === Object.keys(current.columns).length) return true;
+    return this.updateSettings({ envMatrixWidths: { ...this.settings.envMatrixWidths, [this.root]: { ...current, columns } } });
   }
 
   /** The selected environment's colour, if it has one. */

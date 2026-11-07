@@ -606,7 +606,9 @@ Decisions made during implementation, beyond the plan above:
   its header's right edge, or its separator's arrow keys; double-click or Enter fits it
   to its widest value), and the widths are remembered per workspace in the app
   settings (`envMatrixWidths`: the Variable column, then by column, `$shared` or the
-  environment's name). A value that doesn't fit shows in full in a tooltip, never a
+  environment's name). Like production and colour, a renamed environment's width
+  carries over (`app.carryMatrixWidth`) and Save drops the widths of environments no
+  folder has any more (`app.keepMatrixWidths`). A value that doesn't fit shows in full in a tooltip, never a
   masked Secret's. "Add variable to all
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
