@@ -38,7 +38,9 @@ control or the popup layer.
 ## Main window
 
 - [ ] Welcome screen (no workspace open): recent workspaces list and buttons.
-- [ ] Top bar: environment Select (open it: themed list, check on the current one) and
+- [ ] Top bar: environment Select (open it: themed list, check on the current one; ⌘⌥E /
+      Ctrl+Alt+E opens it, also from inside an editor, and on a layout where AltGr+E types
+      € it still types €; the window title ends with the chosen environment) and
       the theme menu button (System / Light / Dark with a check; the "A" badge on
       System).
 - [ ] Sidebar: tree with method badges lined up, search box with its results list, and

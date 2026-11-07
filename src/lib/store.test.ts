@@ -738,6 +738,39 @@ describe("opening a workspace", () => {
   });
 });
 
+describe("window title", () => {
+  const tree = { name: "my-api", path: "/dev/my-api", kind: "dir" as const, children: [] };
+  const environments = [
+    { name: "local", variables: [] },
+    { name: "staging", variables: [] },
+  ];
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.toasts = [];
+    getSettings.mockResolvedValue({ environments: { "/dev/my-api": "staging" } });
+    loadEnvironments.mockResolvedValue({ shared: [], environments, privateFileIgnored: true });
+    openWorkspace.mockResolvedValue({ root: "/dev/my-api", tree, gitignoreUpdated: false });
+  });
+
+  it("is just the app name with no workspace open", () => {
+    app.root = null;
+    expect(app.windowTitle).toBe("HttpDesk");
+  });
+
+  it("names the workspace and the active environment", async () => {
+    await app.openWorkspace("/dev/my-api");
+    expect(app.windowTitle).toBe("HttpDesk — my-api — staging");
+  });
+
+  it("follows the environment as it changes, and drops it when none is selected", async () => {
+    await app.openWorkspace("/dev/my-api");
+    await app.selectEnvironment("local");
+    expect(app.windowTitle).toBe("HttpDesk — my-api — local");
+    await app.selectEnvironment(null);
+    expect(app.windowTitle).toBe("HttpDesk — my-api");
+  });
+});
+
 describe("switching workspace with unsaved files", () => {
   const other = { name: "other", path: "/other", kind: "dir" as const, children: [] };
   beforeEach(() => {

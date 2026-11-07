@@ -89,8 +89,13 @@ const savedBodies: Record<string, string> = {};
 const shapeRequests: string[] = [];
 let settingsServed = false;
 let prettyRequests = 0;
+let windowTitle: string | null = null;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
+  /** The window title the app last set. */
+  get title() {
+    return windowTitle;
+  },
   /** How many times the viewer called `pretty_response`; a test may reset it. */
   get prettyRequests() {
     return prettyRequests;
@@ -451,6 +456,9 @@ mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
+      case "plugin:window|set_title":
+        windowTitle = args.value;
+        return null;
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);
         await settingsReleased;

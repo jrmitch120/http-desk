@@ -129,6 +129,12 @@ class AppStore {
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
+  /** "HttpDesk — my-api — staging": the workspace and the active environment, so
+   *  the window always says where a send will go. App.svelte applies it. */
+  windowTitle = $derived(
+    this.root ? ["HttpDesk", basename(this.root), ...(this.envName ? [this.envName] : [])].join(" — ") : "HttpDesk",
+  );
+
   /** Variables of the selected environment (for highlighting/autocomplete). */
   envVariables = $derived.by(() => {
     const out: Record<string, { value: string; secret: boolean; source: string }> = {};
@@ -316,7 +322,6 @@ class AppStore {
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
       this.envName = this.envSet?.environments.some((e) => e.name === saved) ? saved : null;
-      getCurrentWindow().setTitle(`HttpDesk — ${basename(info.root)}`).catch(() => {});
     } catch (e) {
       this.toast("error", errorMessage(e));
     }

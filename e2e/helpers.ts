@@ -85,6 +85,8 @@ export interface MockState {
   prettyRequests: number;
   /** Whether the app has been given its settings yet. */
   settingsServed: boolean;
+  /** The window title the app last set (null before it sets one). */
+  title: string | null;
 }
 
 /** One value of the mock's test-facing state, read from the page. */
