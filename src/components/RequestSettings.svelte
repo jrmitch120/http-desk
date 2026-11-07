@@ -36,12 +36,13 @@
     });
   });
 
-  // A hover card's Edit on a File variable: focus its row.
+  // A hover card's Edit on a File variable: focus its row. "Add as File variable" adds one first.
   let grid = $state<KeyValueGrid<KeyValue>>();
   $effect(() => {
     const want = app.definitionWanted;
     if (want?.kind !== "file" || !grid) return;
     app.definitionWanted = null;
+    if (want.add && !fileVars.some((v) => v.name === want.name)) fileVars.push({ enabled: true, name: want.name, value: "" });
     // The last of a repeated name is the one in use.
     const row = fileVars.filter((v) => v.name === want.name).at(-1);
     if (row) tick().then(() => grid?.focusValue(row));

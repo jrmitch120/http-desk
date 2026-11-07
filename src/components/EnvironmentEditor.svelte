@@ -190,6 +190,7 @@
   }
 
   // A hover card's Edit: show the environment that supplies the variable, and focus its row.
+  // "Add … to <environment>" (the Undefined-variable strip) adds an empty one first.
   let grid = $state<KeyValueGrid<EnvVar>>();
   $effect(() => {
     const want = app.definitionWanted;
@@ -198,6 +199,7 @@
     if (want.env !== SHARED && !set.environments.some((e) => e.name === want.env)) return;
     selected = want.env;
     filter = "";
+    if (want.add && !vars.some((v) => v.name === want.name)) setVars([...vars, { name: want.name, value: "", secret: false }]);
     tick().then(() => {
       const row = vars.filter((v) => v.name === want.name).at(-1);
       if (row) grid?.focusValue(row);
