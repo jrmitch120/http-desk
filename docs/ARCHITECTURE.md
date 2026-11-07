@@ -564,7 +564,8 @@ Decisions made during implementation, beyond the plan above:
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions
   button) offers Find usages (which closes the modal, asking about unsaved edits first,
-  since the search reads the env files from disk) and deletes the variable everywhere.
+  since the search reads the env files from disk), Rename… (see
+  [Rename variable](#rename-variable)) and deletes the variable everywhere.
   The matrix edits the modal's unsaved set
   (`src/lib/envMatrix.ts`), so Save is the usual `save_environments` and Secrets stay in
   the private file. Environment-level actions (rename, duplicate, delete, Use,
@@ -638,6 +639,25 @@ Decisions made during implementation, beyond the plan above:
   header, the auth field, the Body section, or the `.http` source for a request's own
   `@name`), a File variable's row in Settings, or an environment value's cell in the
   Environments matrix (its row in the list view).
+* <a id="rename-variable"></a>**Rename variable** (a matrix row's Rename…) renames an
+  environment variable in Shared and every environment and, with "Update references"
+  (on by default), every reference Find usages finds. Renaming saves the env files, so
+  unsaved edits in the Environments modal are saved first (the user is asked). The form
+  (`RenameVariable.svelte`, opened by `app.renameVariable(name)` through
+  `app.renaming`) refuses a name a reference can't use or one Shared or an environment
+  already has, and, since there is no undo beyond version control, shows the files that
+  will change with how many requests (File variables, environment values) in each
+  before anything is written. On Rename the store renames it in a copy of the saved
+  environment set, rewrites references in env values, and saves it with the usual
+  `save_environments` (a Secret stays in the private file); if that fails nothing else
+  changes. Then each `.http` file with references is loaded, edited at the usages'
+  ranges (`renameInFile` in `src/lib/rename.ts`: `{{ old }}` becomes `{{ new }}`, spacing
+  kept; a request is found at its index or by name, method and URL, and a range that no
+  longer holds the reference is skipped) and saved with `save_http_file` at once, so
+  untouched requests keep their bytes. A file that already had unsaved edits gets the
+  rename in memory only and stays unsaved. Both commands register their writes with
+  `SelfWrites`, so the watcher doesn't report them. References are matched by name, so
+  a `{{name}}` that resolves to a same-named File variable is renamed too.
 * **Prompt variables** (VS Code REST Client): `# @prompt name [description]` or
   `// @prompt …` in a request's comment lines asks for a value at send. They are kept
   as ordinary directives, so the file is written back unchanged; `Request::prompts()`

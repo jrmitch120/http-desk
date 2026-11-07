@@ -7,6 +7,7 @@ mod deleting;
 mod folder_envs;
 mod paths;
 mod preview;
+mod renaming;
 mod usages;
 mod watcher;
 
