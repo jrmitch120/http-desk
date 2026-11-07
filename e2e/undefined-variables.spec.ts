@@ -91,7 +91,7 @@ test("Add to the selected environment adds an empty cell in the matrix and focus
   await expect(field).toBeFocused();
   // Defined, though empty, so no longer a gap; local's Secret is untouched.
   await expect(matrix.locator(".m-cell.gap")).toHaveCount(0);
-  await expect(matrix.locator(".kv-row .m-name")).toHaveText(["version", "baseUrl", "token"]);
+  await expect(matrix.locator(".kv-row .m-name")).toHaveText(["baseUrl", "token", "version"]);
   await expect(page.getByRole("textbox", { name: "token in local", exact: true })).toHaveText("•••••••••••••");
 
   await page.keyboard.type("stg-1");

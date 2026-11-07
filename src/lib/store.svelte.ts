@@ -223,7 +223,7 @@ class AppStore {
   definitionWanted = $state<WantedDefinition | null>(null);
   envPickerWanted = $state(false);
   /** How the Environments matrix sorts its rows (its Variable header): for this app session only, never saved. */
-  envMatrixSort = $state<MatrixSort>("none");
+  envMatrixSort = $state<MatrixSort>("asc");
   /** Find usages results shown in the sidebar (`usages` null while searching); null when closed. */
   usages = $state<{ name: string; usages: Usage[] | null } | null>(null);
   private usagesSeq = 0;

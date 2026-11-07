@@ -28,8 +28,8 @@
   /** Matrix (every environment side by side) unless the user picked the list; remembered in the app settings. */
   const view = $derived(app.settings?.envView === "list" ? "list" : "matrix");
   const viewOptions = [
-    { value: "matrix", label: "Matrix", icon: "columns" },
     { value: "list", label: "List", icon: "rows" },
+    { value: "matrix", label: "Matrix", icon: "columns" },
   ] as const;
 
   function clean(s: EnvironmentSet): EnvironmentSet {

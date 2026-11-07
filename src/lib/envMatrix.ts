@@ -22,11 +22,10 @@ export function matrixColumns(set: EnvironmentSet): string[] {
 
 /**
  * Every named variable once, in the order first seen from Shared through the
- * environments. With `previous` (the rows shown so far), those keep their places
- * and new ones follow: filling or unsetting a cell changes where a name is first
- * seen, and must not move its row. A name in `previous` stays even when no column
- * defines it any more (its last cell was unset), so its row doesn't vanish; the
- * owner drops a deleted row from `previous` itself.
+ * environments (the matrix then sorts them by name). With `previous` (the rows
+ * shown so far), a name in it stays even when no column defines it any more (its
+ * last cell was unset), so its row doesn't vanish; the owner drops a deleted row
+ * from `previous` itself.
  */
 export function matrixNames(set: EnvironmentSet, previous: readonly string[] = []): string[] {
   const names = new Set(previous);
@@ -36,21 +35,20 @@ export function matrixNames(set: EnvironmentSet, previous: readonly string[] = [
   return [...names];
 }
 
-/** How the rows are sorted: by name A→Z, Z→A, or not (`none`: the file order). */
-export type MatrixSort = "none" | "asc" | "desc";
+/** How the rows are sorted: by name A→Z or Z→A. */
+export type MatrixSort = "asc" | "desc";
 
 const byName = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 /** `names` sorted by name only, so typing a value never moves a row. */
 export function sortNames(names: readonly string[], sort: MatrixSort): string[] {
-  if (sort === "none") return [...names];
   const sign = sort === "asc" ? 1 : -1;
   return [...names].sort((a, b) => sign * byName.compare(a, b));
 }
 
-/** What a click on the Variable header does: file order → A→Z → Z→A → file order. */
+/** What a click on the Variable header does: A→Z ⇄ Z→A. */
 export function nextSort(sort: MatrixSort): MatrixSort {
-  return sort === "none" ? "asc" : sort === "asc" ? "desc" : "none";
+  return sort === "asc" ? "desc" : "asc";
 }
 
 /** The column's definition of `name`: the last same-named row, as sending uses. */

@@ -46,7 +46,7 @@ test("refuses a name that exists, and without Update references changes only the
   expect(await mockState(page, "files")).toEqual(filesBefore);
   // The Environments modal shows the new name, saved.
   const modal = dialog(page, "Environments");
-  await expect(modal.locator(".kv-row .m-name")).toHaveText(["version", "apiUrl", "token"]);
+  await expect(modal.locator(".kv-row .m-name")).toHaveText(["apiUrl", "token", "version"]);
   await expect(modal.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 

@@ -583,7 +583,7 @@ Decisions made during implementation, beyond the plan above:
   (`src/lib/envColors.ts`) with a shade per theme that keeps 3:1 contrast against the top
   bar, and tints the top bar's environment indicator (icon, border, a faint wash; the
   name keeps the text colour).
-* **Environments matrix.** The Environments modal opens on a matrix (a Matrix | List
+* **Environments matrix.** The Environments modal opens on a matrix (a List | Matrix
   switch, remembered as the `envView` app setting): one row per variable name, a
   column for Shared and one per environment, each cell a VarField that sees its own
   column's scope. A cell is a gap (tinted, placeholder "Not set") when the environment
@@ -594,12 +594,12 @@ Decisions made during implementation, beyond the plan above:
   button (shown on hover or focus) or its context menu ("Unset in local", "Unset in
   Shared") removes the variable from that column (`unsetCell`), so it's "Not set" there
   (a gap when nothing else supplies it) and Save leaves it out of both of the folder's
-  files; clearing the text only leaves an empty value. Rows keep their places while
-  the modal is open: filling or unsetting a cell changes where a name is first seen,
-  and must not move its row (`matrixNames` with the previous order), so new names go
-  at the end, and a row unset in every column stays until the modal closes. The
-  Variable header sorts the rows by name (file order → A→Z → Z→A; `sortNames`), for
-  the app session (`app.envMatrixSort`, not saved). The header's last cell, "+
+  files; clearing the text only leaves an empty value. A row unset in every
+  column stays until the modal closes (`matrixNames` with the previous rows). Rows
+  are sorted by name, A→Z by default; the Variable header flips it to Z→A and back
+  (`sortNames`), for the app session (`app.envMatrixSort`, not saved). The sort
+  compares names only, so typing a value never moves a row, and a new variable
+  appears at its sorted place. The header's last cell, "+
   Environment", adds an environment as a new column. "Add variable to all
   environments" adds it, empty, to every environment that lacks it (not to Shared), so
   every environment saves the key. A row's menu (right-click its name, or its actions

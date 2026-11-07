@@ -68,12 +68,8 @@ describe("sorting by the Variable column", () => {
     expect(sortNames(names, "desc")).toEqual(["version10", "version2", "token", "baseUrl", "api_key", "Accept"]);
   });
 
-  it("keeps the file order when not sorting", () => {
-    expect(sortNames(names, "none")).toEqual(names);
-  });
-
-  it("cycles file order, A to Z, Z to A, then file order again", () => {
-    expect([nextSort("none"), nextSort("asc"), nextSort("desc")]).toEqual(["asc", "desc", "none"]);
+  it("toggles between A to Z and Z to A, with no unsorted state", () => {
+    expect([nextSort("asc"), nextSort("desc")]).toEqual(["desc", "asc"]);
   });
 });
 

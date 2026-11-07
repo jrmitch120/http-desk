@@ -396,11 +396,10 @@ variables, form-urlencoded fields, multipart parts and environment variables.
     focus, like the row actions) and a context menu ("Unset in <environment>" or
     "Unset in Shared"; a cell that isn't set keeps the webview's menu); unsetting
     moves focus to the cell's lock. Rows are stable objects per name, so an edit
-    doesn't remount the row and drop focus, and their order is kept while the
-    matrix is shown (`matrixNames` with the previous order), so filling a cell
-    never moves its row. The Variable header is a sort button (`headerCell`, with
-    `sort` for `aria-sort`): file order, A→Z, Z→A (an arrow icon shows which), kept
-    in `app.envMatrixSort` for the session. The last column is the row actions
+    doesn't remount the row and drop focus. Rows are sorted by name, A→Z by
+    default, so filling a cell never moves its row; the Variable header is a sort
+    button (`headerCell`, with `sort` for `aria-sort`) that flips A→Z ⇄ Z→A (an
+    arrow icon shows which), kept in `app.envMatrixSort` for the session. The last column is the row actions
     button under the header's "+ Environment" (accessible name "New environment"),
     which adds an environment; the List view keeps its own + button.
 - The description sub-row only shows with `showDescriptions`; the request editor passes

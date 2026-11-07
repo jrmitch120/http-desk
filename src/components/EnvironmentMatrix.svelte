@@ -80,7 +80,7 @@
   const revealed = new SvelteSet<string>();
   const key = (column: string, name: string) => JSON.stringify([column, name]);
 
-  const ariaSort = { none: "none", asc: "ascending", desc: "descending" } as const;
+  const ariaSort = { asc: "ascending", desc: "descending" } as const;
   /** The last column: wide enough for its header's "+ Environment". */
   const ACTIONS_WIDTH = 124;
   const gridColumns = $derived<Column<MatrixRow>[]>([
@@ -142,10 +142,10 @@
 {#snippet variableHeader()}
   <button
     class="head-btn sort"
-    use:tooltip={sort === "none" ? "Sort by name, A to Z" : sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for the file order"}
+    use:tooltip={sort === "asc" ? "Sorted A to Z. Click for Z to A" : "Sorted Z to A. Click for A to Z"}
     onclick={() => (app.envMatrixSort = nextSort(sort))}
   >
-    Variable{#if sort !== "none"}<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />{/if}
+    Variable<Icon name={sort === "asc" ? "arrow-up" : "arrow-down"} size={12} />
   </button>
 {/snippet}
 
