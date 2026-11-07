@@ -3,7 +3,9 @@
 //! resolver drifts from the expected answers, its side fails.
 
 use httpdesk_core::env;
-use httpdesk_core::model::Variable;
+use std::collections::HashMap;
+
+use httpdesk_core::model::{Prompt, Variable};
 use httpdesk_core::vars::Resolver;
 use serde::Deserialize;
 
@@ -30,6 +32,18 @@ struct Case {
     undefined: Vec<String>,
     #[serde(default)]
     circular: Vec<Vec<String>>,
+    /// The request's Prompt variables; one with a `value` has been answered.
+    #[serde(default)]
+    prompts: Vec<PromptCase>,
+    /// Unanswered prompts met: asked when sent.
+    #[serde(default)]
+    asked: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct PromptCase {
+    name: String,
+    value: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -72,7 +86,11 @@ fn the_core_resolver_gives_the_shared_answers() {
         }
         let set = env::load(dir.path()).unwrap();
         let vars = env::variables(&set, c.environment.as_deref());
-        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(dir.path()));
+        let prompts: Vec<Prompt> =
+            c.prompts.iter().map(|p| Prompt { name: p.name.clone(), description: String::new() }).collect();
+        let answers: HashMap<String, String> =
+            c.prompts.iter().filter_map(|p| Some((p.name.clone(), p.value.clone()?))).collect();
+        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(dir.path())).with_prompts(&prompts, &answers);
         let value = r.resolve(&c.text);
         assert!(
             value == c.value || matches_with_dynamics(&c.value, &value),
@@ -82,6 +100,7 @@ fn the_core_resolver_gives_the_shared_answers() {
         );
         assert_eq!(r.unresolved(), c.undefined, "{}: undefined", c.case);
         assert_eq!(r.circular(), c.circular, "{}: circular", c.case);
+        assert_eq!(r.unanswered(), c.asked, "{}: asked", c.case);
         assert!(r.errors().is_empty(), "{}: {:?}", c.case, r.errors());
     }
 }

@@ -21,6 +21,8 @@ import {
   variableNameError,
   bodySyntaxWarnings,
   customMethod,
+  requestPrompts,
+  promptMasked,
   type BulkRow,
   type MultipartPart,
 } from "./http";
@@ -354,6 +356,28 @@ describe("directives", () => {
     ]);
     setDirective(r, "no-redirect", null);
     expect(getDirective(r, "no-redirect")).toBeUndefined();
+  });
+});
+
+describe("Prompt variables", () => {
+  it("are read from @prompt directives in order, each name once, with its first description", () => {
+    const r = newRequest();
+    r.directives = [
+      { name: "prompt", value: "username" },
+      { name: "name", value: "login" },
+      { name: "Prompt", value: "otp Your one-time  password " },
+      { name: "prompt", value: "otp again" },
+      { name: "prompt", value: "" },
+    ];
+    expect(requestPrompts(r)).toEqual([
+      { name: "username", description: "" },
+      { name: "otp", description: "Your one-time  password" },
+    ]);
+  });
+
+  it("are masked only for password, passwd and pass, ignoring case", () => {
+    expect(["password", "PASSWD", "Pass"].every(promptMasked)).toBe(true);
+    expect(["passphrase", "userPassword", "otp"].some(promptMasked)).toBe(false);
   });
 });
 

@@ -8,7 +8,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { makeVarProvider } from "../lib/vars";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
@@ -35,7 +35,15 @@
   const orphaned = $derived(app.isOrphaned(tab));
   const variables = $derived.by(() => {
     if (!doc) return null;
-    const scope = { env: app.envVariables, fileVars: fileVariables(doc.file), headerVars: doc.file.header.variables, requestVars: req?.variables ?? [], envName: app.envName };
+    const scope = {
+      env: app.envVariables,
+      fileVars: fileVariables(doc.file),
+      headerVars: doc.file.header.variables,
+      requestVars: req?.variables ?? [],
+      envName: app.envName,
+      prompts: req ? requestPrompts(req) : [],
+      answers: app.promptAnswers(tab),
+    };
     return { ...makeVarProvider(scope), edit: (d: Definition) => app.editDefinition(tab.id, d), findUsages: (name: string) => app.findUsages(name) };
   });
 

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Local, Utc};
 
-use crate::model::Variable;
+use crate::model::{Prompt, Variable};
 
 /// Every dynamic variable the resolver generates, without the `$`; `env.` takes a
 /// name after it. Anything else after `$` is an Undefined variable. Autocomplete's
@@ -108,6 +108,9 @@ const GENERATED: &[&str] = &[
 /// characters, so they can't clash with real text and survive query encoding.
 const PLACEHOLDER: (char, char) = ('\u{E000}', '\u{E001}');
 
+/// How the resolved preview shows a masked prompted value.
+pub const MASK: &str = "••••••••";
+
 /// Resolves `{{name}}` references against a flat variable map.
 #[derive(Debug, Default)]
 pub struct Resolver {
@@ -118,6 +121,10 @@ pub struct Resolver {
     errors: std::cell::RefCell<Vec<String>>,
     /// Set by [`Resolver::previewing`]: generated dynamic variables, as written.
     placeholders: Option<std::cell::RefCell<Vec<String>>>,
+    /// Prompt variables (see [`Resolver::with_prompts`]): answered ones with their
+    /// value and whether it's masked, unanswered ones with `None`.
+    prompts: HashMap<String, Option<(String, bool)>>,
+    unanswered: std::cell::RefCell<BTreeSet<String>>,
 }
 
 impl Resolver {
@@ -137,6 +144,18 @@ impl Resolver {
             vars.insert(v.name.clone(), v.value.clone());
         }
         Resolver { vars, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
+    }
+
+    /// Adds the request's Prompt variables. An answered one (its value in `answers`)
+    /// overrides every other variable of the same name, also inside other variables'
+    /// values, and is used as typed. An unanswered one is left as written and
+    /// reported by [`Self::unanswered`], not as undefined.
+    pub fn with_prompts(mut self, prompts: &[Prompt], answers: &HashMap<String, String>) -> Self {
+        for p in prompts {
+            let answer = answers.get(&p.name).map(|v| (v.clone(), p.masked()));
+            self.prompts.insert(p.name.clone(), answer);
+        }
+        self
     }
 
     /// For the resolved preview: dynamic variables that would generate a new value
@@ -187,6 +206,11 @@ impl Resolver {
         self.unresolved.borrow().iter().cloned().collect()
     }
 
+    /// Unanswered Prompt variables met so far: asked when the request is sent.
+    pub fn unanswered(&self) -> Vec<String> {
+        self.unanswered.borrow().iter().cloned().collect()
+    }
+
     /// Circular references met so far, each as the chain of names followed from the
     /// reference as written to the name that repeats (`["a", "b", "a"]`), in the order found.
     pub fn circular(&self) -> Vec<Vec<String>> {
@@ -230,6 +254,20 @@ impl Resolver {
                         continue;
                     }
                 }
+            } else if let Some(prompt) = self.prompts.get(inner) {
+                // In the preview a masked value is shown masked, and an unanswered
+                // prompt as written (a placeholder, so it passes the URL check).
+                let shown = match prompt {
+                    Some((value, masked)) => {
+                        (*masked).then(|| self.placeholder(MASK)).flatten().unwrap_or(value.clone())
+                    }
+                    None => {
+                        self.unanswered.borrow_mut().insert(inner.to_string());
+                        self.placeholder(whole).unwrap_or_else(|| whole.to_string())
+                    }
+                };
+                out.push_str(&shown);
+                continue;
             } else if chain.iter().any(|n| n == inner) {
                 let mut cycle = chain.clone();
                 cycle.push(inner.to_string());

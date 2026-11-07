@@ -187,3 +187,35 @@ fn a_request_that_cant_be_sent_is_still_shown_with_the_reason() {
     assert_eq!(shown.url, "/users");
     assert!(shown.error.unwrap().to_string().contains("Host header"));
 }
+
+#[test]
+fn prompted_values_are_shown_masked_ones_masked_and_unanswered_prompts_as_written() {
+    let req = request(
+        "# @prompt host\n# @prompt password\n# @prompt otp One-time code\nGET https://{{host}}/login?otp={{otp}}\nX-Pass: {{password}}\nX-Env: {{envOnly}}\n",
+    );
+    let env = vars(&[("host", "env.example"), ("envOnly", "{{host}}")]);
+    let answers = vars(&[("host", "typed.example"), ("password", "s3cret")]);
+    let resolver = Resolver::new(env).with_prompts(&req.prompts(), &answers);
+
+    let shown = preview(&req, resolver);
+    assert_eq!(shown.url, "https://typed.example/login?otp={{otp}}");
+    let header = |name: &str| shown.headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+    assert_eq!(header("X-Pass"), Some("••••••••"), "never the masked value");
+    assert_eq!(header("X-Env"), Some("typed.example"), "used inside other variables' values");
+    assert!(shown.warnings.is_empty(), "an unanswered prompt isn't an Undefined variable: {:?}", shown.warnings);
+    assert!(shown.error.is_none(), "{:?}", shown.error);
+
+    // An unanswered prompt in the host doesn't stop the preview either.
+    let req = request("# @prompt host\nGET https://{{host}}/x\n");
+    let shown = preview(&req, Resolver::new(HashMap::new()).with_prompts(&req.prompts(), &HashMap::new()));
+    assert_eq!((shown.url.as_str(), shown.error.is_none()), ("https://{{host}}/x", true));
+}
+
+#[test]
+fn a_send_uses_prompted_values_including_masked_ones() {
+    let req = request("# @prompt password\nGET https://x.example/?p={{password}}\n");
+    let resolver =
+        Resolver::new(vars(&[("password", "env")])).with_prompts(&req.prompts(), &vars(&[("password", "s3cret")]));
+    let sent = prepare(&req, &resolver, Path::new("."), &ExecSettings::default()).unwrap();
+    assert_eq!(sent.url, "https://x.example/?p=s3cret");
+}

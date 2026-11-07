@@ -3,8 +3,8 @@
 // (src/lib/vars.test.ts drives both through the same cases), except that dynamic
 // variables are left as written: they're generated at send time.
 import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
-import { VAR_RE } from "./http";
-import type { EnvironmentSet, Variable } from "./types";
+import { promptMasked, VAR_RE } from "./http";
+import type { EnvironmentSet, Prompt, Variable } from "./types";
 import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
 
 /**
@@ -61,6 +61,10 @@ export interface Scope {
   /** The `@name` lines at the top of the file (some of `fileVars`): the ones the request's Settings edit. */
   headerVars?: Variable[];
   envName: string | null;
+  /** The request's Prompt variables (`requestPrompts`). */
+  prompts?: Prompt[];
+  /** Values remembered for them; a prompt without one is asked when sent. */
+  answers?: Record<string, string>;
 }
 
 interface Entry {
@@ -92,7 +96,11 @@ function segments(text: string): Segment[] {
   return out;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {} }: Scope): VarProvider {
+  // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
+  const prompted = new Map<string, { value: string; masked: boolean } | null>();
+  for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
+
   // Later wins: environment, then the file, then the request's own declarations.
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
@@ -109,6 +117,7 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();
     const circular: string[][] = [];
+    const asked = new Set<string>();
     let secret = false;
     const walk = (text: string, chain: string[]): string =>
       segments(text)
@@ -118,6 +127,15 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
           if (isDynamic(s.name)) return s.whole;
           if (s.name.startsWith("$")) {
             undefinedNames.add(s.name);
+            return s.whole;
+          }
+          const prompt = prompted.get(s.name);
+          if (prompt) {
+            secret ||= prompt.masked;
+            return prompt.value;
+          }
+          if (prompt === null) {
+            asked.add(s.name);
             return s.whole;
           }
           if (chain.includes(s.name)) {
@@ -135,12 +153,15 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
         })
         .join("");
     const value = walk(text, []);
-    return { value, undefined: [...undefinedNames].sort(), circular, secret };
+    return { value, undefined: [...undefinedNames].sort(), circular, asked: [...asked].sort(), secret };
   }
 
   function info(name: string): VarInfo {
     if (isDynamic(name)) return { state: "dyn" };
     if (name.startsWith("$")) return { state: "bad" };
+    const prompt = prompted.get(name);
+    if (prompt === null) return { state: "prompt", source: "a prompt: asked when sent" };
+    if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered until the app quits" };
     const entry = scope.get(name);
     if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
     const r = resolve(`{{${name}}}`);
@@ -149,8 +170,10 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   }
 
   function completions(): VarCompletion[] {
-    const named = [...scope].map(([name, entry]): VarCompletion => {
-      const source = entry.origin;
+    // A Prompt variable overrides every other variable of its name, so it takes that name's entry.
+    const sources = new Map<string, VarCompletion["source"]>([...scope].map(([name, entry]) => [name, entry.origin]));
+    for (const name of prompted.keys()) sources.set(name, "prompt");
+    const named = [...sources].map(([name, source]): VarCompletion => {
       const i = info(name);
       if (i.secret) return { name, source, secret: true };
       if (i.state !== "ok") return { name, source };

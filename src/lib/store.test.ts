@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   searchRequests: vi.fn(),
   findUsages: vi.fn(),
   sendRequest: vi.fn(),
+  previewRequest: vi.fn(),
   cancelRequest: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
@@ -1285,5 +1286,125 @@ describe("find usages", () => {
 
     expect(app.modal).toBe("env");
     expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url" });
+  });
+});
+
+describe("Prompt variables", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  /** A tab on a POST that declares `otp` (with help text) and `password`. */
+  async function promptingTab() {
+    const f = fileOf(["GET", "Login", "https://api.example.com/login?otp={{otp}}"]);
+    f.requests[0].directives = [
+      { name: "prompt", value: "otp Your one-time password" },
+      { name: "prompt", value: "password" },
+    ];
+    const [tab] = await openAll(f);
+    return tab;
+  }
+  const sentPrompts = (call = 0) => api.sendRequest.mock.calls[call][0].promptValues;
+
+  it("asks once for all of them, in order, with their descriptions and masking, then sends with the values", async () => {
+    const tab = await promptingTab();
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields).toEqual([
+      { label: "otp", help: "Your one-time password", masked: false, value: "" },
+      { label: "password", help: "", masked: true, value: "" },
+    ]);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await sending;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(sentPrompts()).toEqual({ otp: "123456", password: "s3cret" });
+  });
+
+  it("cancelling the form cancels the send", async () => {
+    const tab = await promptingTab();
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.runs[tab.id]).toBeUndefined();
+    expect(app.promptAnswers(tab)).toEqual({});
+  });
+
+  it("remembers the values: a second send, or one after reopening the tab, doesn't ask again", async () => {
+    const tab = await promptingTab();
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await first;
+
+    await app.send(tab.id);
+    await app.closeTab(tab.id);
+    await app.openRequest(PATH, { index: 0 });
+    await app.send(app.activeTabId!);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(3);
+    expect(sentPrompts(2)).toEqual({ otp: "123456", password: "s3cret" });
+  });
+
+  it("asks only for prompts without a remembered value, and again for all after forgetting", async () => {
+    const tab = await promptingTab();
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await first;
+
+    app.requestFor(tab)!.directives.push({ name: "prompt", value: "user Who to log in as" });
+    const second = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields!.map((f) => f.label)).toEqual(["user"]);
+    app.closeDialog("send", "", ["ann"]);
+    await second;
+    expect(sentPrompts(1)).toEqual({ otp: "123456", password: "s3cret", user: "ann" });
+
+    app.forgetPrompts(tab);
+    expect(app.promptAnswers(tab)).toEqual({});
+    const third = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields!.map((f) => f.label)).toEqual(["otp", "password", "user"]);
+    app.closeDialog("cancel");
+    await third;
+  });
+
+  it("are remembered per request", async () => {
+    const f = fileOf(["GET", "A", "https://x/a"], ["GET", "B", "https://x/b"]);
+    for (const r of f.requests) r.directives = [{ name: "prompt", value: "otp" }];
+    const [a, b] = await openAll(f);
+    const first = app.send(a.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["1"]);
+    await first;
+    const second = app.send(b.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("cancel");
+    await second;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the resolved preview gets the remembered values; a request without prompts sends none", async () => {
+    const tab = await promptingTab();
+    api.previewRequest.mockResolvedValue(null);
+    await app.preview(tab);
+    expect(api.previewRequest.mock.calls[0][0].promptValues).toEqual({});
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["1", "2"]);
+    await sending;
+    await app.preview(tab);
+    expect(api.previewRequest.mock.calls[1][0].promptValues).toEqual({ otp: "1", password: "2" });
+
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Plain", "https://x"]));
+    await app.openRequest("/ws/api/plain.http", { index: 0 });
+    await app.send(app.activeTabId!);
+    expect(app.dialog).toBeNull();
+    expect(sentPrompts(1)).toEqual({});
   });
 });
