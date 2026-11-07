@@ -8,7 +8,7 @@
   import VarField from "../lib/codemirror/VarField.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
 
-  let { auth, variables = null }: { auth: Auth; variables?: VarProvider | null } = $props();
+  let { auth = $bindable(), variables = null }: { auth: Auth; variables?: VarProvider | null } = $props();
   let reveal = $state(false);
 
   // A header key is written as a header line; either way the name goes on the `# @httpdesk-auth` line, which splits at spaces.
