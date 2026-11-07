@@ -201,7 +201,7 @@ const extraHeaders: [string, string][] = manyHeaders
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
 // `?response=store`: items with a `status` and 19-digit IDs, and item 2 becomes
 //   "sold" from the second send on (filter tests).
-// `?response=html`: an HTML page. `?response=text`: a plain-text body. `?response=truncated`: a JSON body cut off at the size limit.
+// `?response=html`: an HTML page; `?response=longHtml`: a 200-line one. `?response=text`: a plain-text body. `?response=truncated`: a JSON body cut off at the size limit.
 // `?response=nested`: `{"a":{"odd key":[{"b":1}]}}` (Copy path tests).
 const responseKind = new URLSearchParams(location.search).get("response");
 // `?download=slow`: the send takes ~2 s, its body "arriving" as `send-progress`
@@ -539,6 +539,8 @@ mockIPC(
                 ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
                 : responseKind === "html"
                   ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
+                  : responseKind === "longHtml"
+                    ? `<!doctype html>\n<html><body>\n${Array.from({ length: 200 }, (_, i) => `<div class="row" data-index="${i}"><span class="label">Pet number ${i}</span> <a href="/pets/${i}" title="Open pet ${i}">open</a> <em class="tag">${"good dog ".repeat(20)}</em></div>`).join("\n")}\n</body></html>`
                   : responseKind === "text"
                     ? "pets: 2\nRex, Tom\n"
                   : responseKind === "truncated"
@@ -550,8 +552,8 @@ mockIPC(
         const transferredSize = gzip ? 112 : body.length;
         const status = statusParam ?? (r.method === "POST" ? 201 : 200);
         const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        const contentType = responseKind === "html" ? "text/html; charset=utf-8" : responseKind === "text" ? "text/plain; charset=utf-8" : "application/json";
-        const bodyKind: ResponseKind = responseKind === "html" ? "html" : responseKind === "text" ? "text" : "json";
+        const contentType = responseKind === "html" || responseKind === "longHtml" ? "text/html; charset=utf-8" : responseKind === "text" ? "text/plain; charset=utf-8" : "application/json";
+        const bodyKind: ResponseKind = responseKind === "html" || responseKind === "longHtml" ? "html" : responseKind === "text" ? "text" : "json";
         textBodies.set(id, { body, kind: bodyKind });
         const cookies = responseKind === "cookies" ? mockCookies : [];
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);

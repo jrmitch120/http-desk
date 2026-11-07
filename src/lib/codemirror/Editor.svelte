@@ -3,7 +3,7 @@
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { foldAll, unfoldAll } from "@codemirror/language";
+  import { foldAll, forceParsing, unfoldAll } from "@codemirror/language";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
 
   interface Props {
@@ -21,6 +21,9 @@
     extensions?: Extension;
   }
   let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
+
+  /** The most time spent colouring the visible text when an editor is created. */
+  const PARSE_ON_MOUNT_MS = 50;
 
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);
@@ -45,6 +48,11 @@
         ],
       }),
     });
+    // A new state parses only its first 3000 characters; the rest of the view
+    // would stay uncoloured until CodeMirror's idle-time parse (100 ms or more).
+    // Parse what's in view now, before the first paint, so switching back to an
+    // editor (Preview → Raw) is coloured at once. Capped so a huge body can't stall.
+    forceParsing(view, view.viewport.to, PARSE_ON_MOUNT_MS);
   });
   onDestroy(() => view?.destroy());
 
