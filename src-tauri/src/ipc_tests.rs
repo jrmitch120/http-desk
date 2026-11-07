@@ -526,7 +526,10 @@ fn send_errors_arrive_classified() {
 
     let err = send(0);
     assert_eq!((&err["kind"], &err["details"]), (&json!("refused"), &json!({ "host": "127.0.0.1", "port": port })));
-    assert!(err["message"].as_str().unwrap().contains("Connection refused"), "{err}");
+    // The message is the error chain, in the OS's own words ("Connection refused" on
+    // Linux and macOS, "actively refused it" on Windows); the UI's heading and hint
+    // come from `kind`, so only check that it's about this request.
+    assert!(err["message"].as_str().unwrap().contains(&format!("http://127.0.0.1:{port}/x")), "{err}");
 
     // Errors found before sending are classified too.
     let err = send(1);
