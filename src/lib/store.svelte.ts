@@ -240,11 +240,15 @@ class AppStore {
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
-  /** "HttpDesk — my-api — staging": the workspace and the active environment, so
-   *  the window always says where a send will go. App.svelte applies it. */
-  windowTitle = $derived(
-    this.root ? ["HttpDesk", basename(this.root), ...(this.envName ? [this.envName] : [])].join(" — ") : "HttpDesk",
-  );
+  /** "Get users — my-api — staging": the active request (as its tab names it), the
+   *  workspace and the active environment, dropping what doesn't apply; "HttpDesk"
+   *  with no workspace. The request leads because the Dock, taskbar and window
+   *  switcher cut long titles off at the end. App.svelte applies it. */
+  windowTitle = $derived.by(() => {
+    if (!this.root) return "HttpDesk";
+    const req = this.requestFor(this.activeTab);
+    return [req && displayName(req), basename(this.root), this.envName].filter(Boolean).join(" — ");
+  });
 
   /** Every environment name in the workspace (the picker lists them all). */
   envNames = $derived(environmentNames(this.envSet, this.envFolders));
