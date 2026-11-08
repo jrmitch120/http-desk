@@ -26,6 +26,7 @@
   /** Left/Right (wrapping), Home/End move focus between tabs; Enter/Space switch to the focused one. */
   function onTabKey(e: KeyboardEvent, tab: Tab) {
     if (e.target !== e.currentTarget) return; // keys on the close button
+    if (e.ctrlKey || e.metaKey) return; // shortcuts (⌘/Ctrl Enter sends) pass through
     const all = [...(strip?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
     const i = all.indexOf(e.currentTarget as HTMLElement);
     let to: HTMLElement | undefined;

@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { activeTab, bodyEditor, openApp, openRequest, sentRequests, urlBar } from "./helpers";
+import { activeTab, bodyEditor, openApp, openRequest, sentRequests, tab, urlBar } from "./helpers";
 
 test("⌘Enter in a JSON body sends once without editing the body", async ({ page }) => {
   await openApp(page);
@@ -15,6 +15,33 @@ test("⌘Enter in a JSON body sends once without editing the body", async ({ pag
   expect(await sentRequests(page)).toHaveLength(1);
   await expect(lines).toHaveText(before);
   await expect(activeTab(page).locator(".dot")).toHaveCount(0);
+});
+
+test("⌘Enter with a tab focused sends the active request once and keeps the active tab", async ({ page }) => {
+  await openApp(page);
+  for (const name of ["Create pet", "List pets"]) await openRequest(page, ["api", "pets.http"], name);
+  // Focus the inactive tab: ⌘Enter must send the active one, not switch to it.
+  await tab(page, "List pets").click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(tab(page, "Create pet")).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+Enter");
+
+  await expect(page.getByText("200 OK")).toBeVisible();
+  expect(await sentRequests(page)).toHaveLength(1);
+  await expect(activeTab(page)).toContainText("List pets");
+});
+
+test("⌘Enter with a row's checkbox focused sends once without toggling it", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.locator(".subtab", { hasText: "Headers" }).click();
+  const accept = page.getByRole("checkbox", { name: "Enable Accept" });
+  await accept.focus();
+  await page.keyboard.press("ControlOrMeta+Enter");
+
+  await expect(page.getByText("200 OK")).toBeVisible();
+  expect(await sentRequests(page)).toHaveLength(1);
+  await expect(accept).toHaveAttribute("aria-checked", "true");
 });
 
 test("⌘, with the Environments editor open and edited keeps the editor and its edits", async ({ page }) => {
