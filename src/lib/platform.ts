@@ -69,3 +69,41 @@ function keyLabel(key: string, os: OS): string {
   if (os === "mac" && MAC_KEYS[key]) return MAC_KEYS[key];
   return key.length === 1 ? key.toUpperCase() : key;
 }
+
+/** Words that differ by OS: what its file manager and its trash are called. */
+export interface Wording {
+  /** Context menu item that shows a file or folder in the file manager. */
+  reveal: string;
+  /** Context menu item, and its confirmation's title and button, for deleting to the trash. */
+  moveToTrash: string;
+  /** The delete confirmation's question about the file or folder `name`. */
+  trashQuestion: (name: string) => string;
+  /** Title of the question asked when the trash can't take it (delete permanently instead?). */
+  trashUnavailable: string;
+}
+
+const WORDING: Record<OS, Wording> = {
+  mac: {
+    reveal: "Reveal in Finder",
+    moveToTrash: "Move to Trash",
+    trashQuestion: (name) => `Move "${name}" to the Trash?`,
+    trashUnavailable: "Couldn't Move to the Trash",
+  },
+  windows: {
+    reveal: "Show in File Explorer",
+    moveToTrash: "Delete",
+    trashQuestion: (name) => `Move "${name}" to the Recycle Bin?`,
+    trashUnavailable: "Couldn't Move to the Recycle Bin",
+  },
+  linux: {
+    reveal: "Open Containing Folder",
+    moveToTrash: "Move to Trash",
+    trashQuestion: (name) => `Move "${name}" to the Trash?`,
+    trashUnavailable: "Couldn't Move to the Trash",
+  },
+};
+
+/** The words `os` uses (see `Wording`): `wording().reveal` is "Reveal in Finder" on macOS. */
+export function wording(os: OS = currentOS()): Wording {
+  return WORDING[os];
+}

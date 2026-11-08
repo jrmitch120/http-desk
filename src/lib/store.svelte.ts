@@ -13,6 +13,7 @@ import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractT
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
 import { SHARED } from "./vars";
+import { wording } from "./platform";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -983,14 +984,15 @@ class AppStore {
   }
 
   async deletePath(path: string) {
-    const r = await this.choose("Move to trash", `Move "${basename(path)}" to the trash?`, [
+    const words = wording();
+    const r = await this.choose(words.moveToTrash, words.trashQuestion(basename(path)), [
       { label: "Cancel", value: "cancel" },
-      { label: "Move to trash", value: "delete", danger: true },
+      { label: words.moveToTrash, value: "delete", danger: true },
     ]);
     if (r.button !== "delete") return;
     try {
       if ((await api.deletePath(path)) === "trashUnavailable") {
-        const ok = await this.choose("Couldn't move to trash", `Delete "${basename(path)}" permanently? This can't be undone.`, [
+        const ok = await this.choose(words.trashUnavailable, `Delete "${basename(path)}" permanently? This can't be undone.`, [
           { label: "Cancel", value: "cancel", focus: true },
           { label: "Delete permanently", value: "delete", danger: true },
         ]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectOS, formatShortcut, matchesShortcut, type KeyPress } from "./platform";
+import { detectOS, formatShortcut, matchesShortcut, wording, type KeyPress } from "./platform";
 
 describe("detectOS", () => {
   it("reads the OS from the webview's navigator.platform", () => {
@@ -95,5 +95,31 @@ describe("formatShortcut", () => {
     expect(formatShortcut({ mod: true, key: "Enter" }, os)).toBe("Ctrl+Enter");
     expect(formatShortcut({ mod: true, key: "," }, os)).toBe("Ctrl+,");
     expect(formatShortcut({ alt: true, key: "F4" }, os)).toBe("Alt+F4");
+  });
+});
+
+describe("wording", () => {
+  it("on macOS: Finder and the Trash", () => {
+    const w = wording("mac");
+    expect(w.reveal).toBe("Reveal in Finder");
+    expect(w.moveToTrash).toBe("Move to Trash");
+    expect(w.trashQuestion("x.http")).toBe('Move "x.http" to the Trash?');
+    expect(w.trashUnavailable).toBe("Couldn't Move to the Trash");
+  });
+
+  it("on Windows: File Explorer and the Recycle Bin", () => {
+    const w = wording("windows");
+    expect(w.reveal).toBe("Show in File Explorer");
+    expect(w.moveToTrash).toBe("Delete");
+    expect(w.trashQuestion("x.http")).toBe('Move "x.http" to the Recycle Bin?');
+    expect(w.trashUnavailable).toBe("Couldn't Move to the Recycle Bin");
+  });
+
+  it("on Linux: the containing folder and the Trash", () => {
+    const w = wording("linux");
+    expect(w.reveal).toBe("Open Containing Folder");
+    expect(w.moveToTrash).toBe("Move to Trash");
+    expect(w.trashQuestion("x.http")).toBe('Move "x.http" to the Trash?');
+    expect(w.trashUnavailable).toBe("Couldn't Move to the Trash");
   });
 });
