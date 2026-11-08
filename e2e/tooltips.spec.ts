@@ -8,8 +8,8 @@ test("hovering an icon-only button shows its tooltip after a short delay, and le
   const tip = page.getByRole("tooltip");
 
   await settings.hover();
-  await expect(tip).toHaveText("Settings (⌘/Ctrl ,)");
-  await expect(settings).toHaveAccessibleDescription("Settings (⌘/Ctrl ,)");
+  await expect(tip).toHaveText("Settings (⌘,)");
+  await expect(settings).toHaveAccessibleDescription("Settings (⌘,)");
 
   await page.mouse.move(400, 400);
   await expect(tip).toBeHidden();
@@ -22,7 +22,7 @@ test("keyboard focus shows the tooltip and Escape hides it", async ({ page }) =>
 
   for (let i = 0; i < 40 && !(await settings.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab");
   await expect(settings).toBeFocused();
-  await expect(tip).toHaveText("Settings (⌘/Ctrl ,)");
+  await expect(tip).toHaveText("Settings (⌘,)");
 
   await page.keyboard.press("Escape");
   await expect(tip).toBeHidden();

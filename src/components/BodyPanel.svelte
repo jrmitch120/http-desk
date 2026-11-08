@@ -16,6 +16,10 @@
   import { addMenuItems } from "../lib/editMenu";
   import { pathAt } from "../lib/jsonpath";
   import type { HttpResponse } from "../lib/types";
+  import { formatShortcut, type Shortcut } from "../lib/platform";
+
+  // The editor's own find (CodeMirror's Mod-f), not an app command.
+  const SEARCH: Shortcut = { mod: true, key: "f" };
 
   interface Props {
     res: HttpResponse;
@@ -87,7 +91,7 @@
   {#if !isBinary}<span class="lang muted">{kind.toUpperCase()}</span>{/if}
   <span class="spacer"></span>
   {#if effectiveMode !== "preview"}
-    <button class="icon-btn" aria-label="Search" use:tooltip={"Search (⌘/Ctrl F)"} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
+    <button class="icon-btn" aria-label="Search" use:tooltip={`Search (${formatShortcut(SEARCH)})`} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
     {#if kind === "json" || kind === "xml"}
       <button class="icon-btn" aria-label="Fold all" use:tooltip onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
       <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>

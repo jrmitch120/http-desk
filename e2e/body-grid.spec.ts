@@ -15,7 +15,7 @@ async function bodyOf(page: Page, mode: string): Promise<Locator> {
 }
 
 async function send(page: Page): Promise<Sent["body"]> {
-  // The button, not ⌘/Ctrl Enter: the shortcut lives in text fields, and a test may end on a checkbox.
+  // The button, not ⌘Enter / Ctrl+Enter: the shortcut lives in text fields, and a test may end on a checkbox.
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(async () => (await sentRequests(page)).length).toBeGreaterThan(0);
   const sent = (await sentRequests(page)) as unknown as Sent[];

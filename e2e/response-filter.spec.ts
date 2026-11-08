@@ -87,7 +87,7 @@ test("the filter survives switching tabs and is re-applied to the next response"
   await expect(filterBox(page)).toHaveValue(SOLD_IDS);
   await expect(bodyLines(page)).toHaveText(["[", "  1234567890123456789,", "  9007199254740993", "]"]);
 
-  // The mock marks item 2 as sold from the second send on. ⌘/Ctrl Enter sends
+  // The mock marks item 2 as sold from the second send on. ⌘Enter / Ctrl+Enter sends
   // even with the tab strip focused (#74).
   await expect(tab(page, "List pets")).toBeFocused();
   await page.keyboard.press("Meta+Enter");
