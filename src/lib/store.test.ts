@@ -1019,8 +1019,8 @@ describe("search", () => {
 describe("dialog queue", () => {
   it("shows one dialog at a time and resolves each with the user's own answer", async () => {
     const del = app.choose("Delete request", 'Delete "List"?', [
-      { label: "Cancel", value: "cancel" },
-      { label: "Delete", value: "delete", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     const name = app.prompt("Rename request", "List");
 

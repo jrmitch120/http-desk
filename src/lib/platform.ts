@@ -1,5 +1,6 @@
 // The one place that knows which OS the app runs on, and what that means for
-// shortcuts. Pure and synchronous: the OS comes from the page, before any IPC.
+// shortcuts, dialog button order and wording. Pure and synchronous: the OS
+// comes from the page, before any IPC.
 
 export type OS = "mac" | "windows" | "linux";
 
@@ -68,6 +69,30 @@ export function matchesShortcut(e: KeyPress, s: Shortcut, os: OS = currentOS()):
 function keyLabel(key: string, os: OS): string {
   if (os === "mac" && MAC_KEYS[key]) return MAC_KEYS[key];
   return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/**
+ * What a dialog button is for, which decides where it sits:
+ * - `primary`: the default answer (Enter, and focus unless another button asks
+ *   for it). A destructive confirmation's action ("Move to Trash") is primary too.
+ * - `destructive`: an alternative to the primary that throws work away ("Don't save").
+ * - `cancel`: the button Escape stands for.
+ */
+export type ButtonRole = "primary" | "destructive" | "cancel";
+
+/**
+ * Where `os` puts a dialog's buttons, each group left to right: `start` at the
+ * far left, `end` at the right. macOS (and GTK on Linux) puts the primary
+ * rightmost, after Cancel, and a destructive alternative apart at the far left:
+ * `[Don't save] … [Cancel] [Save all]`. Windows puts the primary first:
+ * `[Save all] [Don't save] [Cancel]`. Buttons without a role keep their order,
+ * between the alternatives and Cancel.
+ */
+export function arrangeDialogButtons<B extends { role?: ButtonRole }>(buttons: B[], os: OS = currentOS()): { start: B[]; end: B[] } {
+  const by = (role?: ButtonRole) => buttons.filter((b) => b.role === role);
+  const [primary, destructive, cancel, other] = [by("primary"), by("destructive"), by("cancel"), by(undefined)];
+  if (os === "windows") return { start: [], end: [...primary, ...destructive, ...other, ...cancel] };
+  return { start: destructive, end: [...other, ...cancel, ...primary] };
 }
 
 /** Words that differ by OS: what its file manager and its trash are called. */

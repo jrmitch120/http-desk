@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectOS, formatShortcut, matchesShortcut, wording, type KeyPress } from "./platform";
+import { arrangeDialogButtons, detectOS, formatShortcut, matchesShortcut, wording, type KeyPress } from "./platform";
 
 describe("detectOS", () => {
   it("reads the OS from the webview's navigator.platform", () => {
@@ -95,6 +95,40 @@ describe("formatShortcut", () => {
     expect(formatShortcut({ mod: true, key: "Enter" }, os)).toBe("Ctrl+Enter");
     expect(formatShortcut({ mod: true, key: "," }, os)).toBe("Ctrl+,");
     expect(formatShortcut({ alt: true, key: "F4" }, os)).toBe("Alt+F4");
+  });
+});
+
+describe("arrangeDialogButtons", () => {
+  const unsaved = [
+    { label: "Cancel", role: "cancel" as const },
+    { label: "Don't save", role: "destructive" as const },
+    { label: "Save all", role: "primary" as const },
+  ];
+  const confirm = [
+    { label: "Cancel", role: "cancel" as const },
+    { label: "Move to Trash", role: "primary" as const },
+  ];
+  const labels = ({ start, end }: { start: { label: string }[]; end: { label: string }[] }) => ({
+    start: start.map((b) => b.label),
+    end: end.map((b) => b.label),
+  });
+
+  it.each(["mac", "linux"] as const)("on %s: primary rightmost, a destructive alternative apart at the far left", (os) => {
+    expect(labels(arrangeDialogButtons(unsaved, os))).toEqual({ start: ["Don't save"], end: ["Cancel", "Save all"] });
+    expect(labels(arrangeDialogButtons([...unsaved].reverse(), os))).toEqual({ start: ["Don't save"], end: ["Cancel", "Save all"] });
+    expect(labels(arrangeDialogButtons(confirm, os))).toEqual({ start: [], end: ["Cancel", "Move to Trash"] });
+  });
+
+  it("on Windows: primary first, Cancel last, all together", () => {
+    expect(labels(arrangeDialogButtons(unsaved, "windows"))).toEqual({ start: [], end: ["Save all", "Don't save", "Cancel"] });
+    expect(labels(arrangeDialogButtons([...unsaved].reverse(), "windows"))).toEqual({ start: [], end: ["Save all", "Don't save", "Cancel"] });
+    expect(labels(arrangeDialogButtons(confirm, "windows"))).toEqual({ start: [], end: ["Move to Trash", "Cancel"] });
+  });
+
+  it.each(["mac", "windows", "linux"] as const)("on %s: buttons without a role keep their order, between the alternatives and Cancel", (os) => {
+    const buttons = [{ label: "Cancel", role: "cancel" as const }, { label: "A" }, { label: "B" }, { label: "OK", role: "primary" as const }];
+    const { start, end } = labels(arrangeDialogButtons(buttons, os));
+    expect([...start, ...end]).toEqual(os === "windows" ? ["OK", "A", "B", "Cancel"] : ["A", "B", "Cancel", "OK"]);
   });
 });
 

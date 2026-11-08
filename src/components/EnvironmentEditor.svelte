@@ -174,8 +174,8 @@
 
   async function deleteEnv(name: string) {
     const r = await app.choose("Delete environment", `Delete environment "${name}" and all of its variables?`, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Delete", value: "delete", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     set.environments = set.environments.filter((e) => e.name !== name);
@@ -313,9 +313,9 @@
     if (dir === folder) return true;
     if (filesDirty) {
       const r = await app.choose("Unsaved changes", `Save the changes to the environments of ${folderLabel(folder)} first?`, [
-        { label: "Cancel", value: "cancel" },
-        { label: "Discard", value: "discard", danger: true },
-        { label: "Save", value: "save", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Discard", value: "discard", role: "destructive", danger: true },
+        { label: "Save", value: "save", role: "primary" },
       ]);
       if (r.button === "cancel") return false;
       if (r.button === "save" && !(await persist())) return false;
@@ -328,8 +328,8 @@
     if (app.dialog || app.renaming) return false; // a nested prompt/confirm/form is handling this keypress
     if (dirty) {
       const r = await app.choose("Discard changes?", "You have unsaved environment changes.", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Discard", value: "discard", danger: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Discard", value: "discard", role: "primary", danger: true },
       ]);
       if (r.button !== "discard") return false;
     }
@@ -343,8 +343,8 @@
   async function renameVariable(name: string) {
     if (dirty) {
       const r = await app.choose("Save changes first?", "Renaming a variable saves the environments. Your unsaved changes to them will be saved too.", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Save", value: "save", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Save", value: "save", role: "primary" },
       ]);
       if (r.button !== "save" || !(await persist())) return;
     }

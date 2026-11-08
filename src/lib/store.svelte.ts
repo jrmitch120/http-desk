@@ -13,7 +13,7 @@ import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractT
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
 import { SHARED } from "./vars";
-import { wording } from "./platform";
+import { wording, type ButtonRole } from "./platform";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -75,7 +75,10 @@ export interface Toast {
 export interface DialogButton {
   label: string;
   value: string;
-  primary?: boolean;
+  /** Decides where the button sits on each OS (`arrangeDialogButtons`), and
+   *  which one Enter (primary) and Escape (cancel) stand for. */
+  role?: ButtonRole;
+  /** Drawn in the danger colour: a primary that destroys something, or a destructive alternative. */
   danger?: boolean;
   /** Focused when the dialog opens, instead of the primary button. Set it on
    *  Cancel for irreversible confirmations, so a stray Enter destroys nothing. */
@@ -397,9 +400,9 @@ class AppStore {
     if (!dirty.length) return true;
     const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
     const r = await this.choose("Unsaved changes", question ? `${summary} ${question}` : summary, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Don't save", value: "discard", danger: true },
-      { label: "Save all", value: "save", primary: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: "Don't save", value: "discard", role: "destructive", danger: true },
+      { label: "Save all", value: "save", role: "primary" },
     ]);
     if (r.button === "cancel") return false;
     if (r.button === "save") {
@@ -649,8 +652,8 @@ class AppStore {
       message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
     }
     const r = await this.choose("Overwrite existing files?", message, [
-      { label: "Cancel", value: "cancel", focus: true },
-      { label: "Overwrite", value: "overwrite", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+      { label: "Overwrite", value: "overwrite", role: "primary", danger: true },
     ]);
     return r.button === "overwrite";
   }
@@ -818,9 +821,9 @@ class AppStore {
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Don't save", value: "discard", danger: true },
-        { label: "Save", value: "save", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Don't save", value: "discard", role: "destructive", danger: true },
+        { label: "Save", value: "save", role: "primary" },
       ]);
       if (r.button === "cancel") return false;
       if (r.button === "save" && !(await this.saveTab(tab))) return false;
@@ -879,8 +882,8 @@ class AppStore {
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!doc || !req) return;
     const r = await this.choose("Delete request", `Delete "${displayName(req)}" from ${basename(path)}?`, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Delete", value: "delete", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     const wasClean = !this.isDocDirty(path);
@@ -986,15 +989,15 @@ class AppStore {
   async deletePath(path: string) {
     const words = wording();
     const r = await this.choose(words.moveToTrash, words.trashQuestion(basename(path)), [
-      { label: "Cancel", value: "cancel" },
-      { label: words.moveToTrash, value: "delete", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: words.moveToTrash, value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     try {
       if ((await api.deletePath(path)) === "trashUnavailable") {
         const ok = await this.choose(words.trashUnavailable, `Delete "${basename(path)}" permanently? This can't be undone.`, [
-          { label: "Cancel", value: "cancel", focus: true },
-          { label: "Delete permanently", value: "delete", danger: true },
+          { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+          { label: "Delete permanently", value: "delete", role: "primary", danger: true },
         ]);
         if (ok.button !== "delete") return;
         await api.deletePermanently(path);
@@ -1049,8 +1052,8 @@ class AppStore {
       message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
       fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
       buttons: [
-        { label: "Cancel", value: "cancel" },
-        { label: "Send", value: "send", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Send", value: "send", role: "primary" },
       ],
     });
     if (r.button !== "send") return false;
@@ -1121,8 +1124,8 @@ class AppStore {
     this.confirmingSend.add(tabId);
     try {
       const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
-        { label: "Cancel", value: "cancel", focus: true },
-        { label: `Send ${verb}`, value: "send", danger: true },
+        { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+        { label: `Send ${verb}`, value: "send", role: "primary", danger: true },
       ]);
       return r.button === "send";
     } finally {
@@ -1480,8 +1483,8 @@ class AppStore {
       title,
       input: { value, placeholder, selectStem },
       buttons: [
-        { label: "Cancel", value: "cancel" },
-        { label: "OK", value: "ok", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "OK", value: "ok", role: "primary" },
       ],
     });
     return r.button === "ok" ? r.value : null;
