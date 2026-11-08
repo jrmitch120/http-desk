@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -13,11 +14,14 @@
   import EnvironmentEditor from "./components/EnvironmentEditor.svelte";
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
+  import RenameVariable from "./components/RenameVariable.svelte";
+  import ExtractVariable from "./components/ExtractVariable.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
   import { modalOpen } from "./lib/modal";
   import { SIDEBAR } from "./lib/panes";
+  import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
     app.init().then(() => {
@@ -26,10 +30,15 @@
     });
   });
 
+  // The native window's title follows the workspace and the active environment.
+  $effect(() => {
+    getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
+  });
+
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
-    if (e.key === "F10" && e.shiftKey) return keyboardContextMenu(e);
+    if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") return keyboardContextMenu(e);
     const action = shortcut(e);
     if (!action) return;
     e.preventDefault();
@@ -38,14 +47,11 @@
   }
 
   /**
-   * Shift+F10 opens the focused element's context menu (macOS keyboards have no
-   * Menu key). Text fields keep the webview's own behaviour.
+   * Shift+F10 (macOS keyboards have no Menu key) and the Menu key open the
+   * focused element's context menu: a text field's edit menu at its caret.
    */
   function keyboardContextMenu(e: KeyboardEvent) {
-    const t = e.target;
-    if (!(t instanceof HTMLElement) || t === document.body || t.closest("input, textarea, .cm-editor") || modalOpen()) return;
-    e.preventDefault();
-    t.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    if (openFromKeyboard()) e.preventDefault();
   }
 
   /** The global shortcut `e` triggers, if any. */
@@ -57,13 +63,29 @@
     if (k === "enter" && app.activeTabId) return () => app.activeTabId && app.send(app.activeTabId);
     if ((k === "p" || k === "k") && root) return () => app.focusSearch++;
     if (k === "t" && root) return () => (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(root));
-    if (k === "e" && root) return () => (app.modal = "env");
+    if (switchEnvironment(e)) return root ? () => app.chooseEnvironment() : null;
+    if (k === "e" && !e.altKey && root) return () => (app.modal = "env");
     if (k === ",") return () => (app.modal = "settings");
     return null;
   }
+
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+  /**
+   * ⌘⌥E on macOS, Ctrl+Alt+E elsewhere: open the environment picker. On macOS
+   * ⌥E is a dead key, so the physical E key counts. Elsewhere the key must
+   * really be "e": Ctrl+Alt is how Windows reports AltGr, and AltGr+E types €
+   * on many layouts.
+   */
+  function switchEnvironment(e: KeyboardEvent): boolean {
+    if (!e.altKey || e.shiftKey) return false;
+    if (mac) return e.metaKey && !e.ctrlKey && (e.key.toLowerCase() === "e" || e.code === "KeyE");
+    return e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "e";
+  }
 </script>
 
-<svelte:window onkeydown={onKey} oncontextmenu={(e) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || (e.target as HTMLElement).closest?.(".cm-editor") || e.preventDefault()} />
+<!-- The app's own context menus only, never the webview's (src/lib/editMenu.ts). -->
+<svelte:window onkeydown={onKey} oncontextmenu={openContextMenu} />
 
 {#if app.root}
   <div class="shell">
@@ -113,6 +135,8 @@
 {#if app.modal === "env"}<EnvironmentEditor />{/if}
 {#if app.modal === "openapi"}<OpenApiImport />{/if}
 {#if app.modal === "settings"}<SettingsModal />{/if}
+{#if app.renaming}<RenameVariable />{/if}
+{#if app.extraction}<ExtractVariable />{/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}
 {/if}

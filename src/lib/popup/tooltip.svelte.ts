@@ -3,6 +3,7 @@
 //   <button class="icon-btn" aria-label="Refresh" use:tooltip>…</button>   text = the aria-label
 //   <span use:tooltip={node.path}>…</span>                                  text = the argument
 //   <button use:tooltip={tooltip ?? null}>                                  null or "" = no tooltip
+//   <div use:tooltip={() => (cut() ? text : null)}>                         asked each time it would show
 //
 // (An undefined argument is the same as none, so a component forwarding an
 // optional prop passes `?? null` to avoid showing its aria-label.)
@@ -70,12 +71,15 @@ export function hideTooltip(warm = true) {
   tip.visible = false;
 }
 
+/** The text, or a function that gives it when the tooltip is about to show (e.g. only while the text is cut off). */
+export type TooltipText = string | null | (() => string | null);
+
 /** `use:tooltip` / `use:tooltip={text}`. No text and no aria-label means no tooltip. */
-export function tooltip(node: HTMLElement, text?: string | null) {
+export function tooltip(node: HTMLElement, text?: TooltipText) {
   let current = text;
   // After a click, wait for the pointer to leave before showing it again (as native tooltips do).
   let clicked = false;
-  const textNow = () => (current === undefined ? (node.getAttribute("aria-label") ?? "") : (current ?? ""));
+  const textNow = () => (current === undefined ? (node.getAttribute("aria-label") ?? "") : ((typeof current === "function" ? current() : current) ?? ""));
   const start = () => {
     const t = textNow();
     if (t) show(node, t);
@@ -107,7 +111,7 @@ export function tooltip(node: HTMLElement, text?: string | null) {
   node.addEventListener("focus", onFocus);
   node.addEventListener("blur", stop);
   return {
-    update(next?: string | null) {
+    update(next?: TooltipText) {
       current = next;
       if (tip.anchor !== node) return;
       const t = textNow();

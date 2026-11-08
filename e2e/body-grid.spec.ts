@@ -22,10 +22,18 @@ async function send(page: Page): Promise<Sent["body"]> {
   return sent[sent.length - 1].body;
 }
 
-/** Types a new row into the ghost row. */
+/** Types a new row into the ghost row. Values are variable-aware fields (#80), typed into, not filled. */
 async function addRow(grid: Locator, name: string, value: string): Promise<void> {
   await grid.getByPlaceholder("Add key").fill(name);
-  await grid.locator(".kv-row:not(.ghost)").last().getByPlaceholder("Value").fill(value);
+  await grid.locator(".kv-row:not(.ghost)").last().getByRole("textbox", { name: "Value" }).click();
+  await grid.page().keyboard.type(value);
+}
+
+/** Types a path into a file part's (empty) path field. */
+async function typePath(row: Locator, path: string): Promise<void> {
+  // The field itself: in a narrow value column only its padding is left to click.
+  await row.locator(".file-cell .var-field").click();
+  await row.page().keyboard.type(path);
 }
 
 test("form-urlencoded fields are added in the ghost row, deleted and bulk-edited", async ({ page }) => {
@@ -38,7 +46,7 @@ test("form-urlencoded fields are added in the ghost row, deleted and bulk-edited
   await page.keyboard.press("Tab");
   await page.keyboard.type("good dog");
   await expect(grid.locator(".kv-row:not(.ghost) input.c-name")).toHaveCount(2);
-  await expect(grid.locator("input.c-value").nth(1)).toHaveValue("good dog");
+  await expect(grid.locator(".kv-row").nth(1).locator(".c-value")).toHaveText("good dog");
 
   const del = grid.getByRole("button", { name: "Delete" }).first();
   await grid.locator(".kv-row").first().hover();
@@ -77,7 +85,7 @@ test("multipart parts switch between text and file with the Select and take a co
   await expect(kind).toHaveText("File");
 
   const row = grid.locator(".kv-row").nth(1);
-  await row.getByPlaceholder("./path/to/file").fill("./cat.png");
+  await typePath(row, "./cat.png");
   await row.getByPlaceholder("auto").fill("image/png");
 
   // Back to text by keyboard, then to file again: the path is kept as the value.
@@ -86,7 +94,7 @@ test("multipart parts switch between text and file with the Select and take a co
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   await expect(kind).toHaveText("Text");
-  await expect(row.getByPlaceholder("./path/to/file")).toHaveCount(0);
+  await expect(row.locator(".file-cell")).toHaveCount(0);
   await kind.click();
   await page.getByRole("listbox", { name: "Type of avatar" }).getByRole("option", { name: "File" }).click();
 
@@ -113,7 +121,7 @@ test("multipart bulk edit keeps each part's type and content type", async ({ pag
   await grid.getByPlaceholder("Add key").fill("avatar");
   await grid.getByRole("combobox", { name: "Type of avatar" }).click();
   await page.getByRole("listbox", { name: "Type of avatar" }).getByRole("option", { name: "File" }).click();
-  await grid.getByPlaceholder("./path/to/file").fill("./cat.png");
+  await typePath(grid.locator(".kv-row").first(), "./cat.png");
 
   await grid.getByRole("button", { name: "Bulk edit" }).click();
   const text = grid.locator("textarea.bulk-text");

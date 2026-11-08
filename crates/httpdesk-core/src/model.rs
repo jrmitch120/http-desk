@@ -52,6 +52,24 @@ pub struct Directive {
     pub value: String,
 }
 
+/// A Prompt variable: `# @prompt name [description]` (or `// @prompt`) asks for a
+/// value when the request is sent (VS Code REST Client).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Prompt {
+    pub name: String,
+    /// Help text shown with the field; empty when the line has none.
+    pub description: String,
+}
+
+impl Prompt {
+    /// Whether the value is typed masked: the name is `password`, `passwd` or
+    /// `pass`, ignoring case (REST Client's list, case-insensitive).
+    pub fn masked(&self) -> bool {
+        ["password", "passwd", "pass"].iter().any(|n| self.name.eq_ignore_ascii_case(n))
+    }
+}
+
 /// A query parameter or header.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -267,6 +285,20 @@ impl Default for Request {
 impl Request {
     pub fn directive(&self, name: &str) -> Option<&str> {
         self.directives.iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.value.as_str())
+    }
+
+    /// The request's Prompt variables, in order. A name declared twice is asked once,
+    /// with its first description.
+    pub fn prompts(&self) -> Vec<Prompt> {
+        let mut out: Vec<Prompt> = Vec::new();
+        for d in self.directives.iter().filter(|d| d.name.eq_ignore_ascii_case("prompt")) {
+            let value = d.value.trim();
+            let (name, description) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
+            if !name.is_empty() && !out.iter().any(|p| p.name == name) {
+                out.push(Prompt { name: name.to_string(), description: description.trim().to_string() });
+            }
+        }
+        out
     }
 
     /// Human-friendly label: `### name`, then `@name`, then `METHOD url`.

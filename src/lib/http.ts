@@ -1,6 +1,6 @@
 // Pure helpers for editing the request model. No Svelte/Tauri imports so
 // they can be unit tested with vitest (src/lib/http.test.ts).
-import type { BodyMode, HttpFile, KeyValue, Request, Variable } from "./types";
+import type { BodyMode, HttpFile, KeyValue, Prompt, Request, Variable } from "./types";
 
 export const STANDARD_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -87,18 +87,32 @@ function escapedChar(s: string, i: number): [string, number] | null {
   }
 }
 
-/** Splits text into plain runs and `{{…}}` references, as the resolver finds them. */
-function segments(text: string): [boolean, string][] {
-  const out: [boolean, string][] = [];
-  let rest = text;
+/** A run of plain text, or a `{{…}}` reference: `ref` is what's between the braces, trimmed. */
+export interface Segment {
+  text: string;
+  ref?: string;
+  /** Where `text` starts in the text split. */
+  from: number;
+}
+
+/**
+ * Splits text into plain runs and `{{…}}` references, the one way every part of the
+ * frontend reads them, as the core's `vars::segments` does: a reference runs from
+ * `{{` to the next `}}` (so `{{a{b}}` names `a{b`); an unclosed `{{` is plain text.
+ * Empty plain runs are left out.
+ */
+export function segments(text: string): Segment[] {
+  const out: Segment[] = [];
+  let at = 0;
   for (;;) {
-    const start = rest.indexOf("{{");
-    const end = start < 0 ? -1 : rest.indexOf("}}", start + 2);
+    const start = text.indexOf("{{", at);
+    const end = start < 0 ? -1 : text.indexOf("}}", start + 2);
     if (end < 0) break;
-    out.push([false, rest.slice(0, start)], [true, rest.slice(start, end + 2)]);
-    rest = rest.slice(end + 2);
+    if (start > at) out.push({ text: text.slice(at, start), from: at });
+    out.push({ text: text.slice(start, end + 2), ref: text.slice(start + 2, end).trim(), from: start });
+    at = end + 2;
   }
-  out.push([false, rest]);
+  if (at < text.length) out.push({ text: text.slice(at), from: at });
   return out;
 }
 
@@ -108,8 +122,8 @@ function percentEncode(c: string): string {
 
 function escapeParam(text: string, part: Part): string {
   let out = "";
-  for (const [ref, s] of segments(text)) {
-    if (ref) {
+  for (const { text: s, ref } of segments(text)) {
+    if (ref !== undefined) {
       out += s;
       continue;
     }
@@ -132,8 +146,8 @@ function escapeParam(text: string, part: Part): string {
 
 function unescapeParam(text: string, part: Part): string {
   let out = "";
-  for (const [ref, s] of segments(text)) {
-    if (ref) {
+  for (const { text: s, ref } of segments(text)) {
+    if (ref !== undefined) {
       out += s;
       continue;
     }
@@ -518,10 +532,31 @@ export function setDirective(req: Request, name: string, value: string | null): 
   }
 }
 
+/**
+ * The request's Prompt variables (`# @prompt name [description]`), in order, as
+ * the core's `Request::prompts` reads them: a name declared twice is asked once.
+ */
+export function requestPrompts(req: Request): Prompt[] {
+  const out: Prompt[] = [];
+  for (const d of req.directives) {
+    if (d.name.toLowerCase() !== "prompt") continue;
+    const m = /^(\S+)\s*(.*)$/s.exec(d.value.trim());
+    if (m && !out.some((p) => p.name === m[1])) out.push({ name: m[1], description: m[2].trim() });
+  }
+  return out;
+}
+
+/** Whether a prompt's value is typed masked: its name is `password`, `passwd` or `pass`, ignoring case. */
+export function promptMasked(name: string): boolean {
+  return ["password", "passwd", "pass"].includes(name.toLowerCase());
+}
+
 // ------------------------------------------------------------------ variables
 
-/** A `{{name}}` reference; group 1 is the name. Global: use with matchAll. */
-export const VAR_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
+/** The definition of `name` in use in `list`: the last one, since a later definition wins. */
+export function lastNamed<T extends { name: string }>(list: readonly T[], name: string): T | undefined {
+  return list.filter((v) => v.name === name).at(-1);
+}
 
 /** All file-scoped variables: header + every request's `@var` lines. */
 export function fileVariables(file: HttpFile): Variable[] {
@@ -529,6 +564,11 @@ export function fileVariables(file: HttpFile): Variable[] {
 }
 
 // ------------------------------------------------------------------ formatting
+
+/** "A", "A and B", "A, B and C". */
+export function joinAnd(items: string[]): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
 
 /** How many bytes a base64 string decodes to, without decoding it. */
 export function base64DecodedLength(b64: string): number {

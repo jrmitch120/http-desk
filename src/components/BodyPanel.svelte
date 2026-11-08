@@ -1,8 +1,8 @@
 <!--
   The response viewer's Body tab: the view switch (Pretty/Raw, Hex, Preview),
   search, folding and wrap, the JSONPath filter bar, and the body itself
-  (an editor, or a preview). JSON bodies get their own context menu with
-  Copy path. The state behind it (rendered text, filter, shape) is the
+  (an editor, or a preview). JSON bodies add Copy path to the editor's
+  edit menu. The state behind it (rendered text, filter, shape) is the
   viewer's BodyView, so it outlives a switch to another tab.
 -->
 <script lang="ts">
@@ -13,8 +13,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import ResponseFilter from "./ResponseFilter.svelte";
-  import { keymap } from "@codemirror/view";
-  import { menu } from "../lib/menu.svelte";
+  import { addMenuItems } from "../lib/editMenu";
   import { pathAt } from "../lib/jsonpath";
   import type { HttpResponse } from "../lib/types";
 
@@ -57,25 +56,14 @@
     ...(view.canPreview ? [{ value: "preview" as const, label: "Preview" }] : []),
   ]);
 
-  // "Copy path" in the body editor's context menu (JSON bodies only; other
-  // bodies keep the webview's own menu). Paths are of the text on screen, so
-  // not while filter matches show.
+  // "Copy path" in the body editor's edit menu, after Copy and Select all (JSON
+  // bodies only). Paths are of the text on screen, so not while filter matches show.
   const jsonBody = $derived(kind === "json" && !isBinary);
   function bodyMenu(e: MouseEvent) {
     if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
     const ed = editor;
     const offset = ed.caretForMenu(e);
-    const selection = ed.selectedText();
-    menu.show(
-      e,
-      [
-        { label: "Copy", icon: "copy", disabled: !selection, action: () => void copyText(selection, "Copied") },
-        { label: "Select all", action: () => ed.selectAll() },
-        { separator: true },
-        { label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) },
-      ],
-      { label: "Body" },
-    );
+    addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) }]);
   }
   async function copyText(text: string, message: string) {
     await navigator.clipboard.writeText(text);
@@ -86,8 +74,6 @@
     if (path === null) app.toast("error", "There's no JSON value at the cursor");
     else void copyText(path, `Copied ${path}`);
   }
-  /** Shift+F10 in the body editor opens the same menu at the caret. */
-  const bodyKeys = keymap.of([{ key: "Shift-F10", run: () => (jsonBody ? (editor?.openMenuAtCaret(), true) : false) }]);
 </script>
 
 <div class="toolbar">
@@ -114,7 +100,7 @@
     <ResponseFilter value={filter} onchange={(v) => (filter = v)} matches={filtered?.matches ?? null} error={view.filterError} shape={view.shape} needshape={() => view.loadShape()} />
   </div>
 {/if}
-<!-- The body editor's context menu (Copy path); other content keeps the webview's. -->
+<!-- Adds Copy path to the body editor's edit menu. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="body" oncontextmenu={bodyMenu}>
   {#if mountPreview}
@@ -139,7 +125,7 @@
       {:else if view.formatting}
         <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
       {:else}
-        <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} extensions={bodyKeys} />
+        <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}
     </div>
   {/if}

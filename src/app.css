@@ -25,6 +25,9 @@
   --var-ok: #4fc08d;
   --var-bad: #f2706b;
   --var-dyn: #c3a6ff;
+  --var-circular: #f0954a;
+  --var-prompt: var(--info);
+  --var-secret: #5fc4d6;
 
   --m-get: #6bdd9a;
   --m-post: #ffd65c;
@@ -75,6 +78,10 @@
   --popup-border: 1px solid var(--border-strong);
   --popup-radius: 8px;
   --popup-shadow: var(--shadow);
+  /* A variable's hover card: at least this wide, and grows with its value up to
+     the maximum before wrapping (never wider than the window). */
+  --popup-card-min-width: 220px;
+  --popup-card-max-width: 480px;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
@@ -106,6 +113,9 @@
   --var-ok: #108a4c;
   --var-bad: #c8352b;
   --var-dyn: #7b4fc4;
+  --var-circular: #b35900;
+  --var-prompt: var(--info);
+  --var-secret: #0b7d8f;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
   --tok-key: #0451a5;
   --tok-string: #a31515;
@@ -181,7 +191,8 @@ textarea,
   outline: none;
   min-width: 0;
 }
-.input:focus {
+.input:focus,
+.var-field.input:focus-within {
   border-color: var(--focus);
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
@@ -459,7 +470,8 @@ kbd {
   color: var(--text-2);
 }
 
-/* CodeMirror variable highlighting (shared by URL bar and body editor) */
+/* {{variable}} highlighting: CodeMirror marks in the URL bar, body editor and
+   VarField, and VarField's static rendering (same classes) */
 .cm-var {
   border-radius: 3px;
   padding: 0 1px;
@@ -468,13 +480,70 @@ kbd {
   color: var(--var-ok);
   background: color-mix(in srgb, var(--var-ok) 12%, transparent);
 }
+/* An Undefined variable: underlined everywhere it is marked, so it reads without colour too. */
 .cm-var-bad {
   color: var(--var-bad);
   background: color-mix(in srgb, var(--var-bad) 12%, transparent);
+  text-decoration: underline wavy;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
 }
 .cm-var-dyn {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
+}
+/* A reference that leads back to itself (a → b → a): not the same as undefined. */
+.cm-var-circular {
+  color: var(--var-circular);
+  background: color-mix(in srgb, var(--var-circular) 12%, transparent);
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+/* An unanswered Prompt variable: asked when sent, not undefined. */
+.cm-var-prompt {
+  color: var(--var-prompt);
+  background: color-mix(in srgb, var(--var-prompt) 12%, transparent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* A defined value with a Secret in it (cm-var-ok cm-var-secret): a Secret, or a
+   variable whose value references one. */
+.cm-var-secret {
+  color: var(--var-secret);
+  background: color-mix(in srgb, var(--var-secret) 12%, transparent);
+}
+
+/* A variable's hover card (varCard in src/lib/codemirror/setup.ts), in an
+   editor's tooltip or VarField's popup. */
+.var-card {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font);
+  /* Sized by its content, not by what contains it: WebKit lays out CodeMirror's
+     tooltips absolutely in the popup layer, which has no width to give. */
+  width: max-content;
+  min-width: var(--popup-card-min-width);
+  max-width: min(var(--popup-card-max-width), calc(100vw - 12px));
+}
+.var-card-name {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.var-card-value {
+  font-family: var(--mono);
+  /* Breaks mid-word only when a value doesn't fit at the card's maximum width. */
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+.var-card-source {
+  color: var(--muted);
+  margin-top: 3px;
+}
+.var-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 4px -6px -2px 0;
 }
 
 /* Shared popup layer (src/lib/popup/layer.ts): a zero-size fixed stacking

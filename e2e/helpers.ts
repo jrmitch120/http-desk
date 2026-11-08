@@ -67,8 +67,17 @@ type EnvFile = Record<string, Record<string, unknown>>;
 /** What the mocked backend exposes to tests as `window.__mock` (see src/dev/mock.ts). */
 export interface MockState {
   sent: { method: string; url: string }[];
+  /** The Prompt variable values each send got, in order. */
+  sentPrompts: Record<string, string>[];
   /** The settings it last saved. */
-  settings: { theme: string; exec: Record<string, unknown> };
+  settings: {
+    theme: string;
+    exec: Record<string, unknown>;
+    showResolved: boolean;
+    envView: "matrix" | "list";
+    envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
+    environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
+  };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
   /** What "Save body to file" wrote, by path. */
@@ -77,10 +86,16 @@ export interface MockState {
   shapeRequests: string[];
   /** The two env files as last written. */
   envFiles: { shared: EnvFile; private: EnvFile };
+  /** Each folder's own environments below the root, as last saved, by folder ("api"). */
+  folderPairs: Record<string, { shared: unknown[]; environments: { name: string; variables: { name: string; value: string; secret: boolean }[] }[] }>;
   /** How many times the viewer called `pretty_response`. */
   prettyRequests: number;
+  /** How many times the resolved preview called `preview_request`. */
+  previewRequests: number;
   /** Whether the app has been given its settings yet. */
   settingsServed: boolean;
+  /** The window title the app last set (null before it sets one). */
+  title: string | null;
 }
 
 /** One value of the mock's test-facing state, read from the page. */
@@ -118,6 +133,20 @@ export function tab(page: Page, name: string): Locator {
 /** A confirm/prompt dialog (or any modal) by its title. */
 export function dialog(page: Page, title: string): Locator {
   return page.getByRole("dialog", { name: title, exact: true });
+}
+
+/** Switches the open Environments modal to its matrix (every environment side by side); it opens on the list. */
+export async function showEnvironmentMatrix(page: Page): Promise<void> {
+  const modal = dialog(page, "Environments");
+  await modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "Matrix" }).click();
+  await expect(modal.getByRole("group", { name: "Environments matrix" })).toBeVisible();
+}
+
+/** Switches the open Environments modal back to its list (one environment at a time). */
+export async function showEnvironmentList(page: Page): Promise<void> {
+  const modal = dialog(page, "Environments");
+  await modal.getByRole("radiogroup", { name: "View" }).getByRole("radio", { name: "List" }).click();
+  await expect(modal.getByRole("group", { name: "Variables" })).toBeVisible();
 }
 
 /** Right-clicks a sidebar row and picks an item from its context menu. */

@@ -60,7 +60,7 @@ test("Tab accepts the selected suggestion and moves on to the value", async ({ p
   await page.keyboard.press("Tab");
   await expect(cell).toHaveValue("User-Agent");
   await expect(suggestions(page)).toBeHidden();
-  await expect(page.locator(".kv-row input.c-value").nth(2)).toBeFocused();
+  await expect(page.locator(".kv-row").nth(2).locator(".c-value .cm-content")).toBeFocused();
 });
 
 test("clicking a suggestion accepts it, and the header is sent", async ({ page }) => {

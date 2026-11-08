@@ -2,7 +2,8 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, HttpFile, HttpResponse } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Usage } from "./types";
+import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
@@ -15,12 +16,16 @@ const api = vi.hoisted(() => ({
   deletePermanently: vi.fn(),
   pathExists: vi.fn(),
   searchRequests: vi.fn(),
+  findUsages: vi.fn(),
   sendRequest: vi.fn(),
+  previewRequest: vi.fn(),
   cancelRequest: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
+  loadFolderEnvironments: vi.fn(),
+  saveEnvironments: vi.fn(),
   getTree: vi.fn(),
 }));
 const {
@@ -33,9 +38,12 @@ const {
   deletePermanently,
   pathExists,
   searchRequests,
+  findUsages,
   openWorkspace,
   getSettings,
   loadEnvironments,
+  saveEnvironments,
+  loadFolderEnvironments,
   getTree,
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
@@ -78,6 +86,7 @@ beforeEach(() => {
   renamePath.mockResolvedValue(undefined);
   pathExists.mockResolvedValue(true);
   deletePath.mockResolvedValue("trashed");
+  loadFolderEnvironments.mockResolvedValue([]);
   app.dialog = null;
   app.toasts = [];
   app.tree = null;
@@ -738,6 +747,39 @@ describe("opening a workspace", () => {
   });
 });
 
+describe("window title", () => {
+  const tree = { name: "my-api", path: "/dev/my-api", kind: "dir" as const, children: [] };
+  const environments = [
+    { name: "local", variables: [] },
+    { name: "staging", variables: [] },
+  ];
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.toasts = [];
+    getSettings.mockResolvedValue({ environments: { "/dev/my-api": "staging" } });
+    loadEnvironments.mockResolvedValue({ shared: [], environments, privateFileIgnored: true });
+    openWorkspace.mockResolvedValue({ root: "/dev/my-api", tree, gitignoreUpdated: false });
+  });
+
+  it("is just the app name with no workspace open", () => {
+    app.root = null;
+    expect(app.windowTitle).toBe("HttpDesk");
+  });
+
+  it("names the workspace and the active environment", async () => {
+    await app.openWorkspace("/dev/my-api");
+    expect(app.windowTitle).toBe("HttpDesk — my-api — staging");
+  });
+
+  it("follows the environment as it changes, and drops it when none is selected", async () => {
+    await app.openWorkspace("/dev/my-api");
+    await app.selectEnvironment("local");
+    expect(app.windowTitle).toBe("HttpDesk — my-api — local");
+    await app.selectEnvironment(null);
+    expect(app.windowTitle).toBe("HttpDesk — my-api");
+  });
+});
+
 describe("switching workspace with unsaved files", () => {
   const other = { name: "other", path: "/other", kind: "dir" as const, children: [] };
   beforeEach(() => {
@@ -1075,5 +1117,767 @@ describe("deleting", () => {
     expect(deletePermanently).not.toHaveBeenCalled();
     expect(app.tabs).toEqual(tabs);
     expect(app.docs[PATH]).toBeDefined();
+  });
+});
+
+describe("production guard", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = {
+      theme: "dark",
+      recentWorkspaces: [],
+      environments: {},
+      environmentSettings: { "/ws": { prod: { production: true }, staging: { color: "blue" } } },
+    } as unknown as AppSettings;
+    app.envName = "prod";
+    const env = (name: string) => ({ name, variables: [] });
+    app.envSet = { shared: [], environments: [env("prod"), env("staging")], privateFileIgnored: null };
+    app.envFolders = [];
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("doesn't ask when the request's folder doesn't define the selected production environment (it's sent with none)", async () => {
+    // books.http is in api/, whose env files define only dev (ADR-0004).
+    app.envFolders = [{ dir: "api", set: { shared: [], environments: [{ name: "dev", variables: [] }], privateFileIgnored: null } }];
+    const tab = await tabFor("POST");
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  async function tabFor(method: string) {
+    const [tab] = await openAll(fileOf([method, "Req", "https://api.example.com/books"]));
+    return tab;
+  }
+
+  it("asks before sending a POST with a production environment, naming the environment and method", async () => {
+    const tab = await tabFor("POST");
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.message).toMatch(/POST/);
+    expect(app.dialog!.message).toMatch(/"prod"/);
+    expect(app.dialog!.buttons.find((b) => b.focus)?.value).toBe("cancel");
+    app.closeDialog("send");
+    await sending;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't send when the confirmation is cancelled", async () => {
+    const tab = await tabFor("DELETE");
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.runs[tab.id]).toBeUndefined();
+  });
+
+  it.each(["PUT", "PATCH", "PURGE"])("asks for %s too", async (method) => {
+    const tab = await tabFor(method);
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it.each(["GET", "HEAD", "OPTIONS"])("sends %s without asking", async (method) => {
+    const tab = await tabFor(method);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't ask when the selected environment isn't production", async () => {
+    app.envName = "staging";
+    const tab = await tabFor("POST");
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks only once when Send is pressed again while it's asking", async () => {
+    const tab = await tabFor("POST");
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    const second = app.send(tab.id);
+    app.closeDialog("send");
+    await Promise.all([first, second]);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("environment settings", () => {
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.root = "/ws";
+    app.settings = {
+      theme: "dark",
+      recentWorkspaces: [],
+      environments: {},
+      environmentSettings: { "/other": { prod: { production: true } }, "/ws": { gone: { color: "red" } } },
+    } as unknown as AppSettings;
+    api.saveSettings.mockResolvedValue(undefined);
+  });
+
+  it("replace the workspace's, leaving out environments with nothing set and other workspaces alone", async () => {
+    expect(await app.saveEnvironmentSettings({ prod: { production: true, color: "red" }, dev: { production: false, color: null } })).toBe(true);
+    expect(app.environmentSettings("prod")).toEqual({ production: true, color: "red" });
+    expect(app.environmentSettings("dev")).toEqual({});
+    expect(app.environmentSettings("gone")).toEqual({});
+    expect(api.saveSettings.mock.lastCall![0].environmentSettings).toEqual({
+      "/other": { prod: { production: true } },
+      "/ws": { prod: { production: true, color: "red" } },
+    });
+  });
+
+  it("carry a matrix column's width to a renamed environment, and drop those of environments gone", async () => {
+    app.settings!.envMatrixWidths = {
+      "/other": { columns: { local: 300 } },
+      "/ws": { variable: 120, columns: { $shared: 180, local: 100, staging: 116 } },
+    };
+    expect(await app.carryMatrixWidth("local", "dev")).toBe(true);
+    // The old name keeps it until saved: another folder may still have a `local`.
+    expect(app.matrixWidths()).toEqual({ variable: 120, columns: { $shared: 180, local: 100, staging: 116, dev: 100 } });
+    expect(await app.carryMatrixWidth("qa", "test")).toBe(true);
+    expect(app.matrixWidths().columns.test).toBeUndefined();
+
+    expect(await app.keepMatrixWidths(["dev"])).toBe(true);
+    expect(api.saveSettings.mock.lastCall![0].envMatrixWidths).toEqual({
+      "/other": { columns: { local: 300 } },
+      "/ws": { variable: 120, columns: { $shared: 180, dev: 100 } },
+    });
+  });
+
+  it("give the selected environment's colour, ignoring names outside the palette", () => {
+    app.settings!.environmentSettings["/ws"] = { a: { color: "green" }, b: { color: "#123456" } };
+    app.envName = "a";
+    expect(app.envColor).toBe("green");
+    app.envName = "b";
+    expect(app.envColor).toBeNull();
+    app.envName = null;
+    expect(app.envColor).toBeNull();
+  });
+});
+
+describe("find usages", () => {
+  const usage = (index: number, name: string, url: string): Usage => ({
+    kind: "request",
+    path: PATH,
+    index,
+    name,
+    method: "GET",
+    url,
+    field: { kind: "header", index: 0, name: "Authorization", part: "value" },
+    disabled: false,
+    start: 7,
+    end: 16,
+  });
+
+  it("searches open documents as they are on screen and lists what the backend found", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    app.requestFor(list)!.url = "{{host}}/books"; // unsaved
+    findUsages.mockResolvedValue([usage(0, "List", "{{host}}/books")]);
+
+    await app.findUsages("host");
+
+    const [name, open] = findUsages.mock.lastCall!;
+    expect(name).toBe("host");
+    expect(open).toHaveLength(1);
+    expect(open[0].path).toBe(PATH);
+    expect(open[0].file.requests[0].url).toBe("{{host}}/books");
+    expect(app.usages).toEqual({ name: "host", usages: [usage(0, "List", "{{host}}/books")] });
+  });
+
+  it("keeps only the latest search when two overlap", async () => {
+    findUsages.mockImplementationOnce(() => later(30, [usage(0, "Old", "x")])).mockImplementationOnce(() => later(5, []));
+    const first = app.findUsages("a");
+    await app.findUsages("b");
+    await first;
+    expect(app.usages).toEqual({ name: "b", usages: [] });
+  });
+
+  it("opens a usage's request on the field that holds it, even after unsaved edits moved it", async () => {
+    const [list] = await openAll(fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    await app.duplicateRequest(PATH, list.key); // "Get" moves to index 2
+    const u = usage(1, "Get", "https://x/books/1");
+
+    await app.openUsage(u);
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("Get");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "header", index: 0, name: "Authorization", part: "value" } });
+  });
+
+  it("opens a File variable's row in its file's request Settings", async () => {
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+
+    await app.openUsage({ kind: "fileVariable", path: PATH, index: 0, name: "base", start: 0, end: 8 });
+
+    expect(app.requestFor(app.activeTab)?.name).toBe("List");
+    expect(app.requestSettingsFor).toBe(app.activeTabId);
+    expect(app.definitionWanted).toEqual({ kind: "file", name: "base" });
+  });
+
+  it("opens an environment value's row in the Environments modal, on the folder of its env file", async () => {
+    app.root = "/ws";
+    await app.openUsage({ kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 8 });
+
+    expect(app.modal).toBe("env");
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "url", dir: "" });
+
+    // One in a nested folder's file opens that folder's environments.
+    await app.openUsage({ kind: "environment", path: "/ws/api/users/http-client.private.env.json", env: "dev", name: "token", secret: true, start: 0, end: 8 });
+    expect(app.definitionWanted).toEqual({ kind: "env", env: "dev", name: "token", dir: "api/users" });
+  });
+});
+
+describe("Edit on a File variable declared in a request", () => {
+  it("shows the declaring request's .http source at that @name line: the request's own, else the last one in the file", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"], ["GET", "Get", "https://x/books/1"], ["GET", "Other", "https://x/o"]);
+    f.requests[0].variables = [{ name: "id", value: "1" }, { name: "page", value: "1" }];
+    f.requests[1].variables = [{ name: "page", value: "2" }];
+    f.requests[2].variables = [{ name: "page", value: "3" }, { name: "size", value: "9" }];
+    const [list] = await openAll(f);
+    app.activeTabId = list.id;
+
+    // List's own @page wins for List.
+    await app.editDefinition(list.id, { kind: "request", name: "page" });
+    expect(app.activeTabId).toBe(list.id);
+    expect(app.fieldWanted).toEqual({ tabId: list.id, field: { kind: "variable", index: 1, name: "page" } });
+
+    // @size is only Other's: its tab comes forward on that line.
+    await app.editDefinition(list.id, { kind: "request", name: "size" });
+    expect(app.requestFor(app.activeTab)?.name).toBe("Other");
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "variable", index: 1, name: "size" } });
+  });
+});
+
+describe("renaming a variable", () => {
+  const OTHER = "/ws/api/authors.http";
+  const envSet = (): EnvironmentSet => ({
+    shared: [],
+    environments: [
+      { name: "dev", variables: [{ name: "token", value: "t", secret: true }, { name: "auth", value: "Bearer {{token}}", secret: false }] },
+    ],
+    privateFileIgnored: true,
+  });
+  const inUrl = (path: string, index: number, name: string, url: string): Usage => ({
+    kind: "request",
+    path,
+    index,
+    name,
+    method: "GET",
+    url,
+    field: { kind: "url" },
+    disabled: false,
+    start: 0,
+    end: 9,
+  });
+
+  beforeEach(() => {
+    app.root = "/ws";
+    app.envSet = envSet();
+    saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockImplementation(async () => structuredClone(saveEnvironments.mock.lastCall![0]));
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+  });
+
+  /** Renames `token` to `apiToken` through the form, as the user would. */
+  async function rename(usages: Usage[] | null) {
+    const done = app.renameVariable("token");
+    expect(app.renaming?.name).toBe("token");
+    app.closeRenaming({ name: "apiToken", usages });
+    return done;
+  }
+
+  it("without updating references, renames it in every environment and touches no .http file", async () => {
+    expect(await rename(null)).toBe(true);
+
+    expect(saveEnvironments).toHaveBeenCalledWith({
+      ...envSet(),
+      environments: [
+        { name: "dev", variables: [{ name: "apiToken", value: "t", secret: true }, { name: "auth", value: "Bearer {{token}}", secret: false }] },
+      ],
+    }, "");
+    expect(app.envSet?.environments[0].variables[0].name).toBe("apiToken");
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(readHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("updating references saves files that had no unsaved edits, and only renames in memory in one that had", async () => {
+    // books.http is open with an unsaved edit; authors.http isn't open.
+    const [list] = await openAll(fileOf(["GET", "List", "{{token}}/books"], ["GET", "Get", "https://x/1"]));
+    app.requestFor(list)!.name = "List all"; // unsaved
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Authors", "{{token}}/authors"]));
+
+    expect(
+      await rename([
+        inUrl(PATH, 0, "List all", "{{token}}/books"),
+        inUrl(OTHER, 0, "Authors", "{{token}}/authors"),
+        { kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "auth", secret: false, start: 7, end: 16 },
+      ]),
+    ).toBe(true);
+
+    expect(saveEnvironments.mock.lastCall![0].environments[0].variables).toEqual([
+      { name: "apiToken", value: "t", secret: true },
+      { name: "auth", value: "Bearer {{apiToken}}", secret: false },
+    ]);
+    expect(saveHttpFile).toHaveBeenCalledTimes(1);
+    const [path, saved] = saveHttpFile.mock.lastCall!;
+    expect(path).toBe(OTHER);
+    expect(saved.requests[0].url).toBe("{{apiToken}}/authors");
+    expect(app.isDocDirty(OTHER)).toBe(false);
+    // The open file has the rename on screen, and is still unsaved.
+    expect(app.docs[PATH].file.requests.map((r) => r.url)).toEqual(["{{apiToken}}/books", "https://x/1"]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment and 2 files. books.http had unsaved edits, so it was left unsaved.");
+  });
+
+  it("in a nested folder's environments: renames in that folder's files only, with only its env values' references", async () => {
+    const apiPair = (): EnvironmentSet => ({
+      shared: [],
+      environments: [{ name: "dev", variables: [{ name: "token", value: "api-t", secret: true }, { name: "url", value: "{{token}}", secret: false }] }],
+      privateFileIgnored: true,
+    });
+    loadEnvironments.mockImplementation(async (dir?: string) => (dir === "api" ? apiPair() : envSet()));
+    const done = app.renameVariable("token", "api");
+    app.closeRenaming({
+      name: "apiToken",
+      usages: [
+        // The root's auth uses the root's token: not this folder's to rename.
+        { kind: "environment", path: "/ws/http-client.env.json", env: "dev", name: "auth", secret: false, start: 7, end: 16 },
+        { kind: "environment", path: "/ws/api/http-client.env.json", env: "dev", name: "url", secret: false, start: 0, end: 9 },
+      ],
+    });
+    expect(await done).toBe(true);
+
+    expect(saveEnvironments.mock.calls).toEqual([
+      [
+        {
+          ...apiPair(),
+          environments: [{ name: "dev", variables: [{ name: "apiToken", value: "api-t", secret: true }, { name: "url", value: "{{apiToken}}", secret: false }] }],
+        },
+        "api",
+      ],
+    ]);
+    expect(app.toasts.at(-1)?.message).toBe("Renamed token to apiToken in every environment of api/.");
+  });
+
+  describe("with env files in folders below (ADR-0004: the nearest folder wins)", () => {
+    const pair = (token: boolean): EnvironmentSet => ({
+      shared: [],
+      environments: [{ name: "dev", variables: token ? [{ name: "token", value: "own", secret: true }] : [{ name: "host", value: "h", secret: false }] }],
+      privateFileIgnored: true,
+    });
+    const files: Record<string, HttpFile> = {
+      "/ws/a.http": fileOf(["GET", "A", "{{token}}/a"]),
+      "/ws/api/b.http": fileOf(["GET", "B", "{{token}}/b"]),
+      "/ws/api/v2/c.http": fileOf(["GET", "C", "{{token}}/c"]),
+      "/ws/web/d.http": fileOf(["GET", "D", "{{token}}/d"]),
+    };
+    const usages = Object.entries(files).map(([path, f]) => inUrl(path, 0, f.requests[0].name, f.requests[0].url));
+
+    beforeEach(() => {
+      // api/ has env files defining token, web/ has some that don't.
+      app.envFolders = [
+        { dir: "api", set: pair(true) },
+        { dir: "web", set: pair(false) },
+      ];
+      loadEnvironments.mockImplementation(async (dir?: string) =>
+        dir === "api" ? pair(true) : dir === "web" ? pair(false) : structuredClone(saveEnvironments.mock.lastCall?.[0] ?? envSet()),
+      );
+      readHttpFile.mockImplementation(async (path: string) => structuredClone(files[path]));
+      findUsages.mockResolvedValue(usages);
+    });
+
+    it("renaming the root's variable rewrites only files that don't get the name from a nearer folder", async () => {
+      expect(await rename(usages)).toBe(true);
+      expect(saveHttpFile.mock.calls.map(([path, f]) => [path, f.requests[0].url])).toEqual([
+        ["/ws/a.http", "{{apiToken}}/a"],
+        ["/ws/web/d.http", "{{apiToken}}/d"],
+      ]);
+    });
+
+    it("renaming a folder's variable rewrites only files in or below it", async () => {
+      const done = app.renameVariable("token", "api");
+      app.closeRenaming({ name: "apiToken", usages });
+      expect(await done).toBe(true);
+      expect(saveEnvironments.mock.calls.map(([, dir]) => dir)).toEqual(["api"]);
+      expect(saveHttpFile.mock.calls.map(([path]) => path)).toEqual(["/ws/api/b.http", "/ws/api/v2/c.http"]);
+    });
+
+    it("the form is given that folder's env files (for the name check) and exactly the references that change", async () => {
+      const done = app.renameVariable("token", "web");
+      expect(app.renaming).toMatchObject({ name: "token", dir: "web" });
+      const plan = await app.renamePlan("token", "web");
+      expect(plan.pair).toEqual(pair(false));
+      expect(plan.usages.map((u) => u.path)).toEqual(["/ws/web/d.http"]);
+      app.closeRenaming(null);
+      await done;
+    });
+  });
+
+  it("cancelling the form changes nothing", async () => {
+    const done = app.renameVariable("token");
+    app.closeRenaming(null);
+    expect(await done).toBe(false);
+    expect(saveEnvironments).not.toHaveBeenCalled();
+  });
+
+  it("stops before touching any file if the environments can't be saved", async () => {
+    saveEnvironments.mockRejectedValue("disk full");
+    expect(await rename([inUrl(OTHER, 0, "Authors", "{{token}}/authors")])).toBe(false);
+    expect(readHttpFile).not.toHaveBeenCalled();
+    expect(app.toasts.at(-1)?.message).toBe("Could not save environments: disk full");
+  });
+});
+
+describe("Prompt variables", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  /** A tab on a POST that declares `otp` (with help text) and `password`. */
+  async function promptingTab() {
+    const f = fileOf(["GET", "Login", "https://api.example.com/login?otp={{otp}}"]);
+    f.requests[0].directives = [
+      { name: "prompt", value: "otp Your one-time password" },
+      { name: "prompt", value: "password" },
+    ];
+    const [tab] = await openAll(f);
+    return tab;
+  }
+  const sentPrompts = (call = 0) => api.sendRequest.mock.calls[call][0].promptValues;
+
+  it("asks once for all of them, in order, with their descriptions and masking, then sends with the values", async () => {
+    const tab = await promptingTab();
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields).toEqual([
+      { label: "otp", help: "Your one-time password", masked: false, value: "" },
+      { label: "password", help: "", masked: true, value: "" },
+    ]);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await sending;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(sentPrompts()).toEqual({ otp: "123456", password: "s3cret" });
+  });
+
+  it("cancelling the form cancels the send", async () => {
+    const tab = await promptingTab();
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.runs[tab.id]).toBeUndefined();
+    expect(app.promptAnswers(tab)).toEqual({});
+  });
+
+  it("remembers the values: a second send, or one after reopening the tab, doesn't ask again", async () => {
+    const tab = await promptingTab();
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await first;
+
+    await app.send(tab.id);
+    await app.closeTab(tab.id);
+    await app.openRequest(PATH, { index: 0 });
+    await app.send(app.activeTabId!);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(3);
+    expect(sentPrompts(2)).toEqual({ otp: "123456", password: "s3cret" });
+  });
+
+  it("asks only for prompts without a remembered value, and again for all after forgetting", async () => {
+    const tab = await promptingTab();
+    const first = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["123456", "s3cret"]);
+    await first;
+
+    app.requestFor(tab)!.directives.push({ name: "prompt", value: "user Who to log in as" });
+    const second = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields!.map((f) => f.label)).toEqual(["user"]);
+    app.closeDialog("send", "", ["ann"]);
+    await second;
+    expect(sentPrompts(1)).toEqual({ otp: "123456", password: "s3cret", user: "ann" });
+
+    app.forgetPrompts(tab);
+    expect(app.promptAnswers(tab)).toEqual({});
+    const third = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields!.map((f) => f.label)).toEqual(["otp", "password", "user"]);
+    app.closeDialog("cancel");
+    await third;
+  });
+
+  it("are remembered per request", async () => {
+    const f = fileOf(["GET", "A", "https://x/a"], ["GET", "B", "https://x/b"]);
+    for (const r of f.requests) r.directives = [{ name: "prompt", value: "otp" }];
+    const [a, b] = await openAll(f);
+    const first = app.send(a.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["1"]);
+    await first;
+    const second = app.send(b.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("cancel");
+    await second;
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the resolved preview gets the remembered values; a request without prompts sends none", async () => {
+    const tab = await promptingTab();
+    api.previewRequest.mockResolvedValue(null);
+    await app.preview(tab);
+    expect(api.previewRequest.mock.calls[0][0].promptValues).toEqual({});
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("send", "", ["1", "2"]);
+    await sending;
+    await app.preview(tab);
+    expect(api.previewRequest.mock.calls[1][0].promptValues).toEqual({ otp: "1", password: "2" });
+
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Plain", "https://x"]));
+    await app.openRequest("/ws/api/plain.http", { index: 0 });
+    await app.send(app.activeTabId!);
+    expect(app.dialog).toBeNull();
+    expect(sentPrompts(1)).toEqual({});
+  });
+});
+
+describe("per-directory environments", () => {
+  const env = (...names: string[]) => names.map((name) => ({ name, variables: [{ name: "host", value: name, secret: false }] }));
+  const rootSet = { shared: [], environments: env("dev", "prod"), privateFileIgnored: null };
+  const apiSet = { shared: [], environments: env("dev", "prod", "qa"), privateFileIgnored: null };
+  const tree = { name: "ws", path: "/ws", kind: "dir" as const, children: [] };
+  beforeEach(() => {
+    app.root = "/ws";
+    app.envName = null;
+    app.envFolders = [];
+    loadEnvironments.mockResolvedValue(rootSet);
+    loadFolderEnvironments.mockResolvedValue([{ dir: "api", set: apiSet }]);
+  });
+
+  it("each request takes its own folder's environments, and the picker gets every name in the workspace", async () => {
+    await app.loadEnvironments();
+    expect(app.envSetFor("/ws/api/users/list.http")).toEqual(apiSet);
+    expect(app.envSetFor("/ws/web/home.http")).toEqual(rootSet);
+    expect(app.envNames).toEqual(["dev", "prod", "qa"]);
+  });
+
+  it("keeps a selected environment only a folder defines, also when the workspace opens", async () => {
+    app.envName = "qa";
+    await app.loadEnvironments();
+    expect(app.envName).toBe("qa");
+
+    getSettings.mockResolvedValue({ environments: { "/ws": "qa" } });
+    openWorkspace.mockResolvedValueOnce({ root: "/ws", tree, gitignoreUpdated: false });
+    await app.openWorkspace("/ws");
+    expect(app.envName).toBe("qa");
+
+    loadFolderEnvironments.mockResolvedValue([]);
+    await app.loadEnvironments();
+    expect(app.envName).toBeNull();
+  });
+
+  it("editing or adding a nested env file, or changing a folder, reloads them", async () => {
+    await app.onExternalChange(["/ws/api/users/http-client.private.env.json"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(1);
+    expect(app.envFolders).toEqual([{ dir: "api", set: apiSet }]);
+
+    // A folder holding env files that's moved in or deleted is reported as the folder.
+    await app.onExternalChange(["/ws/legacy"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+
+    await app.onExternalChange(["/ws/api/pets.http"]);
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+  });
+
+  it("moving or deleting a folder in the app reloads them (the watcher ignores the app's own changes)", async () => {
+    await app.movePath("/ws/api.http", "/ws/v1.http");
+    expect(loadFolderEnvironments).not.toHaveBeenCalled();
+    await app.movePath("/ws/api", "/ws/v1");
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(1);
+
+    const deleting = app.deletePath("/ws/v1");
+    await answer("delete");
+    await deleting;
+    expect(loadFolderEnvironments).toHaveBeenCalledTimes(2);
+  });
+
+  it("a folder's env file that can't be read is reported, and the root's environments still load", async () => {
+    loadFolderEnvironments.mockRejectedValueOnce("api/http-client.env.json is not a valid environment file");
+    await app.loadEnvironments();
+    expect(app.envSet).toEqual(rootSet);
+    expect(app.envFolders).toEqual([]);
+    expect(app.toasts.map((t) => t.message)).toEqual(["api/http-client.env.json is not a valid environment file"]);
+  });
+});
+
+describe("Extract to variable", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = { shared: [], environments: [], privateFileIgnored: true };
+    app.closeExtraction(null);
+  });
+
+  it("to a File variable: adds an @name line at the top of the file, unsaved, and returns the name", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+    const extracting = app.extractVariable(tab.id, "https://api.example.com");
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    expect(app.extraction!.value).toBe("https://api.example.com");
+    app.closeExtraction({ name: "baseUrl", target: { kind: "file" } });
+
+    expect(await extracting).toBe("baseUrl");
+    expect(app.docs[PATH].file.header.variables).toEqual([{ name: "baseUrl", value: "https://api.example.com" }]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect(app.extraction).toBeNull();
+  });
+
+  /** Two environments; `staging` already has a Secret. */
+  const twoEnvs = () => ({
+    shared: [{ name: "version", value: "v1", secret: false }],
+    environments: [
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "s3cret", secret: true }] },
+    ],
+    privateFileIgnored: true,
+  });
+  /** Extracts `value` from the tab's request with `choice` and returns what the store returned. */
+  async function extract(tabId: string, value: string, choice: ExtractChoice | null) {
+    const extracting = app.extractVariable(tabId, value);
+    await vi.waitFor(() => expect(app.extraction).not.toBeNull());
+    app.closeExtraction(choice);
+    return extracting;
+  }
+
+  it("to the selected environment: saves it in that environment's env file and reloads the environments", async () => {
+    app.envSet = twoEnvs();
+    app.envName = "staging";
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "staging" } })).toBe("baseUrl");
+
+    const saved = api.saveEnvironments.mock.calls[0][0];
+    expect(saved.environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "dev", secret: false }] },
+      {
+        name: "staging",
+        variables: [
+          { name: "token", value: "s3cret", secret: true },
+          { name: "baseUrl", value: "https://api.example.com", secret: false },
+        ],
+      },
+    ]);
+    expect(saved.shared).toEqual([{ name: "version", value: "v1", secret: false }]);
+    expect(loadEnvironments).toHaveBeenCalled();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+  });
+
+  it("to all environments: sets the same value in each, replacing a same-named one in place (a Secret stays a Secret)", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockResolvedValue(twoEnvs());
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+
+    expect(api.saveEnvironments.mock.calls[0][0].environments).toEqual([
+      { name: "local", variables: [{ name: "token", value: "abc", secret: false }] },
+      { name: "staging", variables: [{ name: "token", value: "abc", secret: true }] },
+    ]);
+    expect(app.toasts.map((t) => t.message)).toContain("Added token to every environment");
+  });
+
+  it("returns null when the env files can't be written, or when cancelled, so the field keeps its text", async () => {
+    app.envSet = twoEnvs();
+    api.saveEnvironments.mockRejectedValue("disk full");
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books"]));
+
+    expect(await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "local" } })).toBeNull();
+    expect(app.toasts.map((t) => t.message)).toContain("Could not save environments: disk full");
+
+    expect(await extract(tab.id, "https://api.example.com", null)).toBeNull();
+    expect(app.docs[PATH].file.header.variables).toEqual([]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("from a request in a nested folder: writes to the folders whose env files supply each environment to it", async () => {
+    // PATH is in api/. dev's public file is the root's, its private one api/'s; qa is api/'s only.
+    const rootPair = () => ({ shared: [], environments: [{ name: "dev", variables: [{ name: "host", value: "h", secret: false }] }], privateFileIgnored: true });
+    const apiPair = () => ({
+      shared: [],
+      environments: [
+        { name: "dev", variables: [{ name: "token", value: "old", secret: true }] },
+        { name: "qa", variables: [] },
+      ],
+      privateFileIgnored: true,
+    });
+    app.envSet = rootPair();
+    app.envFolders = [
+      {
+        dir: "api",
+        set: {
+          shared: [],
+          environments: [
+            { name: "dev", source: { public: "", private: "api" }, variables: [{ name: "host", value: "h", secret: false }, { name: "token", value: "old", secret: true }] },
+            { name: "qa", source: { public: "api" }, variables: [] },
+          ],
+          privateFileIgnored: true,
+        },
+      },
+    ];
+    loadEnvironments.mockImplementation(async (dir?: string) => (dir === "api" ? apiPair() : rootPair()));
+    api.saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    const [tab] = await openAll(fileOf(["GET", "List", "https://api.example.com/books?key=abc"]));
+
+    expect(await extract(tab.id, "abc", { name: "token", target: { kind: "all" } })).toBe("token");
+    expect(api.saveEnvironments.mock.calls).toEqual([
+      [
+        {
+          shared: [],
+          environments: [
+            { name: "dev", variables: [{ name: "token", value: "abc", secret: true }] },
+            { name: "qa", variables: [{ name: "token", value: "abc", secret: false }] },
+          ],
+          privateFileIgnored: true,
+        },
+        "api",
+      ],
+    ]);
+
+    // A new value of dev goes to the root, whose shareable file supplies dev here.
+    api.saveEnvironments.mockClear();
+    app.envName = "dev";
+    await extract(tab.id, "https://api.example.com", { name: "baseUrl", target: { kind: "env", env: "dev" } });
+    expect(api.saveEnvironments.mock.calls[0][1]).toBe("");
+    expect(api.saveEnvironments.mock.calls[0][0].environments[0].variables).toContainEqual({ name: "baseUrl", value: "https://api.example.com", secret: false });
+  });
+
+  it("to a File variable that exists: replaces the value of the definition the request uses, adding no line", async () => {
+    const f = fileOf(["GET", "A", "https://a.example.com/x"], ["GET", "B", "https://b.example.com/y"]);
+    f.header.variables = [{ name: "host", value: "old" }, { name: "id", value: "1" }];
+    f.requests[1].variables = [{ name: "host", value: "own" }];
+    const [a, b] = await openAll(f);
+    const file = () => app.docs[PATH].file;
+
+    await extract(a.id, "https://a.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().header.variables).toEqual([{ name: "host", value: "https://a.example.com" }, { name: "id", value: "1" }]);
+
+    // B declares its own @host, which wins over the file's, so that one changes.
+    await extract(b.id, "https://b.example.com", { name: "host", target: { kind: "file" } });
+    expect(file().requests[1].variables).toEqual([{ name: "host", value: "https://b.example.com" }]);
+    expect(file().header.variables[0]).toEqual({ name: "host", value: "https://a.example.com" });
   });
 });

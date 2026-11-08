@@ -157,7 +157,7 @@
         ? ` Base URL${report.environments.length > 1 ? "s" : ""} added to environment${report.environments.length > 1 ? "s" : ""} ${report.environments.join(", ")}; credentials go to http-client.private.env.json.`
         : "";
       app.toast("success", `Generated ${n} request${n === 1 ? "" : "s"} in ${report.files.length} file${report.files.length === 1 ? "" : "s"}.${envNote}`);
-      if (report.gitignoreUpdated) app.toast("info", "Added http-client.private.env.json to .gitignore");
+      if (report.gitignoreUpdated) app.gitignoreUpdated("");
       if (report.warnings.length) {
         app.toast("info", `${report.warnings.length} warning${report.warnings.length === 1 ? "" : "s"}: ${report.warnings.slice(0, 3).join("; ")}${report.warnings.length > 3 ? "…" : ""}`);
       }

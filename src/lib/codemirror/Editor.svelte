@@ -91,22 +91,12 @@
   export function text(): string {
     return view?.state.doc.toString() ?? "";
   }
-  /** The selected text (the main selection), or "" if nothing is selected. */
-  export function selectedText(): string {
-    if (!view) return "";
-    const { from, to } = view.state.selection.main;
-    return view.state.sliceDoc(from, to);
-  }
-  export function selectAll() {
-    view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
-  }
-  /** Opens the context menu at the caret, for Shift+F10 (dispatches `contextmenu` on the content). */
-  export function openMenuAtCaret() {
-    if (!view) return;
-    const at = view.coordsAtPos(view.state.selection.main.head);
-    const x = at ? at.left : 0;
-    const y = at ? (at.top + at.bottom) / 2 : 0;
-    view.contentDOM.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  /** Selects line `n` (1-based) and scrolls it into view, focusing the editor so the selection shows. */
+  export function revealLine(n: number) {
+    if (!view || n < 1 || n > view.state.doc.lines) return;
+    const line = view.state.doc.line(n);
+    view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+    view.focus();
   }
   /**
    * For a context menu at `e`: moves the caret to the clicked spot unless the

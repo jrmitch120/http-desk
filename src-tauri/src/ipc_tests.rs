@@ -4,7 +4,11 @@
 
 mod confinement;
 mod deleting;
+mod folder_envs;
 mod paths;
+mod preview;
+mod renaming;
+mod usages;
 mod watcher;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
@@ -156,7 +160,7 @@ fn vertical_slice_over_ipc() {
     );
     assert_eq!(resp["status"], 200);
     assert_eq!(resp["bodyText"], r#"{"ok":true}"#);
-    assert_eq!(resp["warnings"][0], "Unresolved variables: token");
+    assert_eq!(resp["warnings"][0], "Undefined variables: token");
     let raw = received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(raw.starts_with("GET /items?page=1 HTTP/1.1"), "{raw}");
     assert!(raw.to_lowercase().contains("accept: application/json"));
@@ -672,6 +676,139 @@ fn saved_themes_load_unchanged_and_a_missing_theme_follows_the_system() {
     let fresh: super::AppSettings = serde_json::from_str(r#"{"layout":"vertical"}"#).unwrap();
     assert_eq!(serde_json::to_value(&fresh).unwrap()["theme"], "system");
     assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["theme"], "system");
+}
+
+/// #79: whether an environment is production, and its colour, live in the app
+/// settings keyed by workspace + environment name. They survive a restart and
+/// never touch the env files, so other tools don't see them as variables.
+#[test]
+fn environment_settings_survive_a_restart_and_leave_the_env_files_alone() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    let env_file = r#"{ "prod": { "baseUrl": "https://api.example.com" } }"#;
+    std::fs::write(root.join("http-client.env.json"), env_file).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["environmentSettings"], json!({}));
+    let ws_key = root.to_string_lossy().to_string();
+    settings["environmentSettings"] = json!({ ws_key.clone(): { "prod": { "production": true, "color": "red" } } });
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    // A restart: the defaults, then whatever settings.json holds.
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    let reloaded = h.ok("get_settings", json!({}));
+    assert_eq!(reloaded["environmentSettings"][&ws_key]["prod"], json!({ "production": true, "color": "red" }));
+    assert_eq!(std::fs::read_to_string(root.join("http-client.env.json")).unwrap(), env_file);
+    assert!(!root.join("http-client.private.env.json").exists());
+}
+
+/// #83: the Environments matrix edits the same set `save_environments` takes:
+/// a variable added to all environments, a cell's Secret toggled on or off.
+/// Secret values only ever reach the private file, and a cell made shareable
+/// moves its value back to the shared file.
+#[test]
+fn saving_matrix_changes_keeps_secrets_only_in_the_private_file() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let var = |name: &str, value: &str, secret: bool| json!({ "name": name, "value": value, "secret": secret });
+    let save = |dev: Vec<Value>, prod: Vec<Value>| {
+        h.ok(
+            "save_environments",
+            json!({ "set": { "shared": [var("version", "v1", false)], "environments": [
+                { "name": "dev", "variables": dev }, { "name": "prod", "variables": prod }
+            ], "privateFileIgnored": null } }),
+        );
+    };
+    let files = || {
+        let read = |name: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(root.join(name)).unwrap_or_else(|_| "{}".into())).unwrap()
+        };
+        (read("http-client.env.json"), read("http-client.private.env.json"))
+    };
+
+    // "Add variable to all environments" (apiKey, empty everywhere), and token a Secret in each cell.
+    save(
+        vec![var("baseUrl", "http://dev", false), var("token", "dev-tok", true), var("apiKey", "", false)],
+        vec![var("baseUrl", "https://prod", false), var("token", "prod-tok", true), var("apiKey", "", false)],
+    );
+    let (shared, private) = files();
+    assert_eq!(shared["dev"], json!({ "baseUrl": "http://dev", "apiKey": "" }), "{shared}");
+    assert_eq!(shared["prod"], json!({ "baseUrl": "https://prod", "apiKey": "" }), "{shared}");
+    assert_eq!(private, json!({ "dev": { "token": "dev-tok" }, "prod": { "token": "prod-tok" } }));
+
+    // Then prod's token cell made shareable, dev's baseUrl and apiKey cells made Secrets.
+    save(
+        vec![var("baseUrl", "http://dev", true), var("token", "dev-tok", true), var("apiKey", "k-dev", true)],
+        vec![var("baseUrl", "https://prod", false), var("token", "prod-tok", false), var("apiKey", "", false)],
+    );
+    let (shared, private) = files();
+    let text = std::fs::read_to_string(root.join("http-client.env.json")).unwrap();
+    for secret in ["http://dev", "dev-tok", "k-dev"] {
+        assert!(!text.contains(secret), "{secret} leaked into the shared file: {text}");
+    }
+    assert_eq!(shared["prod"], json!({ "baseUrl": "https://prod", "token": "prod-tok", "apiKey": "" }));
+    assert_eq!(private["dev"], json!({ "baseUrl": "http://dev", "token": "dev-tok", "apiKey": "k-dev" }));
+    assert_eq!(private.get("prod"), None, "prod has no Secrets left: {private}");
+
+    let set = h.ok("load_environments", json!({}));
+    let secrets = |env: usize| -> Vec<(String, bool)> {
+        set["environments"][env]["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| (v["name"].as_str().unwrap().to_string(), v["secret"].as_bool().unwrap()))
+            .collect()
+    };
+    assert!(secrets(0).iter().all(|(_, secret)| *secret), "{:?}", secrets(0));
+    assert!(secrets(1).iter().all(|(_, secret)| !*secret), "{:?}", secrets(1));
+}
+
+/// #39: the Environments modal opens on the list unless the user picked the
+/// matrix, and that choice survives a restart.
+#[test]
+fn the_environments_view_defaults_to_the_list_and_is_remembered() {
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["envView"], "list");
+    settings["envView"] = json!("matrix");
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    assert_eq!(h.ok("get_settings", json!({}))["envView"], "matrix");
+
+    // A hand-edited value the app doesn't know opens the list, keeping the other settings.
+    let odd: super::AppSettings = serde_json::from_str(r#"{"envView":"grid","theme":"light"}"#).unwrap();
+    let json = serde_json::to_value(&odd).unwrap();
+    assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("list"), Some("light")));
+}
+
+/// #39: the Environments matrix's column widths are remembered per workspace.
+#[test]
+fn the_environments_matrix_column_widths_are_remembered_per_workspace() {
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["envMatrixWidths"], json!({}));
+    settings["envMatrixWidths"] =
+        json!({ "/work": { "variable": 180.0, "columns": { "$shared": 120.0, "local": 240.5 } } });
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    let widths = &h.ok("get_settings", json!({}))["envMatrixWidths"]["/work"];
+    assert_eq!(widths["variable"], 180.0);
+    assert_eq!(widths["columns"], json!({ "$shared": 120.0, "local": 240.5 }));
+
+    // A hand-edited value the app can't read is dropped, keeping the other settings.
+    let odd: super::AppSettings =
+        serde_json::from_str(r#"{"envMatrixWidths":{"/work":"wide"},"theme":"light"}"#).unwrap();
+    let json = serde_json::to_value(&odd).unwrap();
+    assert_eq!((json["envMatrixWidths"].clone(), json["theme"].as_str()), (json!({}), Some("light")));
 }
 
 /// Paths reported by `workspace-changed` until no event has arrived for `quiet`.

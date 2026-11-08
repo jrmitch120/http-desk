@@ -2,14 +2,46 @@
 //! JetBrains HTTP Client (`$uuid`, `$timestamp`, `$random.integer()`, …) and
 //! VS Code REST Client (`$guid`, `$randomInt`, `$datetime`, `$processEnv`, …).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Local, Utc};
 
-use crate::model::Variable;
+use crate::model::{Prompt, Variable};
 
-const MAX_DEPTH: usize = 10;
+/// Every dynamic variable the resolver generates, without the `$`; `env.` takes a
+/// name after it. Anything else after `$` is an Undefined variable. Autocomplete's
+/// list (`dynamic-variables.json`, with descriptions and argument hints) must name
+/// exactly these, in this order: a test checks.
+pub const DYNAMIC_VARIABLES: &[&str] = &[
+    "uuid",
+    "guid",
+    "random.uuid",
+    "timestamp",
+    "isoTimestamp",
+    "randomInt",
+    "random.integer",
+    "random.float",
+    "random.alphabetic",
+    "random.alphanumeric",
+    "random.hexadecimal",
+    "random.email",
+    "datetime",
+    "localDatetime",
+    "processEnv",
+    "dotenv",
+    "env.",
+];
+
+fn is_dynamic(name: &str) -> bool {
+    DYNAMIC_VARIABLES.iter().any(|d| {
+        if d.ends_with('.') {
+            name.len() > d.len() && name.starts_with(d)
+        } else {
+            name == *d
+        }
+    })
+}
 
 /// A run of plain text, or one `{{…}}` reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +73,62 @@ pub(crate) fn segments(text: &str) -> Vec<Segment<'_>> {
     out
 }
 
+/// The `{{…}}` references in `text`: the byte range of each, braces included,
+/// with its trimmed name (as [`segments`] reads them).
+pub(crate) fn references(text: &str) -> impl Iterator<Item = (std::ops::Range<usize>, &str)> {
+    segments(text).into_iter().filter_map(move |s| match s {
+        Segment::Reference { whole, name } => {
+            let start = whole.as_ptr() as usize - text.as_ptr() as usize;
+            Some((start..start + whole.len(), name))
+        }
+        Segment::Text(_) => None,
+    })
+}
+
+/// Dynamic variables that read a value that's already there (`env.` takes a name).
+/// Every other one generates a new value on every send.
+const READING: &[&str] = &["processEnv", "dotenv", "env."];
+
+/// Whether dynamic variable `name` generates a new value on every send.
+fn generates(name: &str) -> bool {
+    is_dynamic(name) && !READING.iter().any(|r| name == *r || (r.ends_with('.') && name.starts_with(r)))
+}
+
+/// Brackets the index of a placeholder (see [`Resolver::previewing`]). Private-use
+/// characters, so they can't clash with real text and survive query encoding.
+const PLACEHOLDER: (char, char) = ('\u{E000}', '\u{E001}');
+
+/// How the resolved preview shows a masked prompted value.
+pub const MASK: &str = "••••••••";
+
+/// Bracket, in the resolved preview, each value a Secret went into (see
+/// [`Resolver::with_secrets`]), so the UI can mask it until revealed. Private-use
+/// characters, like [`PLACEHOLDER`]'s.
+pub const SECRET_MARKS: (char, char) = ('\u{E002}', '\u{E003}');
+
+/// `c` percent-encoded as UTF-8, as query encoding writes it.
+fn percent_encoded(c: char) -> String {
+    c.encode_utf8(&mut [0; 4]).bytes().map(|b| format!("%{b:02X}")).collect()
+}
+
 /// Resolves `{{name}}` references against a flat variable map.
 #[derive(Debug, Default)]
 pub struct Resolver {
     vars: HashMap<String, String>,
     base_dir: Option<PathBuf>,
-    unresolved: std::cell::RefCell<BTreeSet<String>>,
+    undefined: std::cell::RefCell<BTreeSet<String>>,
+    circular: std::cell::RefCell<Vec<Vec<String>>>,
     errors: std::cell::RefCell<Vec<String>>,
+    /// Set by [`Resolver::previewing`]: generated dynamic variables, as written.
+    placeholders: Option<std::cell::RefCell<Vec<String>>>,
+    /// Prompt variables (see [`Resolver::with_prompts`]): answered ones with their
+    /// value and whether it's masked, unanswered ones with `None`.
+    prompts: HashMap<String, Option<(String, bool)>>,
+    unanswered: std::cell::RefCell<BTreeSet<String>>,
+    /// Names whose value is a Secret (see [`Resolver::with_secrets`]).
+    secrets: HashSet<String>,
+    /// Whether a Secret went into the reference being resolved.
+    secret_seen: std::cell::Cell<bool>,
 }
 
 impl Resolver {
@@ -69,13 +150,121 @@ impl Resolver {
         Resolver { vars, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
     }
 
-    pub fn resolve(&self, text: &str) -> String {
-        self.resolve_depth(text, 0)
+    /// Adds the request's Prompt variables. An answered one (its value in `answers`)
+    /// overrides every other variable of the same name, also inside other variables'
+    /// values, and is used as typed. An unanswered one is left as written and
+    /// reported by [`Self::unanswered`], not as undefined.
+    pub fn with_prompts(mut self, prompts: &[Prompt], answers: &HashMap<String, String>) -> Self {
+        for p in prompts {
+            let answer = answers.get(&p.name).map(|v| (v.clone(), p.masked()));
+            self.prompts.insert(p.name.clone(), answer);
+        }
+        self
     }
 
-    /// Variable names that could not be resolved so far.
-    pub fn unresolved(&self) -> Vec<String> {
-        self.unresolved.borrow().iter().cloned().collect()
+    /// The names whose value is a Secret: the environment's, unless a File or request
+    /// variable of the same name replaces it. In the preview ([`Self::previewing`])
+    /// each reference whose value a Secret went into (directly or through other
+    /// variables) resolves to its value between [`SECRET_MARKS`].
+    pub fn with_secrets(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.secrets = names.into_iter().collect();
+        self
+    }
+
+    /// For the resolved preview: dynamic variables that would generate a new value
+    /// on every send (`$uuid`, `$timestamp`, `$random…`) are not generated. They
+    /// resolve to placeholders that [`Resolver::replace_placeholders`] turns back
+    /// into the reference as written, wherever they end up (even percent-encoded).
+    /// Values Secrets went into are marked (see [`Self::with_secrets`]).
+    pub fn previewing(mut self) -> Self {
+        self.placeholders = Some(Default::default());
+        self
+    }
+
+    /// `text` with each placeholder replaced by `with(reference as written)`.
+    pub fn replace_placeholders(&self, text: &str, with: impl Fn(&str) -> String) -> String {
+        let Some(placeholders) = &self.placeholders else { return text.to_string() };
+        let (open, close) = PLACEHOLDER;
+        let mut out = text.to_string();
+        for (i, whole) in placeholders.borrow().iter().enumerate() {
+            let value = with(whole);
+            out = out.replace(&format!("{open}{i}{close}"), &value);
+            out = out.replace(&format!("{}{i}{}", percent_encoded(open), percent_encoded(close)), &value);
+        }
+        out
+    }
+
+    /// `text` as the preview shows it: placeholders back to the references as written,
+    /// and Secret marks as characters again where query encoding encoded them.
+    pub fn shown(&self, text: &str) -> String {
+        let (open, close) = SECRET_MARKS;
+        self.replace_placeholders(text, str::to_string)
+            .replace(&percent_encoded(open), &open.to_string())
+            .replace(&percent_encoded(close), &close.to_string())
+    }
+
+    /// `text` without Secret marks (encoded or not), as it would be sent.
+    pub fn unmarked(&self, text: &str) -> String {
+        self.shown_marks(text, |value| value.to_string())
+    }
+
+    /// `text` with each marked Secret value replaced by [`MASK`]: for messages, which can't reveal.
+    pub fn masked(&self, text: &str) -> String {
+        self.shown_marks(text, |_| MASK.to_string())
+    }
+
+    fn shown_marks(&self, text: &str, value: impl Fn(&str) -> String) -> String {
+        let (open, close) = SECRET_MARKS;
+        let text = text
+            .replace(&percent_encoded(open), &open.to_string())
+            .replace(&percent_encoded(close), &close.to_string());
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find(open) {
+            let Some(len) = rest[start + open.len_utf8()..].find(close) else { break };
+            out.push_str(&rest[..start]);
+            let inner = start + open.len_utf8();
+            out.push_str(&value(&rest[inner..inner + len]));
+            rest = &rest[inner + len + close.len_utf8()..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Whether `text` holds a placeholder or a marked Secret value.
+    pub fn has_placeholders(&self, text: &str) -> bool {
+        self.placeholders.is_some() && (text.contains(PLACEHOLDER.0) || text.contains(SECRET_MARKS.0))
+    }
+
+    fn placeholder(&self, whole: &str) -> Option<String> {
+        let mut placeholders = self.placeholders.as_ref()?.borrow_mut();
+        let i = placeholders.iter().position(|p| p == whole).unwrap_or_else(|| {
+            placeholders.push(whole.to_string());
+            placeholders.len() - 1
+        });
+        let (open, close) = PLACEHOLDER;
+        Some(format!("{open}{i}{close}"))
+    }
+
+    pub fn resolve(&self, text: &str) -> String {
+        self.resolve_chain(text, &mut Vec::new())
+    }
+
+    /// Undefined variables met so far: names with no definition in scope. Circular
+    /// references are reported by [`Self::circular`] instead.
+    pub fn undefined(&self) -> Vec<String> {
+        self.undefined.borrow().iter().cloned().collect()
+    }
+
+    /// Unanswered Prompt variables met so far: asked when the request is sent.
+    pub fn unanswered(&self) -> Vec<String> {
+        self.unanswered.borrow().iter().cloned().collect()
+    }
+
+    /// Circular references met so far, each as the chain of names followed from the
+    /// reference as written to the name that repeats (`["a", "b", "a"]`), in the order found.
+    pub fn circular(&self) -> Vec<Vec<String>> {
+        self.circular.borrow().clone()
     }
 
     /// Dynamic variables that failed (bad or out-of-range arguments), as messages.
@@ -83,7 +272,9 @@ impl Resolver {
         self.errors.borrow().clone()
     }
 
-    fn resolve_depth(&self, text: &str, depth: usize) -> String {
+    /// Resolves `text`, where `chain` is the names being resolved around it. A name
+    /// already on the chain is a circular reference: it's recorded and left as written.
+    fn resolve_chain(&self, text: &str, chain: &mut Vec<String>) -> String {
         let mut out = String::with_capacity(text.len());
         for segment in segments(text) {
             let (whole, inner) = match segment {
@@ -94,6 +285,12 @@ impl Resolver {
                 Segment::Reference { whole, name } => (whole, name),
             };
             let value = if let Some(dynamic) = inner.strip_prefix('$') {
+                if generates(split_call(dynamic).0) {
+                    if let Some(placeholder) = self.placeholder(whole) {
+                        out.push_str(&placeholder);
+                        continue;
+                    }
+                }
                 match self.dynamic(dynamic) {
                     Ok(v) => v,
                     Err(e) => {
@@ -107,15 +304,48 @@ impl Resolver {
                         continue;
                     }
                 }
-            } else if depth < MAX_DEPTH {
-                self.vars.get(inner).map(|v| self.resolve_depth(v, depth + 1))
+            } else if let Some(prompt) = self.prompts.get(inner) {
+                // In the preview a masked value is shown masked, and an unanswered
+                // prompt as written (a placeholder, so it passes the URL check).
+                let shown = match prompt {
+                    Some((value, masked)) => {
+                        (*masked).then(|| self.placeholder(MASK)).flatten().unwrap_or(value.clone())
+                    }
+                    None => {
+                        self.unanswered.borrow_mut().insert(inner.to_string());
+                        self.placeholder(whole).unwrap_or_else(|| whole.to_string())
+                    }
+                };
+                out.push_str(&shown);
+                continue;
+            } else if chain.iter().any(|n| n == inner) {
+                let mut cycle = chain.clone();
+                cycle.push(inner.to_string());
+                let mut circular = self.circular.borrow_mut();
+                if !circular.contains(&cycle) {
+                    circular.push(cycle);
+                }
+                out.push_str(whole);
+                continue;
             } else {
-                None
+                // Whether a Secret goes into this reference's value, kept apart from the text around it.
+                let outer = self.secret_seen.replace(self.secrets.contains(inner));
+                let value = self.vars.get(inner).map(|v| {
+                    chain.push(inner.to_string());
+                    let resolved = self.resolve_chain(v, chain);
+                    chain.pop();
+                    resolved
+                });
+                let secret = self.secret_seen.get();
+                self.secret_seen.set(outer || secret);
+                let (open, close) = SECRET_MARKS;
+                let marked = secret && chain.is_empty() && self.placeholders.is_some();
+                value.map(|v| if marked { format!("{open}{v}{close}") } else { v })
             };
             match value {
                 Some(v) => out.push_str(&v),
                 None => {
-                    self.unresolved.borrow_mut().insert(inner.to_string());
+                    self.undefined.borrow_mut().insert(inner.to_string());
                     out.push_str(whole);
                 }
             }
@@ -126,6 +356,9 @@ impl Resolver {
     /// `Ok(None)` when the variable is unknown or unset; `Err` when its arguments are bad.
     fn dynamic(&self, expr: &str) -> Result<Option<String>, String> {
         let (name, args) = split_call(expr);
+        if !is_dynamic(name) {
+            return Ok(None);
+        }
         let arg = |i: usize| args.get(i).map(String::as_str);
         let int = |i: usize, default: i64| arg(i).map_or(Ok(default), parse_int);
         Ok(Some(match name {
@@ -331,17 +564,56 @@ mod tests {
     }
 
     #[test]
-    fn resolves_nested_and_reports_unresolved() {
+    fn resolves_nested_and_reports_undefined() {
         let r = resolver(&[("host", "example.com"), ("base", "https://{{host}}/api")]);
         assert_eq!(r.resolve("{{base}}/users/{{ id }}"), "https://example.com/api/users/{{ id }}");
-        assert_eq!(r.unresolved(), vec!["id"]);
+        assert_eq!(r.undefined(), vec!["id"]);
     }
 
     #[test]
-    fn cycles_terminate() {
+    fn a_cycle_is_reported_as_circular_with_its_chain_not_as_undefined() {
         let r = resolver(&[("a", "{{b}}"), ("b", "{{a}}")]);
-        let out = r.resolve("{{a}}");
-        assert!(out.contains("{{"));
+        assert_eq!(r.resolve("{{a}}"), "{{a}}");
+        assert_eq!(r.circular(), vec![vec!["a", "b", "a"]]);
+        assert!(r.undefined().is_empty(), "{:?}", r.undefined());
+    }
+
+    #[test]
+    fn the_chain_starts_at_the_reference_and_a_self_reference_is_circular() {
+        let r = resolver(&[("url", "https://{{a}}/x"), ("a", "{{b}}"), ("b", "{{a}}"), ("me", "{{me}}")]);
+        assert_eq!(r.resolve("{{url}} {{me}}"), "https://{{a}}/x {{me}}");
+        assert_eq!(r.circular(), vec![vec!["url", "a", "b", "a"], vec!["me", "me"]]);
+        assert!(r.undefined().is_empty(), "{:?}", r.undefined());
+    }
+
+    #[test]
+    fn a_long_chain_without_a_cycle_resolves() {
+        let pairs: Vec<(String, String)> = (0..15).map(|i| (format!("v{i}"), format!("{{{{v{}}}}}", i + 1))).collect();
+        let mut map: HashMap<String, String> = pairs.into_iter().collect();
+        map.insert("v15".into(), "end".into());
+        let r = Resolver::new(map);
+        assert_eq!(r.resolve("{{v0}}"), "end");
+        assert!(r.circular().is_empty() && r.undefined().is_empty());
+    }
+
+    #[test]
+    fn a_name_used_twice_side_by_side_is_not_circular() {
+        let r = resolver(&[("host", "h"), ("both", "{{host}}{{host}}")]);
+        assert_eq!(r.resolve("{{both}}"), "hh");
+        assert!(r.circular().is_empty());
+    }
+
+    #[test]
+    fn the_preview_marks_each_value_a_secret_went_into_and_a_send_does_not() {
+        let pairs = [("token", "s3"), ("auth", "Bearer {{token}}"), ("host", "h")];
+        let send = resolver(&pairs).with_secrets(["token".to_string()]);
+        assert_eq!(send.resolve("{{auth}} {{host}}"), "Bearer s3 h");
+
+        let preview = resolver(&pairs).with_secrets(["token".to_string()]).previewing();
+        let (open, close) = SECRET_MARKS;
+        assert_eq!(preview.resolve("{{auth}} {{host}}/{{token}}"), format!("{open}Bearer s3{close} h/{open}s3{close}"));
+        assert_eq!(preview.unmarked(&preview.resolve("x{{auth}}")), "xBearer s3");
+        assert_eq!(preview.masked(&preview.resolve("x{{auth}}")), format!("x{MASK}"));
     }
 
     #[test]
@@ -368,10 +640,48 @@ mod tests {
         assert!(r.resolve("{{$datetime rfc1123}}").ends_with("GMT"));
         assert!(r.resolve("{{$isoTimestamp}}").ends_with('Z'));
         assert_eq!(r.resolve("{{$random.hexadecimal(8)}}").len(), 8);
-        assert!(r.unresolved().is_empty());
+        assert!(r.undefined().is_empty());
         std::env::set_var("HTTPDESK_TEST_VAR", "yes");
         assert_eq!(r.resolve("{{$processEnv HTTPDESK_TEST_VAR}}"), "yes");
         assert_eq!(r.resolve("{{$env.HTTPDESK_TEST_VAR}}"), "yes");
+    }
+
+    /// Autocomplete offers the dynamic variables listed in `dynamic-variables.json`.
+    /// The resolver generates nothing outside `DYNAMIC_VARIABLES`, so a dynamic
+    /// variable added to the core without its entry there fails here.
+    #[test]
+    fn autocomplete_lists_every_dynamic_variable() {
+        #[derive(serde::Deserialize)]
+        struct Catalogue {
+            variables: Vec<Entry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            name: String,
+        }
+        let listed: Catalogue = serde_json::from_str(include_str!("../dynamic-variables.json")).unwrap();
+        let listed: Vec<String> = listed.variables.into_iter().map(|e| e.name).collect();
+        let generated: Vec<String> = DYNAMIC_VARIABLES.iter().map(|n| format!("${n}")).collect();
+        assert_eq!(listed, generated);
+    }
+
+    #[test]
+    fn the_resolver_generates_every_listed_dynamic_variable_and_nothing_else() {
+        std::env::set_var("HTTPDESK_LISTED_VAR", "yes");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "HTTPDESK_LISTED_VAR=yes\n").unwrap();
+        let r = Resolver::for_request(&HashMap::new(), &[], &[], Some(dir.path()));
+        for name in DYNAMIC_VARIABLES {
+            let reference = match *name {
+                "processEnv" | "dotenv" => format!("{{{{${name} HTTPDESK_LISTED_VAR}}}}"),
+                "env." => "{{$env.HTTPDESK_LISTED_VAR}}".to_string(),
+                _ => format!("{{{{${name}}}}}"),
+            };
+            assert!(!r.resolve(&reference).contains("{{"), "{reference} was not generated");
+        }
+        assert!(r.undefined().is_empty() && r.errors().is_empty(), "{:?} {:?}", r.undefined(), r.errors());
+        assert_eq!(r.resolve("{{$nope}}"), "{{$nope}}");
+        assert_eq!(r.undefined(), vec!["$nope"]);
     }
 
     /// Resolves `text` with a fresh resolver and returns its errors.
