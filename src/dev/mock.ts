@@ -279,7 +279,8 @@ function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: E
 let envFiles = splitEnvFiles(envSet, { shared: {} });
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
-  recentWorkspaces: [ROOT],
+  // `?recent=/work/shop,/work/api`: more recent workspaces after the demo one (File → Open Recent).
+  recentWorkspaces: [ROOT, ...(new URLSearchParams(location.search).get("recent")?.split(",") ?? [])],
   environments: { [ROOT]: "local" },
   environmentSettings: {} as Record<string, Record<string, { production?: boolean; color?: string | null }>>,
   theme: new URLSearchParams(location.search).get("theme") ?? "system",
@@ -314,9 +315,64 @@ let previewRequests = 0;
 let windowTitle: string | null = null;
 let windowCloseRequests = 0;
 let windowClosed = false;
+/** The `.http` files `save_http_file` wrote, in order. */
+const savedPaths: string[] = [];
+/** Runs `cancel_request` was called for that are still sending. */
+const cancelledRuns = new Set<string>();
+
+// ---- The native menu bar (src-tauri/src/menu.rs), as the app sent it.
+type MenuEntry =
+  | { kind: "item"; id: string; label: string; accelerator: string | null; enabled: boolean; checked: boolean | null }
+  | { kind: "separator" }
+  | { kind: "predefined"; item: string; label: string | null }
+  | { kind: "submenu"; label: string; enabled: boolean; items: MenuEntry[] };
+type MenuItemEntry = Extract<MenuEntry, { kind: "item" }>;
+type MenuChange = { id: string; enabled?: boolean; checked?: boolean };
+let menuBar: { label: string; items: MenuEntry[] }[] = [];
+const menuStateChanges: MenuChange[][] = [];
+/** Every item in the menu bar (the same id may be in several menus). */
+const menuItems = (entries: MenuEntry[] = menuBar.flatMap((m) => m.items)): MenuItemEntry[] =>
+  entries.flatMap((e) => (e.kind === "item" ? [e] : e.kind === "submenu" ? menuItems(e.items) : []));
+/** Like the shell: only the menu bar's own items send a `menu` event. */
+async function menuClick(id: string) {
+  if (menuItems().some((i) => i.id === id)) await emit("menu", { id });
+}
+// On macOS a key the page left alone (no `preventDefault()`) reaches the menu, which
+// runs the enabled item with that key equivalent (ADR-0005). The check waits for
+// the page's own handlers, which run after this capture listener.
+const ACCELERATOR_KEYS: Record<string, string> = { Enter: "Enter", ",": "," };
+function acceleratorOf(e: KeyboardEvent): string {
+  const key = ACCELERATOR_KEYS[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  return [e.metaKey && "Cmd", e.altKey && "Alt", e.shiftKey && "Shift", e.ctrlKey && "Ctrl", key].filter(Boolean).join("+");
+}
+window.addEventListener(
+  "keydown",
+  (e) => {
+    setTimeout(() => {
+      if (e.defaultPrevented) return;
+      const item = menuItems().find((i) => i.accelerator && i.enabled && i.accelerator === acceleratorOf(e));
+      if (item) void menuClick(item.id);
+    });
+  },
+  { capture: true },
+);
+
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
   sentPrompts,
+  get savedPaths() {
+    return [...savedPaths];
+  },
+  /** The native menu bar as the app last sent it, with the state changes since applied. */
+  get menu() {
+    return { layout: clone(menuBar) };
+  },
+  /** Each batch of item state changes the app sent, in order. */
+  get menuStateChanges() {
+    return clone(menuStateChanges);
+  },
+  /** A click on the native menu item `id`: sends the `menu` event the shell would. */
+  menuClick,
   /** The window title the app last set. */
   get title() {
     return windowTitle;
@@ -728,7 +784,22 @@ mockIPC(
       case "path_exists":
         return true;
       case "open_workspace":
+        // Like the shell, the opened folder goes to the top of the recent workspaces
+        // (the mock always opens the demo workspace, though).
+        settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
         return { root: ROOT, tree, gitignoreUpdated: false };
+      case "set_menu":
+        menuBar = clone(args.layout);
+        return null;
+      case "set_menu_state":
+        menuStateChanges.push(clone(args.changes));
+        for (const change of args.changes as MenuChange[]) {
+          for (const item of menuItems().filter((i) => i.id === change.id)) {
+            if (change.enabled !== undefined) item.enabled = change.enabled;
+            if (change.checked !== undefined && item.checked !== null) item.checked = change.checked;
+          }
+        }
+        return null;
       case "get_tree":
         return tree;
       case "load_environments":
@@ -753,6 +824,7 @@ mockIPC(
       case "read_http_file":
         return clone(files[args.path]);
       case "save_http_file":
+        savedPaths.push(args.path);
         files[args.path] = clone(args.file);
         return clone(args.file);
       case "create_file": {
@@ -796,12 +868,17 @@ mockIPC(
       }
       case "find_usages":
         return findUsages(String(args.name), args.open ?? []);
+      case "cancel_request":
+        cancelledRuns.add(args.runId);
+        return null;
       case "send_request": {
         sent.push(clone(args.request));
         sentPrompts.push(clone(args.promptValues ?? {}));
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
+            // Like the shell: a cancelled send fails (the app shows it as Cancelled).
+            if (cancelledRuns.delete(args.runId)) throw "cancelled";
             await emit("send-progress", { runId: args.runId, received: i * 6_000 });
           }
         } else {

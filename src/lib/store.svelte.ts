@@ -236,6 +236,9 @@ class AppStore {
   /** A Find usages result asked to show this field of the tab's request: its
    *  request editor switches to it and clears this. */
   fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
+  /** The tab whose request editor shows its request's `.http` source instead of
+   *  its sections (the editor's .http button, Request → Show .http Source). */
+  sourceShownFor = $state<string | null>(null);
   private renameForm = new PendingForm<Renaming, RenameChoice>();
   /** The Rename variable form on screen (`RenameVariable.svelte`), if any. */
   get renaming(): Renaming | null {
@@ -1265,6 +1268,11 @@ class AppStore {
     if (req !== own) await this.openRequest(tab.path, { key: req._key });
     const index = req.variables.map((v) => v.name).lastIndexOf(name);
     if (this.activeTab) this.fieldWanted = { tabId: this.activeTab.id, field: { kind: "variable", index, name } };
+  }
+
+  /** Shows or hides the `.http` source in the tab's request editor. */
+  toggleSource(tabId: string) {
+    this.sourceShownFor = this.sourceShownFor === tabId ? null : tabId;
   }
 
   /** Switches the tab's request editor to its Settings section (timeouts). */

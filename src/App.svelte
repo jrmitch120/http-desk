@@ -20,10 +20,12 @@
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
   import { handleCommandKey, shortcutHint } from "./lib/commands";
+  import { startNativeMenu } from "./lib/nativeMenu.svelte";
   import { SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
+    startNativeMenu().catch((e) => console.warn("native menu unavailable", e));
     app.init().then(() => {
       // Production builds only: dev builds have no signed release to compare against.
       if (!import.meta.env.DEV && app.settings?.checkUpdates !== false) setTimeout(() => updates.check(false), 3000);
