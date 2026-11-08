@@ -26,6 +26,7 @@ mod quit;
 mod self_writes;
 mod theme;
 mod watcher;
+mod window_state;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
@@ -209,9 +210,13 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     if let Some(dir) = app.try_state::<ConfigDir>() {
         return Some(dir.0.join("settings.json"));
     }
-    let dir =
-        std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
+    let dir = config_dir_override().or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
+}
+
+/// The config folder `HTTPDESK_CONFIG_DIR` sets, if any.
+fn config_dir_override() -> Option<PathBuf> {
+    std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from)
 }
 
 fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> CmdResult<()> {
@@ -898,7 +903,8 @@ pub fn run() {
             .plugin(tauri_plugin_clipboard_manager::init())
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init()),
+            .plugin(tauri_plugin_process::init())
+            .plugin(window_state::plugin(config_dir_override())),
         theme::create_main_window,
     )
     .build(tauri::generate_context!())

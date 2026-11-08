@@ -6,14 +6,18 @@ use tauri::{Manager, Theme};
 
 /// Creates the app's only window, "main" from tauri.conf.json (which has
 /// `"create": false`), in the saved `theme` setting; runs at setup once settings
-/// are loaded (the IPC tests make their own window). The page's `applyTheme()`
+/// are loaded (most IPC tests make their own window). The page's `applyTheme()`
 /// takes over once settings arrive over IPC, setting the same theme again.
+///
+/// The window is created hidden and shown once its saved size and place are
+/// restored (window_state.rs), so it never appears at the default size first.
 pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let choice = app.state::<crate::AppState>().settings.lock().unwrap().theme.clone();
     let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or(tauri::Error::WindowNotFound)?;
     let fixed = window_theme(&choice);
     let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
         .theme(fixed)
+        .visible(false)
         // Main frame only (Windows also runs it in subframes, so the script checks):
         // response previews are iframes with their own styles.
         .initialization_script(page_script(&choice));
@@ -26,7 +30,7 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         // frame, which the event loop draws after setup.
         window.set_background_color(Some(background(window.theme().unwrap_or(Theme::Dark))))?;
     }
-    Ok(())
+    crate::window_state::show_restored(&window)
 }
 
 /// `--bg` in src/app.css for each theme (checked by a test).
