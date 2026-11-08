@@ -6,7 +6,7 @@ import { openApp, openRequest } from "./helpers";
 test("the size tooltip shows transferred size, decoded size and encoding", async ({ page }) => {
   await openApp(page, "?response=gzip");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await page.locator(".metric", { hasText: "Size" }).hover();
   await expect(page.getByRole("tooltip")).toHaveText("Transferred 112 B (gzip) · Decoded 144 B · Headers 120 B");
@@ -15,7 +15,7 @@ test("the size tooltip shows transferred size, decoded size and encoding", async
 test("an unencoded response's size tooltip shows the body and headers", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await page.locator(".metric", { hasText: "Size" }).hover();
   await expect(page.getByRole("tooltip")).toHaveText("Body 144 B · Headers 120 B");
@@ -24,7 +24,7 @@ test("an unencoded response's size tooltip shows the body and headers", async ({
 test("the Request tab lists the Accept-Encoding that was sent", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await page.getByRole("radiogroup", { name: "Response tabs" }).getByRole("radio", { name: /^Request\b/ }).click();
   await expect(page.getByRole("row", { name: /Accept-Encoding/ })).toContainText("gzip, deflate, br, zstd");

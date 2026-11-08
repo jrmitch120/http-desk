@@ -11,7 +11,7 @@ function savedFiles(page: Page) {
 test("Pretty view shows a 64-bit ID exactly as the server sent it", async ({ page }) => {
   await openApp(page, "?response=bigint");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const body = page.locator(".body .cm-content");
   await expect(body).toContainText('"id": 9007199254740993,');
@@ -22,7 +22,7 @@ test("Pretty view shows a 64-bit ID exactly as the server sent it", async ({ pag
 test("Pretty view of a JSON response that doesn't parse shows the raw body", async ({ page }) => {
   await openApp(page, "?response=invalidJson");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await expect(page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Pretty" })).toBeChecked();
   await expect(page.locator(".body .cm-content")).toHaveText('{"id": 9007199254740993, oops}');
@@ -41,7 +41,7 @@ test("Beautify keeps 10.50 and 1e3 as written, and saving writes them unchanged"
   const pretty = '{\n  "price": 10.50,\n  "e": 1e3,\n  "id": 9007199254740993\n}';
   await expect(editor.locator(".cm-line")).toHaveText(pretty.split("\n"));
 
-  await page.keyboard.press("ControlOrMeta+S");
+  await page.keyboard.press("Meta+S");
   await expect
     .poll(async () => (await savedFiles(page))["/demo/api/pets.http"].requests.find((r) => r.name === "Create pet")?.body.text)
     .toBe(pretty);

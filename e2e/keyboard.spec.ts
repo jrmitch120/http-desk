@@ -26,7 +26,7 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
 
 test("a modal's Tab wrap skips elements that aren't Tab stops", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   const settings = dialog(page, "Settings");
   // Roving widgets (a SegmentedControl's unchecked radios) put tabindex=-1
   // buttons in a modal; here one sits first, and a tabindex=-1 element that
@@ -202,9 +202,9 @@ test("only the active tab is in the Tab order", async ({ page }) => {
 test("icon-only buttons, including toast close buttons, have accessible labels", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.getByText("200 OK")).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+E");
+  await page.keyboard.press("Meta+E");
   await dialog(page, "Environments").getByPlaceholder("Add variable").fill("apiKey");
   await dialog(page, "Environments").getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Environments saved")).toBeVisible();

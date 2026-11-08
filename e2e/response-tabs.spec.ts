@@ -10,7 +10,7 @@ function viewerTabs(page: Page) {
 async function sendListPets(page: Page) {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(viewerTabs(page)).toBeVisible();
 }
 
@@ -82,7 +82,7 @@ test("the Headers tab counts the response headers; tabs without a count show non
 
   // The count follows the response.
   await openRequest(page, ["api", "pets.http"], "Get pet image");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(tabs.getByRole("radio", { name: "Headers" })).toHaveAccessibleName("Headers 2");
 });
 
@@ -92,7 +92,7 @@ test("each editor tab remembers its viewer tab", async ({ page }) => {
   await tab("Request").click();
 
   await openRequest(page, ["api", "pets.http"], "Create pet");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(tab("Body")).toHaveAttribute("aria-checked", "true");
 
   await openRequest(page, ["api", "pets.http"], "List pets");

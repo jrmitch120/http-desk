@@ -8,7 +8,7 @@ test("a TLS error opens Settings scrolled to TLS, and offers no way to turn veri
   await page.setViewportSize({ width: 1280, height: 480 });
   await openApp(page, "?sendError=tls");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const panel = page.getByRole("alert").filter({ hasText: "Secure connection failed" });
   await expect(panel.getByRole("button")).toHaveText(["Open Settings → TLS", "Retry"]);
@@ -24,7 +24,7 @@ for (const kind of ["timeoutIdle", "timeoutConnect"]) {
     await openApp(page, `?sendError=${kind}`);
     await openRequest(page, ["api", "pets.http"], "List pets");
     await expect(page.getByRole("textbox", { name: "Idle timeout" })).toBeHidden();
-    await page.keyboard.press("ControlOrMeta+Enter");
+    await page.keyboard.press("Meta+Enter");
 
     const panel = page.getByRole("alert").filter({ hasText: "Timed out" });
     await expect(panel.getByRole("button")).toHaveText(["Open request Settings", "Retry"]);
@@ -43,7 +43,7 @@ test("an unresolved-variable error opens the environment picker, and Retry sends
   const picker = page.getByRole("combobox", { name: "Active environment" });
   await picker.click();
   await page.getByRole("option", { name: "No environment" }).click();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const panel = page.getByRole("alert").filter({ hasText: "Undefined variables in the URL" });
   await expect(panel.getByRole("button")).toHaveText(["Choose environment", "Retry"]);

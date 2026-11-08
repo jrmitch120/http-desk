@@ -12,7 +12,7 @@ test("⌘⌥E opens the environment picker from an editor; typing filters it and
   const env = page.getByRole("combobox", { name: "Active environment" });
   const list = page.getByRole("listbox", { name: "Active environment" });
 
-  await page.keyboard.press("ControlOrMeta+Alt+E");
+  await page.keyboard.press("Meta+Alt+E");
   await expect(list).toBeVisible();
   await expect(env).toBeFocused();
   await page.keyboard.type("stag");

@@ -6,7 +6,7 @@ import { openApp, openRequest, sentRequests } from "./helpers";
 test("a DNS failure names the host, hints at the URL or environment, and Retry sends again", async ({ page }) => {
   await openApp(page, "?sendError=dns");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const panel = page.getByRole("alert").filter({ hasText: "Host not found" });
   await expect(panel).toBeVisible();
@@ -22,7 +22,7 @@ test("a DNS failure names the host, hints at the URL or environment, and Retry s
 test("an unclassified failure keeps the general hint", async ({ page }) => {
   await openApp(page, "?sendError=other");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const panel = page.getByRole("alert").filter({ hasText: "Could not send request" });
   await expect(panel).toContainText("Check the URL, the selected environment, and that the server is reachable.");

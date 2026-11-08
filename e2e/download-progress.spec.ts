@@ -6,7 +6,7 @@ import { openApp, openRequest } from "./helpers";
 test("a downloading body shows an updating byte count next to the loading state", async ({ page }) => {
   await openApp(page, "?download=slow");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const received = page.locator(".statusbar .loading .received");
   await expect(received).toHaveText(/^\d+(\.\d+)? (B|KB|MB) received$/);
@@ -21,7 +21,7 @@ test("a downloading body shows an updating byte count next to the loading state"
 test("a send with nothing received yet shows no byte count", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await expect(page.locator(".statusbar .loading")).toBeVisible();
   await expect(page.locator(".statusbar .loading .received")).toHaveCount(0);

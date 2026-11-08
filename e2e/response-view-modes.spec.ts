@@ -6,7 +6,7 @@ import { openApp, openRequest, setMockResponse } from "./helpers";
 async function send(page: Page, response: string): Promise<void> {
   await openApp(page, `?response=${response}`);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".statusbar .metric").first()).toBeVisible();
 }
 
@@ -46,7 +46,7 @@ test("a response first shown in Preview builds Raw only when picked, coloured on
   await send(page, "longHtml");
   await views(page).getByRole("radio", { name: "Preview" }).click();
   // The next response in this tab opens in Preview, with no Raw editor behind it yet.
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator("iframe[title='HTML preview']")).toBeVisible();
   await expect(page.locator(".body .cm-editor")).toHaveCount(0);
 
@@ -61,12 +61,12 @@ test("a tab set to Pretty shows an HTML response in Raw, and the next JSON respo
   await expect(views(page).getByRole("radio", { name: "Pretty" })).toBeChecked();
 
   await setMockResponse(page, "html");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".body .cm-content")).toContainText("<h1>Pets</h1>");
   await expect(views(page).getByRole("radio", { name: "Raw" })).toBeChecked();
 
   await setMockResponse(page, "bigint");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".body .cm-content")).toContainText('"price": 10.50,');
   await expect(views(page).getByRole("radio", { name: "Pretty" })).toBeChecked();
 });
@@ -74,7 +74,7 @@ test("a tab set to Pretty shows an HTML response in Raw, and the next JSON respo
 test("a binary body without a preview still names its view: Hex", async ({ page }) => {
   await openApp(page, "?bigBinary=1");
   await openRequest(page, ["api", "pets.http"], "Get pet image");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(views(page).getByRole("radio")).toHaveText(["Hex"]);
 });
 

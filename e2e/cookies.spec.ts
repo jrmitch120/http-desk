@@ -15,7 +15,7 @@ const rows = (page: Page) => page.getByRole("table", { name: "Response cookies" 
 async function sendListPets(page: Page, query = "?response=cookies") {
   await openApp(page, query);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(viewerTabs(page)).toBeVisible();
 }
 

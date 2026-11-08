@@ -43,7 +43,7 @@ async function expectMenu(page: Page, target: Locator, items: string[]) {
 }
 
 async function send(page: Page) {
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".statusbar .metric").first()).toBeVisible();
 }
 

@@ -14,7 +14,7 @@ function prettyRequests(page: Page): Promise<number> {
 async function send(page: Page, query: string) {
   await openApp(page, query);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 }
 
 test("a small JSON response shows its Pretty text without asking the shell again", async ({ page }) => {
@@ -52,7 +52,7 @@ test("a large response opened in Raw isn't formatted until Pretty is chosen", as
 
   // The tab remembers Raw, so the next response isn't formatted.
   await resetPrettyRequests(page);
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.getByText(/^Sending/)).toHaveCount(0);
   await expect(page.locator(".body .cm-content")).toHaveText(RAW);
   expect(await prettyRequests(page)).toBe(0);
