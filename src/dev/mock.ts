@@ -320,6 +320,12 @@ let windowClosed = false;
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
 const openedUrls: string[] = [];
+/** The OS clipboard, as the clipboard plugin reads and writes it. */
+let clipboardText = "";
+/** The texts the clipboard plugin wrote, in order. */
+const clipboardWrites: string[] = [];
+/** Whether the clipboard plugin's writes fail (a test sets it). */
+let clipboardFails = false;
 /**
  * Like the shell's opener: only URLs its capability's scope allows (globs, `*`
  * matching anything), so a link the capability doesn't cover fails here too.
@@ -386,6 +392,21 @@ window.addEventListener(
   /** The URLs the opener opened in the browser, in order. */
   get openedUrls() {
     return [...openedUrls];
+  },
+  /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
+  get clipboard() {
+    return clipboardText;
+  },
+  set clipboard(text: string) {
+    clipboardText = text;
+  },
+  /** The texts the clipboard plugin wrote, in order. */
+  get clipboardWrites() {
+    return [...clipboardWrites];
+  },
+  /** Makes the clipboard plugin's writes fail, or succeed again. */
+  set clipboardFails(fails: boolean) {
+    clipboardFails = fails;
   },
   /** The window title the app last set. */
   get title() {
@@ -772,8 +793,12 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "plugin:clipboard-manager|read_text":
-        // The browser's clipboard (tests replace navigator.clipboard to control it).
-        return navigator.clipboard.readText().catch(() => "");
+        return clipboardText;
+      case "plugin:clipboard-manager|write_text":
+        if (clipboardFails) throw "The clipboard can't be written";
+        clipboardText = args.text;
+        clipboardWrites.push(args.text);
+        return null;
       case "plugin:opener|open_url":
         if (!openableUrls.some((re) => re.test(args.url))) throw `Not allowed to open url ${args.url}`;
         openedUrls.push(args.url);

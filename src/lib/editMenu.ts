@@ -116,7 +116,7 @@ export type EditActions = Partial<Record<"undo" | "redo" | "cut" | "copy" | "pas
 /** The edit actions on `field`: the context menu's (Cut, Copy, Paste, Select all), and Undo and Redo. */
 function textActions(field: TextField): EditActions {
   const cannotCopy = !field.selected() || field.masked;
-  const copy: EditAction = { disabled: cannotCopy, run: () => void writeClipboard(field.selected()) };
+  const copy: EditAction = { disabled: cannotCopy, run: () => void writeClipboard(field.selected()).catch(() => {}) };
   const selectAll: EditAction = { disabled: false, run: () => field.selectAll() };
   if (field.readOnly) return { copy, "select-all": selectAll };
   return {
@@ -124,9 +124,14 @@ function textActions(field: TextField): EditActions {
     redo: { disabled: false, run: () => field.history("redo") },
     cut: {
       disabled: cannotCopy,
-      run: () => {
-        void writeClipboard(field.selected());
-        field.replace("");
+      // The selection goes only once it's on the clipboard.
+      run: async () => {
+        try {
+          await writeClipboard(field.selected());
+        } catch {
+          return;
+        }
+        if (field.connected()) field.replace("");
       },
     },
     copy,
