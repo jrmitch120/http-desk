@@ -152,3 +152,77 @@ fn deleting_the_workspace_folder_is_reported() {
 fn moving_the_workspace_folder_is_reported() {
     assert_missing_reported(|root| std::fs::rename(root, root.with_file_name("moved")).unwrap());
 }
+
+/// The app's own env file saves, at the root and in a nested folder, aren't reported
+/// however long writing takes: each file is recorded with its bytes before it's written.
+/// An outside edit made right after a save still is.
+#[test]
+fn own_env_saves_are_not_reported_even_when_writing_outlasts_the_debounce() {
+    let h = Harness::new();
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    std::fs::create_dir(root.join("api")).unwrap();
+    std::fs::write(root.join("api/http-client.env.json"), json!({ "dev": { "host": "api.dev" } }).to_string()).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    let rx = events(&h, "workspace-changed");
+    changed_paths(&rx, Duration::from_millis(600));
+
+    // Longer than the watcher's 250 ms debounce, between recording each file and writing it.
+    h.slow_env_writes(Duration::from_millis(400));
+    let set = json!({ "shared": [], "environments": [{ "name": "dev", "variables": [
+        { "name": "host", "value": "h", "secret": false },
+        { "name": "token", "value": "t", "secret": true }
+    ] }], "privateFileIgnored": null });
+    h.ok("save_environments", json!({ "set": set }));
+    h.ok("save_environments", json!({ "set": set, "dir": "api" }));
+    for f in ["http-client.env.json", "http-client.private.env.json", "api/http-client.private.env.json"] {
+        assert!(root.join(f).is_file(), "{f} was written");
+    }
+    let own = changed_paths(&rx, Duration::from_secs(2));
+    assert!(!own.iter().any(|p| p.contains("env.json")), "own env file saves were reported: {own:?}");
+
+    h.ok("save_environments", json!({ "set": set, "dir": "api" }));
+    std::fs::write(root.join("api/http-client.env.json"), "{}").unwrap();
+    let ext = changed_paths(&rx, Duration::from_secs(2));
+    assert!(ext.contains(&s(&root.join("api/http-client.env.json"))), "outside edit not reported: {ext:?}");
+}
+
+/// An import adds an environment per server, with public and (given a security scheme)
+/// Secret variables; none of its env file writes is reported, even when writing outlasts
+/// the debounce.
+#[test]
+fn env_file_writes_from_an_openapi_import_are_not_reported() {
+    for security in ["security: [{bearer: []}]\n", ""] {
+        let h = Harness::new();
+        let ws = tempfile::tempdir().unwrap();
+        let root = crate::paths::canonicalize(ws.path()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let spec = root.join("spec.yaml");
+        std::fs::write(
+            &spec,
+            format!("openapi: 3.0.3\ninfo: {{title: Mini, version: '1'}}\nservers: [{{url: 'https://api.mini.dev'}}, {{url: 'https://staging.mini.dev'}}]\ncomponents: {{securitySchemes: {{bearer: {{type: http, scheme: bearer}}}}}}\n{security}paths:\n  /things:\n    get:\n      operationId: listThings\n      tags: [things]\n      responses: {{'200': {{description: ok}}}}\n"),
+        )
+        .unwrap();
+        h.ok("open_workspace", json!({ "path": root }));
+        let rx = events(&h, "workspace-changed");
+        changed_paths(&rx, Duration::from_millis(600));
+
+        h.slow_env_writes(Duration::from_millis(400));
+        let source = s(&spec);
+        h.ok("openapi_load", json!({ "source": source }));
+        let done = h.ok(
+            "openapi_generate",
+            json!({ "source": source, "options": { "operationIds": [], "grouping": "tag", "baseUrlVariable": "baseUrl", "singleFileName": null },
+                    "outputDir": root.join("mini"), "overwrite": false, "dryRun": false }),
+        );
+        assert_eq!(done["written"], true);
+        let public = std::fs::read_to_string(root.join("http-client.env.json")).unwrap();
+        assert!(public.contains("https://api.mini.dev") && public.contains("https://staging.mini.dev"), "{public}");
+        let private = std::fs::read_to_string(root.join("http-client.private.env.json")).ok();
+        assert_eq!(private.is_some_and(|p| p.contains("\"token\"")), !security.is_empty(), "Secrets imported");
+
+        let own = changed_paths(&rx, Duration::from_secs(2));
+        assert!(!own.iter().any(|p| p.contains("env.json")), "the import's env file writes were reported: {own:?}");
+    }
+}

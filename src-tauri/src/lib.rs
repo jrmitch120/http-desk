@@ -168,6 +168,10 @@ struct AppState {
     /// Whether an open file has unsaved edits (reported by the frontend), so a
     /// logout asks first. See quit.rs.
     unsaved: AtomicBool,
+    /// How long to wait between recording an env file and writing it, so tests can make
+    /// writing outlast the watcher's debounce.
+    #[cfg(test)]
+    env_write_delay: Mutex<std::time::Duration>,
 }
 
 impl AppState {
@@ -178,6 +182,19 @@ impl AppState {
     fn write_file(&self, path: &Path, text: &str) -> CmdResult<()> {
         self.self_writes.writing(path, text.as_bytes());
         workspace::write_atomic(path, text.as_bytes()).map_err(|e| format!("Could not write {}: {e}", path.display()))
+    }
+
+    /// The hook `env` saves call before writing each env file: records the file's exact
+    /// bytes, so the watcher never reports the write, however long it takes.
+    fn recording_env_writes(&self) -> impl FnMut(&Path, &[u8]) + '_ {
+        move |path, bytes| {
+            self.self_writes.writing(path, bytes);
+            #[cfg(test)]
+            {
+                let delay = *self.env_write_delay.lock().unwrap();
+                std::thread::sleep(delay);
+            }
+        }
     }
 }
 
@@ -401,12 +418,7 @@ async fn load_folder_environments<R: tauri::Runtime>(app: AppHandle<R>) -> CmdRe
 fn save_environments(state: State<'_, AppState>, set: EnvironmentSet, dir: Option<String>) -> CmdResult<SaveReport> {
     let root = state.root()?;
     let folder = env_folder(&state, dir.as_deref())?;
-    // The core serializes, so the bytes are only known afterwards: mark both env files after saving.
-    let report = env::save_folder(&root, &folder, &set).map_err(err)?;
-    for name in [env::ENV_FILE, env::PRIVATE_ENV_FILE] {
-        state.self_writes.wrote(&folder.join(name));
-    }
-    Ok(report)
+    env::save_folder(&root, &folder, &set, state.recording_env_writes()).map_err(err)
 }
 
 // ------------------------------------------------------------------ execution
@@ -806,12 +818,15 @@ fn openapi_generate_blocking(state: &AppState, request: &GenerateRequest) -> Cmd
     for (text, path) in texts.iter().zip(&report.files) {
         state.write_file(path, text)?;
     }
-    for e in &output.environments {
-        env::merge_variables(&env_dir, &e.name, &e.variables, false).map_err(err)?;
-        if !e.secrets.is_empty() {
-            let r = env::merge_variables(&env_dir, &e.name, &e.secrets, true).map_err(err)?;
-            report.gitignore_updated |= r.gitignore_updated;
+    if !output.environments.is_empty() {
+        // Merged first and saved once, so each env file is written (and recorded) once.
+        let mut set = env::load(&env_dir).map_err(err)?;
+        for e in &output.environments {
+            env::merge_variables(&mut set, &e.name, &e.variables, false);
+            env::merge_variables(&mut set, &e.name, &e.secrets, true);
         }
+        let saved = env::save_folder(&env_dir, &env_dir, &set, state.recording_env_writes()).map_err(err)?;
+        report.gitignore_updated = saved.gitignore_updated;
     }
     report.written = true;
     Ok(report)

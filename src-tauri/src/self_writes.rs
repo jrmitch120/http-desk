@@ -35,13 +35,6 @@ impl SelfWrites {
         map.insert(path.to_path_buf(), Expect::Content(hash));
     }
 
-    /// Call after writing a file whose bytes were produced elsewhere.
-    pub fn wrote(&self, path: &Path) {
-        if let Ok(bytes) = std::fs::read(path) {
-            self.writing(path, &bytes);
-        }
-    }
-
     /// Call before creating the folder `path`.
     pub fn creating_dir(&self, path: &Path) {
         self.0.lock().unwrap().insert(path.to_path_buf(), Expect::Dir);

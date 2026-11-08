@@ -318,18 +318,20 @@ fn build_object(
     obj
 }
 
-/// Saves `set` as `dir`'s own pair of files, `dir` being the workspace root: [`save_folder`]'s
-/// root case, for [`merge_variables`] (the shell saves through `save_folder`).
-fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
-    save_folder(dir, dir, set)
-}
-
 /// Saves `set` as the own pair of files of folder `dir` in workspace `root`: Secrets
 /// to the private file, the rest to the public one. Environments are listed in the
 /// public file (so teammates see them) even when all their variables are Secrets,
 /// except below the root when the public file doesn't list them yet: there an entry
 /// would supply the whole environment and hide a farther folder's (ADR-0004).
-pub fn save_folder(root: &Path, dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
+///
+/// `before_write` is called with each file's path and exact bytes just before that file is
+/// written (and only for files that are), so the caller can tell its own writes apart.
+pub fn save_folder(
+    root: &Path,
+    dir: &Path,
+    set: &EnvironmentSet,
+    mut before_write: impl FnMut(&Path, &[u8]),
+) -> Result<SaveReport, EnvError> {
     let public_path = dir.join(ENV_FILE);
     let private_path = dir.join(PRIVATE_ENV_FILE);
     let old_public = read_map(&public_path)?;
@@ -352,8 +354,9 @@ pub fn save_folder(root: &Path, dir: &Path, set: &EnvironmentSet) -> Result<Save
         }
     }
 
-    let write = |path: &Path, map: Map<String, Value>| -> Result<(), EnvError> {
+    let mut write = |path: &Path, map: Map<String, Value>| -> Result<(), EnvError> {
         let text = serde_json::to_string_pretty(&Value::Object(map)).unwrap() + "\n";
+        before_write(path, text.as_bytes());
         crate::workspace::write_atomic(path, text.as_bytes())
             .map_err(|source| EnvError::Io { path: path.into(), source })
     };
@@ -369,15 +372,10 @@ pub fn save_folder(root: &Path, dir: &Path, set: &EnvironmentSet) -> Result<Save
     Ok(report)
 }
 
-/// Adds variables that don't exist yet to `env_name` (creating it if needed).
-/// Existing values are never overwritten.
-pub fn merge_variables(
-    dir: &Path,
-    env_name: &str,
-    vars: &[(String, String)],
-    secret: bool,
-) -> Result<SaveReport, EnvError> {
-    let mut set = load(dir)?;
+/// Adds variables that don't exist yet to `set`'s `env_name` (creating it if needed).
+/// Existing values are never overwritten. Merge everything first and save once with
+/// [`save_folder`], so each env file is written once.
+pub fn merge_variables(set: &mut EnvironmentSet, env_name: &str, vars: &[(String, String)], secret: bool) {
     if !set.environments.iter().any(|e| e.name == env_name) {
         set.environments.push(Environment { name: env_name.to_string(), ..Default::default() });
     }
@@ -387,7 +385,6 @@ pub fn merge_variables(
             env.variables.push(EnvVar { name: k.clone(), value: v.clone(), secret, ..Default::default() });
         }
     }
-    save(dir, &set)
 }
 
 /// What the repository's `.gitignore` rules say about the private env file.
@@ -485,6 +482,11 @@ pub fn ssl_config(root: &Path, dir: &Path, env_name: &str) -> SslConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Saves `set` as `dir`'s own pair of files, `dir` being the workspace root.
+    fn save(dir: &Path, set: &EnvironmentSet) -> Result<SaveReport, EnvError> {
+        save_folder(dir, dir, set, |_, _| {})
+    }
 
     #[test]
     fn load_merges_private_and_preserves_ssl_on_save() {
@@ -668,15 +670,66 @@ mod tests {
     #[test]
     fn merge_never_overwrites() {
         let dir = tempfile::tempdir().unwrap();
-        merge_variables(dir.path(), "dev", &[("a".into(), "1".into())], false).unwrap();
-        merge_variables(dir.path(), "dev", &[("a".into(), "2".into()), ("b".into(), "3".into())], false).unwrap();
-        merge_variables(dir.path(), "dev", &[("token".into(), String::new())], true).unwrap();
+        let mut set = load(dir.path()).unwrap();
+        merge_variables(&mut set, "dev", &[("a".into(), "1".into())], false);
+        save(dir.path(), &set).unwrap();
+        let mut set = load(dir.path()).unwrap();
+        merge_variables(&mut set, "dev", &[("a".into(), "2".into()), ("b".into(), "3".into())], false);
+        merge_variables(&mut set, "dev", &[("token".into(), String::new())], true);
+        save(dir.path(), &set).unwrap();
         let set = load(dir.path()).unwrap();
         let vars = variables(&set, Some("dev"));
         assert_eq!((vars["a"].as_str(), vars["b"].as_str()), ("1", "3"));
         assert!(set.environments[0].variables.iter().find(|v| v.name == "token").unwrap().secret);
         assert!(dir.path().join(PRIVATE_ENV_FILE).exists());
         assert_eq!(set.private_file_ignored, None, "not a git repo, gitignore untouched");
+    }
+
+    /// What a save's before-write hook was told.
+    #[derive(Default)]
+    struct Announced(Vec<(PathBuf, Vec<u8>)>);
+
+    impl Announced {
+        /// A hook that notes each file and its bytes, then scribbles over the file: so it
+        /// only ends up holding the announced bytes if the save wrote it after the hook.
+        fn scribbling_hook(&mut self) -> impl FnMut(&Path, &[u8]) + '_ {
+            |path, bytes| {
+                std::fs::write(path, "not yet written").unwrap();
+                self.0.push((path.to_path_buf(), bytes.to_vec()));
+            }
+        }
+    }
+
+    /// What `files` in `dir` hold now, for comparing with what was announced.
+    fn on_disk(dir: &Path, files: &[&str]) -> Vec<(PathBuf, Vec<u8>)> {
+        files.iter().map(|f| (dir.join(f), std::fs::read(dir.join(f)).unwrap())).collect()
+    }
+
+    #[test]
+    fn a_save_announces_each_file_it_writes_with_its_exact_bytes_before_writing_it() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let api = root.join("api");
+        std::fs::create_dir(&api).unwrap();
+        let var = |name: &str, secret| EnvVar { name: name.into(), value: "v".into(), secret, ..Default::default() };
+        let env = |vars| EnvironmentSet {
+            environments: vec![Environment { name: "dev".into(), variables: vars, ..Default::default() }],
+            ..Default::default()
+        };
+
+        // Only a public file is needed: the private one isn't created, so isn't announced.
+        let mut seen = Announced::default();
+        save_folder(root, &api, &env(vec![var("host", false)]), seen.scribbling_hook()).unwrap();
+        assert_eq!(seen.0, on_disk(&api, &[ENV_FILE]));
+        assert!(!api.join(PRIVATE_ENV_FILE).exists());
+
+        let mut seen = Announced::default();
+        let report =
+            save_folder(root, &api, &env(vec![var("host", false), var("token", true)]), seen.scribbling_hook())
+                .unwrap();
+        assert_eq!(seen.0, on_disk(&api, &[ENV_FILE, PRIVATE_ENV_FILE]));
+        assert!(report.gitignore_updated, "the private file still gets git-ignored");
     }
 
     /// Writes env file `file` (public or private) with `json` in folder `rel` under `root`.
@@ -764,13 +817,13 @@ mod tests {
         let mut set = load(&api).unwrap();
         set.environments[0].variables[0].value = "new".into();
         set.environments.push(Environment { name: "qa".into(), ..Default::default() });
-        save_folder(root, &api, &set).unwrap();
+        save_folder(root, &api, &set, |_, _| {}).unwrap();
 
         // An `"dev": {}` in api's public file would supply all of dev and lose the root's host.
         assert_eq!(read_json(&api.join(ENV_FILE)), serde_json::json!({ "qa": {} }));
         assert_eq!(env_vars(&load_for(root, &api).unwrap(), "dev"), pairs(&[("host", "root.dev"), ("key", "new")]));
         // At the root nothing is farther, so every environment is listed in the shareable file.
-        save_folder(root, root, &load(&api).unwrap()).unwrap();
+        save(root, &load(&api).unwrap()).unwrap();
         assert_eq!(read_json(&root.join(ENV_FILE)), serde_json::json!({ "dev": {}, "qa": {} }));
     }
 
