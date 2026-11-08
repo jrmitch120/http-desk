@@ -429,6 +429,11 @@ class AppStore {
     }
   }
 
+  /** The recent workspaces other than the open one, as many as the workspace menus list (the top bar's, Open Recent). */
+  get otherRecentWorkspaces(): string[] {
+    return (this.settings?.recentWorkspaces ?? []).filter((w) => w !== this.root).slice(0, 8);
+  }
+
   async openWorkspace(path: string) {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {

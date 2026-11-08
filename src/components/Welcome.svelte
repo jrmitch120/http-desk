@@ -1,15 +1,10 @@
 <script lang="ts">
-  import { open } from "@tauri-apps/plugin-dialog";
   import { app } from "../lib/store.svelte";
+  import { runCommand } from "../lib/commands";
   import { basename } from "../lib/http";
   import AppIcon from "./AppIcon.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-
-  async function openFolder() {
-    const dir = await open({ directory: true, title: "Open workspace folder" });
-    if (typeof dir === "string") await app.openWorkspace(dir);
-  }
 </script>
 
 <div class="welcome">
@@ -19,7 +14,7 @@
     </div>
     <h1>HttpDesk</h1>
     <p class="muted">A graphical HTTP client for plain <code>.http</code> files.<br />Your requests stay portable, readable and version-controlled.</p>
-    <button class="btn primary big" onclick={openFolder}><Icon name="folder-open" />Open folder…</button>
+    <button class="btn primary big" onclick={() => runCommand("open-folder")}><Icon name="folder-open" />Open folder…</button>
 
     {#if app.settings?.recentWorkspaces.length}
       <div class="recent">
