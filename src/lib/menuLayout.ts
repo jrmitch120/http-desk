@@ -70,8 +70,12 @@ export function menuLayout(os: OS): TopMenu[] {
     ...(os === "windows" ? [SEP, cmd("quit", { label: "Exit", shortcut: { alt: true, key: "F4" } })] : []),
     ...(os === "linux" ? [SEP, cmd("quit", { label: "Quit" })] : []),
   ];
-  // Linux gets its own Edit items separately: muda's predefined ones don't work on GTK (ADR-0005).
-  const edit: MenuEntry[] = [native("undo"), native("redo"), SEP, native("cut"), native("copy"), native("paste"), native("selectAll")];
+  // The OS's own Edit items, except on Linux: muda's predefined ones don't work
+  // on GTK (ADR-0005), so there they're the app's, acting as the context menu does.
+  const edit: MenuEntry[] =
+    os === "linux"
+      ? [cmd("undo"), cmd("redo"), SEP, cmd("cut"), cmd("copy"), cmd("paste"), cmd("select-all")]
+      : [native("undo"), native("redo"), SEP, native("cut"), native("copy"), native("paste"), native("selectAll")];
   const view: MenuEntry[] = [
     { kind: "submenu", label: "Response Layout", items: [cmd("layout-right"), cmd("layout-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
@@ -104,7 +108,7 @@ export function menuLayout(os: OS): TopMenu[] {
   }
   return [
     { label: "File", items: file },
-    ...(os === "windows" ? [{ label: "Edit", items: edit }] : []),
+    { label: "Edit", items: edit },
     { label: "View", items: view },
     { label: "Request", items: request },
     { label: "Help", role: "help", items: [cmd("check-updates")] },

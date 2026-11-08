@@ -26,10 +26,11 @@ test.describe("the menu the page sends", () => {
     expect(await menuItem(page, "quit")).toMatchObject({ label: "Exit\tAlt+F4" });
   });
 
-  test("on Linux: no Edit menu", async ({ page }) => {
+  test("on Linux: nothing bound or shown, and the app's own Edit items", async ({ page }) => {
     await openApp(page, "?platform=linux");
-    await expect.poll(() => menuBar(page)).toEqual(["File", "View", "Request", "Help"]);
+    await expect.poll(() => menuBar(page)).toEqual(["File", "Edit", "View", "Request", "Help"]);
     expect(await menuItem(page, "quit")).toMatchObject({ label: "Quit", accelerator: null });
+    expect(await menuItem(page, "copy")).toMatchObject({ label: "Copy", accelerator: null });
   });
 
   test("Open Recent lists the other recent workspaces, and is rebuilt when the list changes", async ({ page }) => {
