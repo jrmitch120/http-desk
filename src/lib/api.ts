@@ -1,6 +1,7 @@
 // Typed wrappers around Tauri commands (src-tauri/src/lib.rs).
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppInfo,
   AppSettings,
   BodyKind,
   FilterResult,
@@ -91,6 +92,9 @@ export const api = {
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
+
+  /** The app's version, OS and architecture (About HttpDesk, Report an Issue). */
+  appInfo: () => invoke<AppInfo>("app_info"),
 
   openapiLoad: (source: string) => invoke<SpecSummary>("openapi_load", { source }),
   openapiGenerate: (args: {

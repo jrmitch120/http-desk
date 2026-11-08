@@ -2,6 +2,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { app } from "../lib/store.svelte";
   import { basename } from "../lib/http";
+  import AppIcon from "./AppIcon.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
 
@@ -14,11 +15,7 @@
 <div class="welcome">
   <div class="card">
     <div class="logo">
-      <svg viewBox="0 0 1024 1024" width="56" height="56" aria-hidden="true">
-        <rect x="64" y="64" width="896" height="896" rx="200" fill="var(--accent)" />
-        <path d="M300 330 L460 512 L300 694" fill="none" stroke="#fff" stroke-width="84" stroke-linecap="round" stroke-linejoin="round" />
-        <path d="M540 694 H730" fill="none" stroke="#fff" stroke-width="84" stroke-linecap="round" />
-      </svg>
+      <AppIcon size={56} />
     </div>
     <h1>HttpDesk</h1>
     <p class="muted">A graphical HTTP client for plain <code>.http</code> files.<br />Your requests stay portable, readable and version-controlled.</p>

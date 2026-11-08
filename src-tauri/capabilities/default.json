@@ -14,6 +14,13 @@
     "dialog:default",
     "clipboard-manager:allow-read-text",
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://github.com/jrmitch120/http-desk#readme" },
+        { "url": "https://github.com/jrmitch120/http-desk/*" }
+      ]
+    },
     "updater:default",
     "process:allow-restart"
   ]

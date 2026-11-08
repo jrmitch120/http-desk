@@ -158,7 +158,7 @@ class PendingForm<S, C> {
   }
 }
 
-export type ModalKind = "env" | "openapi" | "settings" | null;
+export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 

@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
 import { updates } from "./updates.svelte";
+import { DOCUMENTATION_URL, openLink, RELEASE_NOTES_URL, reportIssue } from "./about";
 import { modalOpen } from "./modal.svelte";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
@@ -35,7 +36,11 @@ export type CommandId =
   | "layout-below"
   | "theme-system"
   | "theme-light"
-  | "theme-dark";
+  | "theme-dark"
+  | "about"
+  | "documentation"
+  | "release-notes"
+  | "report-issue";
 
 export interface Command {
   id: CommandId;
@@ -209,6 +214,10 @@ const COMMANDS: Command[] = [
   themeChoice("theme-system", "System", "system"),
   themeChoice("theme-light", "Light", "light"),
   themeChoice("theme-dark", "Dark", "dark"),
+  { id: "about", label: "About HttpDesk", enabled: always, run: () => (app.modal = "about") },
+  { id: "documentation", label: "Documentation", enabled: always, run: () => void openLink(DOCUMENTATION_URL) },
+  { id: "release-notes", label: "Release Notes", enabled: always, run: () => void openLink(RELEASE_NOTES_URL) },
+  { id: "report-issue", label: "Report an Issue", enabled: always, run: () => void reportIssue() },
 ];
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));

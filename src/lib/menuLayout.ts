@@ -76,6 +76,7 @@ export function menuLayout(os: OS): TopMenu[] {
     { kind: "submenu", label: "Response Layout", items: [cmd("layout-right"), cmd("layout-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];
+  const help: MenuEntry[] = [cmd("documentation"), cmd("release-notes"), SEP, cmd("report-issue")];
   const request: MenuEntry[] = [cmd("send"), cmd("cancel"), SEP, cmd("save"), cmd("duplicate-request"), cmd("rename-request"), SEP, cmd("show-source")];
 
   if (mac) {
@@ -83,6 +84,8 @@ export function menuLayout(os: OS): TopMenu[] {
       {
         label: "HttpDesk",
         items: [
+          cmd("about"),
+          SEP,
           cmd("settings"),
           cmd("check-updates"),
           SEP,
@@ -100,6 +103,7 @@ export function menuLayout(os: OS): TopMenu[] {
       { label: "View", items: view },
       { label: "Request", items: request },
       { label: "Window", role: "window", items: [native("minimize"), native("zoom", "Zoom"), SEP, native("bringAllToFront")] },
+      { label: "Help", role: "help", items: help },
     ];
   }
   return [
@@ -107,7 +111,8 @@ export function menuLayout(os: OS): TopMenu[] {
     ...(os === "windows" ? [{ label: "Edit", items: edit }] : []),
     { label: "View", items: view },
     { label: "Request", items: request },
-    { label: "Help", role: "help", items: [cmd("check-updates")] },
+    // About and Check for Updates are in the app menu on macOS, here elsewhere.
+    { label: "Help", role: "help", items: [...help, SEP, cmd("check-updates"), SEP, cmd("about")] },
   ];
 }
 

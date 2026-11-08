@@ -367,6 +367,15 @@ export interface EnvironmentSettings {
   color?: string | null;
 }
 
+/** Which HttpDesk this is (the shell's `app_info`). */
+export interface AppInfo {
+  version: string;
+  /** Rust's name for the OS: "macos", "windows", "linux". */
+  os: string;
+  /** Rust's name for the CPU architecture: "aarch64", "x86_64". */
+  arch: string;
+}
+
 export interface AppSettings {
   exec: ExecSettings;
   recentWorkspaces: string[];

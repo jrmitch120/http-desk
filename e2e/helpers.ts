@@ -115,6 +115,8 @@ export interface MockState {
   menu: { layout: { label: string; items: MenuEntry[] }[] };
   /** Each `set_menu_state` batch, in order. */
   menuStateChanges: MenuStateChange[][];
+  /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
+  openedUrls: string[];
 }
 
 /** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */
