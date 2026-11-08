@@ -437,6 +437,8 @@ window.addEventListener(
   },
   /** Lets held settings through (`?settingsDelay=hold`). */
   releaseSettings: () => releaseSettings(),
+  /** Lets held formatting through (`?pretty=hold`). */
+  releasePretty: () => releasePretty(),
   get settings() {
     return clone(settings);
   },
@@ -600,6 +602,11 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
+// `?pretty=hold`: `pretty_response` waits until a test calls `__mock.releasePretty()`,
+// so the viewer's loading state lasts as long as the test needs.
+const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
+let releasePretty: () => void = () => {};
+const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -1002,7 +1009,8 @@ mockIPC(
         }
       case "pretty_response": {
         prettyRequests++;
-        await delay(400); // long enough for a test to see the loading state
+        await delay(400); // as a large body takes a while
+        await prettyReleased;
         const stored = evicted ? undefined : textBodies.get(args.responseId);
         if (stored === undefined) throw RESPONSE_GONE;
         if (stored.kind === "xml") return formatXml(stored.body, "pretty");

@@ -202,6 +202,11 @@ export function releaseSettings(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());
 }
 
+/** Lets formatting held by `?pretty=hold` through. */
+export function releasePretty(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { releasePretty: () => void } }).__mock.releasePretty());
+}
+
 /** An open request tab in the tab bar, by request name. */
 export function tab(page: Page, name: string): Locator {
   return page
