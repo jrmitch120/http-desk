@@ -71,6 +71,7 @@ Requests you don't edit are saved byte-for-byte as they were.
 | New request | `⌘/Ctrl T` (in the current tab's file; a new file if no tab is open) |
 | Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
 | Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
+| Close tab / close window | `⌘/Ctrl W` / `⌘/Ctrl ⇧ W` (unsaved edits are asked about first) |
 | Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
 | Find usages of a variable | Hover a `{{variable}}` → *Find usages*, or a variable's menu in the Environments modal (List or Matrix); results open in the explorer |
 | Rename a variable | A variable's menu in the Environments modal (List or Matrix) → *Rename everywhere…*; renames it in every environment and, optionally, every `{{reference}}` (files with unsaved edits stay unsaved) |
