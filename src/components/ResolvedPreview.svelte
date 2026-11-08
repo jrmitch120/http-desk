@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Resolved toggle under the URL bar and the preview it shows: the request
+  // The preview the title row's Resolved button shows (RequestEditor): the request
   // as it will be sent (active environment and File variables applied), asked of
   // the shell's `preview_request`, which runs the same preparation as a send.
   // Dynamic variables that generate a new value on every send stay as written, and
@@ -11,7 +11,6 @@
   import { isDynamic, MASK, SECRET_OPEN, SECRET_RE } from "../lib/vars";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import Toggle from "./Toggle.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -109,15 +108,6 @@
   {/each}
 {/snippet}
 
-<div class="resolved-toggle">
-  <Toggle
-    checked={show}
-    label="Resolved"
-    title={show ? "Hide the resolved request" : "Show the request as it will be sent, with variables applied"}
-    onchange={(v) => app.updateSettings({ showResolved: v })}
-  />
-</div>
-
 {#if show}
   <section class="resolved" aria-label="Resolved request">
     {#if failure}
@@ -167,14 +157,6 @@
 {/if}
 
 <style>
-  .resolved-toggle {
-    display: flex;
-    align-items: center;
-    padding: 0 14px 8px 16px;
-    margin-top: -6px;
-    flex: none;
-    font-size: 12px;
-  }
   .resolved {
     flex: none;
     max-height: 40%;

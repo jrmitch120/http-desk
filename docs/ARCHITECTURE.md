@@ -811,7 +811,7 @@ Decisions made during implementation, beyond the plan above:
   (`tls_probe.rs`). That probe connects directly, so it's skipped when reqwest would
   use a proxy for the URL (the same hyper-util matcher over HTTP_PROXY, HTTPS_PROXY,
   ALL_PROXY and NO_PROXY), and the reason stays the verifier's.
-* **The resolved preview** (the Resolved toggle under the URL bar, remembered as
+* **The resolved preview** (the Resolved button in the request's title row, beside .http, remembered as
   `showResolved` in app settings) shows the request as it will be sent: method, URL,
   every header (the auth header, the Content-Type the body implies, the defaults) and
   the auth fields, with the active environment and File variables applied. The webview

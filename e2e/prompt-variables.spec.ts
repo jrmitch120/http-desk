@@ -49,7 +49,7 @@ test("sending asks once for all prompts; Cancel doesn't send, and a second send 
 test("the resolved preview shows remembered values, and Forget prompted values asks again", async ({ page }) => {
   await openApp(page, PROMPTS);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.getByRole("switch", { name: "Resolved" }).click();
+  await page.getByRole("button", { name: "Resolved", exact: true }).click();
   await expect(preview(page).locator(".target")).toHaveText("GET {{baseUrl}}/pets?limit=20");
   await expect(preview(page).locator(".var.prompt")).toHaveText("{{baseUrl}}");
   await expect(preview(page)).not.toContainText("Undefined");

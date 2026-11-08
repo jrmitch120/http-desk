@@ -84,6 +84,8 @@
   });
 
   let showSource = $state(false);
+  /** The resolved preview (ResolvedPreview) is shown under the URL bar; an app setting, so it lasts. */
+  const resolved = $derived(app.settings?.showResolved === true);
   let source = $state("");
   /** The request (as JSON) `source` was rendered from. */
   let rendered = $state<string | null>(null);
@@ -196,7 +198,16 @@
       <Icon name="chevron-right" size={12} />
       <input class="name-input" value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
       <span class="spacer"></span>
-      <button class="btn small ghost" class:on={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
+      <button
+        class="btn small ghost"
+        class:on={resolved}
+        aria-pressed={resolved}
+        onclick={() => app.updateSettings({ showResolved: !resolved })}
+        use:tooltip={resolved ? "Hide the resolved request" : "Show the request as it will be sent, with variables applied"}
+      >
+        <Icon name="eye" size={14} />Resolved
+      </button>
+      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={"Save (⌘/Ctrl S)"}>

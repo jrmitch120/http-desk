@@ -7,14 +7,14 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "@playwright/test";
 import { mockState, openApp, openRequest, sentRequests, urlBar } from "./helpers";
 
-const toggle = (page: Page) => page.getByRole("switch", { name: "Resolved" });
+const toggle = (page: Page) => page.getByRole("button", { name: "Resolved", exact: true });
 const preview = (page: Page) => page.getByRole("region", { name: "Resolved request" });
 const lines = (page: Page, section: string) => preview(page).getByRole("group", { name: section }).locator(".line");
 
 test("the Resolved toggle shows the final URL and headers without sending, and is remembered", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await expect(toggle(page)).toHaveAttribute("aria-checked", "false");
+  await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
   await expect(preview(page)).toHaveCount(0);
 
   await toggle(page).click();
@@ -38,7 +38,7 @@ test("the Resolved toggle shows the final URL and headers without sending, and i
 
   await page.reload();
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await expect(toggle(page)).toHaveAttribute("aria-checked", "true");
+  await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
   await expect(preview(page).locator(".target")).toHaveText("GET http://127.0.0.1:8765/pets?limit=20");
 
   await toggle(page).click();

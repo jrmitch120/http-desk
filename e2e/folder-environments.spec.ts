@@ -18,7 +18,7 @@ async function selectEnvironment(page: Page, env: string): Promise<void> {
 test("a request resolves with its own folder's environment", async ({ page }) => {
   await openApp(page, "?folderEnvs=1");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.getByRole("switch", { name: "Resolved" }).click();
+  await page.getByRole("button", { name: "Resolved", exact: true }).click();
   await expect(preview(page).locator(".target")).toHaveText("GET http://127.0.0.1:9001/pets?limit=20");
   // The root's Secret token still applies (masked until revealed).
   await preview(page).getByRole("button", { name: "Reveal Secrets" }).click();
@@ -55,7 +55,7 @@ test("the strip explains when the selected environment isn't defined for the req
   await expect(page.getByRole("listbox", { name: "Active environment" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByRole("switch", { name: "Resolved" }).click();
+  await page.getByRole("button", { name: "Resolved", exact: true }).click();
   await expect(preview(page)).toContainText("Environment \"qa\" isn't defined for samples/, so it's sent with no environment");
 
   await selectEnvironment(page, "local");
