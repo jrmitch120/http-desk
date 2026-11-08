@@ -1,22 +1,41 @@
-// The command registry: every app command the keyboard (and later the native
-// menu and the command palette) can run, in one table. Keys reach it through
-// `handleCommandKey`, the page's global key handler (ADR-0005).
+// The command registry: every app command the keyboard and the native menu
+// (and later the command palette) can run, in one table. Keys reach it through
+// `handleCommandKey`, the page's global key handler (ADR-0005); menu clicks
+// through `runCommand` (src/lib/nativeMenu.svelte.ts).
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
-import { modalOpen } from "./modal";
-import { matchesShortcut, type KeyPress, type Shortcut } from "./platform";
+import { updates } from "./updates.svelte";
+import { modalOpen } from "./modal.svelte";
+import { currentOS, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
+import type { AppSettings } from "./types";
 
 export type CommandId =
+  | "open-folder"
+  | "new-request"
+  | "new-file"
+  | "new-folder"
+  | "import-openapi"
   | "save"
   | "save-all"
+  | "close-tab"
+  | "close-window"
+  | "quit"
+  | "settings"
+  | "check-updates"
   | "send"
+  | "cancel"
+  | "duplicate-request"
+  | "rename-request"
+  | "show-source"
   | "search"
-  | "new-request"
   | "choose-environment"
   | "manage-environments"
-  | "settings"
-  | "close-tab"
-  | "close-window";
+  | "layout-right"
+  | "layout-below"
+  | "theme-system"
+  | "theme-light"
+  | "theme-dark";
 
 export interface Command {
   id: CommandId;
@@ -25,9 +44,13 @@ export interface Command {
   shortcut?: Shortcut;
   /** More keys that run the command, never shown. */
   aliases?: Shortcut[];
+  /** The OSes where the page takes the command's keys; every OS if not given. */
+  keysOn?: OS[];
   /** Whether the command applies now. A disabled command's keys are still swallowed. */
   enabled(): boolean;
-  /** For a choice the menu shows ticked (a layout, a theme). */
+  /** Runs even while a modal or dialog is open, like the window's close button (Quit). */
+  underModal?: boolean;
+  /** For a choice or a toggle the menu shows ticked (a layout, a theme, the .http source). */
   checked?(): boolean;
   run(): void;
 }
@@ -35,25 +58,37 @@ export interface Command {
 const always = () => true;
 const inWorkspace = () => app.root !== null;
 const withTab = () => app.activeTabId !== null;
+/** The active tab's request is in its file (not an Orphaned tab's). */
+const withRequest = () => {
+  const tab = app.activeTab;
+  return !!tab && !app.isOrphaned(tab) && !!app.requestFor(tab);
+};
+const withSettings = () => app.settings !== null;
+
+/** Asks for a folder and opens it as the workspace. */
+async function openFolder() {
+  const dir = await open({ directory: true, title: "Open workspace folder" });
+  if (typeof dir === "string") await app.openWorkspace(dir);
+}
+
+/** A View → Response Layout choice. */
+function layoutChoice(id: CommandId, label: string, layout: AppSettings["layout"]): Command {
+  return {
+    id,
+    label,
+    enabled: withSettings,
+    checked: () => (app.settings?.layout ?? "horizontal") === layout,
+    run: () => void app.updateSettings({ layout }),
+  };
+}
+
+/** A View → Theme choice. */
+function themeChoice(id: CommandId, label: string, theme: AppSettings["theme"]): Command {
+  return { id, label, enabled: withSettings, checked: () => app.themeChoice === theme, run: () => void app.updateSettings({ theme }) };
+}
 
 const COMMANDS: Command[] = [
-  { id: "save", label: "Save", shortcut: { mod: true, key: "s" }, enabled: always, run: () => void app.saveActive() },
-  { id: "save-all", label: "Save All", shortcut: { mod: true, shift: true, key: "s" }, enabled: always, run: () => void app.saveAll() },
-  {
-    id: "send",
-    label: "Send",
-    shortcut: { mod: true, key: "Enter" },
-    enabled: withTab,
-    run: () => app.activeTabId && void app.send(app.activeTabId),
-  },
-  {
-    id: "search",
-    label: "Search Requests",
-    shortcut: { mod: true, key: "p" },
-    aliases: [{ mod: true, key: "k" }],
-    enabled: inWorkspace,
-    run: () => app.focusSearch++,
-  },
+  { id: "open-folder", label: "Open Folder…", enabled: always, run: () => void openFolder() },
   {
     id: "new-request",
     label: "New Request",
@@ -61,21 +96,24 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => void (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(app.root!)),
   },
+  { id: "new-file", label: "New .http File…", enabled: inWorkspace, run: () => void app.createFile(app.root!) },
+  { id: "new-folder", label: "New Folder…", enabled: inWorkspace, run: () => void app.createFolder(app.root!) },
+  { id: "import-openapi", label: "Import OpenAPI…", enabled: inWorkspace, run: () => (app.modal = "openapi") },
   {
-    id: "choose-environment",
-    label: "Choose Environment",
-    shortcut: { mod: true, alt: true, key: "e" },
-    enabled: inWorkspace,
-    run: () => app.chooseEnvironment(),
+    id: "save",
+    label: "Save",
+    shortcut: { mod: true, key: "s" },
+    // What the request's Save button saves: its file with edits, or an Orphaned tab's request.
+    enabled: () => !!app.activeTab && (app.isDocDirty(app.activeTab.path) || app.isOrphaned(app.activeTab)),
+    run: () => void app.saveActive(),
   },
   {
-    id: "manage-environments",
-    label: "Manage Environments…",
-    shortcut: { mod: true, key: "e" },
-    enabled: inWorkspace,
-    run: () => (app.modal = "env"),
+    id: "save-all",
+    label: "Save All",
+    shortcut: { mod: true, shift: true, key: "s" },
+    enabled: () => app.dirtyDocs().length > 0,
+    run: () => void app.saveAll(),
   },
-  { id: "settings", label: "Settings…", shortcut: { mod: true, key: "," }, enabled: always, run: () => (app.modal = "settings") },
   {
     id: "close-tab",
     label: "Close Tab",
@@ -92,6 +130,85 @@ const COMMANDS: Command[] = [
     // close-requested handler asks about unsaved files first.
     run: () => void getCurrentWindow().close(),
   },
+  {
+    // Windows' File → Exit and Linux's File → Quit. macOS has its own Quit (the
+    // app menu's, through the shell's quit path in quit.rs) and Windows' Alt+F4
+    // is the OS's, so only Linux's Ctrl+Q is the page's.
+    id: "quit",
+    label: "Quit",
+    shortcut: { mod: true, key: "q" },
+    keysOn: ["linux"],
+    enabled: always,
+    underModal: true,
+    // One window: quitting is closing it, through the same unsaved-changes flow.
+    run: () => void getCurrentWindow().close(),
+  },
+  { id: "settings", label: "Settings…", shortcut: { mod: true, key: "," }, enabled: always, run: () => (app.modal = "settings") },
+  {
+    id: "check-updates",
+    label: "Check for Updates…",
+    enabled: () => !updates.checking && updates.progress === null,
+    run: () => void updates.check(true),
+  },
+  {
+    id: "send",
+    label: "Send",
+    shortcut: { mod: true, key: "Enter" },
+    enabled: withTab,
+    run: () => app.activeTabId && void app.send(app.activeTabId),
+  },
+  {
+    id: "cancel",
+    label: "Cancel",
+    enabled: () => !!app.activeTabId && !!app.runs[app.activeTabId]?.loading,
+    run: () => app.activeTabId && void app.cancel(app.activeTabId),
+  },
+  {
+    id: "duplicate-request",
+    label: "Duplicate",
+    enabled: withRequest,
+    run: () => app.activeTab && void app.duplicateRequest(app.activeTab.path, app.activeTab.key),
+  },
+  {
+    id: "rename-request",
+    label: "Rename…",
+    enabled: withRequest,
+    run: () => app.activeTab && void app.renameRequest(app.activeTab.path, app.activeTab.key),
+  },
+  {
+    id: "show-source",
+    label: "Show .http Source",
+    enabled: withTab,
+    checked: () => app.activeTabId !== null && app.sourceShownFor === app.activeTabId,
+    run: () => app.activeTabId && app.toggleSource(app.activeTabId),
+  },
+  {
+    id: "search",
+    label: "Search Requests",
+    shortcut: { mod: true, key: "p" },
+    aliases: [{ mod: true, key: "k" }],
+    enabled: inWorkspace,
+    run: () => app.focusSearch++,
+  },
+  {
+    id: "choose-environment",
+    label: "Choose Environment",
+    shortcut: { mod: true, alt: true, key: "e" },
+    enabled: inWorkspace,
+    run: () => app.chooseEnvironment(),
+  },
+  {
+    id: "manage-environments",
+    label: "Manage Environments…",
+    shortcut: { mod: true, key: "e" },
+    enabled: inWorkspace,
+    run: () => (app.modal = "env"),
+  },
+  layoutChoice("layout-right", "Response on the Right", "horizontal"),
+  layoutChoice("layout-below", "Response Below", "vertical"),
+  themeChoice("theme-system", "System", "system"),
+  themeChoice("theme-light", "Light", "light"),
+  themeChoice("theme-dark", "Dark", "dark"),
 ];
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));
@@ -106,12 +223,20 @@ export function allCommands(): readonly Command[] {
   return COMMANDS;
 }
 
+/** Whether `id` names a registered command (a menu event carries any string). */
+export function isCommandId(id: string): id is CommandId {
+  return byId.has(id as CommandId);
+}
+
 /**
  * Whether a command can run now. Under a modal or dialog no app command runs
- * (only Escape acts there, and Modal.svelte handles it).
+ * (only Escape acts there, and Modal.svelte handles it), except the few that
+ * act on the window like its close button does. Reactive: the native menu's
+ * greyed-out state follows it.
  */
 export function canRun(id: CommandId): boolean {
-  return !modalOpen() && command(id).enabled();
+  const cmd = command(id);
+  return (!!cmd.underModal || !modalOpen()) && cmd.enabled();
 }
 
 /** Runs a command if it can run now. True if it ran. */
@@ -123,7 +248,10 @@ export function runCommand(id: CommandId): boolean {
 
 /** The command a key press is the shortcut of, on the current OS. */
 export function commandForKey(e: KeyPress): Command | undefined {
-  return COMMANDS.find((c) => [c.shortcut, ...(c.aliases ?? [])].some((s) => s && matchesShortcut(e, s)));
+  const os = currentOS();
+  return COMMANDS.find(
+    (c) => (!c.keysOn || c.keysOn.includes(os)) && [c.shortcut, ...(c.aliases ?? [])].some((s) => s && matchesShortcut(e, s, os)),
+  );
 }
 
 /**

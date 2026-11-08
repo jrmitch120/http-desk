@@ -34,3 +34,9 @@ objc2 = "0.6.5"
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3.27.0"
+
+# macOS builds menus on the main thread only, and libtest runs tests on other
+# threads: this one runs its tests itself, on the main thread.
+[[test]]
+name = "native_menu"
+harness = false

@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+import { allCommands } from "./commands";
+import { menuLayout, nativeMenu, type MenuEntry, type NativeEntry, type NativeMenu, type TopMenu } from "./menuLayout";
+import type { OS } from "./platform";
+
+/** One line per menu: "File: open-folder, Open Recent ▸ [recent], -, …". Commands by id, predefined items as "(item)". */
+function outline(menus: TopMenu[]): string[] {
+  const entry = (e: MenuEntry): string => {
+    switch (e.kind) {
+      case "command":
+        return e.id;
+      case "separator":
+        return "-";
+      case "predefined":
+        return `(${e.item})`;
+      case "recent":
+        return "[recent]";
+      case "submenu":
+        return `${e.label} ▸ [${e.items.map(entry).join(", ")}]`;
+    }
+  };
+  return menus.map((m) => `${m.label}: ${m.items.map(entry).join(", ")}`);
+}
+
+function entries(items: MenuEntry[]): MenuEntry[] {
+  return items.flatMap((e) => (e.kind === "submenu" ? [e, ...entries(e.items)] : [e]));
+}
+
+describe("the menu layout", () => {
+  it("on macOS is the app menu, File, Edit, View, Request and Window", () => {
+    expect(outline(menuLayout("mac"))).toEqual([
+      "HttpDesk: settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, close-window",
+      "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
+      "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "Window: (minimize), (zoom), -, (bringAllToFront)",
+    ]);
+  });
+
+  it("on Windows puts Settings, Close Window and Exit under File and Check for Updates under Help", () => {
+    expect(outline(menuLayout("windows"))).toEqual([
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
+      "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
+      "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "Help: check-updates",
+    ]);
+  });
+
+  it("on Linux is Windows' layout without an Edit menu", () => {
+    expect(outline(menuLayout("linux"))).toEqual([
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
+      "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "Help: check-updates",
+    ]);
+  });
+
+  it.each<OS>(["mac", "windows", "linux"])("on %s, every item that isn't predefined runs a registered command", (os) => {
+    const registered = new Set(allCommands().map((c) => c.id));
+    const ids = entries(menuLayout(os).flatMap((m) => m.items)).flatMap((e) => (e.kind === "command" ? [e.id] : []));
+    expect(ids.length).toBeGreaterThan(20);
+    for (const id of ids) expect(registered, id).toContain(id);
+  });
+
+  it("names the last File item Exit on Windows and Quit on Linux", () => {
+    const quit = (os: OS) => menuLayout(os)[0].items.at(-1);
+    expect(quit("windows")).toMatchObject({ kind: "command", id: "quit", label: "Exit" });
+    expect(quit("linux")).toMatchObject({ kind: "command", id: "quit", label: "Quit" });
+  });
+});
+
+describe("the menu the shell builds", () => {
+  const ready = () => ({ enabled: true, checked: null });
+  const render = (os: OS, recents: string[] = []) => nativeMenu(menuLayout(os), { os, recents, state: ready });
+  /** The first item with this id, anywhere in the menu bar. */
+  const item = (menus: NativeMenu, id: string) => {
+    const find = (items: NativeEntry[]): NativeEntry | undefined => {
+      for (const e of items) {
+        if (e.kind === "item" && e.id === id) return e;
+        const inner = e.kind === "submenu" ? find(e.items) : undefined;
+        if (inner) return inner;
+      }
+    };
+    return find(menus.flatMap((m) => m.items));
+  };
+
+  it("binds key equivalents on macOS (ADR-0005)", () => {
+    const mac = render("mac");
+    expect(item(mac, "save")).toMatchObject({ label: "Save", accelerator: "Cmd+S" });
+    expect(item(mac, "save-all")).toMatchObject({ label: "Save All", accelerator: "Cmd+Shift+S" });
+    expect(item(mac, "send")).toMatchObject({ label: "Send", accelerator: "Cmd+Enter" });
+    expect(item(mac, "settings")).toMatchObject({ label: "Settings…", accelerator: "Cmd+," });
+    expect(item(mac, "close-window")).toMatchObject({ label: "Close Window", accelerator: "Cmd+Shift+W" });
+    expect(item(mac, "open-folder")).toMatchObject({ label: "Open Folder…", accelerator: null });
+  });
+
+  it("shows shortcuts in the label on Windows, binding nothing", () => {
+    const win = render("windows");
+    expect(item(win, "save")).toMatchObject({ label: "Save\tCtrl+S", accelerator: null });
+    expect(item(win, "save-all")).toMatchObject({ label: "Save All\tCtrl+Shift+S", accelerator: null });
+    expect(item(win, "settings")).toMatchObject({ label: "Settings…\tCtrl+,", accelerator: null });
+    expect(item(win, "quit")).toMatchObject({ label: "Exit\tAlt+F4", accelerator: null });
+    expect(item(win, "open-folder")).toMatchObject({ label: "Open Folder…", accelerator: null });
+  });
+
+  it("shows no shortcuts for app commands on Linux", () => {
+    const linux = render("linux");
+    expect(item(linux, "save")).toMatchObject({ label: "Save", accelerator: null });
+    expect(item(linux, "quit")).toMatchObject({ label: "Quit", accelerator: null });
+  });
+
+  it("lists recent workspaces under Open Recent by folder name, greyed out when there are none", () => {
+    const recent = (menus: NativeMenu) => menus[0].items.find((e) => e.kind === "submenu" && e.label === "Open Recent");
+    expect(recent(render("linux", ["/work/api", "C:\\Users\\me\\shop"]))).toEqual({
+      kind: "submenu",
+      label: "Open Recent",
+      enabled: true,
+      items: [
+        { kind: "item", id: "open-recent:/work/api", label: "api", accelerator: null, enabled: true, checked: null },
+        { kind: "item", id: "open-recent:C:\\Users\\me\\shop", label: "shop", accelerator: null, enabled: true, checked: null },
+      ],
+    });
+    expect(recent(render("linux"))).toEqual({ kind: "submenu", label: "Open Recent", enabled: false, items: [] });
+  });
+
+  it("starts each item in the state it is given", () => {
+    const state = (id: string) => ({ enabled: id !== "send", checked: id === "theme-dark" ? true : id.startsWith("theme-") ? false : null });
+    const menus = nativeMenu(menuLayout("mac"), { os: "mac", recents: [], state });
+    expect(item(menus, "send")).toMatchObject({ enabled: false, checked: null });
+    expect(item(menus, "theme-dark")).toMatchObject({ enabled: true, checked: true });
+    expect(item(menus, "theme-light")).toMatchObject({ enabled: true, checked: false });
+  });
+
+  it("passes predefined items and separators through", () => {
+    const mac = render("mac");
+    expect(mac[0]).toMatchObject({ label: "HttpDesk" });
+    expect(mac[0].items.slice(-3)).toEqual([
+      { kind: "predefined", item: "showAll", label: null },
+      { kind: "separator" },
+      { kind: "predefined", item: "quit", label: "Quit HttpDesk" },
+    ]);
+  });
+});

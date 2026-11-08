@@ -21,6 +21,7 @@ mod bodies;
 mod confine;
 mod deleting;
 mod json_docs;
+mod menu;
 mod paths;
 mod quit;
 mod self_writes;
@@ -857,6 +858,8 @@ type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
 fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: AfterSetup<R>) -> tauri::Builder<R> {
     builder
         .manage(AppState::default())
+        .manage(menu::NativeMenu::<R>::new())
+        .on_menu_event(|app, event| menu::clicked(app, event.id().as_ref()))
         .setup(move |app| {
             load_settings(app.handle());
             Ok(after_setup(app)?)
@@ -892,7 +895,23 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             set_unsaved,
             openapi_load,
             openapi_generate,
+            menu::set_menu,
+            menu::set_menu_state,
         ])
+}
+
+/// For the shell's tests that can't run on libtest's threads (src-tauri/tests).
+#[doc(hidden)]
+pub mod test_support {
+    /// The app's state and commands on `builder`, without a main window.
+    pub fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+        super::with_commands(builder, |_| Ok(()))
+    }
+
+    /// What a click on native menu item `id` does.
+    pub fn menu_clicked<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
+        super::menu::clicked(app, id)
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

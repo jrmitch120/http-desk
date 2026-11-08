@@ -80,6 +80,7 @@ export interface MockState {
   /** The settings it last saved. */
   settings: {
     theme: string;
+    recentWorkspaces: string[];
     exec: Record<string, unknown>;
     showResolved: boolean;
     envView: "matrix" | "list";
@@ -108,6 +109,48 @@ export interface MockState {
   windowCloseRequests: number;
   /** Whether the window has closed: a close request the app let through. */
   windowClosed: boolean;
+  /** The `.http` files `save_http_file` wrote, in order. */
+  savedPaths: string[];
+  /** The native menu bar as the app last sent it, with the state changes since applied. */
+  menu: { layout: { label: string; items: MenuEntry[] }[] };
+  /** Each `set_menu_state` batch, in order. */
+  menuStateChanges: MenuStateChange[][];
+}
+
+/** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */
+export type MenuEntry =
+  | { kind: "item"; id: string; label: string; accelerator: string | null; enabled: boolean; checked: boolean | null }
+  | { kind: "separator" }
+  | { kind: "predefined"; item: string; label: string | null }
+  | { kind: "submenu"; label: string; enabled: boolean; items: MenuEntry[] };
+export type MenuItem = Extract<MenuEntry, { kind: "item" }>;
+export type MenuStateChange = { id: string; enabled?: boolean; checked?: boolean };
+
+/** The labels of the native menu bar's menus, as the app last sent it. */
+export async function menuBar(page: Page): Promise<string[]> {
+  return (await mockState(page, "menu")).layout.map((m) => m.label);
+}
+
+/** The first native menu item with this id (a command id), as it shows now; undefined if there's none. */
+export async function menuItem(page: Page, id: string): Promise<MenuItem | undefined> {
+  const find = (items: MenuEntry[]): MenuItem | undefined => {
+    for (const e of items) {
+      if (e.kind === "item" && e.id === id) return e;
+      const inner = e.kind === "submenu" ? find(e.items) : undefined;
+      if (inner) return inner;
+    }
+  };
+  return find((await mockState(page, "menu")).layout.flatMap((m) => m.items));
+}
+
+/** Each batch of item state changes the app sent to the native menu, in order. */
+export function menuStateChanges(page: Page): Promise<MenuStateChange[][]> {
+  return mockState(page, "menuStateChanges");
+}
+
+/** Clicks a native menu item: the menu event the shell sends, carrying the item's id. */
+export function menuClick(page: Page, id: string): Promise<void> {
+  return page.evaluate((i) => (window as unknown as { __mock: { menuClick: (id: string) => Promise<void> } }).__mock.menuClick(i), id);
 }
 
 /** One value of the mock's test-facing state, read from the page. */
