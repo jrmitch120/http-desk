@@ -27,6 +27,7 @@
   import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
 
   let { tab }: { tab: Tab } = $props();
@@ -127,7 +128,7 @@
         <path d="M22 36l6 5-6 5M34 46h14" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <div>Click <strong>Send</strong> to get a response</div>
-      <div class="muted small"><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd></div>
+      <div class="muted small"><kbd>{shortcutHint("send")}</kbd></div>
     </div>
   {:else}
     <div class="statusbar">

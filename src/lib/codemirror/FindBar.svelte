@@ -22,7 +22,7 @@
   const id = $props.id();
   let root: HTMLDivElement | undefined;
 
-  /** The Find text field (the panel focuses it on open and on ⌘/Ctrl F). */
+  /** The Find text field (the panel focuses it on open and on ⌘F / Ctrl+F). */
   export function findField(): HTMLInputElement | null {
     return root?.querySelector("input") ?? null;
   }

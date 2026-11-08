@@ -5,6 +5,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
 
   let strip: HTMLDivElement | undefined = $state();
 
@@ -26,7 +27,7 @@
   /** Left/Right (wrapping), Home/End move focus between tabs; Enter/Space switch to the focused one. */
   function onTabKey(e: KeyboardEvent, tab: Tab) {
     if (e.target !== e.currentTarget) return; // keys on the close button
-    if (e.ctrlKey || e.metaKey) return; // shortcuts (⌘/Ctrl Enter sends) pass through
+    if (e.ctrlKey || e.metaKey) return; // shortcuts (⌘Enter / Ctrl+Enter sends) pass through
     const all = [...(strip?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
     const i = all.indexOf(e.currentTarget as HTMLElement);
     let to: HTMLElement | undefined;
@@ -81,7 +82,7 @@
       </div>
     {/each}
   </div>
-  <button class="icon-btn plus" aria-label="New request" use:tooltip={"New request (⌘/Ctrl T)"} onclick={newRequest}><Icon name="plus" /></button>
+  <button class="icon-btn plus" aria-label="New request" use:tooltip={`New request (${shortcutHint("new-request")})`} onclick={newRequest}><Icon name="plus" /></button>
 </div>
 
 <style>
