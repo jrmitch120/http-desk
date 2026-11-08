@@ -85,6 +85,9 @@ export interface DialogButton {
   focus?: boolean;
 }
 
+/** A dialog's Cancel button, which Escape stands for (answers "cancel"). */
+export const CANCEL: DialogButton = { label: "Cancel", value: "cancel", role: "cancel" };
+
 /** A definition's row to open; with `add`, one with an empty value is added if there's none. */
 export type WantedDefinition = Definition & { add?: boolean };
 
@@ -403,7 +406,7 @@ class AppStore {
     if (!dirty.length) return true;
     const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
     const r = await this.choose("Unsaved changes", question ? `${summary} ${question}` : summary, [
-      { label: "Cancel", value: "cancel", role: "cancel" },
+      CANCEL,
       { label: "Don't save", value: "discard", role: "destructive", danger: true },
       { label: "Save all", value: "save", role: "primary" },
     ]);
@@ -660,7 +663,7 @@ class AppStore {
       message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
     }
     const r = await this.choose("Overwrite existing files?", message, [
-      { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+      { ...CANCEL, focus: true },
       { label: "Overwrite", value: "overwrite", role: "primary", danger: true },
     ]);
     return r.button === "overwrite";
@@ -829,7 +832,7 @@ class AppStore {
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
-        { label: "Cancel", value: "cancel", role: "cancel" },
+        CANCEL,
         { label: "Don't save", value: "discard", role: "destructive", danger: true },
         { label: "Save", value: "save", role: "primary" },
       ]);
@@ -890,7 +893,7 @@ class AppStore {
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!doc || !req) return;
     const r = await this.choose("Delete request", `Delete "${displayName(req)}" from ${basename(path)}?`, [
-      { label: "Cancel", value: "cancel", role: "cancel" },
+      CANCEL,
       { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
@@ -997,14 +1000,14 @@ class AppStore {
   async deletePath(path: string) {
     const words = wording();
     const r = await this.choose(words.moveToTrash, words.trashQuestion(basename(path)), [
-      { label: "Cancel", value: "cancel", role: "cancel" },
+      CANCEL,
       { label: words.moveToTrash, value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     try {
       if ((await api.deletePath(path)) === "trashUnavailable") {
         const ok = await this.choose(words.trashUnavailable, `Delete "${basename(path)}" permanently? This can't be undone.`, [
-          { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+          { ...CANCEL, focus: true },
           { label: "Delete permanently", value: "delete", role: "primary", danger: true },
         ]);
         if (ok.button !== "delete") return;
@@ -1060,7 +1063,7 @@ class AppStore {
       message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
       fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
       buttons: [
-        { label: "Cancel", value: "cancel", role: "cancel" },
+        CANCEL,
         { label: "Send", value: "send", role: "primary" },
       ],
     });
@@ -1132,7 +1135,7 @@ class AppStore {
     this.confirmingSend.add(tabId);
     try {
       const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
-        { label: "Cancel", value: "cancel", role: "cancel", focus: true },
+        { ...CANCEL, focus: true },
         { label: `Send ${verb}`, value: "send", role: "primary", danger: true },
       ]);
       return r.button === "send";
@@ -1496,7 +1499,7 @@ class AppStore {
       title,
       input: { value, placeholder, selectStem },
       buttons: [
-        { label: "Cancel", value: "cancel", role: "cancel" },
+        CANCEL,
         { label: "OK", value: "ok", role: "primary" },
       ],
     });
