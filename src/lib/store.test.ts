@@ -768,15 +768,15 @@ describe("window title", () => {
 
   it("names the workspace and the active environment", async () => {
     await app.openWorkspace("/dev/my-api");
-    expect(app.windowTitle).toBe("HttpDesk — my-api — staging");
+    expect(app.windowTitle).toBe("my-api — staging");
   });
 
   it("follows the environment as it changes, and drops it when none is selected", async () => {
     await app.openWorkspace("/dev/my-api");
     await app.selectEnvironment("local");
-    expect(app.windowTitle).toBe("HttpDesk — my-api — local");
+    expect(app.windowTitle).toBe("my-api — local");
     await app.selectEnvironment(null);
-    expect(app.windowTitle).toBe("HttpDesk — my-api");
+    expect(app.windowTitle).toBe("my-api");
   });
 });
 

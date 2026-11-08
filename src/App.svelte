@@ -30,7 +30,7 @@
     });
   });
 
-  // The native window's title follows the workspace and the active environment.
+  // The native window's title follows the active request, the workspace and the environment.
   $effect(() => {
     getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
