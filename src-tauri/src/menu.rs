@@ -21,12 +21,13 @@ pub struct SubmenuLayout {
     label: String,
     /// Which of the menus macOS treats specially this is, if any.
     role: Option<Role>,
-    #[serde(default = "yes")]
+    #[serde(default = "default_enabled")]
     enabled: bool,
     items: Vec<Entry>,
 }
 
-fn yes() -> bool {
+/// A submenu the page sends without `enabled` is enabled.
+fn default_enabled() -> bool {
     true
 }
 
@@ -87,6 +88,15 @@ enum Item<R: Runtime> {
     Check(CheckMenuItem<R>),
 }
 
+impl<R: Runtime> Item<R> {
+    fn set_enabled(&self, enabled: bool) -> tauri::Result<()> {
+        match self {
+            Item::Plain(i) => i.set_enabled(enabled),
+            Item::Check(c) => c.set_enabled(enabled),
+        }
+    }
+}
+
 /// The page's items in the menu bar now, by id. One id can have several (Save
 /// is in File and in Request).
 pub struct NativeMenu<R: Runtime>(Mutex<HashMap<String, Vec<Item<R>>>>);
@@ -136,20 +146,11 @@ pub fn set_menu_state<R: Runtime>(app: AppHandle<R>, changes: Vec<ItemChange>) -
     let items = menu.0.lock().unwrap();
     for change in changes {
         for item in items.get(&change.id).into_iter().flatten() {
-            match item {
-                Item::Plain(i) => {
-                    if let Some(enabled) = change.enabled {
-                        i.set_enabled(enabled).map_err(crate::err)?;
-                    }
-                }
-                Item::Check(c) => {
-                    if let Some(enabled) = change.enabled {
-                        c.set_enabled(enabled).map_err(crate::err)?;
-                    }
-                    if let Some(checked) = change.checked {
-                        c.set_checked(checked).map_err(crate::err)?;
-                    }
-                }
+            if let Some(enabled) = change.enabled {
+                item.set_enabled(enabled).map_err(crate::err)?;
+            }
+            if let (Item::Check(c), Some(checked)) = (item, change.checked) {
+                c.set_checked(checked).map_err(crate::err)?;
             }
         }
     }
