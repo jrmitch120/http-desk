@@ -49,6 +49,11 @@ impl Harness {
         Harness { app, webview, cfg, trash_bin }
     }
 
+    /// Waits `delay` between recording each env file the app is about to write and writing it.
+    fn slow_env_writes(&self, delay: std::time::Duration) {
+        *self.app.state::<super::AppState>().env_write_delay.lock().unwrap() = delay;
+    }
+
     /// Makes every move to the trash fail, like a volume without a trash.
     fn trash_unavailable(&self) {
         self.app.state::<super::AppState>().trash.replace(|_| Err("no trash on this volume".into()));
