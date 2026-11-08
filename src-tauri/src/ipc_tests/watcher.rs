@@ -183,9 +183,11 @@ fn own_env_saves_are_not_reported_even_when_writing_outlasts_the_debounce() {
     assert!(!own.iter().any(|p| p.contains("env.json")), "own env file saves were reported: {own:?}");
 
     h.ok("save_environments", json!({ "set": set, "dir": "api" }));
-    std::fs::write(root.join("api/http-client.env.json"), "{}").unwrap();
+    // Joined per component: the reported path uses the platform's separators.
+    let api_env = root.join("api").join("http-client.env.json");
+    std::fs::write(&api_env, "{}").unwrap();
     let ext = changed_paths(&rx, Duration::from_secs(2));
-    assert!(ext.contains(&s(&root.join("api/http-client.env.json"))), "outside edit not reported: {ext:?}");
+    assert!(ext.contains(&s(&api_env)), "outside edit not reported: {ext:?}");
 }
 
 /// An import adds an environment per server, with public and (given a security scheme)
