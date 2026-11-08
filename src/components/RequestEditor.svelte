@@ -27,6 +27,7 @@
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -210,7 +211,7 @@
       <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={"Save (⌘/Ctrl S)"}>
+      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
@@ -237,7 +238,7 @@
       {#if run?.loading}
         <button class="btn send cancel" onclick={() => app.cancel(tab.id)}><Icon name="stop" size={13} />Cancel</button>
       {:else}
-        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={"Send (⌘/Ctrl Enter)"}><Icon name="send" size={13} />Send</button>
+        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={`Send (${shortcutHint("send")})`}><Icon name="send" size={13} />Send</button>
       {/if}
     </div>
 

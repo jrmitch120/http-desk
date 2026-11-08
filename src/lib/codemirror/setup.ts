@@ -477,7 +477,7 @@ export const singleLine = EditorState.transactionFilter.of((tr) => {
 
 /**
  * The editing core of a single-line field (the URL bar, VarField): no line
- * breaks and history. Enter runs `onenter` (or nothing); ⌘/Ctrl+Enter runs
+ * breaks and history. Enter runs `onenter` (or nothing); ⌘Enter / Ctrl+Enter runs
  * `onenter` too, and without it reaches the app's Send shortcut. Tab isn't
  * bound, so it moves focus as in a text input, and neither is Escape (unless
  * the autocomplete list is open), so it reaches a modal.

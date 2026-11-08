@@ -102,7 +102,7 @@
   const typed = (e: KeyboardEvent) => e.key.length === 1 && !e.altKey;
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.ctrlKey || e.metaKey) return; // shortcuts (⌘/Ctrl Enter sends) pass through
+    if (e.ctrlKey || e.metaKey) return; // shortcuts (⌘Enter / Ctrl+Enter sends) pass through
     if (!open) {
       if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown" || e.key === "ArrowUp") show();
       else if (typed(e)) show(e.key);

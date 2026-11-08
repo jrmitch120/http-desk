@@ -43,7 +43,7 @@ export function urlBar(page: Page): Locator {
   return page.locator(".url-input .cm-content");
 }
 
-/** The sidebar search box (⌘/Ctrl P focuses it). */
+/** The sidebar search box (⌘P / Ctrl+P focuses it). */
 export function searchBox(page: Page): Locator {
   return page.getByPlaceholder("Search requests");
 }

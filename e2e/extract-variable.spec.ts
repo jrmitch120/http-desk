@@ -54,7 +54,7 @@ test("the URL bar's context menu extracts the host into a File variable, as an u
   await expect(grid.locator(".kv-row").nth(2).locator(".c-value")).toHaveText(HOST);
 });
 
-test("⌘/Ctrl+Alt+V extracts into every environment, written to the env file at once", async ({ page }) => {
+test("⌘⌥V / Ctrl+Alt+V extracts into every environment, written to the env file at once", async ({ page }) => {
   await selectHost(page);
   await page.keyboard.press("ControlOrMeta+Alt+KeyV");
   await page.keyboard.type("exampleHost");
