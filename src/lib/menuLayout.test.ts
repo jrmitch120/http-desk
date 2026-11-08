@@ -133,6 +133,11 @@ describe("the menu the shell builds", () => {
     expect(item(menus, "theme-light")).toMatchObject({ enabled: true, checked: false });
   });
 
+  it("marks the Window and Help menus, so macOS lists windows and adds Help search", () => {
+    expect(render("mac").map((m) => m.role ?? null)).toEqual([null, null, null, null, null, "window"]);
+    expect(render("windows").map((m) => m.role ?? null)).toEqual([null, null, null, null, "help"]);
+  });
+
   it("passes predefined items and separators through", () => {
     const mac = render("mac");
     expect(mac[0]).toMatchObject({ label: "HttpDesk" });

@@ -201,6 +201,26 @@ fn the_page_greys_out_and_ticks_items_by_id() {
     assert_eq!(bar[3], r#"Request: save "Save\tCtrl+S""#);
 }
 
+fn the_window_and_help_menus_are_the_ones_macos_treats_as_such() {
+    let h = Harness::new();
+    let item = json!({ "kind": "predefined", "item": "minimize", "label": "Minimize" });
+    h.ok(
+        "set_menu",
+        json!({ "layout": [
+            { "label": "File", "items": [item] },
+            { "label": "Window", "role": "window", "items": [item] },
+            { "label": "Help", "role": "help", "items": [item] },
+        ]}),
+    );
+    let menu = h.app.menu().unwrap();
+    let text = |id: &str| match menu.get(id) {
+        Some(MenuItemKind::Submenu(s)) => s.text().unwrap(),
+        other => panic!("no submenu {id}: {:?}", other.map(|o| o.id().clone())),
+    };
+    assert_eq!(text(tauri::menu::WINDOW_SUBMENU_ID), "Window");
+    assert_eq!(text(tauri::menu::HELP_SUBMENU_ID), "Help");
+}
+
 fn main() {
     let tests: &[(&str, fn())] = &[
         ("builds_the_menu_bar_from_the_layout", builds_the_menu_bar_from_the_layout),
@@ -208,6 +228,10 @@ fn main() {
         ("clicking_an_item_sends_a_menu_event_with_its_id", clicking_an_item_sends_a_menu_event_with_its_id),
         ("only_the_layouts_own_items_send_events", only_the_layouts_own_items_send_events),
         ("the_page_greys_out_and_ticks_items_by_id", the_page_greys_out_and_ticks_items_by_id),
+        (
+            "the_window_and_help_menus_are_the_ones_macos_treats_as_such",
+            the_window_and_help_menus_are_the_ones_macos_treats_as_such,
+        ),
     ];
     println!("\nrunning {} tests", tests.len());
     let mut failed = Vec::new();

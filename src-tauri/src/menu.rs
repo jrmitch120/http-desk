@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 /// A menu in the menu bar, or a submenu.
@@ -19,6 +19,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 #[serde(rename_all = "camelCase")]
 pub struct SubmenuLayout {
     label: String,
+    /// Which of the menus macOS treats specially this is, if any.
+    role: Option<Role>,
     #[serde(default = "yes")]
     enabled: bool,
     items: Vec<Entry>,
@@ -26,6 +28,15 @@ pub struct SubmenuLayout {
 
 fn yes() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Role {
+    /// macOS lists the open windows in it.
+    Window,
+    /// macOS adds a search field to it.
+    Help,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,7 +170,11 @@ fn submenu<R: Runtime>(
     layout: SubmenuLayout,
     items: &mut HashMap<String, Vec<Item<R>>>,
 ) -> tauri::Result<Submenu<R>> {
-    let menu = Submenu::new(app, layout.label, layout.enabled)?;
+    let menu = match layout.role {
+        Some(Role::Window) => Submenu::with_id(app, WINDOW_SUBMENU_ID, layout.label, layout.enabled)?,
+        Some(Role::Help) => Submenu::with_id(app, HELP_SUBMENU_ID, layout.label, layout.enabled)?,
+        None => Submenu::new(app, layout.label, layout.enabled)?,
+    };
     for entry in layout.items {
         match entry {
             Entry::Item { id, label, accelerator, enabled, checked: None } => {

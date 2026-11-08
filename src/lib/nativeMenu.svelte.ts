@@ -47,9 +47,10 @@ export async function startNativeMenu(): Promise<void> {
   await listen<{ id: string }>("menu", (e) => clicked(e.payload.id));
 
   $effect.root(() => {
-    // The layout: sent again only when Open Recent changes.
+    // The layout: sent at once, then again only when Open Recent changes (the
+    // recents settle once the app has started and reopened the last workspace).
     $effect(() => {
-      const recents = (app.settings?.recentWorkspaces ?? []).filter((w) => w !== app.root).slice(0, RECENTS);
+      const recents = app.starting ? [] : (app.settings?.recentWorkspaces ?? []).filter((w) => w !== app.root).slice(0, RECENTS);
       const key = JSON.stringify(recents);
       if (key === lastRecents) return;
       lastRecents = key;

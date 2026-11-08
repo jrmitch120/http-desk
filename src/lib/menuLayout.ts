@@ -34,8 +34,12 @@ export type MenuEntry =
   | { kind: "recent" };
 
 /** A menu in the menu bar. On macOS the first one is the app menu. */
+/** The menu macOS lists its windows in, and the one it adds Help search to. */
+export type MenuRole = "window" | "help";
+
 export interface TopMenu {
   label: string;
+  role?: MenuRole;
   items: MenuEntry[];
 }
 
@@ -95,7 +99,7 @@ export function menuLayout(os: OS): TopMenu[] {
       { label: "Edit", items: edit },
       { label: "View", items: view },
       { label: "Request", items: request },
-      { label: "Window", items: [native("minimize"), native("zoom", "Zoom"), SEP, native("bringAllToFront")] },
+      { label: "Window", role: "window", items: [native("minimize"), native("zoom", "Zoom"), SEP, native("bringAllToFront")] },
     ];
   }
   return [
@@ -103,7 +107,7 @@ export function menuLayout(os: OS): TopMenu[] {
     ...(os === "windows" ? [{ label: "Edit", items: edit }] : []),
     { label: "View", items: view },
     { label: "Request", items: request },
-    { label: "Help", items: [cmd("check-updates")] },
+    { label: "Help", role: "help", items: [cmd("check-updates")] },
   ];
 }
 
@@ -117,7 +121,7 @@ export type NativeEntry =
   | { kind: "predefined"; item: Predefined; label: string | null }
   | { kind: "submenu"; label: string; enabled: boolean; items: NativeEntry[] };
 
-export type NativeMenu = { label: string; items: NativeEntry[] }[];
+export type NativeMenu = { label: string; role?: MenuRole; items: NativeEntry[] }[];
 
 /** What an item shows: greyed out or not, ticked or not (null: it isn't a checkbox). */
 export interface ItemState {
@@ -160,7 +164,7 @@ export function nativeMenu(layout: TopMenu[], opts: { os: OS; recents: string[];
       }
     }
   };
-  return layout.map((m) => ({ label: m.label, items: m.items.flatMap(render) }));
+  return layout.map((m) => ({ label: m.label, ...(m.role ? { role: m.role } : {}), items: m.items.flatMap(render) }));
 }
 
 /** A shortcut as a macOS key equivalent the shell (muda) parses: "Cmd+Shift+S", "Cmd+Enter", "Cmd+,". */
