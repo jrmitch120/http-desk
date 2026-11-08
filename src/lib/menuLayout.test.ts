@@ -48,9 +48,10 @@ describe("the menu layout", () => {
     ]);
   });
 
-  it("on Linux is Windows' layout without an Edit menu", () => {
+  it("on Linux is Windows' layout with the app's own Edit items, not the OS's (ADR-0005)", () => {
     expect(outline(menuLayout("linux"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
+      "Edit: undo, redo, -, cut, copy, paste, select-all",
       "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
       "Help: check-updates",
@@ -109,6 +110,20 @@ describe("the menu the shell builds", () => {
     const linux = render("linux");
     expect(item(linux, "save")).toMatchObject({ label: "Save", accelerator: null });
     expect(item(linux, "quit")).toMatchObject({ label: "Quit", accelerator: null });
+  });
+
+  it("shows the Linux Edit items without shortcuts, so Ctrl+C and the rest stay the page's", () => {
+    const linux = render("linux");
+    const edit = linux.find((m) => m.label === "Edit")!.items;
+    expect(edit.map((e) => (e.kind === "item" ? [e.label, e.accelerator] : e.kind))).toEqual([
+      ["Undo", null],
+      ["Redo", null],
+      "separator",
+      ["Cut", null],
+      ["Copy", null],
+      ["Paste", null],
+      ["Select All", null],
+    ]);
   });
 
   it("lists recent workspaces under Open Recent by folder name, greyed out when there are none", () => {

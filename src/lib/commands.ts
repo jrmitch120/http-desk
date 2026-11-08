@@ -7,6 +7,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
 import { updates } from "./updates.svelte";
 import { modalOpen } from "./modal.svelte";
+import { focusedEditActions, type EditActions } from "./editMenu";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
 
@@ -35,7 +36,13 @@ export type CommandId =
   | "layout-below"
   | "theme-system"
   | "theme-light"
-  | "theme-dark";
+  | "theme-dark"
+  | "undo"
+  | "redo"
+  | "cut"
+  | "copy"
+  | "paste"
+  | "select-all";
 
 export interface Command {
   id: CommandId;
@@ -85,6 +92,25 @@ function layoutChoice(id: CommandId, label: string, layout: AppSettings["layout"
 /** A View → Theme choice. */
 function themeChoice(id: CommandId, label: string, theme: AppSettings["theme"]): Command {
   return { id, label, enabled: withSettings, checked: () => app.themeChoice === theme, run: () => void app.updateSettings({ theme }) };
+}
+
+/**
+ * An Edit item on Linux, acting on the focused text field as its context menu
+ * does (ADR-0005: muda's predefined ones don't work on GTK). No shortcut: Ctrl+C
+ * and the rest stay the field's own. Available under a modal, which has text
+ * fields too.
+ */
+function editCommand(id: CommandId & keyof EditActions, label: string): Command {
+  return {
+    id,
+    label,
+    underModal: true,
+    enabled: () => {
+      const action = focusedEditActions()[id];
+      return !!action && !action.disabled;
+    },
+    run: () => focusedEditActions()[id]?.run(),
+  };
 }
 
 const COMMANDS: Command[] = [
@@ -209,6 +235,12 @@ const COMMANDS: Command[] = [
   themeChoice("theme-system", "System", "system"),
   themeChoice("theme-light", "Light", "light"),
   themeChoice("theme-dark", "Dark", "dark"),
+  editCommand("undo", "Undo"),
+  editCommand("redo", "Redo"),
+  editCommand("cut", "Cut"),
+  editCommand("copy", "Copy"),
+  editCommand("paste", "Paste"),
+  editCommand("select-all", "Select All"),
 ];
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));
