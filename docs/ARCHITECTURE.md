@@ -52,6 +52,7 @@ src-tauri/              thin Tauri shell: commands, app state
   quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
   theme.rs              creates the main window in the saved theme (no dark flash at start-up)
   theme-boot.js         the window's initialization script: sets data-theme before first paint
+  window_state.rs       remembers the window's size, position, maximised and fullscreen state
 src/                    Svelte 5 frontend
 vendor/serde_json_path_core/  patched copy (exact number comparisons in filters; see its PATCHED file)
 ```
@@ -896,6 +897,11 @@ Decisions made during implementation, beyond the plan above:
   tauri.conf.json) after loading settings: with the window theme pinned for Light or
   Dark, a background colour matching `--bg`, and an init script that sets `data-theme`
   on `<html>` before the first paint (System resolved through `prefers-color-scheme`).
+* **Window state:** the window reopens at the size and place it was left, maximised or
+  fullscreen if it was (tauri-plugin-window-state, saving `.window-state.json` next to
+  the settings at quit). The main window is created hidden and shown once its state is
+  restored, so it never flashes at the default 1440×900. If the saved position isn't on
+  any connected monitor, the plugin leaves placement to the OS.
 * **Release:** the release workflow runs on a `v*` tag push, or manually with an
   existing tag as input. A pre-flight job checks that the tag matches the version in
   every manifest (`scripts/check-release-version.mjs`) and runs the tests; the bundle
