@@ -5,6 +5,13 @@
 //! Not in src/ipc_tests: macOS builds menus on the main thread only, and libtest
 //! runs tests on other threads, so this binary has no harness and runs its tests
 //! one after another on the main thread.
+//!
+//! Every test runs on every OS, but MockRuntime can't do the same on each:
+//! - macOS: everything runs. The menu is the app's, not a window's.
+//! - Windows: Tauri attaches the menu to MockRuntime's dummy window handle, which
+//!   Win32 ignores. muda reads a label back without the "\tCtrl+S" the page puts
+//!   after it (see `save`), so that part isn't checked.
+//! - Linux: Tauri can't attach the menu to the window at all (see `Harness::new`).
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc;
@@ -30,7 +37,15 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let app = httpdesk_lib::test_support::with_commands(mock_builder()).build(mock_context(noop_assets())).unwrap();
-        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default());
+        // On GTK, `AppHandle::set_menu` also attaches the app's menu to every
+        // window that has no menu of its own, through the window's GTK handle,
+        // and MockRuntime has none (`gtk_window()` is `unimplemented!()`). A menu
+        // of its own keeps Tauri off this window. Everything the shell does with
+        // the layout still runs, and `app.menu()` is still the menu it built.
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let window = window.menu(tauri::menu::Menu::new(&app).unwrap());
+        let webview = window.build().unwrap();
         Harness { app, webview }
     }
 
@@ -101,6 +116,21 @@ fn entry(item: &MenuItemKind<MockRuntime>) -> String {
     }
 }
 
+/// Save as the page sends it on this OS (ADR-0005): a key equivalent on macOS,
+/// the shortcut in the label on Windows, neither on Linux. (A macOS key
+/// equivalent like "Cmd+S" is an error on Windows.) It reads back as
+/// `save "Save"` everywhere: on Windows muda leaves out what follows the tab.
+fn save(enabled: bool) -> Value {
+    let (label, accelerator) = if cfg!(target_os = "macos") {
+        ("Save", json!("Cmd+S"))
+    } else if cfg!(windows) {
+        ("Save\tCtrl+S", Value::Null)
+    } else {
+        ("Save", Value::Null)
+    };
+    json!({ "kind": "item", "id": "save", "label": label, "accelerator": accelerator, "enabled": enabled, "checked": null })
+}
+
 /// A layout like the page's, small enough to read.
 fn layout(recents: &[&str]) -> Value {
     let recent: Vec<Value> = recents
@@ -112,7 +142,7 @@ fn layout(recents: &[&str]) -> Value {
             { "kind": "item", "id": "open-folder", "label": "Open Folder…", "accelerator": null, "enabled": true, "checked": null },
             { "kind": "submenu", "label": "Open Recent", "enabled": !recent.is_empty(), "items": recent },
             { "kind": "separator" },
-            { "kind": "item", "id": "save", "label": "Save", "accelerator": "Cmd+S", "enabled": false, "checked": null },
+            save(false),
         ]},
         { "label": "Edit", "items": [
             { "kind": "predefined", "item": "copy", "label": "Copy" },
@@ -125,7 +155,7 @@ fn layout(recents: &[&str]) -> Value {
             ]},
         ]},
         { "label": "Request", "items": [
-            { "kind": "item", "id": "save", "label": "Save\tCtrl+S", "accelerator": null, "enabled": false, "checked": null },
+            save(false),
         ]},
     ])
 }
@@ -139,7 +169,7 @@ fn builds_the_menu_bar_from_the_layout() {
             r#"File: open-folder "Open Folder…", Open Recent: open-recent:/work/api "api", -, save "Save" (off)"#,
             "Edit: (Copy), (Paste)",
             r#"View: Theme: [ ] theme-light "Light", [x] theme-dark "Dark""#,
-            r#"Request: save "Save\tCtrl+S" (off)"#,
+            r#"Request: save "Save" (off)"#,
         ]
     );
 }
@@ -198,7 +228,7 @@ fn the_page_greys_out_and_ticks_items_by_id() {
     assert!(bar[0].ends_with(r#"save "Save""#), "{bar:?}");
     assert!(bar[0].starts_with(r#"File: open-folder "Open Folder…" (off)"#), "{bar:?}");
     assert_eq!(bar[2], r#"View: Theme: [x] theme-light "Light", [ ] theme-dark "Dark""#);
-    assert_eq!(bar[3], r#"Request: save "Save\tCtrl+S""#);
+    assert_eq!(bar[3], r#"Request: save "Save""#);
 }
 
 fn the_window_and_help_menus_are_the_ones_macos_treats_as_such() {
