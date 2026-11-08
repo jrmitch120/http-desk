@@ -75,6 +75,7 @@ test("switching environment with a request open keeps the request first", async 
 
 test("the window title is just HttpDesk until a workspace is open", async ({ page }) => {
   await page.goto("/?settingsDelay=hold");
+  await page.waitForFunction(() => "__mock" in window);
   await expect.poll(() => mockState(page, "title")).toBe("HttpDesk");
   await releaseSettings(page);
   await expect.poll(() => mockState(page, "title")).toBe("demo — local");
