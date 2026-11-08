@@ -87,3 +87,20 @@ test("clicking a button hides its tooltip until the pointer leaves", async ({ pa
   await page.waitForTimeout(600);
   await expect(page.getByRole("tooltip")).toBeHidden();
 });
+
+test("a focused button whose tooltip is coming can be removed", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  // Sending asks for a prompt value first; answering it with Enter closes the
+  // form and gives focus back to Send, from the keyboard, so its tooltip is on
+  // its way when the send swaps Send for Cancel.
+  await openApp(page, `?prompts=${encodeURIComponent("baseUrl")}`);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const form = page.getByRole("dialog", { name: `Value for "baseUrl"` });
+  await form.getByRole("textbox").fill("http://typed.example");
+  await form.getByRole("textbox").press("Enter");
+  await expect(form).toHaveCount(0);
+  await expect(page.locator(".statusbar .metric").first()).toBeVisible();
+  expect(errors).toEqual([]);
+});
