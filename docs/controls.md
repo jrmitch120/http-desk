@@ -131,6 +131,12 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
     with `menu.close(false)` (the top bar's theme button).
+  - A thing's own "…" actions (a grid row, a matrix column header): `ActionsButton.svelte`
+    (`label`, `items()`, `tip?`, `skipTab?`) is that menu button with the `more` icon. It
+    is hidden until the pointer is over, or focus is in, the nearest element marked
+    `data-actions-host` (every KeyValueGrid row is), and while its menu is open.
+    `skipTab` takes it out of the Tab order where the field beside it opens the same
+    items with Shift+F10 (a List row's name).
   - Choice items: give every item a `checked` boolean. They become `menuitemradio`s with a
     check on the current one, and the menu opens focused on it.
   - `danger` for destructive commands.
@@ -359,7 +365,10 @@ Global classes in `src/app.css`, not components:
 - `.btn`: a text button. Variants: `.primary` (the main action of a dialog or form; one
   per footer), `.danger` (red text), `.danger.solid` (confirming something
   irreversible), `.ghost` (no border or background, for toolbars), `.small`
-  (`--control-h-sm`, for rows and banners).
+  (`--control-h-sm`, for rows and banners). A `.btn.small.ghost` with `.on` and
+  `aria-pressed` is a view switch in a title row: it changes what the pane shows, not
+  how the request is sent (the request's Resolved and `.http`). A setting that changes
+  behaviour is a [Toggle](#toggle).
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
   `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
@@ -401,8 +410,9 @@ variables, form-urlencoded fields, multipart parts and environment variables.
   `class="cell"` look like the built-in cells. A custom column with `id: "value"`
   replaces the value input, and one with `id: "name"` replaces the name input. A
   custom column's `headerCell` snippet (given the column's id) renders its header instead of the `header`
-  text (a button: the matrix's Variable sort, its "+ Environment"), and `sort`
-  (`"ascending"`, `"descending"` or `"none"`) makes the header a `columnheader` with
+  text (a button: the matrix's Variable sort, its "+ Environment"; those use the
+  matrix's `.head-btn`, a ghost button that fills the header cell), and `sort`
+  (`"ascending"` or `"descending"`) makes the header a `columnheader` with
   that `aria-sort`; the caller sorts `items` itself. A custom column's `resize`
   (`{ label, onresize(width, done) }`) puts a [ColumnResizer](#columnresizer) at its
   header cell's right edge; the caller stores the width and passes it back as the

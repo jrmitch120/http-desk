@@ -350,6 +350,18 @@ test("an environment's header has Rename, Duplicate and Delete, from its actions
   await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
+test("deleting an environment takes the rows only it defined with it", async ({ page }) => {
+  await openApp(page);
+  const modal = await open(page);
+  const names = matrix(modal).locator(".kv-row .m-name");
+  await expect(names).toHaveText(["baseUrl", "token", "version"]);
+  // Only local defines token.
+  await matrix(modal).locator(".kv-head > span").filter({ hasText: /^\s*local\s*$/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete environment…" }).click();
+  await dialog(page, "Delete environment").getByRole("button", { name: "Delete" }).click();
+  await expect(names).toHaveText(["baseUrl", "version"]);
+});
+
 /** The header's resize separator for `column`. */
 const resizer = (modal: Locator, column: string) => matrix(modal).getByRole("separator", { name: `Resize ${column} column` });
 const headWidth = async (modal: Locator, column: string) => {

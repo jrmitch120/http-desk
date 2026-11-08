@@ -83,7 +83,47 @@ export function openContextMenu(e: MouseEvent) {
   menu.show(e, items, { label: "Edit", onclose: view ? () => unhold(view) : undefined });
 }
 
-/** Cut, Copy, Paste and Select all in an editor (Copy and Select all when it's read-only). */
+/** What the edit items need from a text field, whatever kind it is. */
+interface TextField {
+  /** The selected text. */
+  selected(): string;
+  /** A masked field (a password, a Secret) keeps its text off the clipboard. */
+  masked: boolean;
+  readOnly: boolean;
+  selectAll(): void;
+  /** Replaces the selection with `text` (empty for Cut), as typing would. */
+  replace(text: string): void;
+  /** Whether the field is still in the document (a Paste waits on the clipboard). */
+  connected(): boolean;
+}
+
+/** Cut, Copy, Paste and Select all (Copy and Select all when it's read-only). */
+function textItems(field: TextField): MenuItem[] {
+  const cannotCopy = !field.selected() || field.masked;
+  const copy: MenuItem = { label: "Copy", icon: "copy", disabled: cannotCopy, action: () => void writeClipboard(field.selected()) };
+  const selectAll: MenuItem = { label: "Select all", icon: "select-all", action: () => field.selectAll() };
+  if (field.readOnly) return [copy, selectAll];
+  const cut: MenuItem = {
+    label: "Cut",
+    icon: "cut",
+    disabled: cannotCopy,
+    action: () => {
+      void writeClipboard(field.selected());
+      field.replace("");
+    },
+  };
+  const paste: MenuItem = {
+    label: "Paste",
+    icon: "paste",
+    action: async () => {
+      const text = await readClipboard();
+      if (text && field.connected()) field.replace(text);
+    },
+  };
+  return [cut, copy, paste, selectAll];
+}
+
+/** The edit items for an editor. */
 function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
   // A right-click outside the selection puts the caret there first, as in a text input.
   const sel = view.state.selection.main;
@@ -91,87 +131,41 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
     const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
     if (pos !== null && (sel.empty || pos < sel.from || pos > sel.to)) view.dispatch({ selection: { anchor: pos } });
   }
-  const selected = () => {
-    const { from, to } = view.state.selection.main;
-    return view.state.sliceDoc(from, to);
-  };
-  // A masked field (a password, a Secret) keeps its text off the clipboard.
-  const secret = view.dom.classList.contains("cm-masked");
-  const none = !selected() || secret;
-  const copy: MenuItem = { label: "Copy", icon: "copy", disabled: none, action: () => void writeClipboard(selected()) };
-  const selectAll: MenuItem = {
-    label: "Select all",
-    icon: "select-all",
-    action: () => {
+  return textItems({
+    selected: () => {
+      const { from, to } = view.state.selection.main;
+      return view.state.sliceDoc(from, to);
+    },
+    masked: view.dom.classList.contains("cm-masked"),
+    readOnly: view.state.readOnly,
+    selectAll: () => {
       view.focus();
       view.dispatch({ selection: { anchor: 0, head: view.state.doc.length }, userEvent: "select" });
     },
-  };
-  if (view.state.readOnly) return [copy, selectAll];
-  return [
-    {
-      label: "Cut",
-      icon: "cut",
-      disabled: none,
-      action: () => {
-        void writeClipboard(selected());
-        view.dispatch(view.state.replaceSelection(""), { userEvent: "delete.cut" });
-      },
+    replace: (text) => {
+      view.focus();
+      view.dispatch(view.state.replaceSelection(text), { userEvent: text ? "input.paste" : "delete.cut", scrollIntoView: true });
     },
-    copy,
-    {
-      label: "Paste",
-      icon: "paste",
-      action: async () => {
-        const text = await readClipboard();
-        if (!text || !view.dom.isConnected) return;
-        view.focus();
-        view.dispatch(view.state.replaceSelection(text), { userEvent: "input.paste", scrollIntoView: true });
-      },
-    },
-    selectAll,
-  ];
+    connected: () => view.dom.isConnected,
+  });
 }
 
-/** Cut, Copy, Paste and Select all in an `<input>` or `<textarea>` (Copy and Select all when it's read-only). */
+/** The edit items for an `<input>` or `<textarea>`. */
 function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
-  const selected = () => el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0);
-  const secret = el.type === "password";
-  const none = !selected() || secret;
-  const copy: MenuItem = { label: "Copy", icon: "copy", disabled: none, action: () => void writeClipboard(selected()) };
-  const selectAll: MenuItem = {
-    label: "Select all",
-    icon: "select-all",
-    action: () => {
+  return textItems({
+    selected: () => el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0),
+    masked: el.type === "password",
+    readOnly: el.readOnly || el.disabled,
+    selectAll: () => {
       el.focus();
       el.select();
     },
-  };
-  if (el.readOnly || el.disabled) return [copy, selectAll];
-  return [
-    {
-      label: "Cut",
-      icon: "cut",
-      disabled: none,
-      action: () => {
-        void writeClipboard(selected());
-        el.focus();
-        insert(el, "");
-      },
+    replace: (text) => {
+      el.focus();
+      insert(el, text);
     },
-    copy,
-    {
-      label: "Paste",
-      icon: "paste",
-      action: async () => {
-        const text = await readClipboard();
-        if (!text || !el.isConnected) return;
-        el.focus();
-        insert(el, text);
-      },
-    },
-    selectAll,
-  ];
+    connected: () => el.isConnected,
+  });
 }
 
 /** Replaces the field's selection with `text` as typing would: undoable, and an `input` event for its owner. */

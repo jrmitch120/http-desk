@@ -31,7 +31,7 @@
     /** Renders the header cell instead of `header` (a button that sorts by the column, or a command). It gets the column's id. */
     headerCell?: Snippet<[string]>;
     /** Makes the header a `columnheader` with this `aria-sort`, for a column the rows can be sorted by. */
-    sort?: "ascending" | "descending" | "none";
+    sort?: "ascending" | "descending";
     /**
      * Makes the column resizable: a ColumnResizer at its header cell's right edge,
      * named `label`. `onresize` reports the new width in px (`done` once a drag ends,
@@ -70,7 +70,8 @@
   import { suggestions as suggest } from "../lib/popup/suggestions.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
-  import { menu, type MenuItem } from "../lib/menu.svelte";
+  import type { MenuItem } from "../lib/menu.svelte";
+  import ActionsButton from "./ActionsButton.svelte";
   import { addMenuItems } from "../lib/editMenu";
 
   interface Props {
@@ -371,7 +372,7 @@
     {#each rows as { row, i } (row)}
       {@const isGhost = row === ghost}
       {@const error = isGhost ? null : nameError(row.name)}
-      <div class="kv-row" class:off={!isGhost && hasEnable && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
+      <div class="kv-row" data-actions-host class:off={!isGhost && hasEnable && !row.enabled} class:ghost={isGhost} style:grid-template-columns={template}>
         {#each tracks as t, c (t.id)}
           {#if t.id === "enable"}
             <span class="c-check">
@@ -401,10 +402,7 @@
               <div class="c-name-cell" class:divider={divider(c)}>
                 {@render nameInput("", actions)}
                 {#if actions.length}
-                  {@const what = `Actions for ${row.name.trim()}`}
-                  <button class="icon-btn row-actions" tabindex="-1" aria-label={what} aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, actions, { anchor: e.currentTarget, align: "end", label: what })}>
-                    <Icon name="more" size={13} />
-                  </button>
+                  <ActionsButton label="Actions for {row.name.trim()}" items={() => actions} skipTab />
                 {/if}
               </div>
             {:else}
@@ -530,17 +528,7 @@
     flex: 1;
     align-self: stretch;
   }
-  .row-actions {
-    flex: none;
-    margin-right: var(--space-1);
-    width: var(--control-h-sm);
-    height: var(--control-h-sm);
-    opacity: 0;
-  }
-  .kv-row:hover .row-actions,
-  .kv-row:focus-within .row-actions {
-    opacity: 1;
-  }
+
   /* Description sub-row: spans to the right edge on a faint tint, with a
      hairline that closes off the key/value divider above it. */
   .desc {

@@ -14,6 +14,7 @@
   import KeyValueGrid, { type Column, type GridCell } from "./KeyValueGrid.svelte";
   import VarField from "../lib/codemirror/VarField.svelte";
   import Icon from "./Icon.svelte";
+  import ActionsButton from "./ActionsButton.svelte";
   import { SvelteSet } from "svelte/reactivity";
 
   interface Props {
@@ -48,11 +49,14 @@
   };
   // The rows shown so far are kept here, not re-derived from `set` alone, so a
   // row whose last cell was unset stays until the modal closes. A new set
-  // (another folder, or the files reloaded) starts afresh.
+  // (another folder, or the files reloaded) starts afresh, and so does a change
+  // of columns, so deleting an environment takes the rows only it had with it.
   let order: string[] = [];
   let orderOf: EnvironmentSet | null = null;
+  let orderColumns = "";
   const names = $derived.by(() => {
-    if (orderOf !== set) [order, orderOf] = [[], set];
+    const columns = JSON.stringify(set.environments.map((e) => e.name));
+    if (orderOf !== set || orderColumns !== columns) [order, orderOf, orderColumns] = [[], set, columns];
     return (order = matrixNames(set, order));
   });
   /** The Variable header's sort, for the app session. It compares names only, so typing a value never moves a row. */
@@ -195,18 +199,10 @@
   {@const column = columnAt(id)}
   {@const actions = column === SHARED ? undefined : environmentActions}
   <!-- svelte-ignore a11y_no_static_element_interactions (the menu is also the header's actions button) -->
-  <div class="col-head" oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Environment ${column}` }))}>
+  <div class="col-head" data-actions-host oncontextmenu={actions && ((e) => menu.show(e, actions(column), { label: `Actions for environment ${column}` }))}>
     <span class="col-head-label ellipsis" data-fit>{columnLabel(column)}</span>
     {#if actions}
-      <button
-        class="icon-btn actions"
-        aria-label="Actions for environment {column}"
-        aria-haspopup="menu"
-        use:tooltip={"Environment actions"}
-        onclick={(e) => menu.show(e, actions(column), { anchor: e.currentTarget, align: "end", label: `Environment ${column}` })}
-      >
-        <Icon name="more" size={13} />
-      </button>
+      <ActionsButton label="Actions for environment {column}" tip="Environment actions" items={() => actions(column)} />
     {/if}
   </div>
 {/snippet}
@@ -221,9 +217,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="m-var" oncontextmenu={(e) => menu.show(e, menuFor(row.name))}>
     <span class="cell m-name ellipsis" data-fit>{row.name}</span>
-    <button class="icon-btn actions" aria-label="Actions for {row.name}" aria-haspopup="menu" use:tooltip={"Actions"} onclick={(e) => menu.show(e, menuFor(row.name), { anchor: e.currentTarget, align: "end", label: `Actions for ${row.name}` })}>
-      <Icon name="more" size={13} />
-    </button>
+    <ActionsButton label="Actions for {row.name}" items={() => menuFor(row.name)} />
   </div>
 {/snippet}
 
@@ -363,7 +357,7 @@
     align-items: center;
     gap: var(--space-1);
     height: var(--control-h-sm);
-    padding: 0 var(--space-2) 0 7px;
+    padding: 0 var(--space-2);
     border: none;
     border-radius: var(--radius-sm);
     background: none;
@@ -385,20 +379,6 @@
     min-width: 0;
     margin-right: var(--space-1);
   }
-  .actions {
-    flex: none;
-    margin-right: var(--space-1);
-    width: var(--control-h-sm);
-    height: var(--control-h-sm);
-    opacity: 0;
-  }
-  /* Like the list's delete button: shown on hover, and while the row (or header cell) has focus. */
-  .matrix :global(.kv-row:hover .actions),
-  .matrix :global(.kv-row:focus-within .actions),
-  .col-head:hover .actions,
-  .col-head:focus-within .actions {
-    opacity: 1;
-  }
   /* An environment's header: its name, then its actions at the right edge. */
   .col-head {
     flex: 1;
@@ -410,7 +390,7 @@
   .col-head-label {
     flex: 1;
     min-width: 0;
-    padding-left: 7px;
+    padding-left: var(--space-2);
   }
   .empty {
     padding: 14px var(--space-1);

@@ -161,9 +161,12 @@ test("a List row's actions and its name's right-click menu offer Find usages", a
   await expect(actions).not.toBeFocused();
   await expect(grid.locator(".kv-row.ghost").getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
 
+  await expect(actions).toHaveAttribute("aria-expanded", "false");
   await actions.click();
   await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Find usages", "Rename everywhere…"]);
+  await expect(actions).toHaveAttribute("aria-expanded", "true");
   await page.keyboard.press("Escape");
+  await expect(actions).toHaveAttribute("aria-expanded", "false");
 
   // The name field's right-click menu has the edit items, then the same two.
   await row.locator("input.c-name").click({ button: "right" });
