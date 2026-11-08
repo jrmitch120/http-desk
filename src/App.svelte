@@ -19,7 +19,7 @@
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
-  import { modalOpen } from "./lib/modal";
+  import { handleCommandKey } from "./lib/commands";
   import { SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
@@ -39,11 +39,7 @@
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
     if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") return keyboardContextMenu(e);
-    const action = shortcut(e);
-    if (!action) return;
-    e.preventDefault();
-    // Under a modal or dialog only Escape acts, and Modal.svelte handles it.
-    if (!modalOpen()) action();
+    handleCommandKey(e);
   }
 
   /**
@@ -52,35 +48,6 @@
    */
   function keyboardContextMenu(e: KeyboardEvent) {
     if (openFromKeyboard()) e.preventDefault();
-  }
-
-  /** The global shortcut `e` triggers, if any. */
-  function shortcut(e: KeyboardEvent): (() => void) | null {
-    if (!(e.metaKey || e.ctrlKey)) return null;
-    const k = e.key.toLowerCase();
-    const root = app.root;
-    if (k === "s") return () => (e.shiftKey ? app.saveAll() : app.saveActive());
-    if (k === "enter" && app.activeTabId) return () => app.activeTabId && app.send(app.activeTabId);
-    if ((k === "p" || k === "k") && root) return () => app.focusSearch++;
-    if (k === "t" && root) return () => (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(root));
-    if (switchEnvironment(e)) return root ? () => app.chooseEnvironment() : null;
-    if (k === "e" && !e.altKey && root) return () => (app.modal = "env");
-    if (k === ",") return () => (app.modal = "settings");
-    return null;
-  }
-
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-
-  /**
-   * ⌘⌥E on macOS, Ctrl+Alt+E elsewhere: open the environment picker. On macOS
-   * ⌥E is a dead key, so the physical E key counts. Elsewhere the key must
-   * really be "e": Ctrl+Alt is how Windows reports AltGr, and AltGr+E types €
-   * on many layouts.
-   */
-  function switchEnvironment(e: KeyboardEvent): boolean {
-    if (!e.altKey || e.shiftKey) return false;
-    if (mac) return e.metaKey && !e.ctrlKey && (e.key.toLowerCase() === "e" || e.code === "KeyE");
-    return e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "e";
   }
 </script>
 

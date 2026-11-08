@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { forceOS } from "../lib/platform";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
 import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
@@ -18,6 +19,9 @@ const files: Record<string, unknown> = {
   [`${ROOT}/api/pets.http`]: pets,
   [`${ROOT}/samples/jetbrains.http`]: jetbrains,
 };
+// `?platform=mac|windows|linux` makes the app behave as on that OS (shortcut keys and hints),
+// whatever the browser runs on.
+forceOS(new URLSearchParams(location.search).get("platform"));
 // `?prompts=otp One-time code;password` declares Prompt variables (`# @prompt …`) on pets.http's first request.
 const promptsParam = new URLSearchParams(location.search).get("prompts");
 if (promptsParam) {
@@ -308,12 +312,22 @@ let settingsServed = false;
 let prettyRequests = 0;
 let previewRequests = 0;
 let windowTitle: string | null = null;
+let windowCloseRequests = 0;
+let windowClosed = false;
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
   sentPrompts,
   /** The window title the app last set. */
   get title() {
     return windowTitle;
+  },
+  /** How many times the app asked the window to close. */
+  get windowCloseRequests() {
+    return windowCloseRequests;
+  },
+  /** Whether a close request went through and the window was destroyed. */
+  get windowClosed() {
+    return windowClosed;
   },
   /** How many times the viewer called `pretty_response`; a test may reset it. */
   get prettyRequests() {
@@ -692,6 +706,15 @@ mockIPC(
         return navigator.clipboard.readText().catch(() => "");
       case "plugin:window|set_title":
         windowTitle = args.value;
+        return null;
+      case "plugin:window|close":
+        // Like the shell: a close request the app answers in its close-requested
+        // handler, which destroys the window unless it was turned down.
+        windowCloseRequests++;
+        await emit("tauri://close-requested");
+        return null;
+      case "plugin:window|destroy":
+        windowClosed = true;
         return null;
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);

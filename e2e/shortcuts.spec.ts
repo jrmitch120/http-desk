@@ -1,5 +1,31 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { activeTab, bodyEditor, openApp, openRequest, sentRequests, tab, urlBar } from "./helpers";
+import { activeTab, bodyEditor, openApp, openRequest, sentRequests, tab, treeItem, urlBar } from "./helpers";
+
+// The OS is forced with `?platform=` (openApp defaults to mac), so a test
+// presses that OS's keys whatever machine runs it.
+
+for (const { os, newRequest, otherModifier } of [
+  { os: "mac", newRequest: "Meta+T", otherModifier: "Control+T" },
+  { os: "windows", newRequest: "Control+T", otherModifier: "Meta+T" },
+  { os: "linux", newRequest: "Control+T", otherModifier: "Meta+T" },
+]) {
+  test(`on ${os}, ${otherModifier} in a text field doesn't create a request, and ${newRequest} does`, async ({ page }) => {
+    await openApp(page, `?platform=${os}`);
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    const tabs = page.getByRole("tablist", { name: "Open requests" }).getByRole("tab");
+
+    await urlBar(page).click();
+    await page.keyboard.press(otherModifier);
+    await expect(tabs).toHaveCount(1);
+    await expect(treeItem(page, "New request")).toHaveCount(0);
+
+    // Out of the editor: on a Mac test machine CodeMirror's macOS keymap takes
+    // Ctrl+T (transpose) whatever OS the app is forced to.
+    await activeTab(page).focus();
+    await page.keyboard.press(newRequest);
+    await expect(tabs).toHaveCount(2);
+  });
+}
 
 test("⌘Enter in a JSON body sends once without editing the body", async ({ page }) => {
   await openApp(page);
@@ -9,7 +35,7 @@ test("⌘Enter in a JSON body sends once without editing the body", async ({ pag
   const lines = body.locator(".cm-line");
   const before = await lines.allTextContents();
   await body.click();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await expect(page.getByText("201 Created")).toBeVisible();
   expect(await sentRequests(page)).toHaveLength(1);
@@ -24,7 +50,7 @@ test("⌘Enter with a tab focused sends the active request once and keeps the ac
   await tab(page, "List pets").click();
   await page.keyboard.press("ArrowLeft");
   await expect(tab(page, "Create pet")).toBeFocused();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await expect(page.getByText("200 OK")).toBeVisible();
   expect(await sentRequests(page)).toHaveLength(1);
@@ -37,7 +63,7 @@ test("⌘Enter with a row's checkbox focused sends once without toggling it", as
   await page.locator(".subtab", { hasText: "Headers" }).click();
   const accept = page.getByRole("checkbox", { name: "Enable Accept" });
   await accept.focus();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await expect(page.getByText("200 OK")).toBeVisible();
   expect(await sentRequests(page)).toHaveLength(1);
@@ -46,10 +72,10 @@ test("⌘Enter with a row's checkbox focused sends once without toggling it", as
 
 test("⌘, with the Environments editor open and edited keeps the editor and its edits", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+E");
+  await page.keyboard.press("Meta+E");
   const envs = page.getByRole("dialog", { name: "Environments" });
   await envs.getByPlaceholder("Add variable").fill("apiKey");
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
 
   await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
   await expect(envs).toBeVisible();
@@ -66,7 +92,7 @@ test("with a confirm dialog open, ⌘S, ⌘Enter and ⌘T do nothing", async ({ 
   const confirm = page.getByRole("dialog", { name: 'Save changes to "List pets"?' });
   await expect(confirm).toBeVisible();
 
-  for (const key of ["ControlOrMeta+S", "ControlOrMeta+Enter", "ControlOrMeta+T"]) await page.keyboard.press(key);
+  for (const key of ["Meta+S", "Meta+Enter", "Meta+T"]) await page.keyboard.press(key);
   await page.keyboard.press("Escape");
 
   await expect(confirm).toHaveCount(0);
@@ -77,7 +103,7 @@ test("with a confirm dialog open, ⌘S, ⌘Enter and ⌘T do nothing", async ({ 
 
 test("Escape closes only the topmost dialog, leaving the modal under it open", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+E");
+  await page.keyboard.press("Meta+E");
   const envs = page.getByRole("dialog", { name: "Environments" });
   await envs.getByPlaceholder("Add variable").fill("apiKey");
   await page.keyboard.press("Escape");
