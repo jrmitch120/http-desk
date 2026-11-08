@@ -42,7 +42,7 @@ test("the body type is picked with the mouse and sent with the request", async (
   await expect(modes.getByRole("radio", { name: "XML" })).toHaveAttribute("aria-checked", "true");
   await expect(modes.getByRole("radio", { checked: true })).toHaveCount(1);
 
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   const req = await lastSent(page);
   expect(req.body.mode).toBe("xml");
   expect(contentType(req)).toBe("application/xml");
@@ -79,7 +79,7 @@ test("the arrow keys move between body types, selecting as they go", async ({ pa
   await expect(modes.locator('[tabindex="0"]')).toHaveCount(1);
   await expect(radio("form-data")).toHaveAttribute("tabindex", "0");
 
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   const req = await lastSent(page);
   expect(req.body.mode).toBe("multipart");
   expect(contentType(req)).toMatch(/^multipart\/form-data; boundary=/);
@@ -92,7 +92,7 @@ test("the response view and Settings switches are the same radiogroup", async ({
   const look = await pick(bodyModes(page), "JSON");
   await pick(bodyModes(page), "none");
 
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   const view = page.getByRole("radiogroup", { name: "Response view" });
   expect(await pick(view, "Raw")).toBe(look);
   await expect(page.locator(".body .cm-content")).toContainText('{"items":[');
@@ -102,7 +102,7 @@ test("the response view and Settings switches are the same radiogroup", async ({
   expect(await pick(tabs, "Request")).toBe(look);
   expect(await pick(tabs, "Body")).toBe(look);
 
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   const settings = dialog(page, "Settings");
   // Settings apply live, so compare looks before switching to the light theme.
   const theme = settings.getByRole("radiogroup", { name: "Theme" });

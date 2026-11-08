@@ -14,7 +14,7 @@ test("Request Settings label the per-request idle and connection timeouts", asyn
 
 test("app Settings label the default idle and connection timeouts", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
 
   await expect(page.locator(".setting .label > span", { hasText: /^Idle timeout$/ })).toBeVisible();
   await expect(page.locator(".setting .label > span", { hasText: /^Connection timeout$/ })).toBeVisible();

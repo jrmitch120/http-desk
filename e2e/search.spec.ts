@@ -3,7 +3,7 @@ import { activeTab, openApp, searchBox, searchResults } from "./helpers";
 
 test("Up/Down move the search selection and Enter opens the selected request", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+p");
+  await page.keyboard.press("Meta+P");
   await page.keyboard.type("pet");
 
   const results = searchResults(page);

@@ -5,8 +5,16 @@
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
 
-/** Loads the app and waits for the mocked workspace tree to appear. */
+/**
+ * Loads the app and waits for the mocked workspace tree to appear.
+ *
+ * The app runs as on macOS (`?platform=mac`) unless `query` names another
+ * platform, whatever machine runs the test. So app shortcuts are pressed as
+ * `Meta+…`, never `ControlOrMeta+…`, which follows the test machine. Editor
+ * keys CodeMirror handles itself (select all, find) still follow the machine.
+ */
 export async function openApp(page: Page, query = ""): Promise<void> {
+  if (!/[?&]platform=/.test(query)) query = `${query ? `${query}&` : "?"}platform=mac`;
   await page.goto(`/${query}`);
   await expect(treeItem(page, "api")).toBeVisible();
 }
@@ -96,6 +104,10 @@ export interface MockState {
   settingsServed: boolean;
   /** The window title the app last set (null before it sets one). */
   title: string | null;
+  /** How many times the app asked the window to close (Close Window), each one a close request it answers itself. */
+  windowCloseRequests: number;
+  /** Whether the window has closed: a close request the app let through. */
+  windowClosed: boolean;
 }
 
 /** One value of the mock's test-facing state, read from the page. */

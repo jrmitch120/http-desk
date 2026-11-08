@@ -1,0 +1,71 @@
+// The one place that knows which OS the app runs on, and what that means for
+// shortcuts. Pure and synchronous: the OS comes from the page, before any IPC.
+
+export type OS = "mac" | "windows" | "linux";
+
+const OSES: readonly OS[] = ["mac", "windows", "linux"];
+
+/** The OS a webview's `navigator.platform` names ("MacIntel", "Win32", "Linux x86_64"). */
+export function detectOS(navigatorPlatform: string): OS {
+  if (/Mac|iPhone|iPad/.test(navigatorPlatform)) return "mac";
+  if (/Win/.test(navigatorPlatform)) return "windows";
+  return "linux";
+}
+
+let forced: OS | null = null;
+
+/** The OS the app runs on. */
+export function currentOS(): OS {
+  return forced ?? detectOS(globalThis.navigator?.platform ?? "");
+}
+
+/**
+ * Makes the app behave as if it ran on `os`. For the dev mock's `?platform=`
+ * only (src/dev/mock.ts), which runs before the app mounts. Anything that
+ * isn't an OS goes back to the detected one.
+ */
+export function forceOS(os: string | null): void {
+  forced = OSES.find((o) => o === os) ?? null;
+}
+
+/**
+ * A keyboard shortcut. `mod` is the platform's primary modifier: ⌘ on macOS,
+ * Ctrl elsewhere. `key` is a `KeyboardEvent.key` value: a letter ("s"), a
+ * named key ("Enter", "F4") or a character (",").
+ */
+export interface Shortcut {
+  key: string;
+  mod?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+}
+
+const MAC_KEYS: Record<string, string> = { Enter: "↩" };
+
+/** How a shortcut reads on `os`: "⇧⌘S" on macOS, "Ctrl+Shift+S" elsewhere. */
+export function formatShortcut(s: Shortcut, os: OS = currentOS()): string {
+  const key = keyLabel(s.key, os);
+  if (os === "mac") return (s.alt ? "⌥" : "") + (s.shift ? "⇧" : "") + (s.mod ? "⌘" : "") + key;
+  return [s.mod && "Ctrl", s.alt && "Alt", s.shift && "Shift", key].filter(Boolean).join("+");
+}
+
+/** The parts of a `KeyboardEvent` a shortcut is matched against. */
+export type KeyPress = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
+/**
+ * Whether `e` is shortcut `s` on `os`. Mod is ⌘ on macOS and Ctrl elsewhere,
+ * and the other one must not be held; Alt and Shift must match exactly.
+ */
+export function matchesShortcut(e: KeyPress, s: Shortcut, os: OS = currentOS()): boolean {
+  const [mod, other] = os === "mac" ? [e.metaKey, e.ctrlKey] : [e.ctrlKey, e.metaKey];
+  if (other || mod !== !!s.mod || e.altKey !== !!s.alt || e.shiftKey !== !!s.shift) return false;
+  if (e.key.toLowerCase() === s.key.toLowerCase()) return true;
+  // ⌥ turns a letter into another character or a dead key on macOS (⌥E is
+  // the acute accent), so there the physical key counts.
+  return os === "mac" && !!s.alt && /^[a-z]$/i.test(s.key) && e.code === `Key${s.key.toUpperCase()}`;
+}
+
+function keyLabel(key: string, os: OS): string {
+  if (os === "mac" && MAC_KEYS[key]) return MAC_KEYS[key];
+  return key.length === 1 ? key.toUpperCase() : key;
+}

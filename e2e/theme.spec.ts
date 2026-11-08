@@ -100,7 +100,7 @@ test("the theme button shows the theme in effect, and marks System as automatic"
 test("Settings' Theme switch has System and applies at once", async ({ page }) => {
   await openApp(page, "?theme=dark");
   await page.emulateMedia({ colorScheme: "light" });
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   const theme = dialog(page, "Settings").getByRole("radiogroup", { name: "Theme" });
   await expect(theme.getByRole("radio")).toHaveText(["System", "Light", "Dark"]);
 
@@ -126,6 +126,6 @@ test("with System chosen, the OS appearance flips the theme without a reload", a
 test("a fixed theme ignores the OS appearance", async ({ page }) => {
   await openApp(page, "?theme=dark");
   await page.emulateMedia({ colorScheme: "light" });
-  await page.keyboard.press("ControlOrMeta+Comma"); // a round trip, so a late change would have landed
+  await page.keyboard.press("Meta+Comma"); // a round trip, so a late change would have landed
   await expect(applied(page)).toHaveAttribute("data-theme", "dark");
 });

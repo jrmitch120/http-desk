@@ -7,7 +7,7 @@ import { bodyEditor, openApp, openRequest } from "./helpers";
 async function openFindInResponse(page: Page): Promise<void> {
   await openApp(page, "?response=bigint");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".body .cm-content")).toContainText('"price": 10.50,');
   await page.getByRole("button", { name: "Search" }).click();
 }

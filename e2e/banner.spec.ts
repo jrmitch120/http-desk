@@ -14,7 +14,7 @@ function tone(banner: Locator): Promise<{ color: string; background: string }> {
 
 test("a warning banner in Settings is exposed as a status", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   await page.locator(".setting", { hasText: "Verify server certificates" }).getByRole("switch").click();
 
   await expect(page.getByRole("status").filter({ hasText: "Certificate verification is off" })).toBeVisible();
@@ -23,7 +23,7 @@ test("a warning banner in Settings is exposed as a status", async ({ page }) => 
 test("an error banner in the response viewer is exposed as an alert", async ({ page }) => {
   await openApp(page, "?sendError=refused");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const alert = page.getByRole("alert").filter({ hasText: "Connection refused" });
   await expect(alert).toBeVisible();
@@ -56,11 +56,11 @@ test("warning banners look the same in the request editor, the Environments edit
   await page.keyboard.type("### Heading");
   const body = await tone(status("starts with ###"));
 
-  await page.keyboard.press("ControlOrMeta+E");
+  await page.keyboard.press("Meta+E");
   const envs = await tone(status(/http-client\.private\.env\.json is not ignored by git/));
   await page.keyboard.press("Escape");
 
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   await page.locator(".setting", { hasText: "Verify server certificates" }).getByRole("switch").click();
   const settings = await tone(status("Certificate verification is off"));
 

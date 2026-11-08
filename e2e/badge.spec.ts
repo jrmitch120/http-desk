@@ -17,7 +17,7 @@ test("status, method and OFF pills share one badge shape", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.getByRole("switch", { name: "Enabled" }).click();
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   const off = await shape(page.locator(".subtab", { hasText: "Params" }).getByText("OFF", { exact: true }));
   const method = await shape(treeItem(page, "List pets").getByText("GET", { exact: true }));
