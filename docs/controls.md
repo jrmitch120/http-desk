@@ -504,7 +504,7 @@ request/response split.
 
 ### Modal and Dialog
 
-`Modal.svelte` is the window for Settings, Environments and OpenAPI import: props
+`Modal.svelte` is the window for Settings, Environments, OpenAPI import and About: props
 `title` (also its accessible name), `onclose`, `width?`, `height?`, `children`,
 `footer?`. Escape closes it (unless a field inside it took the key, e.g. to close its
 `{{` list), Tab stays inside it, and focus returns to where it was.

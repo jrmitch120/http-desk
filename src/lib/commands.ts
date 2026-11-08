@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
 import { updates } from "./updates.svelte";
+import { DOCUMENTATION_URL, openLink, RELEASE_NOTES_URL, reportIssue } from "./about";
 import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
@@ -42,7 +43,11 @@ export type CommandId =
   | "cut"
   | "copy"
   | "paste"
-  | "select-all";
+  | "select-all"
+  | "about"
+  | "documentation"
+  | "release-notes"
+  | "report-issue";
 
 export interface Command {
   id: CommandId;
@@ -241,6 +246,10 @@ const COMMANDS: Command[] = [
   editCommand("copy", "Copy"),
   editCommand("paste", "Paste"),
   editCommand("select-all", "Select All"),
+  { id: "about", label: "About HttpDesk", enabled: always, run: () => (app.modal = "about") },
+  { id: "documentation", label: "Documentation", enabled: always, run: () => void openLink(DOCUMENTATION_URL) },
+  { id: "release-notes", label: "Release Notes", enabled: always, run: () => void openLink(RELEASE_NOTES_URL) },
+  { id: "report-issue", label: "Report an Issue", enabled: always, run: () => void reportIssue() },
 ];
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));

@@ -13,9 +13,9 @@ async function editUrl(page: Page) {
 }
 
 test.describe("the menu the page sends", () => {
-  test("on macOS: the app menu, File, Edit, View, Request and Window, with key equivalents", async ({ page }) => {
+  test("on macOS: the app menu, File, Edit, View, Request, Window and Help, with key equivalents", async ({ page }) => {
     await openApp(page);
-    await expect.poll(() => menuBar(page)).toEqual(["HttpDesk", "File", "Edit", "View", "Request", "Window"]);
+    await expect.poll(() => menuBar(page)).toEqual(["HttpDesk", "File", "Edit", "View", "Request", "Window", "Help"]);
     expect(await menuItem(page, "save")).toMatchObject({ label: "Save", accelerator: "Cmd+S" });
   });
 

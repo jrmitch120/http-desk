@@ -27,24 +27,25 @@ function entries(items: MenuEntry[]): MenuEntry[] {
 }
 
 describe("the menu layout", () => {
-  it("on macOS is the app menu, File, Edit, View, Request and Window", () => {
+  it("on macOS is the app menu, File, Edit, View, Request, Window and Help", () => {
     expect(outline(menuLayout("mac"))).toEqual([
-      "HttpDesk: settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
+      "HttpDesk: about, -, settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
       "Window: (minimize), (zoom), -, (bringAllToFront)",
+      "Help: documentation, release-notes, -, report-issue",
     ]);
   });
 
-  it("on Windows puts Settings, Close Window and Exit under File and Check for Updates under Help", () => {
+  it("on Windows puts Settings, Close Window and Exit under File, and Check for Updates and About under Help", () => {
     expect(outline(menuLayout("windows"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
-      "Help: check-updates",
+      "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });
 
@@ -54,7 +55,7 @@ describe("the menu layout", () => {
       "Edit: undo, redo, -, cut, copy, paste, select-all",
       "View: Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
-      "Help: check-updates",
+      "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });
 
@@ -63,6 +64,15 @@ describe("the menu layout", () => {
     const ids = entries(menuLayout(os).flatMap((m) => m.items)).flatMap((e) => (e.kind === "command" ? [e.id] : []));
     expect(ids.length).toBeGreaterThan(20);
     for (const id of ids) expect(registered, id).toContain(id);
+  });
+
+  it("names About after the app on every OS", () => {
+    for (const os of ["mac", "windows", "linux"] as OS[]) {
+      const about = nativeMenu(menuLayout(os), { os, recents: [], state: () => ({ enabled: true, checked: null }) })
+        .flatMap((m) => m.items)
+        .find((e) => e.kind === "item" && e.id === "about");
+      expect(about, os).toMatchObject({ label: "About HttpDesk" });
+    }
   });
 
   it("names the last File item Exit on Windows and Quit on Linux", () => {
@@ -149,7 +159,7 @@ describe("the menu the shell builds", () => {
   });
 
   it("marks the Window and Help menus, so macOS lists windows and adds Help search", () => {
-    expect(render("mac").map((m) => m.role ?? null)).toEqual([null, null, null, null, null, "window"]);
+    expect(render("mac").map((m) => m.role ?? null)).toEqual([null, null, null, null, null, "window", "help"]);
     expect(render("windows").map((m) => m.role ?? null)).toEqual([null, null, null, null, "help"]);
   });
 

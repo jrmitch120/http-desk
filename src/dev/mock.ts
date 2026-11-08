@@ -7,7 +7,8 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
-import { forceOS } from "../lib/platform";
+import { currentOS, forceOS } from "../lib/platform";
+import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
 import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
@@ -317,6 +318,15 @@ let windowCloseRequests = 0;
 let windowClosed = false;
 /** The `.http` files `save_http_file` wrote, in order. */
 const savedPaths: string[] = [];
+/** The URLs the opener opened, in order. */
+const openedUrls: string[] = [];
+/**
+ * Like the shell's opener: only URLs its capability's scope allows (globs, `*`
+ * matching anything), so a link the capability doesn't cover fails here too.
+ */
+const openableUrls = capabilities.permissions
+  .flatMap((p) => (typeof p === "object" && p.identifier === "opener:allow-open-url" ? p.allow : []))
+  .map(({ url }) => new RegExp(`^${url.split("*").map((s) => s.replace(/[.?+^$()[\]{}|\\]/g, "\\$&")).join(".*")}$`));
 /** Runs `cancel_request` was called for that are still sending. */
 const cancelledRuns = new Set<string>();
 
@@ -373,6 +383,10 @@ window.addEventListener(
   },
   /** A click on the native menu item `id`: sends the `menu` event the shell would. */
   menuClick,
+  /** The URLs the opener opened in the browser, in order. */
+  get openedUrls() {
+    return [...openedUrls];
+  },
   /** The window title the app last set. */
   get title() {
     return windowTitle;
@@ -760,6 +774,14 @@ mockIPC(
       case "plugin:clipboard-manager|read_text":
         // The browser's clipboard (tests replace navigator.clipboard to control it).
         return navigator.clipboard.readText().catch(() => "");
+      case "plugin:opener|open_url":
+        if (!openableUrls.some((re) => re.test(args.url))) throw `Not allowed to open url ${args.url}`;
+        openedUrls.push(args.url);
+        return null;
+      case "app_info": {
+        const os = currentOS();
+        return { version: "0.9.8", os: os === "mac" ? "macos" : os, arch: os === "mac" ? "aarch64" : "x86_64" };
+      }
       case "plugin:window|set_title":
         windowTitle = args.value;
         return null;

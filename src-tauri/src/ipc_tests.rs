@@ -2,6 +2,7 @@
 //! payloads the frontend sends (camelCase args, frontend-only `_key` fields),
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
+mod app_info;
 mod confinement;
 mod deleting;
 mod folder_envs;
@@ -23,7 +24,7 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 
 use serde_json::{json, Value};
-use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
 use tauri::Manager;
 
@@ -38,9 +39,14 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with(mock_builder(), mock_context(noop_assets()))
+    }
+
+    /// The app built from `builder` (extra plugins) and `context` (its config and capabilities).
+    fn with(builder: tauri::Builder<MockRuntime>, context: tauri::Context<MockRuntime>) -> Self {
         let cfg = tempfile::tempdir().unwrap();
-        let builder = mock_builder().manage(super::ConfigDir(cfg.path().to_path_buf()));
-        let app = super::with_commands(builder, |_| Ok(())).build(mock_context(noop_assets())).unwrap();
+        let builder = builder.manage(super::ConfigDir(cfg.path().to_path_buf()));
+        let app = super::with_commands(builder, |_| Ok(())).build(context).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let trash_bin = tempfile::tempdir().unwrap();
         let bin = trash_bin.path().to_path_buf();

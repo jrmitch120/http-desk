@@ -725,6 +725,23 @@ fn set_unsaved(state: State<'_, AppState>, unsaved: bool) {
     state.unsaved.store(unsaved, Ordering::Relaxed);
 }
 
+// ------------------------------------------------------------------ about
+
+/// Which HttpDesk this is, for About HttpDesk and Report an Issue.
+#[derive(Serialize)]
+struct AppInfo {
+    version: String,
+    /// Rust's name for the OS: "macos", "windows", "linux".
+    os: &'static str,
+    /// Rust's name for the CPU architecture: "aarch64", "x86_64".
+    arch: &'static str,
+}
+
+#[tauri::command]
+fn app_info<R: tauri::Runtime>(app: AppHandle<R>) -> AppInfo {
+    AppInfo { version: app.package_info().version.to_string(), os: std::env::consts::OS, arch: std::env::consts::ARCH }
+}
+
 // ------------------------------------------------------------------ OpenAPI
 
 fn is_url(s: &str) -> bool {
@@ -893,6 +910,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             get_settings,
             save_settings,
             set_unsaved,
+            app_info,
             openapi_load,
             openapi_generate,
             menu::set_menu,
