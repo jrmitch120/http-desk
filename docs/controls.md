@@ -110,7 +110,8 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   `app.chooseEnvironment()`.
 - Keyboard: Enter, Space or the arrows open it; typing filters (case-insensitive, anywhere
   in the label); arrows, Home/End and PageUp/PageDown move; Enter picks; Escape and Tab
-  close without a change. Focus stays on the trigger throughout.
+  close without a change. Focus stays on the trigger throughout. ⌘/Ctrl+Enter reaches
+  the app's Send shortcut.
 - A value that matches no option still shows (as its raw text), so a stale or custom
   value is visible.
 
@@ -197,7 +198,8 @@ the app's Menu instead:
 - Variants: a bare box with `label` (grid rows: `Enable <name>`, `Enable all`); a labelled
   row with children (OpenAPI operations, "Substitute {{variables}} inside the file"); a
   mixed "all" box with `indeterminate`. Clicking a mixed box checks it.
-- Keyboard: Space toggles; Enter does nothing, as natively.
+- Keyboard: Space toggles; Enter does nothing, as natively. ⌘/Ctrl+Enter reaches the
+  app's Send shortcut.
 - Use for membership in a set. For a setting that applies at once, use a Toggle.
 
 ## Text and numbers

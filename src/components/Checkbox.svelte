@@ -35,7 +35,9 @@
   use:tooltip={tooltipText ?? null}
   onclick={() => onchange(indeterminate ? true : !checked)}
   onkeydown={(e) => {
-    if (e.key === "Enter") e.preventDefault();
+    // Shortcuts (⌘/Ctrl Enter sends) pass through: a modified Enter doesn't
+    // activate a button, so only a plain Enter needs stopping.
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) e.preventDefault();
   }}
 >
   <span class="box">

@@ -87,9 +87,10 @@ test("the filter survives switching tabs and is re-applied to the next response"
   await expect(filterBox(page)).toHaveValue(SOLD_IDS);
   await expect(bodyLines(page)).toHaveText(["[", "  1234567890123456789,", "  9007199254740993", "]"]);
 
-  // The mock marks item 2 as sold from the second send on. (The focused tab
-  // in the tab strip takes Enter, so click Send rather than ⌘/Ctrl Enter.)
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  // The mock marks item 2 as sold from the second send on. ⌘/Ctrl Enter sends
+  // even with the tab strip focused (#74).
+  await expect(tab(page, "List pets")).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect.poll(async () => (await sentRequests(page)).length).toBe(2);
   await expect(page.locator(".filter-bar")).toContainText("3 matches");
   await expect(bodyLines(page)).toHaveText(["[", "  1234567890123456789,", "  2,", "  9007199254740993", "]"]);
