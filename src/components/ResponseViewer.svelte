@@ -27,6 +27,7 @@
   import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
 
   let { tab }: { tab: Tab } = $props();
@@ -73,8 +74,8 @@
     if (bytes > BASE64_COPY_CONFIRM_BYTES) {
       const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
       const r = await app.choose("Copy as base64?", message, [
-        { label: "Cancel", value: "cancel" },
-        { label: "Copy", value: "copy", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Copy", value: "copy", role: "primary" },
       ]);
       if (r.button !== "copy") return;
     }
@@ -127,7 +128,7 @@
         <path d="M22 36l6 5-6 5M34 46h14" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <div>Click <strong>Send</strong> to get a response</div>
-      <div class="muted small"><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd></div>
+      <div class="muted small"><kbd>{shortcutHint("send")}</kbd></div>
     </div>
   {:else}
     <div class="statusbar">

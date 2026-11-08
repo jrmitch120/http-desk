@@ -473,9 +473,9 @@ The output is ordinary `.http` text produced by the same serializer the editor u
   not save settings: …" toast).
 * Deletion moves items to the OS trash (`trash` crate) rather than unlinking them. If
   the trash is unavailable, `delete_path` reports that and leaves the item in place. The
-  UI then asks *"Couldn't move to trash"* (*Delete "name" permanently?*), and only a
-  confirmed *Delete permanently* calls `delete_permanently`, the one command that
-  unlinks. That dialog, like OpenAPI's *Overwrite existing files?*, opens with Cancel
+  UI then asks *"Couldn't Move to the Trash"* (*"…the Recycle Bin"* on Windows; *Delete
+  "name" permanently?*), and only a confirmed *Delete permanently* calls
+  `delete_permanently`, the one command that unlinks. That dialog, like OpenAPI's *Overwrite existing files?*, opens with Cancel
   focused, so a stray Enter destroys nothing. A delete from the explorer closes the tabs
   of the deleted files.
 

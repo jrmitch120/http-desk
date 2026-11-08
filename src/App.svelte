@@ -19,7 +19,7 @@
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
-  import { handleCommandKey } from "./lib/commands";
+  import { handleCommandKey, shortcutHint } from "./lib/commands";
   import { startNativeMenu } from "./lib/nativeMenu.svelte";
   import { SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
@@ -85,10 +85,10 @@
                   <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
                 </div>
                 <div class="hints muted">
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd> send</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>S</kbd> save</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>P</kbd> search</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>E</kbd> environments</span>
+                  <span><kbd>{shortcutHint("send")}</kbd> send</span>
+                  <span><kbd>{shortcutHint("save")}</kbd> save</span>
+                  <span><kbd>{shortcutHint("search")}</kbd> search</span>
+                  <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
                 </div>
               </div>
             {/if}

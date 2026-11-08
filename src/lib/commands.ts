@@ -7,7 +7,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
 import { updates } from "./updates.svelte";
 import { modalOpen } from "./modal.svelte";
-import { currentOS, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
+import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
 
 export type CommandId =
@@ -244,6 +244,16 @@ export function runCommand(id: CommandId): boolean {
   if (!canRun(id)) return false;
   command(id).run();
   return true;
+}
+
+/**
+ * How a command's shortcut reads on the current OS ("⌘S", "Ctrl+S"), for
+ * hints. Taken from the registry, so a hint can't disagree with the key that
+ * runs the command.
+ */
+export function shortcutHint(id: CommandId): string {
+  const s = command(id).shortcut;
+  return s ? formatShortcut(s) : "";
 }
 
 /** The command a key press is the shortcut of, on the current OS. */

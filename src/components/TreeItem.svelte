@@ -8,6 +8,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { wording } from "../lib/platform";
 
   let { node, depth }: { node: TreeNode; depth: number } = $props();
 
@@ -35,9 +36,9 @@
         { label: "New folder", icon: "folder", action: () => app.createFolder(node.path) },
         { separator: true },
         { label: "Rename…", icon: "edit", action: () => app.renamePath(node.path) },
-        { label: "Reveal in file manager", icon: "reveal", action: reveal },
+        { label: wording().reveal, icon: "reveal", action: reveal },
         { separator: true },
-        { label: "Move to trash", icon: "trash", danger: true, action: () => app.deletePath(node.path) },
+        { label: wording().moveToTrash, icon: "trash", danger: true, action: () => app.deletePath(node.path) },
       ]);
     } else {
       menu.show(e, [
@@ -45,9 +46,9 @@
         { label: "Save", icon: "save", disabled: !dirty, action: () => app.save(node.path) },
         { separator: true },
         { label: "Rename…", icon: "edit", action: () => app.renamePath(node.path) },
-        { label: "Reveal in file manager", icon: "reveal", action: reveal },
+        { label: wording().reveal, icon: "reveal", action: reveal },
         { separator: true },
-        { label: "Move to trash", icon: "trash", danger: true, action: () => app.deletePath(node.path) },
+        { label: wording().moveToTrash, icon: "trash", danger: true, action: () => app.deletePath(node.path) },
       ]);
     }
   }

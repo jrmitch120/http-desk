@@ -9,6 +9,7 @@
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
   import { updates } from "../lib/updates.svelte";
 
   async function openFolder() {
@@ -89,9 +90,9 @@
       value={app.envName ?? ""}
       onchange={(v) => app.selectEnvironment(v || null)}
       label="Active environment"
-      tooltip="Active environment (⌘⌥E / Ctrl Alt E)"
+      tooltip={`Active environment (${shortcutHint("choose-environment")})`}
     />
-    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
+    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={`Manage environments (${shortcutHint("manage-environments")})`}><Icon name="layers" size={14} /></button>
   </div>
 
   {#if updates.progress !== null}
@@ -119,7 +120,7 @@
     <Icon name={app.effectiveTheme === "dark" ? "moon" : "sun"} />
     {#if app.themeChoice === "system"}<span class="auto" aria-hidden="true">A</span>{/if}
   </button>
-  <button class="icon-btn" aria-label="Settings" use:tooltip={"Settings (⌘/Ctrl ,)"} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
 </header>
 
 <style>
