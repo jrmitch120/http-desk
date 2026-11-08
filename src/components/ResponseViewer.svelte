@@ -74,8 +74,8 @@
     if (bytes > BASE64_COPY_CONFIRM_BYTES) {
       const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
       const r = await app.choose("Copy as base64?", message, [
-        { label: "Cancel", value: "cancel" },
-        { label: "Copy", value: "copy", primary: true },
+        { label: "Cancel", value: "cancel", role: "cancel" },
+        { label: "Copy", value: "copy", role: "primary" },
       ]);
       if (r.button !== "copy") return;
     }

@@ -514,6 +514,13 @@ Popups opened inside a modal close first on Escape.
 
 For a question or a confirmation, don't build a modal: call `app.choose(title, message,
 buttons)` or `app.prompt(title, value, placeholder?)`, which render `Dialog.svelte`.
+Give each button a `role`: `primary` (the default answer, Enter; a destructive
+confirmation's action too, with `danger`), `destructive` (an alternative that throws work
+away, "Don't save") or `cancel` (what Escape answers). The dialog shows them in the OS's
+order, not the order they're listed in (`arrangeDialogButtons` in `src/lib/platform.ts`):
+`[Don't save] … [Cancel] [Save all]` on macOS and Linux, `[Save all] [Don't save]
+[Cancel]` on Windows. Focus goes to the primary, or to the button marked `focus` (Cancel
+on irreversible confirmations), wherever it sits.
 A dialog can also hold a short form (`DialogState.fields`: label, help text, masked):
 each field has a reveal button, Enter in any field picks the primary button, and the
 values come back in order as `values`. The Prompt variables form uses it.

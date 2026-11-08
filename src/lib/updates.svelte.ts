@@ -40,8 +40,8 @@ class Updates {
       `HttpDesk ${update.version} is available`,
       `You have version ${update.currentVersion}. HttpDesk will restart to finish the update.${saveNote}${notes}`,
       [
-        { label: "Later", value: "later" },
-        { label: dirty ? "Save, install and restart" : "Install and restart", value: "install", primary: true },
+        { label: "Later", value: "later", role: "cancel" },
+        { label: dirty ? "Save, install and restart" : "Install and restart", value: "install", role: "primary" },
       ],
     );
     if (r.button !== "install") return;
