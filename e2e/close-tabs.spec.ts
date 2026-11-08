@@ -21,3 +21,12 @@ test("Close all asks about each unsaved tab in turn, and Cancel keeps the rest o
   await expect(tab(page, "Create pet")).toBeVisible();
   await expect(tab(page, "Get pet image")).toBeVisible();
 });
+
+test("every item in a tab's menu has an icon", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await tab(page, "List pets").click({ button: "right" });
+  const items = page.getByRole("menu").getByRole("menuitem");
+  await expect(items).toHaveText(["Close", "Close others", "Close all", "Duplicate request"]);
+  await expect(items.filter({ has: page.locator(".ico svg path:not([d=''])") })).toHaveCount(4);
+});
