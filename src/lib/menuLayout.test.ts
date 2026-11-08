@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import shell from "../../src-tauri/src/menu.rs?raw";
 import { allCommands } from "./commands";
-import { menuLayout, nativeMenu, type MenuEntry, type NativeEntry, type NativeMenu, type TopMenu } from "./menuLayout";
+import { menuAction, menuLayout, nativeMenu, PREDEFINED, type MenuEntry, type NativeEntry, type NativeMenu, type TopMenu } from "./menuLayout";
 import type { OS } from "./platform";
 
 /** One line per menu: "File: open-folder, Open Recent ▸ [recent], -, …". Commands by id, predefined items as "(item)". */
@@ -171,5 +172,45 @@ describe("the menu the shell builds", () => {
       { kind: "separator" },
       { kind: "predefined", item: "quit", label: "Quit HttpDesk" },
     ]);
+  });
+});
+
+describe("an item id the shell sends back", () => {
+  it("names a registered command, or the recent workspace to open", () => {
+    expect(menuAction("save")).toEqual({ kind: "command", id: "save" });
+    expect(menuAction("open-recent:/work/api")).toEqual({ kind: "recent", path: "/work/api" });
+    expect(menuAction("open-recent:C:\\Users\\me\\shop")).toEqual({ kind: "recent", path: "C:\\Users\\me\\shop" });
+  });
+
+  it("names nothing when the app never gives an item that id", () => {
+    expect(menuAction("no-such-command")).toBeNull();
+    expect(menuAction("")).toBeNull();
+  });
+
+  it("opens the workspace its Open Recent item was rendered for", () => {
+    const recents = ["/work/api", "/work/open-recent:odd"];
+    const menus = nativeMenu(menuLayout("linux"), { os: "linux", recents, state: () => ({ enabled: true, checked: null }) });
+    const openRecent = menus[0].items.find((e) => e.kind === "submenu" && e.label === "Open Recent");
+    const ids = openRecent?.kind === "submenu" ? openRecent.items.flatMap((e) => (e.kind === "item" ? [e.id] : [])) : [];
+    expect(ids.map(menuAction)).toEqual([
+      { kind: "recent", path: "/work/api" },
+      { kind: "recent", path: "/work/open-recent:odd" },
+    ]);
+  });
+});
+
+// The predefined items live twice: PREDEFINED here, and the Predefined enum the
+// shell deserializes them into (camelCase) in src-tauri/src/menu.rs.
+describe("the predefined items", () => {
+  it("are the ones the shell's Predefined enum knows", () => {
+    const body = shell.match(/enum Predefined\s*\{([^}]*)\}/)?.[1];
+    if (!body) throw new Error("src-tauri/src/menu.rs no longer has `enum Predefined { … }`; update this test");
+    const variants = body
+      .replace(/\/\/.*$/gm, "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((v) => v[0].toLowerCase() + v.slice(1));
+    expect(variants).toEqual([...PREDEFINED]);
   });
 });

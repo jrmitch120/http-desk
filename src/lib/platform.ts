@@ -47,7 +47,17 @@ const MAC_KEYS: Record<string, string> = { Enter: "↩" };
 export function formatShortcut(s: Shortcut, os: OS = currentOS()): string {
   const key = keyLabel(s.key, os);
   if (os === "mac") return (s.alt ? "⌥" : "") + (s.shift ? "⇧" : "") + (s.mod ? "⌘" : "") + key;
-  return [s.mod && "Ctrl", s.alt && "Alt", s.shift && "Shift", key].filter(Boolean).join("+");
+  return joinShortcut(s, "Ctrl");
+}
+
+/**
+ * A shortcut as words joined with "+", the primary modifier named `mod`:
+ * "Ctrl+Shift+S" for hints off macOS, "Cmd+Shift+S" for the shell's macOS key
+ * equivalents (src/lib/menuLayout.ts).
+ */
+export function joinShortcut(s: Shortcut, mod: string): string {
+  const key = s.key.length === 1 ? s.key.toUpperCase() : s.key;
+  return [s.mod && mod, s.alt && "Alt", s.shift && "Shift", key].filter(Boolean).join("+");
 }
 
 /** The parts of a `KeyboardEvent` a shortcut is matched against. */
@@ -89,8 +99,8 @@ export type ButtonRole = "primary" | "destructive" | "cancel";
  * between the alternatives and Cancel.
  */
 export function arrangeDialogButtons<B extends { role?: ButtonRole }>(buttons: B[], os: OS = currentOS()): { start: B[]; end: B[] } {
-  const by = (role?: ButtonRole) => buttons.filter((b) => b.role === role);
-  const [primary, destructive, cancel, other] = [by("primary"), by("destructive"), by("cancel"), by(undefined)];
+  const withRole = (role?: ButtonRole) => buttons.filter((b) => b.role === role);
+  const [primary, destructive, cancel, other] = [withRole("primary"), withRole("destructive"), withRole("cancel"), withRole(undefined)];
   if (os === "windows") return { start: [], end: [...primary, ...destructive, ...other, ...cancel] };
   return { start: destructive, end: [...other, ...cancel, ...primary] };
 }
