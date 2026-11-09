@@ -117,6 +117,10 @@ export interface MockState {
   menuStateChanges: MenuStateChange[][];
   /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
   openedUrls: string[];
+  /** The OS clipboard the clipboard plugin reads and writes. */
+  clipboard: string;
+  /** The texts the clipboard plugin wrote, in order. */
+  clipboardWrites: string[];
 }
 
 /** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */
@@ -160,6 +164,25 @@ export function mockState<K extends keyof MockState>(page: Page, key: K): Promis
   return page.evaluate((k) => (window as unknown as { __mock: MockState }).__mock[k], key) as Promise<MockState[K]>;
 }
 
+/** The OS clipboard's text, as the clipboard plugin (src/lib/clipboard.ts) reads and writes it. */
+export function clipboard(page: Page): Promise<string> {
+  return mockState(page, "clipboard");
+}
+
+/** Puts `text` on the OS clipboard, for the clipboard plugin to read. */
+export function setClipboard(page: Page, text: string): Promise<void> {
+  return page.evaluate((t) => {
+    (window as unknown as { __mock: { clipboard: string } }).__mock.clipboard = t;
+  }, text);
+}
+
+/** Makes the clipboard plugin's writes fail (or succeed again), as when the OS clipboard is unavailable. */
+export function setClipboardFails(page: Page, fails: boolean): Promise<void> {
+  return page.evaluate((f) => {
+    (window as unknown as { __mock: { clipboardFails: boolean } }).__mock.clipboardFails = f;
+  }, fails);
+}
+
 /** Starts the mock's `pretty_response` count from zero. */
 export function resetPrettyRequests(page: Page): Promise<void> {
   return page.evaluate(() => {
@@ -177,6 +200,11 @@ export function setMockResponse(page: Page, kind: string | null): Promise<void> 
 /** Lets settings held by `?settingsDelay=hold` through. */
 export function releaseSettings(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());
+}
+
+/** Lets formatting held by `?pretty=hold` through. */
+export function releasePretty(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { releasePretty: () => void } }).__mock.releasePretty());
 }
 
 /** An open request tab in the tab bar, by request name. */

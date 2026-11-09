@@ -4,22 +4,20 @@
 // same greyed-out rules, and Undo and Redo act on the field's history. They act
 // on the field that had focus when the menu opened. Menu clicks are the mock's
 // `menu` event (`menuClick`), as the shell sends it.
+//
+// A menu click reaches the page as an IPC event, not an in-page click, and
+// WebKitGTK may refuse `navigator.clipboard` then. So here the page's own
+// clipboard refuses everything: Cut and Copy must write through the clipboard
+// plugin (the mock's `clipboard`).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { bodyEditor, menuClick, menuItem, openApp, openRequest, searchBox, urlBar } from "./helpers";
+import { bodyEditor, clipboard, menuClick, menuItem, openApp, openRequest, searchBox, setClipboard, setClipboardFails, urlBar } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
-  // A clipboard the test controls. The mock's clipboard plugin reads it through navigator.clipboard.
   await page.addInitScript(() => {
-    const w = window as unknown as { __clipboard: string };
-    w.__clipboard = "";
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: async (text: string) => void (w.__clipboard = text), readText: async () => w.__clipboard },
-    });
+    const refuse = () => Promise.reject(new DOMException("Not allowed outside a user gesture", "NotAllowedError"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: refuse, readText: refuse } });
   });
 });
-
-const clipboard = (page: Page) => page.evaluate(() => (window as unknown as { __clipboard: string }).__clipboard);
-const setClipboard = (page: Page, text: string) => page.evaluate((t) => ((window as unknown as { __clipboard: string }).__clipboard = t), text);
 
 const EDIT_IDS = ["undo", "redo", "cut", "copy", "paste", "select-all"] as const;
 
@@ -50,6 +48,7 @@ async function cutCopyPasteSelectAll(page: Page, field: Locator, text: () => Pro
   await menuClick(page, "copy");
   await expect.poll(() => clipboard(page)).toBe(original);
 
+  await setClipboard(page, "");
   await menuClick(page, "cut");
   await expect.poll(text).toBe("");
   expect(await clipboard(page)).toBe(original);
@@ -88,6 +87,24 @@ test("the Edit menu's Cut, Copy, Paste and Select All work in a plain input", as
   const box = searchBox(page);
   await box.fill("pets");
   await cutCopyPasteSelectAll(page, box, () => box.inputValue());
+});
+
+test("a Cut whose copy fails leaves the text where it was", async ({ page }) => {
+  await openApp(page, "?platform=linux");
+  const box = searchBox(page);
+  await box.fill("pets");
+  await menuClick(page, "select-all");
+  await setClipboard(page, "before");
+  await setClipboardFails(page, true);
+  await menuClick(page, "cut");
+  await page.waitForTimeout(200);
+  await expect(box).toHaveValue("pets");
+  expect(await clipboard(page)).toBe("before");
+
+  await setClipboardFails(page, false);
+  await menuClick(page, "cut");
+  await expect(box).toHaveValue("");
+  expect(await clipboard(page)).toBe("pets");
 });
 
 test("Undo and Redo undo and redo typing in the body editor and in a plain input", async ({ page }) => {

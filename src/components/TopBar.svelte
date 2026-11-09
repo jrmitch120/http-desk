@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { open } from "@tauri-apps/plugin-dialog";
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
@@ -9,18 +8,13 @@
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { shortcutHint } from "../lib/commands";
+  import { runCommand, shortcutHint } from "../lib/commands";
   import { updates } from "../lib/updates.svelte";
 
-  async function openFolder() {
-    const dir = await open({ directory: true, title: "Open workspace folder" });
-    if (typeof dir === "string") await app.openWorkspace(dir);
-  }
-
   function workspaceMenu(e: MouseEvent) {
-    const recent = (app.settings?.recentWorkspaces ?? []).filter((w) => w !== app.root).slice(0, 8);
+    const recent = app.otherRecentWorkspaces;
     menu.show(e, [
-      { label: "Open folder…", icon: "folder-open", action: openFolder },
+      { label: "Open folder…", icon: "folder-open", action: () => runCommand("open-folder") },
       ...(recent.length ? [{ separator: true }, ...recent.map((w) => ({ label: basename(w), icon: "folder", action: () => app.openWorkspace(w) }))] : []),
     ]);
   }

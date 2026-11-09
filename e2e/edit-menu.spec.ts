@@ -4,27 +4,20 @@
 // field's own items (Extract to variable…, Unset in …). Read-only text gets
 // Copy and Select all. Anything else shows no menu at all.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { bodyEditor, dialog, openApp, openRequest, searchBox, showEnvironmentMatrix, urlBar } from "./helpers";
+import { bodyEditor, clipboard, dialog, openApp, openRequest, searchBox, setClipboard, showEnvironmentMatrix, urlBar } from "./helpers";
 
 const EDIT = ["Cut", "Copy", "Paste", "Select all"];
 const READ_ONLY = ["Copy", "Select all"];
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    const w = window as unknown as { __lastContextMenu: MouseEvent | null; __clipboard: string };
+    const w = window as unknown as { __lastContextMenu: MouseEvent | null };
     // The last contextmenu event, to check its default (the webview's menu) was prevented.
     w.__lastContextMenu = null;
     window.addEventListener("contextmenu", (e) => (w.__lastContextMenu = e), true);
-    // A clipboard the test controls. The mock's clipboard plugin reads it through navigator.clipboard.
-    w.__clipboard = "";
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: async (text: string) => void (w.__clipboard = text), readText: async () => w.__clipboard },
-    });
   });
 });
 
-const clipboard = (page: Page) => page.evaluate(() => (window as unknown as { __clipboard: string }).__clipboard);
-const setClipboard = (page: Page, text: string) => page.evaluate((t) => ((window as unknown as { __clipboard: string }).__clipboard = t), text);
 const defaultPrevented = (page: Page) => page.evaluate(() => (window as unknown as { __lastContextMenu: MouseEvent | null }).__lastContextMenu?.defaultPrevented ?? null);
 const menuItems = (page: Page) => page.getByRole("menu").getByRole("menuitem");
 const item = (page: Page, name: string) => page.getByRole("menu").getByRole("menuitem", { name, exact: true });
@@ -112,7 +105,7 @@ test("Cut, Copy, Paste and Select all work in a text input, and are disabled whe
   expect(await box.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 4]);
   await box.click({ button: "right" });
   await item(page, "Copy").click();
-  expect(await clipboard(page)).toBe("pets");
+  await expect.poll(() => clipboard(page)).toBe("pets");
   await box.press("End");
   await box.click({ button: "right" });
   await item(page, "Paste").click();
@@ -144,7 +137,7 @@ test("in a variable field: Paste keeps it on one line, Copy takes the selection,
   await expect(menuItems(page)).toHaveText([...EDIT, "Extract to variable…"]);
   await expect(withIcons(page)).toHaveText([...EDIT, "Extract to variable…"]);
   await item(page, "Copy").click();
-  expect(await clipboard(page)).toBe("application/json;charset=utf-8");
+  await expect.poll(() => clipboard(page)).toBe("application/json;charset=utf-8");
 
   // A masked field can't be copied from, but can be pasted into.
   await page.locator(".subtab", { hasText: "Authorization" }).click();
@@ -175,7 +168,7 @@ test("Select all and Copy in the read-only response body", async ({ page }) => {
   await item(page, "Select all").click();
   await body.click({ button: "right", position: { x: 20, y: 8 } });
   await item(page, "Copy").click();
-  expect(await clipboard(page)).toMatch(/^\{\n {2}"items"/);
+  await expect.poll(() => clipboard(page)).toMatch(/^\{\n {2}"items"/);
 });
 
 test("Shift+F10 and the Menu key open the edit menu from the keyboard", async ({ page }) => {

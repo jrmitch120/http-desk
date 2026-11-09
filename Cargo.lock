@@ -1980,6 +1980,7 @@ name = "httpdesk"
 version = "0.1.3"
 dependencies = [
  "dunce",
+ "glob",
  "httpdesk-core",
  "notify-debouncer-mini",
  "objc2",

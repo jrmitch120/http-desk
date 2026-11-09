@@ -2,26 +2,29 @@
 // registered commands (src/lib/commands.ts) by id; the OS's own items (Edit,
 // Hide, Minimize…) are predefined. src/lib/nativeMenu.svelte.ts renders this
 // for the shell and keeps it up to date (ADR-0005 decides the shortcuts).
-import { command, type CommandId } from "./commands";
+import { command, isCommandId, type CommandId } from "./commands";
 import { basename } from "./http";
-import { formatShortcut, type OS, type Shortcut } from "./platform";
+import { formatShortcut, joinShortcut, type OS, type Shortcut } from "./platform";
 
-/** Items the OS provides and runs itself (muda's predefined menu items). */
-export type Predefined =
-  | "undo"
-  | "redo"
-  | "cut"
-  | "copy"
-  | "paste"
-  | "selectAll"
-  | "services"
-  | "hide"
-  | "hideOthers"
-  | "showAll"
-  | "quit"
-  | "minimize"
-  | "zoom"
-  | "bringAllToFront";
+/** Items the OS provides and runs itself (muda's predefined menu items). The shell's `Predefined` enum lists the same. */
+export const PREDEFINED = [
+  "undo",
+  "redo",
+  "cut",
+  "copy",
+  "paste",
+  "selectAll",
+  "services",
+  "hide",
+  "hideOthers",
+  "showAll",
+  "quit",
+  "minimize",
+  "zoom",
+  "bringAllToFront",
+] as const;
+
+export type Predefined = (typeof PREDEFINED)[number];
 
 export type MenuEntry =
   /** Runs a command. `label` and `shortcut` replace the command's own in this menu. */
@@ -33,10 +36,10 @@ export type MenuEntry =
   /** The recent workspaces, one item each (File → Open Recent). */
   | { kind: "recent" };
 
-/** A menu in the menu bar. On macOS the first one is the app menu. */
 /** The menu macOS lists its windows in, and the one it adds Help search to. */
 export type MenuRole = "window" | "help";
 
+/** A menu in the menu bar. On macOS the first one is the app menu. */
 export interface TopMenu {
   label: string;
   role?: MenuRole;
@@ -138,8 +141,20 @@ export interface ItemState {
   checked: boolean | null;
 }
 
+/** A change to every item with this id; what isn't given stays as it is. */
+export type MenuItemChange = { id: string; enabled?: boolean; checked?: boolean };
+
 /** Each recent workspace's item id: this, then its path. */
-export const RECENT_PREFIX = "open-recent:";
+const RECENT_PREFIX = "open-recent:";
+
+/** What clicking a menu item does: run a command, or open a recent workspace. */
+export type MenuAction = { kind: "command"; id: CommandId } | { kind: "recent"; path: string };
+
+/** What the item with id `id` (as the shell sends it back) does; null for an id the app never gives an item. */
+export function menuAction(id: string): MenuAction | null {
+  if (id.startsWith(RECENT_PREFIX)) return { kind: "recent", path: id.slice(RECENT_PREFIX.length) };
+  return isCommandId(id) ? { kind: "command", id } : null;
+}
 
 /**
  * The menu bar as the shell builds it on `os`, with `recents` under Open
@@ -178,6 +193,5 @@ export function nativeMenu(layout: TopMenu[], opts: { os: OS; recents: string[];
 
 /** A shortcut as a macOS key equivalent the shell (muda) parses: "Cmd+Shift+S", "Cmd+Enter", "Cmd+,". */
 function accelerator(s: Shortcut): string {
-  const key = s.key.length === 1 ? s.key.toUpperCase() : s.key;
-  return [s.mod && "Cmd", s.alt && "Alt", s.shift && "Shift", key].filter(Boolean).join("+");
+  return joinShortcut(s, "Cmd");
 }

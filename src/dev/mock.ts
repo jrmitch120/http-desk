@@ -320,6 +320,12 @@ let windowClosed = false;
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
 const openedUrls: string[] = [];
+/** The OS clipboard, as the clipboard plugin reads and writes it. */
+let clipboardText = "";
+/** The texts the clipboard plugin wrote, in order. */
+const clipboardWrites: string[] = [];
+/** Whether the clipboard plugin's writes fail (a test sets it). */
+let clipboardFails = false;
 /**
  * Like the shell's opener: only URLs its capability's scope allows (globs, `*`
  * matching anything), so a link the capability doesn't cover fails here too.
@@ -387,6 +393,21 @@ window.addEventListener(
   get openedUrls() {
     return [...openedUrls];
   },
+  /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
+  get clipboard() {
+    return clipboardText;
+  },
+  set clipboard(text: string) {
+    clipboardText = text;
+  },
+  /** The texts the clipboard plugin wrote, in order. */
+  get clipboardWrites() {
+    return [...clipboardWrites];
+  },
+  /** Makes the clipboard plugin's writes fail, or succeed again. */
+  set clipboardFails(fails: boolean) {
+    clipboardFails = fails;
+  },
   /** The window title the app last set. */
   get title() {
     return windowTitle;
@@ -416,6 +437,8 @@ window.addEventListener(
   },
   /** Lets held settings through (`?settingsDelay=hold`). */
   releaseSettings: () => releaseSettings(),
+  /** Lets held formatting through (`?pretty=hold`). */
+  releasePretty: () => releasePretty(),
   get settings() {
     return clone(settings);
   },
@@ -579,6 +602,11 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
+// `?pretty=hold`: `pretty_response` waits until a test calls `__mock.releasePretty()`,
+// so the viewer's loading state lasts as long as the test needs.
+const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
+let releasePretty: () => void = () => {};
+const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -772,8 +800,12 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "plugin:clipboard-manager|read_text":
-        // The browser's clipboard (tests replace navigator.clipboard to control it).
-        return navigator.clipboard.readText().catch(() => "");
+        return clipboardText;
+      case "plugin:clipboard-manager|write_text":
+        if (clipboardFails) throw "The clipboard can't be written";
+        clipboardText = args.text;
+        clipboardWrites.push(args.text);
+        return null;
       case "plugin:opener|open_url":
         if (!openableUrls.some((re) => re.test(args.url))) throw `Not allowed to open url ${args.url}`;
         openedUrls.push(args.url);
@@ -977,7 +1009,8 @@ mockIPC(
         }
       case "pretty_response": {
         prettyRequests++;
-        await delay(400); // long enough for a test to see the loading state
+        await delay(400); // as a large body takes a while
+        await prettyReleased;
         const stored = evicted ? undefined : textBodies.get(args.responseId);
         if (stored === undefined) throw RESPONSE_GONE;
         if (stored.kind === "xml") return formatXml(stored.body, "pretty");

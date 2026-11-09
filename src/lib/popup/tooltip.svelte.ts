@@ -104,12 +104,15 @@ export function tooltip(node: HTMLElement, text?: TooltipText) {
   const onFocus = () => {
     if (!clicked && node.matches(":focus-visible")) start();
   };
+  // A focused element Svelte removes blurs while the block removing it is still
+  // updating, where changing state is forbidden: hide once that's done.
+  const onBlur = () => queueMicrotask(stop);
 
   node.addEventListener("pointerenter", onEnter);
   node.addEventListener("pointerleave", onLeave);
   node.addEventListener("pointerdown", onDown);
   node.addEventListener("focus", onFocus);
-  node.addEventListener("blur", stop);
+  node.addEventListener("blur", onBlur);
   return {
     update(next?: TooltipText) {
       current = next;
@@ -123,7 +126,7 @@ export function tooltip(node: HTMLElement, text?: TooltipText) {
       node.removeEventListener("pointerleave", onLeave);
       node.removeEventListener("pointerdown", onDown);
       node.removeEventListener("focus", onFocus);
-      node.removeEventListener("blur", stop);
+      node.removeEventListener("blur", onBlur);
       stop();
     },
   };
