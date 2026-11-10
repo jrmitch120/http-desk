@@ -5,10 +5,10 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
   await openApp(page);
   const row = treeItem(page, "api");
   await row.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move to trash" }).click();
-  const confirm = dialog(page, "Move to trash");
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  const confirm = dialog(page, "Move to Trash");
 
-  await expect(confirm.getByRole("button", { name: "Move to trash" })).toBeFocused();
+  await expect(confirm.getByRole("button", { name: "Move to Trash" })).toBeFocused();
   for (let i = 0; i < 4; i++) {
     await page.keyboard.press("Tab");
     await expect(confirm.locator(":focus")).toHaveCount(1);
@@ -17,7 +17,7 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
     await page.keyboard.press("Shift+Tab");
     await expect(confirm.locator(":focus")).toHaveCount(1);
   }
-  await expect(confirm.getByRole("button", { name: "Move to trash" })).toBeFocused();
+  await expect(confirm.getByRole("button", { name: "Move to Trash" })).toBeFocused();
 
   await page.keyboard.press("Escape");
   await expect(confirm).toHaveCount(0);
@@ -26,7 +26,7 @@ test("a confirm dialog focuses its primary button, keeps Tab inside and gives fo
 
 test("a modal's Tab wrap skips elements that aren't Tab stops", async ({ page }) => {
   await openApp(page);
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   const settings = dialog(page, "Settings");
   // Roving widgets (a SegmentedControl's unchecked radios) put tabindex=-1
   // buttons in a modal; here one sits first, and a tabindex=-1 element that
@@ -64,11 +64,11 @@ test("Enter confirms a Delete dialog", async ({ page }) => {
 test("an irreversible permanent delete focuses Cancel, so a double Enter keeps the file", async ({ page }) => {
   await openApp(page, "?trash=unavailable");
   await treeItem(page, "api").click();
-  await treeMenu(page, "pets.http", "Move to trash");
+  await treeMenu(page, "pets.http", "Move to Trash");
 
-  await expect(dialog(page, "Move to trash").getByRole("button", { name: "Move to trash" })).toBeFocused();
+  await expect(dialog(page, "Move to Trash").getByRole("button", { name: "Move to Trash" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(dialog(page, "Couldn't move to trash").getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(dialog(page, "Couldn't Move to the Trash").getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Enter");
 
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -202,9 +202,9 @@ test("only the active tab is in the Tab order", async ({ page }) => {
 test("icon-only buttons, including toast close buttons, have accessible labels", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.getByText("200 OK")).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+E");
+  await page.keyboard.press("Meta+E");
   await dialog(page, "Environments").getByPlaceholder("Add variable").fill("apiKey");
   await dialog(page, "Environments").getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Environments saved")).toBeVisible();

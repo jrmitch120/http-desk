@@ -14,23 +14,26 @@
   import EnvironmentEditor from "./components/EnvironmentEditor.svelte";
   import OpenApiImport from "./components/OpenApiImport.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
+  import AboutModal from "./components/AboutModal.svelte";
   import RenameVariable from "./components/RenameVariable.svelte";
   import ExtractVariable from "./components/ExtractVariable.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import { updates } from "./lib/updates.svelte";
-  import { modalOpen } from "./lib/modal";
+  import { handleCommandKey, shortcutHint } from "./lib/commands";
+  import { startNativeMenu } from "./lib/nativeMenu.svelte";
   import { SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
+    startNativeMenu().catch((e) => console.warn("native menu unavailable", e));
     app.init().then(() => {
       // Production builds only: dev builds have no signed release to compare against.
       if (!import.meta.env.DEV && app.settings?.checkUpdates !== false) setTimeout(() => updates.check(false), 3000);
     });
   });
 
-  // The native window's title follows the workspace and the active environment.
+  // The native window's title follows the active request, the workspace and the environment.
   $effect(() => {
     getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
@@ -39,11 +42,7 @@
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
     if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") return keyboardContextMenu(e);
-    const action = shortcut(e);
-    if (!action) return;
-    e.preventDefault();
-    // Under a modal or dialog only Escape acts, and Modal.svelte handles it.
-    if (!modalOpen()) action();
+    handleCommandKey(e);
   }
 
   /**
@@ -52,35 +51,6 @@
    */
   function keyboardContextMenu(e: KeyboardEvent) {
     if (openFromKeyboard()) e.preventDefault();
-  }
-
-  /** The global shortcut `e` triggers, if any. */
-  function shortcut(e: KeyboardEvent): (() => void) | null {
-    if (!(e.metaKey || e.ctrlKey)) return null;
-    const k = e.key.toLowerCase();
-    const root = app.root;
-    if (k === "s") return () => (e.shiftKey ? app.saveAll() : app.saveActive());
-    if (k === "enter" && app.activeTabId) return () => app.activeTabId && app.send(app.activeTabId);
-    if ((k === "p" || k === "k") && root) return () => app.focusSearch++;
-    if (k === "t" && root) return () => (app.activeTab ? app.addRequest(app.activeTab.path) : app.createFile(root));
-    if (switchEnvironment(e)) return root ? () => app.chooseEnvironment() : null;
-    if (k === "e" && !e.altKey && root) return () => (app.modal = "env");
-    if (k === ",") return () => (app.modal = "settings");
-    return null;
-  }
-
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
-
-  /**
-   * ⌘⌥E on macOS, Ctrl+Alt+E elsewhere: open the environment picker. On macOS
-   * ⌥E is a dead key, so the physical E key counts. Elsewhere the key must
-   * really be "e": Ctrl+Alt is how Windows reports AltGr, and AltGr+E types €
-   * on many layouts.
-   */
-  function switchEnvironment(e: KeyboardEvent): boolean {
-    if (!e.altKey || e.shiftKey) return false;
-    if (mac) return e.metaKey && !e.ctrlKey && (e.key.toLowerCase() === "e" || e.code === "KeyE");
-    return e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "e";
   }
 </script>
 
@@ -116,10 +86,10 @@
                   <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
                 </div>
                 <div class="hints muted">
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>Enter</kbd> send</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>S</kbd> save</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>P</kbd> search</span>
-                  <span><kbd>⌘/Ctrl</kbd> <kbd>E</kbd> environments</span>
+                  <span><kbd>{shortcutHint("send")}</kbd> send</span>
+                  <span><kbd>{shortcutHint("save")}</kbd> save</span>
+                  <span><kbd>{shortcutHint("search")}</kbd> search</span>
+                  <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
                 </div>
               </div>
             {/if}
@@ -135,6 +105,7 @@
 {#if app.modal === "env"}<EnvironmentEditor />{/if}
 {#if app.modal === "openapi"}<OpenApiImport />{/if}
 {#if app.modal === "settings"}<SettingsModal />{/if}
+{#if app.modal === "about"}<AboutModal />{/if}
 {#if app.renaming}<RenameVariable />{/if}
 {#if app.extraction}<ExtractVariable />{/if}
 {#if app.dialog}

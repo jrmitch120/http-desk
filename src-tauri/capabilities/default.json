@@ -10,9 +10,18 @@
     "core:window:allow-set-title",
     "core:window:allow-set-theme",
     "core:window:allow-destroy",
+    "core:window:allow-close",
     "dialog:default",
     "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://github.com/jrmitch120/http-desk#readme" },
+        { "url": "https://github.com/jrmitch120/http-desk/*" }
+      ]
+    },
     "updater:default",
     "process:allow-restart"
   ]

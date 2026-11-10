@@ -6,17 +6,24 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Icon from "./Icon.svelte";
   import Modal from "./Modal.svelte";
+  import { arrangeDialogButtons } from "../lib/platform";
+  import type { DialogButton } from "../lib/store.svelte";
 
   let value = $state(app.dialog?.input?.value ?? "");
   let input: HTMLInputElement | undefined = $state();
-  const buttons: HTMLButtonElement[] = $state([]);
+  /** The rendered buttons, by value. */
+  const buttons: Record<string, HTMLButtonElement> = $state({});
   const values = $state((app.dialog?.fields ?? []).map((f) => f.value));
   /** Per field: shown in plain text (masked fields start hidden). */
   const shown = $state((app.dialog?.fields ?? []).map((f) => !f.masked));
   const fieldInputs: HTMLInputElement[] = $state([]);
 
   const d = $derived(app.dialog!);
-  const primary = $derived(d.buttons.find((b) => b.primary) ?? d.buttons[d.buttons.length - 1]);
+  const primary = $derived(d.buttons.find((b) => b.role === "primary") ?? d.buttons[d.buttons.length - 1]);
+  // Shown in the OS's order, not the order they're listed in.
+  const arranged = $derived(arrangeDialogButtons(d.buttons));
+  /** What Escape answers: the cancel button's value. */
+  const cancelValue = $derived(d.buttons.find((b) => b.role === "cancel")?.value ?? "cancel");
 
   // Once per dialog: re-selecting on every keystroke would replace what was typed.
   // A confirm (no input) focuses its primary button, so Enter confirms, unless
@@ -27,7 +34,7 @@
       return;
     }
     if (!input || !d.input) {
-      buttons[d.buttons.indexOf(d.buttons.find((b) => b.focus) ?? primary)]?.focus();
+      buttons[(d.buttons.find((b) => b.focus) ?? primary).value]?.focus();
       return;
     }
     input.focus();
@@ -44,7 +51,13 @@
   }
 </script>
 
-<Modal title={d.title} width="420px" onclose={() => app.closeDialog("cancel")}>
+{#snippet answer(b: DialogButton)}
+  <button class="btn" bind:this={buttons[b.value]} class:primary={b.role === "primary" && !b.danger} class:danger={b.danger} class:solid={b.danger} onclick={() => app.closeDialog(b.value, value, [...values])}>
+    {b.label}
+  </button>
+{/snippet}
+
+<Modal title={d.title} width="420px" onclose={() => app.closeDialog(cancelValue)}>
   <div class="body">
     {#if d.message}<p>{d.message}</p>{/if}
     {#if d.input}
@@ -74,11 +87,9 @@
     {/each}
   </div>
   {#snippet footer()}
-    {#each d.buttons as b, i (b.value)}
-      <button class="btn" bind:this={buttons[i]} class:primary={b.primary} class:danger={b.danger} class:solid={b.danger} onclick={() => app.closeDialog(b.value, value, [...values])}>
-        {b.label}
-      </button>
-    {/each}
+    {#each arranged.start as b (b.value)}{@render answer(b)}{/each}
+    {#if arranged.start.length}<span class="apart"></span>{/if}
+    {#each arranged.end as b (b.value)}{@render answer(b)}{/each}
   {/snippet}
 </Modal>
 
@@ -113,6 +124,10 @@
   .help {
     font-size: 12px;
     color: var(--muted);
+  }
+  /* Sets the far-left buttons (a destructive alternative on macOS and Linux) apart. */
+  .apart {
+    flex: 1;
   }
   .with-btn {
     display: flex;

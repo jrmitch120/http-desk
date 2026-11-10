@@ -4,7 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dialog, openApp, openRequest, tab } from "./helpers";
 
 async function send(page: Page): Promise<void> {
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".statusbar .metric").first()).toBeVisible();
 }
 

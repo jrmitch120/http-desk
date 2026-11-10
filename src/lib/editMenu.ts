@@ -10,7 +10,12 @@
 // `openContextMenu` is the window's `contextmenu` listener (App.svelte), so it
 // runs last; a handler that shows a menu of its own (`menu.show`, e.g. a tree
 // row's) stops the event before it gets there.
+//
+// Linux's native Edit menu runs the same actions on the focused field
+// (`focusedEditActions`, ADR-0005), plus Undo and Redo.
+import { redo, undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
+import { createSubscriber } from "svelte/reactivity";
 import { menu, type MenuItem } from "./menu.svelte";
 import { readClipboard, writeClipboard } from "./clipboard";
 import { hold, unhold } from "./codemirror/holds";
@@ -95,32 +100,99 @@ interface TextField {
   replace(text: string): void;
   /** Whether the field is still in the document (a Paste waits on the clipboard). */
   connected(): boolean;
+  /** Undoes or redoes the field's last edit, as its keys would. */
+  history(dir: "undo" | "redo"): void;
+}
+
+/** An edit action on a text field: what its menu item does, and whether it's greyed out. */
+export interface EditAction {
+  disabled: boolean;
+  run(): void;
+}
+
+/** The edit actions a text field offers. Read-only text has no Undo, Redo, Cut or Paste. */
+export type EditActions = Partial<Record<"undo" | "redo" | "cut" | "copy" | "paste" | "select-all", EditAction>>;
+
+/** The edit actions on `field`: the context menu's (Cut, Copy, Paste, Select all), and Undo and Redo. */
+function textActions(field: TextField): EditActions {
+  const cannotCopy = !field.selected() || field.masked;
+  const copy: EditAction = { disabled: cannotCopy, run: () => void writeClipboard(field.selected()).catch(() => {}) };
+  const selectAll: EditAction = { disabled: false, run: () => field.selectAll() };
+  if (field.readOnly) return { copy, "select-all": selectAll };
+  return {
+    undo: { disabled: false, run: () => field.history("undo") },
+    redo: { disabled: false, run: () => field.history("redo") },
+    cut: {
+      disabled: cannotCopy,
+      // The selection goes only once it's on the clipboard.
+      run: async () => {
+        try {
+          await writeClipboard(field.selected());
+        } catch {
+          return;
+        }
+        if (field.connected()) field.replace("");
+      },
+    },
+    copy,
+    paste: {
+      disabled: false,
+      run: async () => {
+        const text = await readClipboard();
+        if (text && field.connected()) field.replace(text);
+      },
+    },
+    "select-all": selectAll,
+  };
 }
 
 /** Cut, Copy, Paste and Select all (Copy and Select all when it's read-only). */
 function textItems(field: TextField): MenuItem[] {
-  const cannotCopy = !field.selected() || field.masked;
-  const copy: MenuItem = { label: "Copy", icon: "copy", disabled: cannotCopy, action: () => void writeClipboard(field.selected()) };
-  const selectAll: MenuItem = { label: "Select all", icon: "select-all", action: () => field.selectAll() };
-  if (field.readOnly) return [copy, selectAll];
-  const cut: MenuItem = {
-    label: "Cut",
-    icon: "cut",
-    disabled: cannotCopy,
-    action: () => {
-      void writeClipboard(field.selected());
-      field.replace("");
-    },
+  const actions = textActions(field);
+  const items: [keyof EditActions, string, string][] = [
+    ["cut", "Cut", "cut"],
+    ["copy", "Copy", "copy"],
+    ["paste", "Paste", "paste"],
+    ["select-all", "Select all", "select-all"],
+  ];
+  return items.flatMap(([key, label, icon]) => {
+    const a = actions[key];
+    return a ? [{ label, icon, disabled: a.disabled, action: a.run }] : [];
+  });
+}
+
+/**
+ * Reruns a reader when focus, the selection or a field's text may have
+ * changed. Once the browser's events have run their course, so an editor has
+ * taken in its new selection first.
+ */
+const focusChanges = createSubscriber((update) => {
+  const events = ["focusin", "focusout", "selectionchange", "select", "input", "keyup", "mouseup"];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const later = () => {
+    clearTimeout(timer);
+    timer = setTimeout(update);
   };
-  const paste: MenuItem = {
-    label: "Paste",
-    icon: "paste",
-    action: async () => {
-      const text = await readClipboard();
-      if (text && field.connected()) field.replace(text);
-    },
+  for (const type of events) document.addEventListener(type, later, true);
+  return () => {
+    clearTimeout(timer);
+    for (const type of events) document.removeEventListener(type, later, true);
   };
-  return [cut, copy, paste, selectAll];
+});
+
+/**
+ * The edit actions for the text field that has focus (or had it when the
+ * window went to the background, as when the native menu opens): the same as
+ * its context menu's. Empty when focus isn't in a text field. Reactive: follows
+ * focus and the selection. Linux's Edit menu runs these (ADR-0005).
+ */
+export function focusedEditActions(): EditActions {
+  focusChanges();
+  const el = document.activeElement;
+  const view = editorAt(el);
+  if (view) return textActions(editorField(view));
+  const field = textField(el);
+  return field ? textActions(inputField(field)) : {};
 }
 
 /** The edit items for an editor. */
@@ -131,7 +203,11 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
     const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
     if (pos !== null && (sel.empty || pos < sel.from || pos > sel.to)) view.dispatch({ selection: { anchor: pos } });
   }
-  return textItems({
+  return textItems(editorField(view));
+}
+
+function editorField(view: EditorView): TextField {
+  return {
     selected: () => {
       const { from, to } = view.state.selection.main;
       return view.state.sliceDoc(from, to);
@@ -147,12 +223,20 @@ function editorItems(view: EditorView, e: MouseEvent): MenuItem[] {
       view.dispatch(view.state.replaceSelection(text), { userEvent: text ? "input.paste" : "delete.cut", scrollIntoView: true });
     },
     connected: () => view.dom.isConnected,
-  });
+    history: (dir) => {
+      view.focus();
+      (dir === "undo" ? undo : redo)(view);
+    },
+  };
 }
 
 /** The edit items for an `<input>` or `<textarea>`. */
 function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
-  return textItems({
+  return textItems(inputField(el));
+}
+
+function inputField(el: HTMLInputElement | HTMLTextAreaElement): TextField {
+  return {
     selected: () => el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0),
     masked: el.type === "password",
     readOnly: el.readOnly || el.disabled,
@@ -165,7 +249,12 @@ function inputItems(el: HTMLInputElement | HTMLTextAreaElement): MenuItem[] {
       insert(el, text);
     },
     connected: () => el.isConnected,
-  });
+    // The webview's own undo stack, which typing and `insert` add to.
+    history: (dir) => {
+      el.focus();
+      document.execCommand(dir);
+    },
+  };
 }
 
 /** Replaces the field's selection with `text` as typing would: undoable, and an `input` event for its owner. */

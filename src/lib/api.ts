@@ -1,6 +1,7 @@
 // Typed wrappers around Tauri commands (src-tauri/src/lib.rs).
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AppInfo,
   AppSettings,
   BodyKind,
   FilterResult,
@@ -21,6 +22,7 @@ import type {
   Variable,
   WorkspaceInfo,
 } from "./types";
+import type { MenuItemChange, NativeMenu } from "./menuLayout";
 
 /** A request with the scope it's sent in, as `send_request` and `preview_request` take it. */
 export type RequestArgs = {
@@ -91,6 +93,14 @@ export const api = {
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
+
+  /** The app's version, OS and architecture (About HttpDesk, Report an Issue). */
+  appInfo: () => invoke<AppInfo>("app_info"),
+
+  /** Builds the native menu bar from `layout` (src-tauri/src/menu.rs), replacing the one before. */
+  setMenu: (layout: NativeMenu) => invoke<void>("set_menu", { layout }),
+  /** Greys out, enables, ticks or unticks the native menu's items by id. */
+  setMenuState: (changes: MenuItemChange[]) => invoke<void>("set_menu_state", { changes }),
 
   openapiLoad: (source: string) => invoke<SpecSummary>("openapi_load", { source }),
   openapiGenerate: (args: {

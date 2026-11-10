@@ -25,7 +25,7 @@ const HEADERS = [
 async function openHeaders(page: Page) {
   await openApp(page, "?manyHeaders=1");
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await page.getByRole("radiogroup", { name: "Response tabs" }).getByRole("radio", { name: /^Headers\b/ }).click();
 }
 

@@ -2,6 +2,7 @@
   import { onDestroy, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { trackModal } from "../lib/modal.svelte";
 
   interface Props {
     title: string;
@@ -14,6 +15,9 @@
   let { title, onclose, width = "560px", height, children, footer }: Props = $props();
 
   let box: HTMLDivElement | undefined = $state();
+
+  // App commands don't run, and are greyed out in the native menu, while it's open.
+  $effect(trackModal);
 
   // Focus goes back to where it was when the modal opened.
   const returnTo = document.activeElement;

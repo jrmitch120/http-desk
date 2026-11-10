@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
@@ -27,6 +27,7 @@
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { shortcutHint } from "../lib/commands";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -83,7 +84,12 @@
     }
   });
 
-  let showSource = $state(false);
+  // Shown for one tab at a time (the store keeps it, so Request → Show .http Source can
+  // toggle it); hidden again when the tab is switched away from, as before.
+  const showSource = $derived(app.sourceShownFor === tab.id);
+  onDestroy(() => {
+    if (app.sourceShownFor === tab.id) app.sourceShownFor = null;
+  });
   /** The resolved preview (ResolvedPreview) is shown under the URL bar; an app setting, so it lasts. */
   const resolved = $derived(app.settings?.showResolved === true);
   let source = $state("");
@@ -106,7 +112,7 @@
     if (want?.tabId !== tab.id || !req) return;
     app.fieldWanted = null;
     const field = want.field;
-    showSource = field.kind === "variable";
+    app.sourceShownFor = field.kind === "variable" ? tab.id : null;
     if (field.kind === "url") {
       tick().then(() => urlInput?.focus());
       return;
@@ -207,10 +213,10 @@
       >
         <Icon name="eye" size={14} />Resolved
       </button>
-      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => (showSource = !showSource)} use:tooltip={"Show the .http source for this request"}>
+      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource(tab.id)} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={"Save (⌘/Ctrl S)"}>
+      <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
@@ -237,7 +243,7 @@
       {#if run?.loading}
         <button class="btn send cancel" onclick={() => app.cancel(tab.id)}><Icon name="stop" size={13} />Cancel</button>
       {:else}
-        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={"Send (⌘/Ctrl Enter)"}><Icon name="send" size={13} />Send</button>
+        <button class="btn primary send" onclick={() => app.send(tab.id)} use:tooltip={`Send (${shortcutHint("send")})`}><Icon name="send" size={13} />Send</button>
       {/if}
     </div>
 

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { open } from "@tauri-apps/plugin-dialog";
   import { app } from "../lib/store.svelte";
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
@@ -9,17 +8,13 @@
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { runCommand, shortcutHint } from "../lib/commands";
   import { updates } from "../lib/updates.svelte";
 
-  async function openFolder() {
-    const dir = await open({ directory: true, title: "Open workspace folder" });
-    if (typeof dir === "string") await app.openWorkspace(dir);
-  }
-
   function workspaceMenu(e: MouseEvent) {
-    const recent = (app.settings?.recentWorkspaces ?? []).filter((w) => w !== app.root).slice(0, 8);
+    const recent = app.otherRecentWorkspaces;
     menu.show(e, [
-      { label: "Open folder…", icon: "folder-open", action: openFolder },
+      { label: "Open folder…", icon: "folder-open", action: () => runCommand("open-folder") },
       ...(recent.length ? [{ separator: true }, ...recent.map((w) => ({ label: basename(w), icon: "folder", action: () => app.openWorkspace(w) }))] : []),
     ]);
   }
@@ -89,9 +84,9 @@
       value={app.envName ?? ""}
       onchange={(v) => app.selectEnvironment(v || null)}
       label="Active environment"
-      tooltip="Active environment (⌘⌥E / Ctrl Alt E)"
+      tooltip={`Active environment (${shortcutHint("choose-environment")})`}
     />
-    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={"Manage environments (⌘/Ctrl E)"}><Icon name="layers" size={14} /></button>
+    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={`Manage environments (${shortcutHint("manage-environments")})`}><Icon name="layers" size={14} /></button>
   </div>
 
   {#if updates.progress !== null}
@@ -119,7 +114,7 @@
     <Icon name={app.effectiveTheme === "dark" ? "moon" : "sun"} />
     {#if app.themeChoice === "system"}<span class="auto" aria-hidden="true">A</span>{/if}
   </button>
-  <button class="icon-btn" aria-label="Settings" use:tooltip={"Settings (⌘/Ctrl ,)"} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
 </header>
 
 <style>

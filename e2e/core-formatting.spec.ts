@@ -75,7 +75,7 @@ test("Beautify formats an XML body in the core", async ({ page }) => {
 test("the Hex view of a binary response is the core's dump of the stored body", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "Get pet image");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
 
   await page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Hex" }).click();
   await expect(page.locator(".body .cm-line").first()).toHaveText("00000000  89 50 4e 47 0d 0a 1a 0a 00 00 00 0d 49 48 44 52  .PNG........IHDR");

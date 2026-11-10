@@ -6,7 +6,7 @@ import { openApp, openRequest } from "./helpers";
 async function sendListPets(page: Page, query = ""): Promise<void> {
   await openApp(page, query);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await page.keyboard.press("ControlOrMeta+Enter");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.getByRole("radiogroup", { name: "Response tabs" })).toBeVisible();
 }
 

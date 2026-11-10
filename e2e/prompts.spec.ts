@@ -64,7 +64,7 @@ const cases: Case[] = [
   {
     name: "new environment",
     open: async (page) => {
-      await page.keyboard.press("ControlOrMeta+e");
+      await page.keyboard.press("Meta+E");
       await environments(page).getByRole("button", { name: "New environment" }).click();
       return "New environment";
     },
@@ -73,7 +73,7 @@ const cases: Case[] = [
   {
     name: "rename environment",
     open: async (page) => {
-      await page.keyboard.press("ControlOrMeta+e");
+      await page.keyboard.press("Meta+E");
       await environments(page).getByRole("button", { name: /^staging\b/ }).click();
       await environments(page).getByRole("button", { name: "Rename", exact: true }).click();
       return "Rename environment";

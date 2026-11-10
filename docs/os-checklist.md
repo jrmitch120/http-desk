@@ -97,3 +97,7 @@ control or the popup layer.
 - [ ] OpenAPI import: File / URL switch, the operation list with group checkboxes in the
       mixed state, deprecated operations, the grouping switch, the warnings banner.
 - [ ] A confirm dialog (delete a request) and a prompt (rename one).
+- [ ] About HttpDesk (app menu on macOS, Help elsewhere), in the light and dark themes:
+      the icon, name, version and copyright; Documentation and Release Notes open in
+      the browser; Copy copies "HttpDesk <version> (<os> <arch>)" and shows a toast.
+      Help → Report an Issue opens a new GitHub issue with the version filled in.

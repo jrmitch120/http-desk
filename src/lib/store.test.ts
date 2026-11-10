@@ -1,7 +1,7 @@
 // Store behaviour that depends on async ordering (concurrent loads of the same
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
@@ -54,6 +54,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { app } from "./store.svelte";
+import { forceOS } from "./platform";
 
 const PATH = "/ws/api/books.http";
 
@@ -768,15 +769,15 @@ describe("window title", () => {
 
   it("names the workspace and the active environment", async () => {
     await app.openWorkspace("/dev/my-api");
-    expect(app.windowTitle).toBe("HttpDesk — my-api — staging");
+    expect(app.windowTitle).toBe("my-api — staging");
   });
 
   it("follows the environment as it changes, and drops it when none is selected", async () => {
     await app.openWorkspace("/dev/my-api");
     await app.selectEnvironment("local");
-    expect(app.windowTitle).toBe("HttpDesk — my-api — local");
+    expect(app.windowTitle).toBe("my-api — local");
     await app.selectEnvironment(null);
-    expect(app.windowTitle).toBe("HttpDesk — my-api");
+    expect(app.windowTitle).toBe("my-api");
   });
 });
 
@@ -1018,8 +1019,8 @@ describe("search", () => {
 describe("dialog queue", () => {
   it("shows one dialog at a time and resolves each with the user's own answer", async () => {
     const del = app.choose("Delete request", 'Delete "List"?', [
-      { label: "Cancel", value: "cancel" },
-      { label: "Delete", value: "delete", danger: true },
+      { label: "Cancel", value: "cancel", role: "cancel" },
+      { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     const name = app.prompt("Rename request", "List");
 
@@ -1079,11 +1080,14 @@ describe("closing several tabs", () => {
 });
 
 describe("deleting", () => {
+  beforeEach(() => forceOS("mac"));
+  afterEach(() => forceOS(null));
+
   it("moves to the trash after one confirmation, closing the file's tabs", async () => {
     await openAll(file("List"));
 
     const deleting = app.deletePath(PATH);
-    expect(await answer("delete")).toBe("Move to trash");
+    expect(await answer("delete")).toBe("Move to Trash");
     await deleting;
 
     expect(deletePath).toHaveBeenCalledWith(PATH);
@@ -1098,7 +1102,7 @@ describe("deleting", () => {
 
     const deleting = app.deletePath(PATH);
     await answer("delete");
-    expect(await answer("delete")).toBe("Couldn't move to trash");
+    expect(await answer("delete")).toBe("Couldn't Move to the Trash");
     await deleting;
 
     expect(deletePermanently).toHaveBeenCalledWith(PATH);

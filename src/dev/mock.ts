@@ -7,6 +7,8 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { currentOS, forceOS } from "../lib/platform";
+import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
 import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
@@ -18,6 +20,9 @@ const files: Record<string, unknown> = {
   [`${ROOT}/api/pets.http`]: pets,
   [`${ROOT}/samples/jetbrains.http`]: jetbrains,
 };
+// `?platform=mac|windows|linux` makes the app behave as on that OS (shortcut keys and hints),
+// whatever the browser runs on.
+forceOS(new URLSearchParams(location.search).get("platform"));
 // `?prompts=otp One-time code;password` declares Prompt variables (`# @prompt …`) on pets.http's first request.
 const promptsParam = new URLSearchParams(location.search).get("prompts");
 if (promptsParam) {
@@ -275,7 +280,8 @@ function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: E
 let envFiles = splitEnvFiles(envSet, { shared: {} });
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
-  recentWorkspaces: [ROOT],
+  // `?recent=/work/shop,/work/api`: more recent workspaces after the demo one (File → Open Recent).
+  recentWorkspaces: [ROOT, ...(new URLSearchParams(location.search).get("recent")?.split(",") ?? [])],
   environments: { [ROOT]: "local" },
   environmentSettings: {} as Record<string, Record<string, { production?: boolean; color?: string | null }>>,
   theme: new URLSearchParams(location.search).get("theme") ?? "system",
@@ -308,12 +314,111 @@ let settingsServed = false;
 let prettyRequests = 0;
 let previewRequests = 0;
 let windowTitle: string | null = null;
+let windowCloseRequests = 0;
+let windowClosed = false;
+/** The `.http` files `save_http_file` wrote, in order. */
+const savedPaths: string[] = [];
+/** The URLs the opener opened, in order. */
+const openedUrls: string[] = [];
+/** The OS clipboard, as the clipboard plugin reads and writes it. */
+let clipboardText = "";
+/** The texts the clipboard plugin wrote, in order. */
+const clipboardWrites: string[] = [];
+/** Whether the clipboard plugin's writes fail (a test sets it). */
+let clipboardFails = false;
+/**
+ * Like the shell's opener: only URLs its capability's scope allows (globs, `*`
+ * matching anything), so a link the capability doesn't cover fails here too.
+ */
+const openableUrls = capabilities.permissions
+  .flatMap((p) => (typeof p === "object" && p.identifier === "opener:allow-open-url" ? p.allow : []))
+  .map(({ url }) => new RegExp(`^${url.split("*").map((s) => s.replace(/[.?+^$()[\]{}|\\]/g, "\\$&")).join(".*")}$`));
+/** Runs `cancel_request` was called for that are still sending. */
+const cancelledRuns = new Set<string>();
+
+// ---- The native menu bar (src-tauri/src/menu.rs), as the app sent it.
+type MenuEntry =
+  | { kind: "item"; id: string; label: string; accelerator: string | null; enabled: boolean; checked: boolean | null }
+  | { kind: "separator" }
+  | { kind: "predefined"; item: string; label: string | null }
+  | { kind: "submenu"; label: string; enabled: boolean; items: MenuEntry[] };
+type MenuItemEntry = Extract<MenuEntry, { kind: "item" }>;
+type MenuChange = { id: string; enabled?: boolean; checked?: boolean };
+let menuBar: { label: string; items: MenuEntry[] }[] = [];
+const menuStateChanges: MenuChange[][] = [];
+/** Every item in the menu bar (the same id may be in several menus). */
+const menuItems = (entries: MenuEntry[] = menuBar.flatMap((m) => m.items)): MenuItemEntry[] =>
+  entries.flatMap((e) => (e.kind === "item" ? [e] : e.kind === "submenu" ? menuItems(e.items) : []));
+/** Like the shell: only the menu bar's own items send a `menu` event. */
+async function menuClick(id: string) {
+  if (menuItems().some((i) => i.id === id)) await emit("menu", { id });
+}
+// On macOS a key the page left alone (no `preventDefault()`) reaches the menu, which
+// runs the enabled item with that key equivalent (ADR-0005). The check waits for
+// the page's own handlers, which run after this capture listener.
+const ACCELERATOR_KEYS: Record<string, string> = { Enter: "Enter", ",": "," };
+function acceleratorOf(e: KeyboardEvent): string {
+  const key = ACCELERATOR_KEYS[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  return [e.metaKey && "Cmd", e.altKey && "Alt", e.shiftKey && "Shift", e.ctrlKey && "Ctrl", key].filter(Boolean).join("+");
+}
+window.addEventListener(
+  "keydown",
+  (e) => {
+    setTimeout(() => {
+      if (e.defaultPrevented) return;
+      const item = menuItems().find((i) => i.accelerator && i.enabled && i.accelerator === acceleratorOf(e));
+      if (item) void menuClick(item.id);
+    });
+  },
+  { capture: true },
+);
+
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
   sentPrompts,
+  get savedPaths() {
+    return [...savedPaths];
+  },
+  /** The native menu bar as the app last sent it, with the state changes since applied. */
+  get menu() {
+    return { layout: clone(menuBar) };
+  },
+  /** Each batch of item state changes the app sent, in order. */
+  get menuStateChanges() {
+    return clone(menuStateChanges);
+  },
+  /** A click on the native menu item `id`: sends the `menu` event the shell would. */
+  menuClick,
+  /** The URLs the opener opened in the browser, in order. */
+  get openedUrls() {
+    return [...openedUrls];
+  },
+  /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
+  get clipboard() {
+    return clipboardText;
+  },
+  set clipboard(text: string) {
+    clipboardText = text;
+  },
+  /** The texts the clipboard plugin wrote, in order. */
+  get clipboardWrites() {
+    return [...clipboardWrites];
+  },
+  /** Makes the clipboard plugin's writes fail, or succeed again. */
+  set clipboardFails(fails: boolean) {
+    clipboardFails = fails;
+  },
   /** The window title the app last set. */
   get title() {
     return windowTitle;
+  },
+  /** How many times the app asked the window to close. */
+  get windowCloseRequests() {
+    return windowCloseRequests;
+  },
+  /** Whether a close request went through and the window was destroyed. */
+  get windowClosed() {
+    return windowClosed;
   },
   /** How many times the viewer called `pretty_response`; a test may reset it. */
   get prettyRequests() {
@@ -332,6 +437,8 @@ let windowTitle: string | null = null;
   },
   /** Lets held settings through (`?settingsDelay=hold`). */
   releaseSettings: () => releaseSettings(),
+  /** Lets held formatting through (`?pretty=hold`). */
+  releasePretty: () => releasePretty(),
   get settings() {
     return clone(settings);
   },
@@ -495,6 +602,11 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
+// `?pretty=hold`: `pretty_response` waits until a test calls `__mock.releasePretty()`,
+// so the viewer's loading state lasts as long as the test needs.
+const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
+let releasePretty: () => void = () => {};
+const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -688,10 +800,31 @@ mockIPC(
   async (cmd, args: any) => {
     switch (cmd) {
       case "plugin:clipboard-manager|read_text":
-        // The browser's clipboard (tests replace navigator.clipboard to control it).
-        return navigator.clipboard.readText().catch(() => "");
+        return clipboardText;
+      case "plugin:clipboard-manager|write_text":
+        if (clipboardFails) throw "The clipboard can't be written";
+        clipboardText = args.text;
+        clipboardWrites.push(args.text);
+        return null;
+      case "plugin:opener|open_url":
+        if (!openableUrls.some((re) => re.test(args.url))) throw `Not allowed to open url ${args.url}`;
+        openedUrls.push(args.url);
+        return null;
+      case "app_info": {
+        const os = currentOS();
+        return { version: "0.9.8", os: os === "mac" ? "macos" : os, arch: os === "mac" ? "aarch64" : "x86_64" };
+      }
       case "plugin:window|set_title":
         windowTitle = args.value;
+        return null;
+      case "plugin:window|close":
+        // Like the shell: a close request the app answers in its close-requested
+        // handler, which destroys the window unless it was turned down.
+        windowCloseRequests++;
+        await emit("tauri://close-requested");
+        return null;
+      case "plugin:window|destroy":
+        windowClosed = true;
         return null;
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);
@@ -705,7 +838,22 @@ mockIPC(
       case "path_exists":
         return true;
       case "open_workspace":
+        // Like the shell, the opened folder goes to the top of the recent workspaces
+        // (the mock always opens the demo workspace, though).
+        settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
         return { root: ROOT, tree, gitignoreUpdated: false };
+      case "set_menu":
+        menuBar = clone(args.layout);
+        return null;
+      case "set_menu_state":
+        menuStateChanges.push(clone(args.changes));
+        for (const change of args.changes as MenuChange[]) {
+          for (const item of menuItems().filter((i) => i.id === change.id)) {
+            if (change.enabled !== undefined) item.enabled = change.enabled;
+            if (change.checked !== undefined && item.checked !== null) item.checked = change.checked;
+          }
+        }
+        return null;
       case "get_tree":
         return tree;
       case "load_environments":
@@ -730,6 +878,7 @@ mockIPC(
       case "read_http_file":
         return clone(files[args.path]);
       case "save_http_file":
+        savedPaths.push(args.path);
         files[args.path] = clone(args.file);
         return clone(args.file);
       case "create_file": {
@@ -773,12 +922,17 @@ mockIPC(
       }
       case "find_usages":
         return findUsages(String(args.name), args.open ?? []);
+      case "cancel_request":
+        cancelledRuns.add(args.runId);
+        return null;
       case "send_request": {
         sent.push(clone(args.request));
         sentPrompts.push(clone(args.promptValues ?? {}));
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
+            // Like the shell: a cancelled send fails (the app shows it as Cancelled).
+            if (cancelledRuns.delete(args.runId)) throw "cancelled";
             await emit("send-progress", { runId: args.runId, received: i * 6_000 });
           }
         } else {
@@ -855,7 +1009,8 @@ mockIPC(
         }
       case "pretty_response": {
         prettyRequests++;
-        await delay(400); // long enough for a test to see the loading state
+        await delay(400); // as a large body takes a while
+        await prettyReleased;
         const stored = evicted ? undefined : textBodies.get(args.responseId);
         if (stored === undefined) throw RESPONSE_GONE;
         if (stored.kind === "xml") return formatXml(stored.body, "pretty");

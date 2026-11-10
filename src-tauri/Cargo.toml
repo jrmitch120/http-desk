@@ -24,6 +24,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
 tokio = { version = "1.54.1", features = ["rt", "sync", "macros"] }
 trash = "5.2.9"
 
@@ -31,5 +32,12 @@ trash = "5.2.9"
 objc2 = "0.6.5"
 
 [dev-dependencies]
+glob = "0.3"
 tauri = { version = "2", features = ["test"] }
 tempfile = "3.27.0"
+
+# macOS builds menus on the main thread only, and libtest runs tests on other
+# threads: this one runs its tests itself, on the main thread.
+[[test]]
+name = "native_menu"
+harness = false

@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dialog, mockState, openApp } from "./helpers";
 
 async function openSettings(page: Page) {
-  await page.keyboard.press("ControlOrMeta+Comma");
+  await page.keyboard.press("Meta+Comma");
   return dialog(page, "Settings");
 }
 

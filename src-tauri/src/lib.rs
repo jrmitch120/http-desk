@@ -21,11 +21,13 @@ mod bodies;
 mod confine;
 mod deleting;
 mod json_docs;
+mod menu;
 mod paths;
 mod quit;
 mod self_writes;
 mod theme;
 mod watcher;
+mod window_state;
 use bodies::RecentBodies;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
@@ -209,9 +211,13 @@ fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     if let Some(dir) = app.try_state::<ConfigDir>() {
         return Some(dir.0.join("settings.json"));
     }
-    let dir =
-        std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from).or_else(|| app.path().app_config_dir().ok())?;
+    let dir = config_dir_override().or_else(|| app.path().app_config_dir().ok())?;
     Some(dir.join("settings.json"))
+}
+
+/// The config folder `HTTPDESK_CONFIG_DIR` sets, if any.
+fn config_dir_override() -> Option<PathBuf> {
+    std::env::var_os("HTTPDESK_CONFIG_DIR").map(PathBuf::from)
 }
 
 fn persist_settings<R: tauri::Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> CmdResult<()> {
@@ -719,6 +725,23 @@ fn set_unsaved(state: State<'_, AppState>, unsaved: bool) {
     state.unsaved.store(unsaved, Ordering::Relaxed);
 }
 
+// ------------------------------------------------------------------ about
+
+/// Which HttpDesk this is, for About HttpDesk and Report an Issue.
+#[derive(Serialize)]
+struct AppInfo {
+    version: String,
+    /// Rust's name for the OS: "macos", "windows", "linux".
+    os: &'static str,
+    /// Rust's name for the CPU architecture: "aarch64", "x86_64".
+    arch: &'static str,
+}
+
+#[tauri::command]
+fn app_info<R: tauri::Runtime>(app: AppHandle<R>) -> AppInfo {
+    AppInfo { version: app.package_info().version.to_string(), os: std::env::consts::OS, arch: std::env::consts::ARCH }
+}
+
 // ------------------------------------------------------------------ OpenAPI
 
 fn is_url(s: &str) -> bool {
@@ -852,6 +875,8 @@ type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
 fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: AfterSetup<R>) -> tauri::Builder<R> {
     builder
         .manage(AppState::default())
+        .manage(menu::NativeMenu::<R>::new())
+        .on_menu_event(|app, event| menu::clicked(app, event.id().as_ref()))
         .setup(move |app| {
             load_settings(app.handle());
             Ok(after_setup(app)?)
@@ -885,9 +910,26 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             get_settings,
             save_settings,
             set_unsaved,
+            app_info,
             openapi_load,
             openapi_generate,
+            menu::set_menu,
+            menu::set_menu_state,
         ])
+}
+
+/// For the shell's tests that can't run on libtest's threads (src-tauri/tests).
+#[doc(hidden)]
+pub mod test_support {
+    /// The app's state and commands on `builder`, without a main window.
+    pub fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+        super::with_commands(builder, |_| Ok(()))
+    }
+
+    /// What a click on native menu item `id` does.
+    pub fn menu_clicked<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
+        super::menu::clicked(app, id)
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -898,7 +940,8 @@ pub fn run() {
             .plugin(tauri_plugin_clipboard_manager::init())
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init()),
+            .plugin(tauri_plugin_process::init())
+            .plugin(window_state::plugin(config_dir_override())),
         theme::create_main_window,
     )
     .build(tauri::generate_context!())

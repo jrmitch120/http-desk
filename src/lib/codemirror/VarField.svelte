@@ -34,7 +34,7 @@
     placeholder?: string;
     /** Accessible name. */
     label?: string;
-    /** Enter (and ⌘/Ctrl+Enter). Without it Enter does nothing and ⌘/Ctrl+Enter reaches the app's shortcut. */
+    /** Enter (and ⌘Enter / Ctrl+Enter). Without it Enter does nothing and ⌘Enter / Ctrl+Enter reaches the app's shortcut. */
     onenter?: () => void;
     /** Draws the text as discs, as a password input does. */
     masked?: boolean;

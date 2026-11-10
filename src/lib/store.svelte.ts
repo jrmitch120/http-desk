@@ -13,6 +13,7 @@ import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractT
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
 import { SHARED } from "./vars";
+import { wording, type ButtonRole } from "./platform";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -74,12 +75,18 @@ export interface Toast {
 export interface DialogButton {
   label: string;
   value: string;
-  primary?: boolean;
+  /** Decides where the button sits on each OS (`arrangeDialogButtons`), and
+   *  which one Enter (primary) and Escape (cancel) stand for. */
+  role?: ButtonRole;
+  /** Drawn in the danger colour: a primary that destroys something, or a destructive alternative. */
   danger?: boolean;
   /** Focused when the dialog opens, instead of the primary button. Set it on
    *  Cancel for irreversible confirmations, so a stray Enter destroys nothing. */
   focus?: boolean;
 }
+
+/** A dialog's Cancel button, which Escape stands for (answers "cancel"). */
+export const CANCEL: DialogButton = { label: "Cancel", value: "cancel", role: "cancel" };
 
 /** A definition's row to open; with `add`, one with an empty value is added if there's none. */
 export type WantedDefinition = Definition & { add?: boolean };
@@ -154,7 +161,7 @@ class PendingForm<S, C> {
   }
 }
 
-export type ModalKind = "env" | "openapi" | "settings" | null;
+export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 
@@ -232,6 +239,9 @@ class AppStore {
   /** A Find usages result asked to show this field of the tab's request: its
    *  request editor switches to it and clears this. */
   fieldWanted = $state<{ tabId: string; field: UsageField } | null>(null);
+  /** The tab whose request editor shows its request's `.http` source instead of
+   *  its sections (the editor's .http button, Request → Show .http Source). */
+  sourceShownFor = $state<string | null>(null);
   private renameForm = new PendingForm<Renaming, RenameChoice>();
   /** The Rename variable form on screen (`RenameVariable.svelte`), if any. */
   get renaming(): Renaming | null {
@@ -240,11 +250,15 @@ class AppStore {
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
 
-  /** "HttpDesk — my-api — staging": the workspace and the active environment, so
-   *  the window always says where a send will go. App.svelte applies it. */
-  windowTitle = $derived(
-    this.root ? ["HttpDesk", basename(this.root), ...(this.envName ? [this.envName] : [])].join(" — ") : "HttpDesk",
-  );
+  /** "Get users — my-api — staging": the active request (as its tab names it), the
+   *  workspace and the active environment, dropping what doesn't apply; "HttpDesk"
+   *  with no workspace. The request leads because the Dock, taskbar and window
+   *  switcher cut long titles off at the end. App.svelte applies it. */
+  windowTitle = $derived.by(() => {
+    if (!this.root) return "HttpDesk";
+    const req = this.requestFor(this.activeTab);
+    return [req && displayName(req), basename(this.root), this.envName].filter(Boolean).join(" — ");
+  });
 
   /** Every environment name in the workspace (the picker lists them all). */
   envNames = $derived(environmentNames(this.envSet, this.envFolders));
@@ -392,9 +406,9 @@ class AppStore {
     if (!dirty.length) return true;
     const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
     const r = await this.choose("Unsaved changes", question ? `${summary} ${question}` : summary, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Don't save", value: "discard", danger: true },
-      { label: "Save all", value: "save", primary: true },
+      CANCEL,
+      { label: "Don't save", value: "discard", role: "destructive", danger: true },
+      { label: "Save all", value: "save", role: "primary" },
     ]);
     if (r.button === "cancel") return false;
     if (r.button === "save") {
@@ -416,6 +430,11 @@ class AppStore {
     } finally {
       this.quitting = false;
     }
+  }
+
+  /** The recent workspaces other than the open one, as many as the workspace menus list (the top bar's, Open Recent). */
+  get otherRecentWorkspaces(): string[] {
+    return (this.settings?.recentWorkspaces ?? []).filter((w) => w !== this.root).slice(0, 8);
   }
 
   async openWorkspace(path: string) {
@@ -644,8 +663,8 @@ class AppStore {
       message += ` ${unsaved.join(", ")} ${unsaved.length === 1 ? "is" : "are"} open with unsaved edits, which will be lost.`;
     }
     const r = await this.choose("Overwrite existing files?", message, [
-      { label: "Cancel", value: "cancel", focus: true },
-      { label: "Overwrite", value: "overwrite", danger: true },
+      { ...CANCEL, focus: true },
+      { label: "Overwrite", value: "overwrite", role: "primary", danger: true },
     ]);
     return r.button === "overwrite";
   }
@@ -813,9 +832,9 @@ class AppStore {
     const req = this.requestFor(tab);
     if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
-        { label: "Cancel", value: "cancel" },
-        { label: "Don't save", value: "discard", danger: true },
-        { label: "Save", value: "save", primary: true },
+        CANCEL,
+        { label: "Don't save", value: "discard", role: "destructive", danger: true },
+        { label: "Save", value: "save", role: "primary" },
       ]);
       if (r.button === "cancel") return false;
       if (r.button === "save" && !(await this.saveTab(tab))) return false;
@@ -874,8 +893,8 @@ class AppStore {
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!doc || !req) return;
     const r = await this.choose("Delete request", `Delete "${displayName(req)}" from ${basename(path)}?`, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Delete", value: "delete", danger: true },
+      CANCEL,
+      { label: "Delete", value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     const wasClean = !this.isDocDirty(path);
@@ -979,16 +998,17 @@ class AppStore {
   }
 
   async deletePath(path: string) {
-    const r = await this.choose("Move to trash", `Move "${basename(path)}" to the trash?`, [
-      { label: "Cancel", value: "cancel" },
-      { label: "Move to trash", value: "delete", danger: true },
+    const words = wording();
+    const r = await this.choose(words.moveToTrash, words.trashQuestion(basename(path)), [
+      CANCEL,
+      { label: words.moveToTrash, value: "delete", role: "primary", danger: true },
     ]);
     if (r.button !== "delete") return;
     try {
       if ((await api.deletePath(path)) === "trashUnavailable") {
-        const ok = await this.choose("Couldn't move to trash", `Delete "${basename(path)}" permanently? This can't be undone.`, [
-          { label: "Cancel", value: "cancel", focus: true },
-          { label: "Delete permanently", value: "delete", danger: true },
+        const ok = await this.choose(words.trashUnavailable, `Delete "${basename(path)}" permanently? This can't be undone.`, [
+          { ...CANCEL, focus: true },
+          { label: "Delete permanently", value: "delete", role: "primary", danger: true },
         ]);
         if (ok.button !== "delete") return;
         await api.deletePermanently(path);
@@ -1043,8 +1063,8 @@ class AppStore {
       message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
       fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
       buttons: [
-        { label: "Cancel", value: "cancel" },
-        { label: "Send", value: "send", primary: true },
+        CANCEL,
+        { label: "Send", value: "send", role: "primary" },
       ],
     });
     if (r.button !== "send") return false;
@@ -1115,8 +1135,8 @@ class AppStore {
     this.confirmingSend.add(tabId);
     try {
       const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
-        { label: "Cancel", value: "cancel", focus: true },
-        { label: `Send ${verb}`, value: "send", danger: true },
+        { ...CANCEL, focus: true },
+        { label: `Send ${verb}`, value: "send", role: "primary", danger: true },
       ]);
       return r.button === "send";
     } finally {
@@ -1256,6 +1276,11 @@ class AppStore {
     if (req !== own) await this.openRequest(tab.path, { key: req._key });
     const index = req.variables.map((v) => v.name).lastIndexOf(name);
     if (this.activeTab) this.fieldWanted = { tabId: this.activeTab.id, field: { kind: "variable", index, name } };
+  }
+
+  /** Shows or hides the `.http` source in the tab's request editor. */
+  toggleSource(tabId: string) {
+    this.sourceShownFor = this.sourceShownFor === tabId ? null : tabId;
   }
 
   /** Switches the tab's request editor to its Settings section (timeouts). */
@@ -1474,8 +1499,8 @@ class AppStore {
       title,
       input: { value, placeholder, selectStem },
       buttons: [
-        { label: "Cancel", value: "cancel" },
-        { label: "OK", value: "ok", primary: true },
+        CANCEL,
+        { label: "OK", value: "ok", role: "primary" },
       ],
     });
     return r.button === "ok" ? r.value : null;

@@ -5,8 +5,16 @@
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
 
-/** Loads the app and waits for the mocked workspace tree to appear. */
+/**
+ * Loads the app and waits for the mocked workspace tree to appear.
+ *
+ * The app runs as on macOS (`?platform=mac`) unless `query` names another
+ * platform, whatever machine runs the test. So app shortcuts are pressed as
+ * `Meta+…`, never `ControlOrMeta+…`, which follows the test machine. Editor
+ * keys CodeMirror handles itself (select all, find) still follow the machine.
+ */
 export async function openApp(page: Page, query = ""): Promise<void> {
+  if (!/[?&]platform=/.test(query)) query = `${query ? `${query}&` : "?"}platform=mac`;
   await page.goto(`/${query}`);
   await expect(treeItem(page, "api")).toBeVisible();
 }
@@ -35,7 +43,7 @@ export function urlBar(page: Page): Locator {
   return page.locator(".url-input .cm-content");
 }
 
-/** The sidebar search box (⌘/Ctrl P focuses it). */
+/** The sidebar search box (⌘P / Ctrl+P focuses it). */
 export function searchBox(page: Page): Locator {
   return page.getByPlaceholder("Search requests");
 }
@@ -72,6 +80,7 @@ export interface MockState {
   /** The settings it last saved. */
   settings: {
     theme: string;
+    recentWorkspaces: string[];
     exec: Record<string, unknown>;
     showResolved: boolean;
     envView: "matrix" | "list";
@@ -96,11 +105,82 @@ export interface MockState {
   settingsServed: boolean;
   /** The window title the app last set (null before it sets one). */
   title: string | null;
+  /** How many times the app asked the window to close (Close Window), each one a close request it answers itself. */
+  windowCloseRequests: number;
+  /** Whether the window has closed: a close request the app let through. */
+  windowClosed: boolean;
+  /** The `.http` files `save_http_file` wrote, in order. */
+  savedPaths: string[];
+  /** The native menu bar as the app last sent it, with the state changes since applied. */
+  menu: { layout: { label: string; items: MenuEntry[] }[] };
+  /** Each `set_menu_state` batch, in order. */
+  menuStateChanges: MenuStateChange[][];
+  /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
+  openedUrls: string[];
+  /** The OS clipboard the clipboard plugin reads and writes. */
+  clipboard: string;
+  /** The texts the clipboard plugin wrote, in order. */
+  clipboardWrites: string[];
+}
+
+/** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */
+export type MenuEntry =
+  | { kind: "item"; id: string; label: string; accelerator: string | null; enabled: boolean; checked: boolean | null }
+  | { kind: "separator" }
+  | { kind: "predefined"; item: string; label: string | null }
+  | { kind: "submenu"; label: string; enabled: boolean; items: MenuEntry[] };
+export type MenuItem = Extract<MenuEntry, { kind: "item" }>;
+export type MenuStateChange = { id: string; enabled?: boolean; checked?: boolean };
+
+/** The labels of the native menu bar's menus, as the app last sent it. */
+export async function menuBar(page: Page): Promise<string[]> {
+  return (await mockState(page, "menu")).layout.map((m) => m.label);
+}
+
+/** The first native menu item with this id (a command id), as it shows now; undefined if there's none. */
+export async function menuItem(page: Page, id: string): Promise<MenuItem | undefined> {
+  const find = (items: MenuEntry[]): MenuItem | undefined => {
+    for (const e of items) {
+      if (e.kind === "item" && e.id === id) return e;
+      const inner = e.kind === "submenu" ? find(e.items) : undefined;
+      if (inner) return inner;
+    }
+  };
+  return find((await mockState(page, "menu")).layout.flatMap((m) => m.items));
+}
+
+/** Each batch of item state changes the app sent to the native menu, in order. */
+export function menuStateChanges(page: Page): Promise<MenuStateChange[][]> {
+  return mockState(page, "menuStateChanges");
+}
+
+/** Clicks a native menu item: the menu event the shell sends, carrying the item's id. */
+export function menuClick(page: Page, id: string): Promise<void> {
+  return page.evaluate((i) => (window as unknown as { __mock: { menuClick: (id: string) => Promise<void> } }).__mock.menuClick(i), id);
 }
 
 /** One value of the mock's test-facing state, read from the page. */
 export function mockState<K extends keyof MockState>(page: Page, key: K): Promise<MockState[K]> {
   return page.evaluate((k) => (window as unknown as { __mock: MockState }).__mock[k], key) as Promise<MockState[K]>;
+}
+
+/** The OS clipboard's text, as the clipboard plugin (src/lib/clipboard.ts) reads and writes it. */
+export function clipboard(page: Page): Promise<string> {
+  return mockState(page, "clipboard");
+}
+
+/** Puts `text` on the OS clipboard, for the clipboard plugin to read. */
+export function setClipboard(page: Page, text: string): Promise<void> {
+  return page.evaluate((t) => {
+    (window as unknown as { __mock: { clipboard: string } }).__mock.clipboard = t;
+  }, text);
+}
+
+/** Makes the clipboard plugin's writes fail (or succeed again), as when the OS clipboard is unavailable. */
+export function setClipboardFails(page: Page, fails: boolean): Promise<void> {
+  return page.evaluate((f) => {
+    (window as unknown as { __mock: { clipboardFails: boolean } }).__mock.clipboardFails = f;
+  }, fails);
 }
 
 /** Starts the mock's `pretty_response` count from zero. */
@@ -120,6 +200,11 @@ export function setMockResponse(page: Page, kind: string | null): Promise<void> 
 /** Lets settings held by `?settingsDelay=hold` through. */
 export function releaseSettings(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());
+}
+
+/** Lets formatting held by `?pretty=hold` through. */
+export function releasePretty(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { releasePretty: () => void } }).__mock.releasePretty());
 }
 
 /** An open request tab in the tab bar, by request name. */

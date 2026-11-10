@@ -66,7 +66,7 @@ export function createFindPanel(view: EditorView): Panel {
   const bar = mount(FindBar, { target: dom, props: { query, readonly: view.state.readOnly, actions } });
   flushSync(); // mount doesn't run effects, and the bar's bind:this is one
   const field = bar.findField();
-  // openSearchPanel (⌘/Ctrl F while the bar is open) focuses the [main-field] input.
+  // openSearchPanel (⌘F / Ctrl+F while the bar is open) focuses the [main-field] input.
   field?.setAttribute("main-field", "true");
 
   return {
@@ -74,7 +74,7 @@ export function createFindPanel(view: EditorView): Panel {
     top: true,
     mount: () => field?.select(),
     update(u: ViewUpdate) {
-      // Keep the bar in step when the query changes from outside (⌘/Ctrl F with a selection).
+      // Keep the bar in step when the query changes from outside (⌘F / Ctrl+F with a selection).
       for (const tr of u.transactions)
         for (const effect of tr.effects)
           if (effect.is(setSearchQuery) && !effect.value.eq(current)) {
