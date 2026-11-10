@@ -67,6 +67,9 @@ struct AppSettings {
     show_descriptions: bool,
     /// Sidebar width in px. A float, so no value the frontend writes fails to load.
     sidebar_width: f64,
+    /// The sidebar is hidden (View → Show Sidebar). Its width is kept meanwhile.
+    #[serde(deserialize_with = "or_default")]
+    sidebar_hidden: bool,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
     /// Show the resolved preview under the URL bar.
@@ -143,6 +146,7 @@ impl Default for AppSettings {
             check_updates: true,
             show_descriptions: true,
             sidebar_width: 280.0,
+            sidebar_hidden: false,
             split_ratio: SplitRatio::default(),
             show_resolved: false,
             env_view: EnvView::List,

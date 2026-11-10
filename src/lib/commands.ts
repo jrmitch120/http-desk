@@ -30,6 +30,7 @@ export type CommandId =
   | "duplicate-request"
   | "rename-request"
   | "show-source"
+  | "toggle-sidebar"
   | "search"
   | "choose-environment"
   | "manage-environments"
@@ -62,7 +63,7 @@ export interface Command {
   enabled(): boolean;
   /** Runs even while a modal or dialog is open, like the window's close button (Quit). */
   underModal?: boolean;
-  /** For a choice or a toggle the menu shows ticked (a layout, a theme, the .http source). */
+  /** For a choice or a toggle the menu shows ticked (a layout, a theme, the .http source, the sidebar). */
   checked?(): boolean;
   run(): void;
 }
@@ -214,12 +215,25 @@ const COMMANDS: Command[] = [
     run: () => app.activeTabId && app.toggleSource(app.activeTabId),
   },
   {
+    // Hiding never changes the stored width, so showing again restores it.
+    id: "toggle-sidebar",
+    label: "Show Sidebar",
+    shortcut: { mod: true, key: "b" },
+    enabled: inWorkspace,
+    checked: () => app.sidebarShown,
+    run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
+  },
+  {
     id: "search",
     label: "Search Requests",
     shortcut: { mod: true, key: "p" },
     aliases: [{ mod: true, key: "k" }],
     enabled: inWorkspace,
-    run: () => app.focusSearch++,
+    // The search box is in the sidebar.
+    run: () => {
+      app.showSidebar();
+      app.focusSearch++;
+    },
   },
   {
     id: "choose-environment",

@@ -96,6 +96,15 @@
   {/if}
   <button
     class="icon-btn"
+    aria-label="Show sidebar"
+    aria-pressed={app.sidebarShown}
+    use:tooltip={`${app.sidebarShown ? "Hide" : "Show"} sidebar (${shortcutHint("toggle-sidebar")})`}
+    onclick={() => runCommand("toggle-sidebar")}
+  >
+    <Icon name="sidebar" />
+  </button>
+  <button
+    class="icon-btn"
     aria-label={layout === "horizontal" ? "Show response below" : "Show response on the right"}
     use:tooltip
     onclick={() => app.updateSettings({ layout: layout === "horizontal" ? "vertical" : "horizontal" })}

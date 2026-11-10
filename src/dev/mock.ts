@@ -289,6 +289,7 @@ let settings = {
   checkUpdates: true,
   showDescriptions: true,
   sidebarWidth: 280,
+  sidebarHidden: false,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.

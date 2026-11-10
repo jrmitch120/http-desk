@@ -52,6 +52,12 @@ control or the popup layer.
 - [ ] Tab bar: method badges, the unsaved dot, overflow when many tabs are open.
 - [ ] Sidebar separator and request/response separator: drag, arrow keys,
       double-click to reset. Same hover highlight on both. Check the vertical layout too.
+- [ ] Hide and show the sidebar with ⌘B / Ctrl+B, View → Show Sidebar and the top bar's
+      sidebar button: the request area takes the full width, the sidebar comes back at its
+      width, and the menu item's tick follows. View → Show Sidebar shows ⌘B on macOS
+      (pressing ⌘B toggles once, not twice), Ctrl+B in the label on Windows, and no
+      shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
+      with the search box focused.
 
 ## Request editor
 

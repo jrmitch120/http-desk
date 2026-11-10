@@ -685,8 +685,8 @@ Decisions made during implementation, beyond the plan above:
   Undefined variable is also there, which is reported first.
 * <a id="find-usages"></a>**Find usages** (a hover card's button, or a variable's menu in
   the Environments modal, either view) lists every
-  `{{name}}` reference in the workspace in the sidebar, in place of the tree, until
-  closed. The search is the core's `workspace::usages(root, name, open)` behind the
+  `{{name}}` reference in the workspace in the sidebar (showing it if it's hidden), in
+  place of the tree, until closed. The search is the core's `workspace::usages(root, name, open)` behind the
   `find_usages` command: each `.http`/`.rest` file the explorer lists (open documents as
   the app has them, unsaved edits included, which `app.findUsages` sends), then the
   values in every folder's env files (the root's, then each folder's in explorer order). It finds direct references only, as written:

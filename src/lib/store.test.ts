@@ -55,6 +55,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import { app } from "./store.svelte";
 import { forceOS } from "./platform";
+import { command, runCommand } from "./commands";
+import { trackModal } from "./modal.svelte";
 
 const PATH = "/ws/api/books.http";
 
@@ -475,6 +477,76 @@ describe("saving settings", () => {
     await app.selectEnvironment("staging");
     expect(app.envName).toBe("staging");
     expect(app.toasts.map((t) => t.kind)).toEqual(["error"]);
+  });
+});
+
+describe("the sidebar", () => {
+  const loaded = (extra: Record<string, unknown>) =>
+    ({ theme: "dark", recentWorkspaces: [], environments: {}, sidebarWidth: 340, ...extra }) as unknown as AppSettings;
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    api.saveSettings.mockReset().mockResolvedValue(undefined);
+    app.settings = loaded({});
+    app.root = "/ws";
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["missing", {}, true],
+    ["not a bool", { sidebarHidden: "yes" }, true],
+    ["false", { sidebarHidden: false }, true],
+    ["true", { sidebarHidden: true }, false],
+  ])("loads shown or hidden from settings (%s)", async (_, extra, shown) => {
+    api.getSettings.mockResolvedValue(loaded(extra));
+    await app.init();
+    expect(app.sidebarShown).toBe(shown);
+    expect(app.settings?.sidebarWidth).toBe(340);
+  });
+
+  it("is hidden and shown again by Show Sidebar, keeping its width and saving the choice", async () => {
+    expect(command("toggle-sidebar").checked?.()).toBe(true);
+    expect(runCommand("toggle-sidebar")).toBe(true);
+    expect(app.sidebarShown).toBe(false);
+    expect(command("toggle-sidebar").checked?.()).toBe(false);
+    await vi.waitFor(() => expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ sidebarHidden: true, sidebarWidth: 340 })));
+
+    runCommand("toggle-sidebar");
+    expect(app.sidebarShown).toBe(true);
+    expect(app.settings?.sidebarWidth).toBe(340);
+    await vi.waitFor(() => expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ sidebarHidden: false, sidebarWidth: 340 })));
+  });
+
+  it("isn't toggled while a modal is open", () => {
+    const closed = trackModal();
+    try {
+      expect(runCommand("toggle-sidebar")).toBe(false);
+    } finally {
+      closed();
+    }
+    expect(app.sidebarShown).toBe(true);
+  });
+
+  it("is shown by Search Requests, which then focuses its search box", () => {
+    app.settings!.sidebarHidden = true;
+    const asked = app.focusSearch;
+    runCommand("search");
+    expect(app.sidebarShown).toBe(true);
+    expect(app.focusSearch).toBe(asked + 1);
+  });
+
+  it("is shown by Find usages, which lists its results there", async () => {
+    app.settings!.sidebarHidden = true;
+    findUsages.mockResolvedValue([]);
+    await app.findUsages("host");
+    expect(app.sidebarShown).toBe(true);
+    expect(app.usages).toEqual({ name: "host", usages: [] });
+  });
+
+  it("isn't saved again when shown while already shown", async () => {
+    app.showSidebar();
+    runCommand("search");
+    expect(api.saveSettings).not.toHaveBeenCalled();
   });
 });
 

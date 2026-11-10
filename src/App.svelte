@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
@@ -38,6 +38,19 @@
     getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
 
+  let aside: HTMLElement | undefined = $state();
+  let work: HTMLElement | undefined = $state();
+
+  // Hiding the sidebar while it has focus hands focus to the work area (the
+  // active tab, else the area itself) before the sidebar goes, never to <body>.
+  $effect.pre(() => {
+    if (app.sidebarShown) return;
+    untrack(() => {
+      if (!aside?.contains(document.activeElement)) return;
+      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work)?.focus();
+    });
+  });
+
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
@@ -62,16 +75,18 @@
     <TopBar />
     <div class="main">
       <SplitPane
+        collapsed={!app.sidebarShown}
         size={app.settings?.sidebarWidth ?? SIDEBAR.initial}
         limits={SIDEBAR}
         label="Resize sidebar"
         onresize={(sidebarWidth) => app.updateSettings({ sidebarWidth })}
       >
         {#snippet first()}
-          <aside><Sidebar /></aside>
+          <aside bind:this={aside}><Sidebar /></aside>
         {/snippet}
         {#snippet second()}
-          <section class="work">
+          <!-- Focusable from code only: where focus goes when the sidebar hides with no tab open. -->
+          <section class="work" bind:this={work} tabindex="-1">
             <TabBar />
             {#if app.activeTab}
               {#key app.activeTab.id}
@@ -130,6 +145,9 @@
     flex: 1;
     min-height: 0;
     background: var(--panel);
+  }
+  .work:focus {
+    outline: none;
   }
   .work {
     flex: 1;
