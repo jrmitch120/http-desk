@@ -203,6 +203,9 @@ class AppStore {
   themeChoice = $derived<AppSettings["theme"]>(
     this.settings?.theme === "light" || this.settings?.theme === "dark" ? this.settings.theme : "system",
   );
+  /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
+   *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
+  sidebarShown = $derived(this.settings?.sidebarHidden !== true);
   /** The theme in effect, with System resolved through the OS appearance. */
   effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
   /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
@@ -352,6 +355,11 @@ class AppStore {
     getCurrentWindow()
       .setTheme(windowTheme)
       .catch(() => {});
+  }
+
+  /** Shows the sidebar if it's hidden, for what puts its results there (Search Requests, Find usages). */
+  showSidebar() {
+    if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });
   }
 
   /** Applies and saves settings; a failed save shows an error toast and returns false. */
@@ -745,10 +753,12 @@ class AppStore {
     if (req) await this.openRequest(hit.path, { key: req._key });
   }
 
-  /** Find usages of `{{name}}` across the workspace, shown in the sidebar. Open
-   *  documents are searched as they are on screen (unsaved edits included); the
-   *  backend reads every other file, and the env files, from disk. */
+  /** Find usages of `{{name}}` across the workspace, shown in the sidebar (shown
+   *  first if it's hidden). Open documents are searched as they are on screen
+   *  (unsaved edits included); the backend reads every other file, and the env
+   *  files, from disk. */
   async findUsages(name: string) {
+    this.showSidebar();
     const seq = ++this.usagesSeq;
     this.usages = { name, usages: null };
     try {

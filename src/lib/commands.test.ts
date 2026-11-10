@@ -44,6 +44,13 @@ describe("commandForKey", () => {
     expect(on("mac", press("s"))).toBeUndefined();
   });
 
+  it("toggles the sidebar with ⌘B on macOS and Ctrl+B elsewhere", () => {
+    expect(on("mac", press("b", { metaKey: true }))).toBe("toggle-sidebar");
+    expect(on("windows", press("b", { ctrlKey: true }))).toBe("toggle-sidebar");
+    expect(on("linux", press("b", { ctrlKey: true }))).toBe("toggle-sidebar");
+    expect(on("mac", press("b", { ctrlKey: true }))).toBeUndefined();
+  });
+
   it("runs a command from its unshown aliases too", () => {
     expect(on("mac", press("p", { metaKey: true }))).toBe("search");
     expect(on("mac", press("k", { metaKey: true }))).toBe("search");

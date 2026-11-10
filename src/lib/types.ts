@@ -388,8 +388,10 @@ export interface AppSettings {
   layout: "horizontal" | "vertical";
   checkUpdates: boolean;
   showDescriptions: boolean;
-  /** Sidebar width in px. */
+  /** Sidebar width in px, kept while the sidebar is hidden. */
   sidebarWidth: number;
+  /** The sidebar is hidden (View → Show Sidebar, ⌘B / Ctrl+B). */
+  sidebarHidden: boolean;
   /** Request pane's share (0..1) of the request/response split, per layout. */
   splitRatio: Record<AppSettings["layout"], number>;
   /** Show the resolved preview under the URL bar. */

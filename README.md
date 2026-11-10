@@ -72,8 +72,9 @@ Requests you don't edit are saved byte-for-byte as they were.
 | Send | **Send** button, `Enter` in the URL bar, or `⌘/Ctrl Enter` |
 | Save / save all | `⌘/Ctrl S` / `⌘/Ctrl ⇧ S` |
 | Close tab / close window | `⌘/Ctrl W` / `⌘/Ctrl ⇧ W` (unsaved edits are asked about first) |
-| Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` |
-| Find usages of a variable | Hover a `{{variable}}` → *Find usages*, or a variable's menu in the Environments modal (List or Matrix); results open in the explorer |
+| Search requests | `⌘/Ctrl P` or `⌘/Ctrl K` (shows the sidebar if it's hidden) |
+| Hide / show the sidebar | `⌘/Ctrl B`, *View → Show Sidebar*, or the sidebar icon in the top bar; it comes back at the width it had, and stays hidden after a restart |
+| Find usages of a variable | Hover a `{{variable}}` → *Find usages*, or a variable's menu in the Environments modal (List or Matrix); results open in the explorer (shown if it's hidden) |
 | Rename a variable | A variable's menu in the Environments modal (List or Matrix) → *Rename everywhere…*; renames it in every environment and, optionally, every `{{reference}}` (files with unsaved edits stay unsaved) |
 | Switch environment | Top-right selector, or `⌘⌥E` (macOS) / `Ctrl Alt E` (Windows, Linux), then type to filter and `Enter`; the window title names the active one |
 | Edit environments | Layers icon next to the selector, or `⌘/Ctrl E` |

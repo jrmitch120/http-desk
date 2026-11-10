@@ -3,7 +3,9 @@
   // second takes the rest. Drag the separator, or focus it and use the arrow
   // keys (Home/End for the limits); double-click resets to the default.
   // The size is the caller's: `onresize` reports a new one, and the caller
-  // stores it and passes it back as `size`.
+  // stores it and passes it back as `size`. `collapsed` hides the first pane and
+  // the separator, so the second takes the whole; the first stays mounted, keeping
+  // its state for when it's shown again, at the same size.
   import type { Snippet } from "svelte";
   import { clampPane, type PaneLimits } from "../lib/panes";
 
@@ -14,6 +16,8 @@
     ratio?: boolean;
     /** Panes one above the other (a horizontal separator) instead of side by side. */
     stacked?: boolean;
+    /** Hides the first pane and the separator (not rendered, not focusable). */
+    collapsed?: boolean;
     /** Accessible name of the separator. */
     label: string;
     /** Called with the new size after a drag, a key press or a double-click. */
@@ -22,7 +26,7 @@
     second: Snippet;
   }
 
-  let { size, limits, ratio = false, stacked = false, label, onresize, first, second }: Props = $props();
+  let { size, limits, ratio = false, stacked = false, collapsed = false, label, onresize, first, second }: Props = $props();
 
   const id = $props.id();
   let root: HTMLDivElement;
@@ -82,30 +86,32 @@
 </script>
 
 <div class="split-pane" class:stacked bind:this={root}>
-  <div class="pane" id="{id}-first" style:flex-basis={basis}>
+  <div class="pane" class:collapsed id="{id}-first" style:flex-basis={basis}>
     {@render first()}
   </div>
-  <!-- A focusable separator with a value is a widget in ARIA (the window
-       splitter pattern); Svelte's checker only knows the static kind. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-  <div
-    class="separator"
-    class:dragging={dragging !== null}
-    role="separator"
-    tabindex="0"
-    aria-label={label}
-    aria-controls="{id}-first"
-    aria-orientation={stacked ? "horizontal" : "vertical"}
-    aria-valuenow={announced(current)}
-    aria-valuemin={announced(limits.min)}
-    aria-valuemax={announced(limits.max)}
-    {onpointerdown}
-    {onpointermove}
-    {onpointerup}
-    onpointercancel={onpointerup}
-    ondblclick={() => commit(limits.initial)}
-    {onkeydown}
-  ></div>
+  {#if !collapsed}
+    <!-- A focusable separator with a value is a widget in ARIA (the window
+         splitter pattern); Svelte's checker only knows the static kind. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="separator"
+      class:dragging={dragging !== null}
+      role="separator"
+      tabindex="0"
+      aria-label={label}
+      aria-controls="{id}-first"
+      aria-orientation={stacked ? "horizontal" : "vertical"}
+      aria-valuenow={announced(current)}
+      aria-valuemin={announced(limits.min)}
+      aria-valuemax={announced(limits.max)}
+      {onpointerdown}
+      {onpointermove}
+      {onpointerup}
+      onpointercancel={onpointerup}
+      ondblclick={() => commit(limits.initial)}
+      {onkeydown}
+    ></div>
+  {/if}
   <div class="pane rest">
     {@render second()}
   </div>
@@ -132,6 +138,9 @@
   }
   .rest {
     flex: 1 1 0;
+  }
+  .pane.collapsed {
+    display: none;
   }
   /* A 1px line with a wider grab area; hover and drag light it up, keyboard focus rings it. */
   .separator {

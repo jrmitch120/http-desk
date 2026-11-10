@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
@@ -38,6 +38,21 @@
     getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
 
+  let main: HTMLElement | undefined = $state();
+  let work: HTMLElement | undefined = $state();
+
+  // Hiding the sidebar while it or its separator has focus hands focus to the
+  // work area before they go, never to <body>: the active tab, else the tab
+  // bar's New request button.
+  $effect.pre(() => {
+    if (app.sidebarShown) return;
+    untrack(() => {
+      const focused = document.activeElement;
+      if (!main?.contains(focused) || work?.contains(focused)) return;
+      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
+    });
+  });
+
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
     if (e.defaultPrevented) return;
@@ -60,8 +75,9 @@
 {#if app.root}
   <div class="shell">
     <TopBar />
-    <div class="main">
+    <div class="main" bind:this={main}>
       <SplitPane
+        collapsed={!app.sidebarShown}
         size={app.settings?.sidebarWidth ?? SIDEBAR.initial}
         limits={SIDEBAR}
         label="Resize sidebar"
@@ -71,7 +87,7 @@
           <aside><Sidebar /></aside>
         {/snippet}
         {#snippet second()}
-          <section class="work">
+          <section class="work" bind:this={work}>
             <TabBar />
             {#if app.activeTab}
               {#key app.activeTab.id}

@@ -80,6 +80,8 @@ export function menuLayout(os: OS): TopMenu[] {
       ? [cmd("undo"), cmd("redo"), SEP, cmd("cut"), cmd("copy"), cmd("paste"), cmd("select-all")]
       : [native("undo"), native("redo"), SEP, native("cut"), native("copy"), native("paste"), native("selectAll")];
   const view: MenuEntry[] = [
+    cmd("toggle-sidebar"),
+    SEP,
     { kind: "submenu", label: "Response Layout", items: [cmd("layout-right"), cmd("layout-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];

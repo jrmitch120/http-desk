@@ -800,6 +800,32 @@ fn the_environments_view_defaults_to_the_list_and_is_remembered() {
     assert_eq!((json["envView"].as_str(), json["theme"].as_str()), (Some("list"), Some("light")));
 }
 
+/// #95: the sidebar starts shown, and hiding it is remembered.
+#[test]
+fn the_sidebar_starts_shown_and_hiding_it_is_remembered() {
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["sidebarHidden"], false);
+    settings["sidebarHidden"] = json!(true);
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    assert_eq!(h.ok("get_settings", json!({}))["sidebarHidden"], true);
+
+    // A file without the field, or with a value that isn't a bool, shows it, keeping the other settings.
+    for old in
+        [r#"{"theme":"light","sidebarWidth":340}"#, r#"{"sidebarHidden":"yes","theme":"light","sidebarWidth":340}"#]
+    {
+        let json = serde_json::to_value(serde_json::from_str::<super::AppSettings>(old).unwrap()).unwrap();
+        assert_eq!(
+            (json["sidebarHidden"].as_bool(), json["theme"].as_str(), json["sidebarWidth"].as_f64()),
+            (Some(false), Some("light"), Some(340.0)),
+            "{old}"
+        );
+    }
+}
+
 /// #39: the Environments matrix's column widths are remembered per workspace.
 #[test]
 fn the_environments_matrix_column_widths_are_remembered_per_workspace() {
