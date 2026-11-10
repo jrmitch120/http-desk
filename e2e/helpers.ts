@@ -80,6 +80,7 @@ export interface MockState {
   /** The settings it last saved. */
   settings: {
     theme: string;
+    zoom: number;
     recentWorkspaces: string[];
     exec: Record<string, unknown>;
     showResolved: boolean;
@@ -109,6 +110,8 @@ export interface MockState {
   windowCloseRequests: number;
   /** Whether the window has closed: a close request the app let through. */
   windowClosed: boolean;
+  /** The webview zoom the app last set (`1` is 100%), null before it sets one. */
+  webviewZoom: number | null;
   /** The `.http` files `save_http_file` wrote, in order. */
   savedPaths: string[];
   /** The native menu bar as the app last sent it, with the state changes since applied. */

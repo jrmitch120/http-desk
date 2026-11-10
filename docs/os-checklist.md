@@ -98,6 +98,14 @@ control or the popup layer.
       Browse… for a certificate path. The theme switch also changes the title bar.
 - [ ] Theme: with System chosen, switch the OS between light and dark; the app, the title
       bar and the scrollbars follow.
+- [ ] Zoom: ⌘= / ⌘- / ⌘0 (Ctrl elsewhere), and ⌘+ (Shift+=) and the keypad's +, step
+      the whole window (sidebar, editors, response preview, modals) one level at a time
+      between 50% and 150%. View → Zoom In / Zoom Out / Actual Size show ⌘=, ⌘- and ⌘0 on
+      macOS (one press steps once, not twice), the shortcut in the label on Windows, and
+      none on Linux; they grey out at 150%, 50% and 100%. Quit at 150% and start again:
+      the window opens at 150% with no frame at 100% first (on Windows too, where the
+      webview is created before the page loads). At 150% and the minimum window size
+      (960×600) the TopBar, the Send button and the modals' buttons stay reachable.
 - [ ] Environments: the variables grid with the Secret lock and show/hide value, the
       search filter, the private-file warning banner, the "Active" badge.
 - [ ] OpenAPI import: File / URL switch, the operation list with group checkboxes in the

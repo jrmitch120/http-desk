@@ -51,6 +51,25 @@ describe("commandForKey", () => {
     expect(on("mac", press("b", { ctrlKey: true }))).toBeUndefined();
   });
 
+  it("zooms with ⌘= / ⌘- / ⌘0 on macOS and Ctrl elsewhere", () => {
+    expect(on("mac", press("=", { metaKey: true }))).toBe("zoom-in");
+    expect(on("mac", press("-", { metaKey: true }))).toBe("zoom-out");
+    expect(on("mac", press("0", { metaKey: true }))).toBe("zoom-reset");
+    expect(on("windows", press("=", { ctrlKey: true }))).toBe("zoom-in");
+    expect(on("windows", press("-", { ctrlKey: true }))).toBe("zoom-out");
+    expect(on("linux", press("0", { ctrlKey: true }))).toBe("zoom-reset");
+    expect(on("mac", press("0", { ctrlKey: true }))).toBeUndefined();
+  });
+
+  it("zooms in from Mod++ too, with or without Shift (⌘+ is ⇧= on a US keyboard; the keypad's +)", () => {
+    for (const os of ["mac", "windows"] as const) {
+      const mod = os === "mac" ? { metaKey: true } : { ctrlKey: true };
+      expect(on(os, press("+", mod))).toBe("zoom-in");
+      expect(on(os, press("+", { ...mod, shiftKey: true }))).toBe("zoom-in");
+      expect(on(os, press("=", { ...mod, shiftKey: true }))).toBe("zoom-in");
+    }
+  });
+
   it("runs a command from its unshown aliases too", () => {
     expect(on("mac", press("p", { metaKey: true }))).toBe("search");
     expect(on("mac", press("k", { metaKey: true }))).toBe("search");

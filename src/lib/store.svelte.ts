@@ -1,11 +1,13 @@
 // Global application state (Svelte 5 runes). Documents are parsed `.http`
 // files; tabs point at a request inside a document by a frontend-only key.
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
 import { basename, dirname, displayName, fileVariables, joinAnd, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
+import { zoomOf } from "./zoom";
 import { toSendError } from "./sendError";
 import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
 import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
@@ -206,6 +208,11 @@ class AppStore {
   /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
    *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
   sidebarShown = $derived(this.settings?.sidebarHidden !== true);
+  /** The zoom of the whole interface. A missing, non-numeric or out-of-range
+   *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
+  zoom = $derived(zoomOf(this.settings?.zoom));
+  /** The webview zoom last asked for, to skip repeat calls. */
+  private webviewZoom: number | undefined = undefined;
   /** The theme in effect, with System resolved through the OS appearance. */
   effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
   /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
@@ -295,6 +302,9 @@ class AppStore {
     this.watchSystemTheme();
     this.windowTheme = undefined;
     this.applyTheme();
+    // The shell already applied the saved zoom before the first paint (theme.rs); this agrees with it.
+    this.webviewZoom = undefined;
+    this.applyZoom();
     await this.migratePaneSizes();
     await listen<{ paths: string[] }>("workspace-changed", (e) => this.onExternalChange(e.payload.paths));
     await listen<{ root: string }>("workspace-missing", (e) => this.onWorkspaceMissing(e.payload.root));
@@ -357,6 +367,15 @@ class AppStore {
       .catch(() => {});
   }
 
+  /** Applies the zoom to the whole webview: the sidebar, editors, previews and modals together. */
+  applyZoom() {
+    if (this.zoom === this.webviewZoom) return;
+    this.webviewZoom = this.zoom;
+    getCurrentWebview()
+      .setZoom(this.zoom)
+      .catch(() => {});
+  }
+
   /** Shows the sidebar if it's hidden, for what puts its results there (Search Requests, Find usages). */
   showSidebar() {
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });
@@ -367,6 +386,7 @@ class AppStore {
     if (!this.settings) return false;
     Object.assign(this.settings, patch);
     this.applyTheme();
+    this.applyZoom();
     return this.saveSettings();
   }
 

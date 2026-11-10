@@ -11,6 +11,7 @@
     "core:window:allow-set-theme",
     "core:window:allow-destroy",
     "core:window:allow-close",
+    "core:webview:allow-set-webview-zoom",
     "dialog:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
