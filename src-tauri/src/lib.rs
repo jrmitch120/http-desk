@@ -70,7 +70,7 @@ struct AppSettings {
     /// The sidebar is hidden (View → Show Sidebar). Its width is kept meanwhile.
     #[serde(deserialize_with = "or_default")]
     sidebar_hidden: bool,
-    /// The zoom of the whole interface, `1.0` being 100% (View → Zoom In / Zoom Out).
+    /// The zoom of the whole interface, `1.0` being 100% (View → Zoom In / Zoom Out / Actual Size).
     /// Applied before the first paint (theme.rs). Out of range, or not a number: 100%.
     #[serde(deserialize_with = "zoom_or_default")]
     zoom: f64,

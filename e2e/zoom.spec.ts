@@ -5,9 +5,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { menuClick, menuItem, mockState, openApp } from "./helpers";
 
+/** The page's window, with the last keydown recorded on it. */
+type Recording = { __lastKey: KeyboardEvent | null };
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    const w = window as unknown as { __lastKey: KeyboardEvent | null };
+    const w = window as unknown as Recording;
     // The last keydown, to check a key the app took was swallowed.
     w.__lastKey = null;
     window.addEventListener("keydown", (e) => (w.__lastKey = e), true);
@@ -26,7 +29,7 @@ async function enabled(page: Page) {
 }
 
 const lastKeyPrevented = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __lastKey: KeyboardEvent | null }).__lastKey?.defaultPrevented ?? null);
+  page.evaluate(() => (window as unknown as Recording).__lastKey?.defaultPrevented ?? null);
 
 /** A keydown as a layout produces it (`key` with these modifiers), on the focused element. */
 const keydown = (page: Page, init: { key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) =>

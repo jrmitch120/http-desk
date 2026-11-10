@@ -10,7 +10,11 @@ describe("the zoom levels", () => {
   });
 
   it("match the range the Rust shell accepts", () => {
-    const rust = (name: string) => Number(shell.match(new RegExp(`const ${name}: f64 = ([\\d.]+);`))?.[1]);
+    const rust = (name: string) => {
+      const m = shell.match(new RegExp(`const ${name}: f64 = ([\\d.]+);`));
+      if (!m) throw new Error(`src-tauri/src/lib.rs no longer defines ${name}; update this test`);
+      return Number(m[1]);
+    };
     expect([rust("MIN_ZOOM"), rust("MAX_ZOOM")]).toEqual([MIN_ZOOM, MAX_ZOOM]);
   });
 });

@@ -11,7 +11,7 @@ import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
-import { zoomIn, zoomOut } from "./zoom";
+import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
   | "open-folder"
@@ -255,8 +255,8 @@ const COMMANDS: Command[] = [
     id: "zoom-reset",
     label: "Actual Size",
     shortcut: { mod: true, key: "0" },
-    enabled: () => withSettings() && app.zoom !== 1,
-    run: () => void app.updateSettings({ zoom: 1 }),
+    enabled: () => withSettings() && app.zoom !== ACTUAL_SIZE,
+    run: () => void app.updateSettings({ zoom: ACTUAL_SIZE }),
   },
   {
     id: "search",
