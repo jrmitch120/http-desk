@@ -392,6 +392,8 @@ export interface AppSettings {
   sidebarWidth: number;
   /** The sidebar is hidden (View → Show Sidebar, ⌘B / Ctrl+B). */
   sidebarHidden: boolean;
+  /** The zoom of the whole interface, `1` being 100% (View → Zoom In / Zoom Out / Actual Size). */
+  zoom: number;
   /** Request pane's share (0..1) of the request/response split, per layout. */
   splitRatio: Record<AppSettings["layout"], number>;
   /** Show the resolved preview under the URL bar. */

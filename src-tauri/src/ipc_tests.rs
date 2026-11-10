@@ -826,6 +826,43 @@ fn the_sidebar_starts_shown_and_hiding_it_is_remembered() {
     }
 }
 
+/// #94: the zoom starts at 100%, and a zoom is remembered.
+#[test]
+fn the_zoom_starts_at_100_percent_and_is_remembered() {
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["zoom"], 1.0);
+    settings["zoom"] = json!(1.25);
+    h.ok("save_settings", json!({ "settings": settings }));
+
+    *h.app.state::<super::AppState>().settings.lock().unwrap() = super::AppSettings::default();
+    super::load_settings(h.app.handle());
+    assert_eq!(h.ok("get_settings", json!({}))["zoom"], 1.25);
+
+    // A value between two levels loads as written.
+    let between: super::AppSettings = serde_json::from_str(r#"{"zoom":1.05}"#).unwrap();
+    assert_eq!(between.zoom, 1.05);
+
+    // A file without the field, or with a value that isn't a number in range, opens at 100%,
+    // keeping the other settings.
+    for old in [
+        r#"{"theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":"big","theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":null,"theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":0,"theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":0.49,"theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":1.51,"theme":"light","sidebarWidth":340}"#,
+        r#"{"zoom":3,"theme":"light","sidebarWidth":340}"#,
+    ] {
+        let json = serde_json::to_value(serde_json::from_str::<super::AppSettings>(old).unwrap()).unwrap();
+        assert_eq!(
+            (json["zoom"].as_f64(), json["theme"].as_str(), json["sidebarWidth"].as_f64()),
+            (Some(1.0), Some("light"), Some(340.0)),
+            "{old}"
+        );
+    }
+}
+
 /// #39: the Environments matrix's column widths are remembered per workspace.
 #[test]
 fn the_environments_matrix_column_widths_are_remembered_per_workspace() {

@@ -33,7 +33,7 @@ describe("the menu layout", () => {
       "HttpDesk: about, -, settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
       "Window: (minimize), (zoom), -, (bringAllToFront)",
       "Help: documentation, release-notes, -, report-issue",
@@ -44,7 +44,7 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("windows"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
@@ -54,7 +54,7 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("linux"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
       "Edit: undo, redo, -, cut, copy, paste, select-all",
-      "View: toggle-sidebar, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
@@ -107,6 +107,9 @@ describe("the menu the shell builds", () => {
     expect(item(mac, "close-window")).toMatchObject({ label: "Close Window", accelerator: "Cmd+Shift+W" });
     expect(item(mac, "open-folder")).toMatchObject({ label: "Open Folder…", accelerator: null });
     expect(item(mac, "toggle-sidebar")).toMatchObject({ label: "Show Sidebar", accelerator: "Cmd+B" });
+    expect(item(mac, "zoom-in")).toMatchObject({ label: "Zoom In", accelerator: "Cmd+=" });
+    expect(item(mac, "zoom-out")).toMatchObject({ label: "Zoom Out", accelerator: "Cmd+-" });
+    expect(item(mac, "zoom-reset")).toMatchObject({ label: "Actual Size", accelerator: "Cmd+0" });
   });
 
   it("shows shortcuts in the label on Windows, binding nothing", () => {
@@ -117,6 +120,9 @@ describe("the menu the shell builds", () => {
     expect(item(win, "quit")).toMatchObject({ label: "Exit\tAlt+F4", accelerator: null });
     expect(item(win, "open-folder")).toMatchObject({ label: "Open Folder…", accelerator: null });
     expect(item(win, "toggle-sidebar")).toMatchObject({ label: "Show Sidebar\tCtrl+B", accelerator: null });
+    expect(item(win, "zoom-in")).toMatchObject({ label: "Zoom In\tCtrl+=", accelerator: null });
+    expect(item(win, "zoom-out")).toMatchObject({ label: "Zoom Out\tCtrl+-", accelerator: null });
+    expect(item(win, "zoom-reset")).toMatchObject({ label: "Actual Size\tCtrl+0", accelerator: null });
   });
 
   it("shows no shortcuts for app commands on Linux", () => {
@@ -124,6 +130,7 @@ describe("the menu the shell builds", () => {
     expect(item(linux, "save")).toMatchObject({ label: "Save", accelerator: null });
     expect(item(linux, "quit")).toMatchObject({ label: "Quit", accelerator: null });
     expect(item(linux, "toggle-sidebar")).toMatchObject({ label: "Show Sidebar", accelerator: null });
+    expect(item(linux, "zoom-in")).toMatchObject({ label: "Zoom In", accelerator: null });
   });
 
   it("shows the Linux Edit items without shortcuts, so Ctrl+C and the rest stay the page's", () => {

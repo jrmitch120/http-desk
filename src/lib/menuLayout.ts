@@ -82,6 +82,10 @@ export function menuLayout(os: OS): TopMenu[] {
   const view: MenuEntry[] = [
     cmd("toggle-sidebar"),
     SEP,
+    cmd("zoom-in"),
+    cmd("zoom-out"),
+    cmd("zoom-reset"),
+    SEP,
     { kind: "submenu", label: "Response Layout", items: [cmd("layout-right"), cmd("layout-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];

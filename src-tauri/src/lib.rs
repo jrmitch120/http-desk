@@ -70,6 +70,10 @@ struct AppSettings {
     /// The sidebar is hidden (View → Show Sidebar). Its width is kept meanwhile.
     #[serde(deserialize_with = "or_default")]
     sidebar_hidden: bool,
+    /// The zoom of the whole interface, `1.0` being 100% (View → Zoom In / Zoom Out).
+    /// Applied before the first paint (theme.rs). Out of range, or not a number: 100%.
+    #[serde(deserialize_with = "zoom_or_default")]
+    zoom: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
     /// Show the resolved preview under the URL bar.
@@ -110,6 +114,18 @@ fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned +
     Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).unwrap_or_default())
 }
 
+/// The zoom range, the lowest and highest of the frontend's levels (`ZOOM_LEVELS`
+/// in src/lib/zoom.ts; src/lib/zoom.test.ts checks they agree).
+const MIN_ZOOM: f64 = 0.5;
+const MAX_ZOOM: f64 = 1.5;
+
+/// Reads `zoom`, taking 100% for anything but a number in the zoom range, as the
+/// frontend's `zoomOf` does. A value between two levels is kept as written.
+fn zoom_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    let zoom = serde_json::Value::deserialize(d)?.as_f64().unwrap_or(1.0);
+    Ok(if (MIN_ZOOM..=MAX_ZOOM).contains(&zoom) { zoom } else { 1.0 })
+}
+
 /// Settings of one environment (see `AppSettings::environment_settings`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -147,6 +163,7 @@ impl Default for AppSettings {
             show_descriptions: true,
             sidebar_width: 280.0,
             sidebar_hidden: false,
+            zoom: 1.0,
             split_ratio: SplitRatio::default(),
             show_resolved: false,
             env_view: EnvView::List,

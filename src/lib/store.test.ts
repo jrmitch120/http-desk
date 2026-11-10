@@ -52,10 +52,12 @@ const win = vi.hoisted(() => ({ setTheme: vi.fn(async (_theme: "light" | "dark" 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}), setTheme: win.setTheme }),
 }));
+const webview = vi.hoisted(() => ({ setZoom: vi.fn(async (_zoom: number) => {}) }));
+vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ setZoom: webview.setZoom }) }));
 
 import { app } from "./store.svelte";
 import { forceOS } from "./platform";
-import { command, runCommand } from "./commands";
+import { canRun, command, runCommand } from "./commands";
 import { trackModal } from "./modal.svelte";
 
 const PATH = "/ws/api/books.http";
@@ -547,6 +549,86 @@ describe("the sidebar", () => {
     app.showSidebar();
     runCommand("search");
     expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("zoom", () => {
+  const loaded = (extra: Record<string, unknown>) =>
+    ({ theme: "dark", recentWorkspaces: [], environments: {}, ...extra }) as unknown as AppSettings;
+  const saved = () => api.saveSettings.mock.lastCall?.[0]?.zoom;
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    api.saveSettings.mockReset().mockResolvedValue(undefined);
+    webview.setZoom.mockClear();
+    app.settings = loaded({});
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["missing", {}, 1],
+    ["not a number", { zoom: "big" }, 1],
+    ["out of range", { zoom: 3 }, 1],
+    ["a level", { zoom: 1.25 }, 1.25],
+    ["between two levels", { zoom: 1.05 }, 1.05],
+  ])("loads the saved zoom and applies it to the webview (%s)", async (_, extra, zoom) => {
+    api.getSettings.mockResolvedValue(loaded(extra));
+    await app.init();
+    expect(app.zoom).toBe(zoom);
+    expect(webview.setZoom).toHaveBeenLastCalledWith(zoom);
+  });
+
+  it("steps up and down one level with Zoom In and Zoom Out, saving each", async () => {
+    expect(runCommand("zoom-in")).toBe(true);
+    expect(app.zoom).toBe(1.1);
+    expect(webview.setZoom).toHaveBeenLastCalledWith(1.1);
+    await vi.waitFor(() => expect(saved()).toBe(1.1));
+    runCommand("zoom-in");
+    expect(app.zoom).toBe(1.25);
+    runCommand("zoom-out");
+    runCommand("zoom-out");
+    runCommand("zoom-out");
+    expect(app.zoom).toBe(0.9);
+    expect(webview.setZoom).toHaveBeenLastCalledWith(0.9);
+    await vi.waitFor(() => expect(saved()).toBe(0.9));
+  });
+
+  it("goes back to 100% with Actual Size", async () => {
+    app.settings!.zoom = 1.5;
+    expect(runCommand("zoom-reset")).toBe(true);
+    expect(app.zoom).toBe(1);
+    expect(webview.setZoom).toHaveBeenLastCalledWith(1);
+    await vi.waitFor(() => expect(saved()).toBe(1));
+  });
+
+  it("disables Zoom In at the top level, Zoom Out at the bottom and Actual Size at 100%", () => {
+    expect([canRun("zoom-in"), canRun("zoom-out"), canRun("zoom-reset")]).toEqual([true, true, false]);
+    app.settings!.zoom = 1.5;
+    expect([canRun("zoom-in"), canRun("zoom-out"), canRun("zoom-reset")]).toEqual([false, true, true]);
+    app.settings!.zoom = 0.5;
+    expect([canRun("zoom-in"), canRun("zoom-out"), canRun("zoom-reset")]).toEqual([true, false, true]);
+    expect(runCommand("zoom-out")).toBe(false);
+    expect(app.zoom).toBe(0.5);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("moves from a hand-edited zoom between two levels to the next level", () => {
+    app.settings!.zoom = 1.05;
+    runCommand("zoom-in");
+    expect(app.zoom).toBe(1.1);
+    app.settings!.zoom = 1.05;
+    runCommand("zoom-out");
+    expect(app.zoom).toBe(1);
+  });
+
+  it("doesn't zoom while a modal is open", () => {
+    const closed = trackModal();
+    try {
+      expect(runCommand("zoom-in")).toBe(false);
+    } finally {
+      closed();
+    }
+    expect(app.zoom).toBe(1);
   });
 });
 

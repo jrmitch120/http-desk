@@ -11,6 +11,7 @@ import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
+import { zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
   | "open-folder"
@@ -31,6 +32,9 @@ export type CommandId =
   | "rename-request"
   | "show-source"
   | "toggle-sidebar"
+  | "zoom-in"
+  | "zoom-out"
+  | "zoom-reset"
   | "search"
   | "choose-environment"
   | "manage-environments"
@@ -92,6 +96,20 @@ function layoutChoice(id: CommandId, label: string, layout: AppSettings["layout"
     enabled: withSettings,
     checked: () => (app.settings?.layout ?? "horizontal") === layout,
     run: () => void app.updateSettings({ layout }),
+  };
+}
+
+/** View → Zoom In or Zoom Out: one level up or down from the zoom now, disabled at the end. */
+function zoomStep(id: CommandId, label: string, step: (zoom: number) => number | null, keys: Pick<Command, "shortcut" | "aliases">): Command {
+  return {
+    id,
+    label,
+    ...keys,
+    enabled: () => withSettings() && step(app.zoom) !== null,
+    run: () => {
+      const zoom = step(app.zoom);
+      if (zoom !== null) void app.updateSettings({ zoom });
+    },
   };
 }
 
@@ -222,6 +240,23 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     checked: () => app.sidebarShown,
     run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
+  },
+  zoomStep("zoom-in", "Zoom In", zoomIn, {
+    shortcut: { mod: true, key: "=" },
+    // ⌘+ on a US keyboard is ⇧=; other layouts need Shift for = or have a + of their own, as the keypad does.
+    aliases: [
+      { mod: true, key: "+" },
+      { mod: true, shift: true, key: "+" },
+      { mod: true, shift: true, key: "=" },
+    ],
+  }),
+  zoomStep("zoom-out", "Zoom Out", zoomOut, { shortcut: { mod: true, key: "-" } }),
+  {
+    id: "zoom-reset",
+    label: "Actual Size",
+    shortcut: { mod: true, key: "0" },
+    enabled: () => withSettings() && app.zoom !== 1,
+    run: () => void app.updateSettings({ zoom: 1 }),
   },
   {
     id: "search",

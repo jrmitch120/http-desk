@@ -1,18 +1,24 @@
-//! The main window, created with the saved theme already applied so the first
-//! frame is in the right colours (the page CSS defaults to dark).
+//! The main window, created with the saved theme and zoom already applied so the
+//! first frame is in the right colours (the page CSS defaults to dark) and at the
+//! right size, never at 100% first.
 
 use tauri::window::Color;
 use tauri::{Manager, Theme};
 
 /// Creates the app's only window, "main" from tauri.conf.json (which has
-/// `"create": false`), in the saved `theme` setting; runs at setup once settings
-/// are loaded (most IPC tests make their own window). The page's `applyTheme()`
-/// takes over once settings arrive over IPC, setting the same theme again.
+/// `"create": false`), in the saved `theme` and `zoom` settings; runs at setup once
+/// settings are loaded (most IPC tests make their own window). The page's
+/// `applyTheme()` and `applyZoom()` take over once settings arrive over IPC,
+/// setting the same theme and zoom again.
 ///
 /// The window is created hidden and shown once its saved size and place are
 /// restored (window_state.rs), so it never appears at the default size first.
 pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let choice = app.state::<crate::AppState>().settings.lock().unwrap().theme.clone();
+    let state = app.state::<crate::AppState>();
+    let (choice, zoom) = {
+        let settings = state.settings.lock().unwrap();
+        (settings.theme.clone(), settings.zoom)
+    };
     let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or(tauri::Error::WindowNotFound)?;
     let fixed = window_theme(&choice);
     let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
@@ -25,6 +31,8 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         builder = builder.background_color(background(theme));
     }
     let window = builder.build()?;
+    // The webview keeps its zoom across page loads, and the window is still hidden.
+    window.set_zoom(zoom)?;
     if fixed.is_none() {
         // System: the window now knows the OS appearance. Still before the first
         // frame, which the event loop draws after setup.

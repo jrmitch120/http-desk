@@ -290,6 +290,7 @@ let settings = {
   showDescriptions: true,
   sidebarWidth: 280,
   sidebarHidden: false,
+  zoom: 1,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
@@ -317,6 +318,8 @@ let previewRequests = 0;
 let windowTitle: string | null = null;
 let windowCloseRequests = 0;
 let windowClosed = false;
+/** The webview zoom the app last set (the shell's starts at the saved one, as theme.rs applies it). */
+let webviewZoom: number | null = null;
 /** The `.http` files `save_http_file` wrote, in order. */
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
@@ -420,6 +423,10 @@ window.addEventListener(
   /** Whether a close request went through and the window was destroyed. */
   get windowClosed() {
     return windowClosed;
+  },
+  /** The webview zoom the app last set, null before it sets one. */
+  get webviewZoom() {
+    return webviewZoom;
   },
   /** How many times the viewer called `pretty_response`; a test may reset it. */
   get prettyRequests() {
@@ -826,6 +833,9 @@ mockIPC(
         return null;
       case "plugin:window|destroy":
         windowClosed = true;
+        return null;
+      case "plugin:webview|set_webview_zoom":
+        webviewZoom = args.value;
         return null;
       case "get_settings":
         if (settingsDelay) await delay(settingsDelay);
