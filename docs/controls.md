@@ -502,8 +502,8 @@ request/response split.
   sidebar button). The second pane takes the whole width, and neither the first pane nor
   the separator can take focus. The first pane stays mounted, so the sidebar keeps its
   search text and tree, and `size` is untouched, so it comes back at the same width.
-  Whoever hides it moves focus out first if it's inside (App.svelte hands it to the
-  active tab, else the work area).
+  Whoever hides it moves focus out first if it's inside (App.svelte hands focus in the
+  sidebar or on its separator to the active tab, else the tab bar's New request button).
 - Drag it, or focus it and use the arrow keys (Home/End go to the limits).
   Double-clicking resets it to `initial`.
 - Controlled: store the size (both splits keep theirs in AppSettings) and pass it back.

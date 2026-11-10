@@ -38,16 +38,18 @@
     getCurrentWindow().setTitle(app.windowTitle).catch(() => {});
   });
 
-  let aside: HTMLElement | undefined = $state();
+  let main: HTMLElement | undefined = $state();
   let work: HTMLElement | undefined = $state();
 
-  // Hiding the sidebar while it has focus hands focus to the work area (the
-  // active tab, else the area itself) before the sidebar goes, never to <body>.
+  // Hiding the sidebar while it or its separator has focus hands focus to the
+  // work area before they go, never to <body>: the active tab, else the tab
+  // bar's New request button.
   $effect.pre(() => {
     if (app.sidebarShown) return;
     untrack(() => {
-      if (!aside?.contains(document.activeElement)) return;
-      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work)?.focus();
+      const focused = document.activeElement;
+      if (!main?.contains(focused) || work?.contains(focused)) return;
+      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
     });
   });
 
@@ -73,7 +75,7 @@
 {#if app.root}
   <div class="shell">
     <TopBar />
-    <div class="main">
+    <div class="main" bind:this={main}>
       <SplitPane
         collapsed={!app.sidebarShown}
         size={app.settings?.sidebarWidth ?? SIDEBAR.initial}
@@ -82,11 +84,10 @@
         onresize={(sidebarWidth) => app.updateSettings({ sidebarWidth })}
       >
         {#snippet first()}
-          <aside bind:this={aside}><Sidebar /></aside>
+          <aside><Sidebar /></aside>
         {/snippet}
         {#snippet second()}
-          <!-- Focusable from code only: where focus goes when the sidebar hides with no tab open. -->
-          <section class="work" bind:this={work} tabindex="-1">
+          <section class="work" bind:this={work}>
             <TabBar />
             {#if app.activeTab}
               {#key app.activeTab.id}
@@ -145,9 +146,6 @@
     flex: 1;
     min-height: 0;
     background: var(--panel);
-  }
-  .work:focus {
-    outline: none;
   }
   .work {
     flex: 1;

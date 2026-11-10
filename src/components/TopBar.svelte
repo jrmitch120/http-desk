@@ -96,9 +96,10 @@
   {/if}
   <button
     class="icon-btn"
+    class:active={app.sidebarShown}
     aria-label="Show sidebar"
     aria-pressed={app.sidebarShown}
-    use:tooltip={`${app.sidebarShown ? "Hide" : "Show"} sidebar (${shortcutHint("toggle-sidebar")})`}
+    use:tooltip={`Show sidebar (${shortcutHint("toggle-sidebar")})`}
     onclick={() => runCommand("toggle-sidebar")}
   >
     <Icon name="sidebar" />

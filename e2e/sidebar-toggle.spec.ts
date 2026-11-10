@@ -6,7 +6,7 @@ import { menuClick, menuItem, openApp, openRequest, searchBox, treeItem } from "
 
 const aside = (page: Page) => page.locator("aside");
 const separator = (page: Page) => page.getByRole("separator", { name: "Resize sidebar" });
-const button = (page: Page) => page.getByRole("button", { name: "Show sidebar", exact: true });
+const toggleButton = (page: Page) => page.getByRole("button", { name: "Show sidebar", exact: true });
 
 async function width(page: Page, selector: string): Promise<number> {
   return Math.round((await page.locator(selector).boundingBox())!.width);
@@ -15,7 +15,7 @@ async function width(page: Page, selector: string): Promise<number> {
 async function expectHidden(page: Page) {
   await expect(aside(page)).toBeHidden();
   await expect(separator(page)).toHaveCount(0);
-  await expect(button(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(toggleButton(page)).toHaveAttribute("aria-pressed", "false");
   // The work area takes the whole width.
   expect(await width(page, ".work")).toBe(await width(page, ".main"));
 }
@@ -23,7 +23,7 @@ async function expectHidden(page: Page) {
 async function expectShown(page: Page, px = 280) {
   await expect(aside(page)).toBeVisible();
   await expect(separator(page)).toHaveAttribute("aria-valuenow", String(px));
-  await expect(button(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(toggleButton(page)).toHaveAttribute("aria-pressed", "true");
   expect(await width(page, "aside")).toBe(px);
 }
 
@@ -53,20 +53,17 @@ test("Ctrl+B toggles it on Windows and Linux", async ({ page }) => {
   await expectShown(page);
 });
 
-test("the TopBar button toggles it, and its tooltip shows the shortcut", async ({ page }) => {
+test("the TopBar button toggles it, shows it pressed while shown, and its tooltip shows the shortcut", async ({ page }) => {
   await openApp(page);
-  const tip = page.getByRole("tooltip");
-  await button(page).hover();
-  await expect(tip).toHaveText("Hide sidebar (⌘B)");
+  await toggleButton(page).hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Show sidebar (⌘B)");
+  await expect(toggleButton(page)).toHaveClass(/\bactive\b/);
 
-  await button(page).click();
+  await toggleButton(page).click();
   await expectHidden(page);
-  await page.mouse.move(0, 0);
-  await expect(tip).toBeHidden();
-  await button(page).hover();
-  await expect(tip).toHaveText("Show sidebar (⌘B)");
+  await expect(toggleButton(page)).not.toHaveClass(/\bactive\b/);
 
-  await button(page).click();
+  await toggleButton(page).click();
   await expectShown(page);
 });
 
@@ -87,7 +84,7 @@ test("a hidden sidebar stays hidden after a reload, and comes back at its width"
   await expectHidden(page);
 
   await page.reload();
-  await expect(button(page)).toBeVisible();
+  await expect(toggleButton(page)).toBeVisible();
   await expectHidden(page);
   await page.keyboard.press("Meta+B");
   await expectShown(page, 264);
@@ -113,15 +110,22 @@ test("Find usages shows a hidden sidebar with its results", async ({ page }) => 
   await page.locator(".popup-layer .var-card").getByRole("button", { name: "Find usages" }).click();
   await expectShown(page);
   await expect(page.getByRole("region", { name: /^Usages of / })).toContainText("Usages of {{baseUrl}}");
-  await expect(page.getByRole("region", { name: /^Usages of / })).toBeVisible();
 });
 
 test("hiding it while it has focus moves focus to the work area, not the page", async ({ page }) => {
   await openApp(page);
+  const newRequest = page.getByRole("button", { name: "New request", exact: true });
   await treeItem(page, "api").focus();
   await page.keyboard.press("Meta+B");
   await expectHidden(page);
-  await expect(page.locator(".work")).toBeFocused();
+  await expect(newRequest).toBeFocused();
+
+  // From its separator too.
+  await page.keyboard.press("Meta+B");
+  await separator(page).focus();
+  await page.keyboard.press("Meta+B");
+  await expectHidden(page);
+  await expect(newRequest).toBeFocused();
 
   // With a request open, its tab takes focus.
   await page.keyboard.press("Meta+B");
