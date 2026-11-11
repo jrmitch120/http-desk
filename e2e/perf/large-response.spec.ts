@@ -57,6 +57,33 @@ async function scrollToEnd(page: Page, axis: "top" | "left", stops = 10): Promis
   }
 }
 
+/**
+ * Scrolls the body editor from the top to the bottom as a reader dragging the
+ * scroll bar and turning the mouse wheel would: it jumps to each of `stops`
+ * evenly spaced places and turns the wheel there a few times, a frame or two
+ * per move, then jumps to the end.
+ */
+async function scrollThrough(page: Page, stops: number): Promise<void> {
+  const box = (await page.locator(".body .cm-scroller").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const jump = (f: number) =>
+    page.evaluate((f) => {
+      const s = document.querySelector<HTMLElement>(".body .cm-scroller")!;
+      s.scrollTop = f * (s.scrollHeight - s.clientHeight);
+    }, f);
+  for (let i = 0; i < stops; i++) {
+    await jump(i / stops);
+    await frames();
+    for (let turn = 0; turn < 3; turn++) {
+      await page.mouse.wheel(0, 300);
+      await frames();
+    }
+  }
+  await jump(1);
+  await frames();
+}
+
 /** A deliberate busy loop: shows the check fails a step that blocks the main thread. Kept off, as it always fails. */
 test.fixme("the long-task check fails a step that blocks the main thread for over 50 ms", async ({ page }) => {
   await openApp(page);
@@ -103,6 +130,23 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
     await views(page).getByRole("radio", { name: "Pretty" }).click();
     await expect(editor(page)).toContainText('"items": [');
     await scrollToEnd(page, "top");
+    await expect(editor(page)).toContainText(NEAR_THE_END);
+  });
+});
+
+// Step 3 as a reader would scroll all 4.8 million lines: 200 stops, each about
+// 24,000 lines on from the last, with three turns of the mouse wheel at each.
+// Off, as it fails (#58 review): CodeMirror's own measuring after each scroll
+// blocks for 50–80 ms once many places have been visited (36 tasks over 50 ms,
+// the longest 78 ms, on an M1 Pro; at 2x CPU throttling, as on CI, 30 stops
+// already fail). It walks its whole height map on every measure, and re-reads
+// the DOM selection (forcing layout) on each of up to five passes per frame
+// ("Viewport failed to stabilize"). Step 3's ten jumps don't get that far.
+test.fixme("3b. scrolling Pretty top to bottom, a stop at a time, with the mouse wheel", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await expectNoLongTasks(page, async () => {
+    await scrollThrough(page, 200);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
 });
