@@ -1,18 +1,23 @@
-// The state behind a response's Body tab: which view the body shows, the text
-// fetched from the shell for it (raw, Pretty JSON/XML, the Hex dump), the JSONPath filter
-// and its matches, and the shape summary key completion uses. The response
-// viewer owns one per mounted viewer, so the filter's matches outlive a switch
-// to another tab (the status bar's Copy copies them) and nothing is fetched
-// twice for the same response.
+// The state behind a response's Body tab: which view the body shows, the
+// editor document built for it (raw, Pretty JSON/XML, the Hex dump), the
+// JSONPath filter and its matches, and the shape summary key completion uses.
+// The response viewer owns one per mounted viewer, so the filter's matches
+// outlive a switch to another viewer tab (the status bar's Copy copies them);
+// the documents are kept per editor tab (responseDocs), so nothing is fetched
+// or built twice for the same response.
 
 import { untrack } from "svelte";
+import { Text } from "@codemirror/state";
 import { api, errorMessage } from "./api";
+import { buildDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
+import { keptDoc, loadDoc, slicedPause, type DocView } from "./responseDocs";
 import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./types";
 
 export type BodyMode = "pretty" | "raw" | "preview";
-/** A text the editor can show for a body: its raw text, its Pretty text, or (binary) its Hex dump. */
-type TextView = "raw" | "pretty" | "hex";
+
+/** A small text (filter matches, a Hex dump, a message) as an editor document, built at once. */
+const textDoc = (text: string): Text => Text.of(text.split(/\r\n?|\n/));
 
 /** Typing pauses this long before the filter runs again on the same response. */
 export const FILTER_DEBOUNCE_MS = 120;
@@ -42,6 +47,8 @@ export function saveName(res: HttpResponse): string {
 
 /** What the Body view is built from: the response, and the choices the viewer remembers per editor tab. */
 export interface BodyViewInput {
+  /** The editor tab, whose documents are kept for it. */
+  tabId: string;
   res: HttpResponse | undefined;
   mode: BodyMode;
   /** The filter expression as typed. */
@@ -50,12 +57,12 @@ export interface BodyViewInput {
 
 export class BodyView {
   /** Set by the constructor, before anything reads it (the derived values below are lazy). */
-  #input: () => BodyViewInput = () => ({ res: undefined, mode: "pretty", filter: "" });
+  #input: () => BodyViewInput = () => ({ tabId: "", res: undefined, mode: "pretty", filter: "" });
 
   /** Call during component set-up: the loaders are effects of the calling component. */
   constructor(input: () => BodyViewInput) {
     this.#input = input;
-    $effect(() => this.#loadText());
+    $effect(() => this.#loadDoc());
     $effect(() => this.#runFilter());
   }
 
@@ -84,50 +91,49 @@ export class BodyView {
   /** Whether a preview may stay mounted while hidden. Audio and video don't, so switching away stops them playing. */
   readonly previewStaysMounted = $derived(this.kind !== "media");
 
-  // The editor's text, fetched from the shell by response id (never taken from
-  // the send reply): the raw text or the Pretty JSON/XML from its lossless
+  // The editor's document, fetched from the shell by response id (never taken
+  // from the send reply): the raw text or the Pretty JSON/XML from its lossless
   // formatter (numbers and text stay as the server sent them), as UTF-8 bytes
-  // decoded here, or the Hex view of a binary body. Each is fetched once per
-  // response, and only when its view is shown, with a loading state meanwhile.
-  // If the body has no Pretty text (it doesn't parse), Pretty shows the raw
-  // text; if it's no longer stored, the editor says so.
+  // built into the document here in pieces, or the Hex view of a binary body.
+  // Each is fetched and built once per tab and response, and only when its
+  // view is shown, with "Preparing…" meanwhile; the documents are kept per tab
+  // (responseDocs), so a remounted viewer shows them at once. If the body has
+  // no Pretty text (it doesn't parse), Pretty shows the raw text; if it's no
+  // longer stored, the editor says so.
 
-  /** The text the editor shows for the current view; null while the body shows as a preview. */
-  readonly #textView = $derived.by<TextView | null>(() => {
+  /** The document the editor shows for the current view; null while the body shows as a preview. */
+  readonly #docView = $derived.by<DocView | null>(() => {
     if (!this.res) return null;
     if (this.isBinary) return this.effectiveMode === "preview" && this.dataUrl ? null : "hex";
     if (this.effectiveMode === "preview") return null;
     return this.effectiveMode === "pretty" && this.canPretty ? "pretty" : "raw";
   });
-  /** The texts fetched for the response they were last fetched for, by view. */
-  #texts = $state.raw<{ id: string; byView: Partial<Record<TextView, string>> }>({ id: "", byView: {} });
-  /** Fetches in flight, as `"<view>:<response id>"`, so none is asked for twice. */
-  #fetching = new Set<string>();
-
-  #loadText() {
+  /** The kept document of the view shown (the raw one behind a preview), as a remounted viewer first finds it. */
+  readonly #kept = $derived.by(() => {
     const res = this.res;
-    const view = this.#textView;
+    return res ? keptDoc(this.#input().tabId, this.#docView ?? "raw", res.id) : undefined;
+  });
+  /** The document last built (or found) for this viewer, which stays up while a re-sent response's is prepared. */
+  #shown = $state.raw<{ view: DocView; doc: Text } | null>(null);
+
+  #loadDoc() {
+    const res = this.res;
+    const view = this.#docView;
+    const { tabId } = this.#input();
     if (!res || !view) return;
     const { id } = res;
-    const key = `${view}:${id}`;
-    if (this.#fetching.has(key) || untrack(() => this.#texts.id === id && this.#texts.byView[view] !== undefined)) return;
-    this.#fetching.add(key);
-    const keep = (texts: Partial<Record<TextView, string>>) => {
-      this.#fetching.delete(key);
-      if (this.#texts.id === id) this.#texts = { id, byView: { ...this.#texts.byView, ...texts } };
-      else if (this.res?.id === id) this.#texts = { id, byView: texts }; // not if a newer response arrived first
-    };
-    const failed = (e: unknown) => `(${errorMessage(e)})`;
-    const fetchText = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => new TextDecoder().decode(bytes));
-    /** Fetches the raw text and keeps it as the text of each of `views`. */
-    const keepRaw = (views: TextView[]) =>
-      fetchText("raw").then(
-        (raw) => keep(Object.fromEntries(views.map((v) => [v, raw]))),
-        (e) => keep({ [view]: failed(e) }),
-      );
-    if (view === "hex") api.hexdump(id).then((hex) => keep({ hex }), (e) => keep({ hex: failed(e) }));
-    else if (view === "raw") keepRaw(["raw"]);
-    else fetchText("pretty").then((pretty) => keep({ pretty }), () => keepRaw(["raw", "pretty"]));
+    const failed = (e: unknown) => textDoc(`(${errorMessage(e)})`);
+    const fetchDoc = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => buildDoc(bytes, slicedPause()));
+    const raw = () => loadDoc(tabId, "raw", id, () => fetchDoc("raw").catch(failed));
+    const loaded =
+      view === "hex"
+        ? loadDoc(tabId, "hex", id, () => api.hexdump(id).then(textDoc, failed))
+        : view === "raw"
+          ? raw()
+          : loadDoc(tabId, "pretty", id, () => fetchDoc("pretty").catch(raw));
+    loaded.then((doc) => {
+      if (this.res?.id === id) this.#shown = { view, doc }; // not if a newer response arrived first
+    });
   }
 
   // The JSONPath filter runs in the core against the stored body, by response
@@ -163,24 +169,19 @@ export class BodyView {
   readonly filterError = $derived(this.#outcome?.expression === this.#expression ? (this.#outcome.error ?? null) : null);
   /** The matches on screen (the body view is then always pretty, and Copy copies them). */
   readonly filtered = $derived(this.#outcome?.result && !this.filterError ? this.#outcome.result : null);
+  readonly #filteredDoc = $derived(this.filtered ? textDoc(this.filtered.text) : null);
   /**
-   * The editor's text is on its way: `"pretty"` for Pretty text being
-   * formatted, `"text"` for the raw text or Hex dump; null when it's there (or
-   * filter matches show instead). A re-sent response keeps showing the previous
-   * one's text in the same view until its own arrives, so the editor doesn't
-   * flash empty.
+   * The editor's document: filter matches, else the document of the view
+   * shown (the raw one behind a preview). Null while it's fetched and built
+   * ("Preparing…"), except that a re-sent response keeps showing the previous
+   * one's document in the same view until its own is ready, so the editor
+   * doesn't flash empty.
    */
-  readonly loading = $derived.by<"pretty" | "text" | null>(() => {
-    const view = this.#textView;
-    if (this.filtered || !view || this.#texts.byView[view] !== undefined) return null;
-    return view === "pretty" ? "pretty" : "text";
-  });
-
-  /** The editor's text: filter matches, else the fetched text of the view shown (the raw text behind a preview). */
-  readonly text = $derived.by(() => {
-    if (!this.res) return "";
-    if (this.filtered) return this.filtered.text;
-    return this.#texts.byView[this.#textView ?? "raw"] ?? "";
+  readonly doc = $derived.by<Text | null>(() => {
+    if (!this.res) return null;
+    if (this.#filteredDoc) return this.#filteredDoc;
+    const view = this.#docView ?? "raw";
+    return this.#kept ?? (this.#shown?.view === view ? this.#shown.doc : null);
   });
 
   // Key completion: the body's shape summary, built once per response in the

@@ -41,13 +41,13 @@ test("Pretty fetches only the Pretty text, and Raw only the raw text, each once 
 test("a slow Pretty text shows a loading state until it arrives", async ({ page }) => {
   await send(page, "?response=bigint&largeBody=1&pretty=hold");
 
-  // Formatting is held until the test lets it through, so the loading state stays.
-  await expect(page.getByRole("status").filter({ hasText: "Formatting…" })).toBeVisible();
+  // The Pretty text is held until the test lets it through, so the loading state stays.
+  await expect(page.getByRole("status").filter({ hasText: "Preparing…" })).toBeVisible();
   const body = page.locator(".body .cm-content");
   await expect(body).toHaveCount(0);
   await releasePretty(page);
   await expect(body).toContainText('"id": 9007199254740993,');
-  await expect(page.getByRole("status").filter({ hasText: "Formatting…" })).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "Preparing…" })).toHaveCount(0);
 });
 
 test("a tab left in Raw doesn't fetch the next response's Pretty text", async ({ page }) => {

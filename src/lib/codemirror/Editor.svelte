@@ -1,13 +1,19 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
+  import { Compartment, EditorState, Prec, Transaction, type Extension, type Text } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
   import { foldAll, forceParsing, unfoldAll } from "@codemirror/language";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
 
   interface Props {
-    value: string;
+    value?: string;
+    /**
+     * A document built ahead (a large response body), shown instead of
+     * `value`. A new one replaces the whole document; nothing is compared or
+     * turned back into a string.
+     */
+    doc?: Text;
     onchange?: (value: string) => void;
     language?: Language;
     readonly?: boolean;
@@ -20,7 +26,7 @@
     /** Extra extensions, fixed at mount. */
     extensions?: Extension;
   }
-  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created:
@@ -38,7 +44,7 @@
     view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: value,
+        doc: doc ?? value,
         extensions: [
           baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
           langC.of(languageExtension(language)),
@@ -60,6 +66,11 @@
   onDestroy(() => view?.destroy());
 
   $effect(() => {
+    const d = doc;
+    if (d) {
+      if (view && d !== view.state.doc) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: d }, annotations: Transaction.addToHistory.of(false) });
+      return;
+    }
     const v = value;
     if (view && v !== view.state.doc.toString()) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });

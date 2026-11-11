@@ -44,7 +44,7 @@
     viewByTab.set(tab.id, { tab: viewerTab, mode, wrap, filter });
   });
 
-  const body = new BodyView(() => ({ res, mode, filter }));
+  const body = new BodyView(() => ({ tabId: tab.id, res, mode, filter }));
   const isBinary = $derived(body.isBinary);
   const filtered = $derived(body.filtered);
 
