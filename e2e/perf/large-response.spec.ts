@@ -3,12 +3,22 @@
 // if the main thread ran any task over 50 ms meanwhile. The mock's bodies (a
 // 50 MB minified JSON body with 19-digit ids, whose Pretty is about 88 MB over
 // millions of lines, and a 25 MB image) are built before measuring starts.
-// Steps that can't pass yet are `test.fixme`, each naming the ticket that
-// switches it on. Run with `pnpm test:perf`.
+// Run with `pnpm test:perf`.
+//
+// CI's runners are slower than a developer's machine, so a step can pass
+// locally and fail there. PERF_CPU_THROTTLE=<rate> slows the page's CPU by
+// that factor (Chromium's CPU throttling, as in DevTools) to see what CI sees:
+// a rate of 2 makes an M1 Pro about as fast as CI's ubuntu-22.04 runner
+// (calibrated on #58 with the Fold all step, 66–71 ms there and 69–72 ms here).
 import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, tab } from "../helpers";
 import { expectNoLongTasks } from "./longtasks";
 import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
+
+test.beforeEach(async ({ page }, info) => {
+  const rate = Number(info.project.metadata.cpuThrottle ?? 1); // PERF_CPU_THROTTLE (playwright.config.ts)
+  if (rate > 1) await (await page.context().newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate });
+});
 
 /** The 50 MB body's first item, as Raw shows it. */
 const RAW_START = '{"items":[{"id":1000000000987654321,';
@@ -167,8 +177,9 @@ test("6. Fold all is turned off at this size", async ({ page }) => {
   await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(0);
 });
 
-// At the limit (just under it), Fold all parses in pieces and its last step,
-// which builds the whole tree and folds, stays under 50 ms (#115).
+// At the limit (just under it), Fold all parses in slices and stages, then
+// hands the tree to the view and folds, each step under 50 ms (#115). The
+// limit is set by this step (src/lib/codemirror/foldAll.ts FOLD_ALL_LIMIT).
 test("6b. Fold all on a body at its size limit", async ({ page }) => {
   await openApp(page);
   // Pretty text is about 1.76 times the minified body: this keeps it just under the limit.
