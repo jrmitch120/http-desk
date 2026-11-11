@@ -136,12 +136,14 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
 
 // Step 3 as a reader would scroll all 4.8 million lines: 200 stops, each about
 // 24,000 lines on from the last, with three turns of the mouse wheel at each.
-// Off, as it fails (#58 review): CodeMirror's own measuring after each scroll
-// blocks for 50–80 ms once many places have been visited (36 tasks over 50 ms,
-// the longest 78 ms, on an M1 Pro; at 2x CPU throttling, as on CI, 30 stops
-// already fail). It walks its whole height map on every measure, and re-reads
-// the DOM selection (forcing layout) on each of up to five passes per frame
-// ("Viewport failed to stabilize"). Step 3's ten jumps don't get that far.
+// Off, as it still fails at CI's speed. Each stop used to take CodeMirror up to
+// five passes of measuring and redrawing (36 tasks over 50 ms on an M1 Pro);
+// src/lib/codemirror/scrollJumps.ts settles each in one, and the step passes
+// unthrottled. At 2x CPU throttling (as on CI) one task of 52–63 ms remains:
+// the slice of CodeMirror's background parse that finishes a stretch of
+// several MB it has worked through, toward a viewport far down, and builds
+// that stretch's tree in one go (Lezer's Tree.build). Fold all avoids the same
+// cost by parsing in stages (foldAll.ts); the background parse doesn't yet.
 test.fixme("3b. scrolling Pretty top to bottom, a stop at a time, with the mouse wheel", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);

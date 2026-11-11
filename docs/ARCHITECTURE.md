@@ -922,10 +922,23 @@ Decisions made during implementation, beyond the plan above:
     `Text` 256 KB at a time (`docBuilder.ts`: a streaming `TextDecoder`, so a character
     or a `\r\n` split between pieces comes out whole), with "Preparing…" meanwhile. It is
     the only copy of the body's text in the webview: nothing turns it back into a
-    string (Copy path reads it through `doc.iter()`, in slices). The documents (Raw,
+    string (Copy path reads it through `doc.iter()`, in slices). A line longer than a
+    piece is kept as its pieces and joined once, in a task of its own: appended piece by
+    piece it would be a chain of strings, which the engine copies into one the first
+    time the editor reads it, in the task that opens the document. The documents (Raw,
     Pretty, Hex) and the preview's `blob:` URL are kept per editor tab outside any
     component (`responseDocs.ts`), so switching tabs and back neither fetches nor builds
-    again, and they go when the tab releases the response.
+    again, and they go when the tab releases the response. `Editor.svelte` swaps a new
+    prebuilt document in with its language taken out and put back in the same update
+    (`putDoc`), so it's parsed like a new editor's (the start, then the text drawn)
+    rather than for CodeMirror's 20 ms per-update budget toward its far end, and the
+    old document's unfinished parse isn't built into a tree first.
+  - *Far scrolls in a very tall document* (`scrollJumps.ts`). CodeMirror draws a
+    document over 7 million px tall scaled down, except its viewport, so where a scroll
+    position lands depends on where the viewport is; after a jump it went round up to
+    five times, redrawing each time ("Viewport failed to stabilize"). A scroll that
+    lands outside the drawn viewport of such a document becomes a scroll to the line
+    found there, which settles in one pass.
   - *Find in pieces* (`findInPieces.ts`). Find next and previous, Mod-d (next
     occurrence) and Mod-Shift-l (every occurrence) make the same choices as
     CodeMirror's commands with its search cursors, but go through the document 32 KB at

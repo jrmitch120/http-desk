@@ -81,14 +81,21 @@ describe("DocBuilder", () => {
 });
 
 describe("buildDoc", () => {
-  it("builds a body of many pieces, pausing between them", async () => {
+  it("builds a body of many pieces, pausing between them and around the end", async () => {
     const lines = Array.from({ length: 50_000 }, (_, i) => `{"id":${i},"name":"pet-${i}","note":"ü"}`);
     const text = lines.join("\r\n");
     const bytes = utf8(text);
     let pauses = 0;
     const doc = await buildDoc(bytes.buffer, async () => void pauses++);
     expectDoc(doc, text);
-    expect(pauses).toBe(Math.ceil(bytes.length / PIECE_BYTES) - 1);
+    expect(pauses).toBe(Math.ceil(bytes.length / PIECE_BYTES) + 1);
+  });
+
+  it("builds a line longer than a piece, and one running to the end", async () => {
+    const long = "y".repeat(2 * PIECE_BYTES + 3);
+    for (const text of [`a\n${long}\nb`, `a\n${long}`, long]) {
+      expectDoc(await buildDoc(utf8(text).buffer, async () => {}), text);
+    }
   });
 });
 

@@ -3,7 +3,7 @@
   import { Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
   import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { foldEffect, foldedRanges, forceParsing, unfoldAll } from "@codemirror/language";
+  import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
 
@@ -34,10 +34,36 @@
   let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
 
   /**
-   * The most time spent colouring the visible text when an editor is created:
-   * CodeMirror's own per-update parse budget, well inside a frame.
+   * The most time spent colouring the visible text when an editor is created
+   * or given a new document: CodeMirror's own per-update parse budget, well
+   * inside a frame.
    */
   const PARSE_ON_MOUNT_MS = 20;
+
+  /**
+   * How far past what's parsed the text drawn may end for parseDrawn to try:
+   * a little under what CodeMirror's JSON parser gets through in
+   * PARSE_ON_MOUNT_MS on an M1 Pro (measured on #58: 170,000 characters of
+   * Pretty text, 230,000 minified; CI's runners are about half as fast).
+   */
+  const PARSE_REACH = 160_000;
+
+  /**
+   * Parses `v`'s new document up to the end of the text drawn, for at most
+   * PARSE_ON_MOUNT_MS, so it's coloured on the first frame. A new state parses
+   * only its first 3000 characters; the rest would stay uncoloured until
+   * CodeMirror's idle-time parse (100 ms or more). Up to the end of the text
+   * drawn, not of the viewport: the viewport takes in the whole of a long line
+   * (a 50 MB minified body) though only part of it is drawn. Nothing when the
+   * text drawn is parsed already, or ends too far on to reach in time: handing
+   * the new tree to the view costs CodeMirror another parse of up to 20 ms
+   * toward the viewport's end, which on that line is 50 MB away.
+   */
+  function parseDrawn(v: EditorView) {
+    const drawnTo = v.visibleRanges.at(-1)?.to ?? v.viewport.to;
+    const parsed = syntaxTree(v.state).length;
+    if (drawnTo > parsed && drawnTo - parsed <= PARSE_REACH) forceParsing(v, drawnTo, PARSE_ON_MOUNT_MS);
+  }
 
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);
@@ -59,6 +85,28 @@
   let destroyed = false;
 
   /**
+   * Puts `d` (a prebuilt document, or the stand-in) in place of `v`'s whole
+   * document, parsing it as a new editor would: only its start at once (and
+   * then, unless `after` moves elsewhere, the text drawn), the rest in the
+   * background. `after` (a selection, effects) applies to the new document.
+   *
+   * Replaced in a plain transaction, the new text would be parsed toward its
+   * end for CodeMirror's full per-update budget (20 ms), as the old viewport's
+   * end maps to the new document's end, and the old document's unfinished
+   * background parse would first have its tree built, which takes tens of
+   * milliseconds after several MB. Taking the language out with the old text
+   * and putting it back in the same update starts afresh instead.
+   */
+  function putDoc(v: EditorView, d: Text | string, after?: { selection?: EditorSelection; effects: StateEffect<unknown>[] }) {
+    const notInHistory = Transaction.addToHistory.of(false);
+    const swap = v.state.update({ changes: { from: 0, to: v.state.doc.length, insert: d }, effects: langC.reconfigure([]), annotations: notInHistory });
+    const reparse = langC.reconfigure(languageExtension(untrack(() => language)));
+    v.dispatch([swap, swap.state.update({ selection: after?.selection, effects: [reparse, ...(after?.effects ?? [])], annotations: notInHistory })]);
+    // What's drawn before the next measure isn't what will show if `after` scrolls or rewraps.
+    if (!after) parseDrawn(v);
+  }
+
+  /**
    * Puts `doc` into `v` (holding the stand-in) after its next measure: the selection,
    * folds and the position at the top of `keep` come back if it's the same document.
    */
@@ -69,12 +117,7 @@
       docPending = false;
       if (destroyed || !doc) return;
       const same = keep?.doc === doc;
-      v.dispatch({
-        changes: { from: 0, to: v.state.doc.length, insert: doc },
-        selection: same ? keep.selection : undefined,
-        effects: same ? [...keep.folds, EditorView.scrollIntoView(keep.top, { y: "start" })] : [],
-        annotations: Transaction.addToHistory.of(false),
-      });
+      putDoc(v, doc, same ? { selection: keep.selection, effects: [...keep.folds, EditorView.scrollIntoView(keep.top, { y: "start" })] } : undefined);
     });
   }
 
@@ -86,7 +129,7 @@
     const r = v.scrollDOM.getBoundingClientRect();
     const top = v.posAtCoords({ x: r.left + r.width / 2, y: r.top + 1 }, false);
     const keep = { doc: state.doc, selection: state.selection, folds, top };
-    v.dispatch({ changes: { from: 0, to: state.doc.length, insert: STAND_IN }, effects, annotations: Transaction.addToHistory.of(false) });
+    putDoc(v, STAND_IN, { effects: [effects] });
     putDocAfterMeasure(v, keep);
   }
 
@@ -119,11 +162,9 @@
         ],
       }),
     });
-    // A new state parses only its first 3000 characters; the rest of the view
-    // would stay uncoloured until CodeMirror's idle-time parse (100 ms or more).
-    // Parse what's in view now, before the first paint, so switching back to an
-    // editor (Preview → Raw) is coloured at once. Capped so a huge body can't stall.
-    forceParsing(view, view.viewport.to, PARSE_ON_MOUNT_MS);
+    // Before the first paint, so switching back to an editor (Preview → Raw)
+    // is coloured at once.
+    parseDrawn(view);
     if (deferDoc) putDocAfterMeasure(view);
   });
   onDestroy(() => {
@@ -134,7 +175,7 @@
   $effect(() => {
     const d = doc;
     if (d) {
-      if (view && !docPending && d !== view.state.doc) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: d }, annotations: Transaction.addToHistory.of(false) });
+      if (view && !docPending && d !== view.state.doc) putDoc(view, d);
       return;
     }
     const v = value;

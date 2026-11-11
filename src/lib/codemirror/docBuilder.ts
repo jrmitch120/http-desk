@@ -45,8 +45,15 @@ export class DocBuilder {
   #decoder = new TextDecoder();
   /** The lines so far, all complete; null until the first line ends. */
   #doc: Text | null = null;
-  /** The line still being read (it may continue in the next piece). */
-  #line = "";
+  /**
+   * The pieces of the line still being read (it may continue in the next
+   * piece), joined once it ends. Adding each piece to a string instead would
+   * leave a long line (a 50 MB minified body) as a chain of pieces, which the
+   * engine copies into one string the first time anything reads a character
+   * of it: the editor, as it opens the document, in the same task (some 15 ms
+   * on CI's runners, #58). Joined here, it's a task of its own (buildDoc).
+   */
+  #line: string[] = [];
   /** The longest line so far. */
   #longest = 0;
   /** The last piece ended in `\r`, which is a break whether or not `\n` follows. */
@@ -62,8 +69,7 @@ export class DocBuilder {
     const rest = (this.#cr ? "\r" : "") + this.#decoder.decode();
     this.#cr = false;
     const lines = rest.split(LINE_BREAK);
-    lines[0] = this.#line + lines[0];
-    this.#line = "";
+    lines[0] = this.#endLine(lines[0]);
     this.#append(lines);
     longest.set(this.#doc!, this.#longest);
     return this.#doc!;
@@ -79,12 +85,20 @@ export class DocBuilder {
     // a short one.
     const lines = text.split(LINE_BREAK);
     if (lines.length === 1) {
-      this.#line += text;
+      this.#line.push(text);
       return;
     }
-    lines[0] = this.#line + lines[0];
-    this.#line = lines.pop()!;
+    lines[0] = this.#endLine(lines[0]);
+    this.#line = [lines.pop()!];
     this.#append(lines);
+  }
+
+  /** The line being read, ending with `last`, as one string. */
+  #endLine(last: string): string {
+    this.#line.push(last);
+    const line = this.#line.length === 1 ? last : this.#line.join("");
+    this.#line = [];
+    return line;
   }
 
   /** Appends `lines`, each after a line break (the first one starts the document). */
@@ -96,7 +110,9 @@ export class DocBuilder {
 
 /**
  * Builds the document for the UTF-8 `bytes`, a piece at a time, awaiting
- * `pause()` between pieces (to give the browser a turn).
+ * `pause()` between pieces (to give the browser a turn). The end, which may
+ * join a long last line, gets a turn of its own too: after the last piece, and
+ * before the caller shows the document.
  */
 export async function buildDoc(bytes: ArrayBuffer, pause: () => Promise<void>): Promise<Text> {
   const b = new DocBuilder();
@@ -104,5 +120,9 @@ export async function buildDoc(bytes: ArrayBuffer, pause: () => Promise<void>): 
     if (at > 0) await pause();
     b.push(new Uint8Array(bytes, at, Math.min(PIECE_BYTES, bytes.byteLength - at)));
   }
-  return b.finish();
+  if (bytes.byteLength <= PIECE_BYTES) return b.finish();
+  await pause();
+  const doc = b.finish();
+  await pause();
+  return doc;
 }

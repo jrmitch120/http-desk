@@ -30,6 +30,7 @@ import { tags as t } from "@lezer/highlight";
 import { popupLayer } from "../popup/layer";
 import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
+import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
 
 export type Language = "json" | "xml" | "html" | "text";
@@ -505,6 +506,7 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
 export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }): Extension {
   const ext: Extension[] = [
     layerTooltips(),
+    scrollJumps,
     theme,
     syntaxHighlighting(highlight),
     drawSelection(),
