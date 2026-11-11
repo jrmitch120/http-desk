@@ -949,12 +949,14 @@ Decisions made during implementation, beyond the plan above:
     one go when the parse ends (about 3.5 ms per MB, 7 on CI), so each stage ends a parse
     a little further on and the next reuses the tree so far, keeping that step at
     1–4 ms. The tree reaches the view, and the view folds, in tasks of their own. Above
-    `FOLD_ALL_LIMIT` (87 MB of text) Fold all is off, with a tooltip pointing to the
-    filter; Unfold all and the gutter's folds stay. The limit follows the spec's rule,
-    the largest whole number of MB at which perf step 6b stays under 50 ms, measured
-    with Chromium's CPU throttled 2× (`PERF_CPU_THROTTLE=2`, which matches CI's runner):
-    staged, no size up to the perf body's reaches 50 ms, so the limit sits just under
-    that body, which step 6 checks Fold all is off for.
+    `FOLD_ALL_LIMIT` (10 MB of text) Fold all is off, with a tooltip pointing to the
+    filter; Unfold all and the gutter's folds stay. Staged, no size reaches the spec's
+    50 ms (the longest task stays 19–26 ms up to 87 MB with Chromium's CPU throttled 2×,
+    `PERF_CPU_THROTTLE=2`, which matches CI's runner), so the spec's rule (the largest
+    MB at which step 6b stays under 50 ms) gives no ceiling. The limit caps the wait
+    instead: the parse takes about 125 ms per MB (290 throttled), so "Folding…" runs
+    about 1.3 s at the limit (3 s on CI-speed hardware). Step 6b runs at the limit and
+    step 6 checks Fold all is off for the perf test's 88 MB Pretty text.
   - *The wrapped prebuilt document's stand-in* (`Editor.svelte`). A prebuilt document
     goes into a wrapped view only after the view has measured itself holding a
     one-space stand-in, as if replaced in an open editor; laid out wrapped from scratch,

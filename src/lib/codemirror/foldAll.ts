@@ -14,22 +14,20 @@ import { nextTask, SLICE_MS } from "../timeSlices";
 
 /**
  * The longest document (in characters, about bytes for JSON and XML) Fold all
- * works on, set by the spec's rule (#58): the largest whole number of MB of
- * Pretty text at which the perf test's Fold all step (6b) stays under 50 ms,
- * here capped just under the perf test's 50 MB body (87.9 MB of Pretty text),
- * which Fold all is to stay off for (step 6).
+ * works on: 10 MB, chosen by how long "Folding…" runs, not by the main thread.
  *
- * Measured on 2026-11-10 on a quiet M1 Pro, with Chromium's CPU throttled 2×
- * (PERF_CPU_THROTTLE=2) to match CI's ubuntu-22.04 runner: before parsing in
- * stages, step 6b at 8 MB took 66–71 ms on CI and 69–72 ms throttled 2×
- * (34–41 ms unthrottled). With stages, the longest task while folding (traced)
- * was 19–20 ms at 8, 16 and 32 MB and 20–26 ms at 87 MB (5 of 5 runs, Fold all
- * taking about 25 s throttled, 11 s not): it no longer grows with the size, so
- * the rule allows every size the perf body leaves room for. Step 6b at 87 MB
- * passed 5 of 5 runs throttled. Re-measure with step 6b and PERF_CPU_THROTTLE
- * if the parser or slicing changes.
+ * The spec's rule (#58) was the largest whole number of MB at which the perf
+ * test's Fold all step (6b) stays under 50 ms. Since the parse runs in stages,
+ * no size reaches that: measured on 2026-11-10 on a quiet M1 Pro, with
+ * Chromium's CPU throttled 2× (PERF_CPU_THROTTLE=2) to match CI's
+ * ubuntu-22.04 runner, the longest task while folding was 19–26 ms at 8, 16,
+ * 32 and 87 MB. But the parse still takes its time: Fold all on 87 MB took
+ * about 11 s (25 s throttled), about 125 ms per MB (about 290 ms throttled). So
+ * the limit caps the wait instead, at about 1.3 s here and 3 s on CI-speed
+ * hardware. Above it, a huge body is usually one top-level array that Fold all
+ * would fold to a line anyway, and the tooltip points to the JSONPath filter.
  */
-export const FOLD_ALL_LIMIT = 87 * 1000 * 1000;
+export const FOLD_ALL_LIMIT = 10 * 1000 * 1000;
 
 /** Whether Fold all works on a document `length` characters long. */
 export function canFoldAll(length: number): boolean {

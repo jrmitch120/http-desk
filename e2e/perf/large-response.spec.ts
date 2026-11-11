@@ -259,8 +259,8 @@ test("6. Fold all is turned off at this size", async ({ page }) => {
 });
 
 // At the limit (just under it), Fold all parses in slices and stages, then
-// hands the tree to the view and folds, each step under 50 ms (#115). The
-// limit is set by this step (src/lib/codemirror/foldAll.ts FOLD_ALL_LIMIT).
+// hands the tree to the view and folds, each step under 50 ms (#115). See
+// FOLD_ALL_LIMIT in src/lib/codemirror/foldAll.ts for how the limit is chosen.
 test("6b. Fold all on a body at its size limit", async ({ page }) => {
   await openApp(page);
   // Pretty text is about 1.76 times the minified body: this keeps it just under the limit.
