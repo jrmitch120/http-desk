@@ -90,6 +90,18 @@ control or the popup layer.
 - [ ] An HTML preview, an image preview, and the hex view of a binary response.
 - [ ] A failed send (stop the server): the inline error banner.
 - [ ] Toasts: copy the response body, save it to a file.
+- [ ] A large body, on macOS and Linux especially (WebKit, where `parseSlices.ts`
+      supplies `requestIdleCallback`): send a request answering with a 50 MB JSON body.
+      "Preparing…", then Pretty shows; scroll it top to bottom with the wheel and by
+      dragging the scroll bar, and Raw, wrapped and not. Find a term near the end
+      ("Searching…" while it runs), then Find previous; the window keeps responding and
+      the text near the end gets coloured within a few seconds. Fold all is off with
+      its tooltip pointing to the filter; on a body of a few MB it shows "Folding…"
+      and then folds.
+- [ ] Previews from `blob:` URLs, on macOS and Linux especially (the content security
+      policy allows `blob:` for them): an HTML page (in its sandboxed frame), an
+      image, a PDF and an audio or video file each show. Switch to another tab and
+      back: the preview shows again at once.
 
 ## Modals
 
