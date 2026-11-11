@@ -99,8 +99,7 @@ test.fixme("3. opening Pretty and scrolling it top to bottom", async ({ page }) 
   });
 });
 
-// Fails until #114 (Find runs in pieces).
-test.fixme("4. finding a term that doesn't match", async ({ page }) => {
+test("4. finding a term that doesn't match", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
@@ -108,12 +107,18 @@ test.fixme("4. finding a term that doesn't match", async ({ page }) => {
     const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
     await field.fill("no-such-pet");
     await field.press("Enter");
+    // Through the whole body and round again, a piece at a time.
+    await expect(page.getByText("Searching…")).toBeVisible();
     await expect(page.getByText("Searching…")).toHaveCount(0);
     await expect(page.locator(".cm-searchMatch")).toHaveCount(0);
   });
 });
 
-// Fails until #114 (Find runs in pieces).
+// Fails until scrolling to the end of the body is smooth, as step 3 (#113) needs too.
+// The Find itself stays under 50 ms (#114), but selecting the match scrolls to the
+// end, and then CodeMirror's background parse works toward it in 100 ms slices
+// (@codemirror/language's Work.Slice, used in Chromium because it has
+// navigator.scheduling.isInputPending). With that hidden, this step passes.
 test.fixme("5. finding a term that matches only near the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
