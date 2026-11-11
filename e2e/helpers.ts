@@ -126,6 +126,8 @@ export interface MockState {
   clipboardWrites: string[];
   /** The response ids `release_response` was called with, in order. */
   releasedResponses: string[];
+  /** The response ids `copy_response_body` copied to the clipboard, in order. */
+  bodyCopies: string[];
 }
 
 /** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */

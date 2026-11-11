@@ -315,6 +315,8 @@ const savedBodies: Record<string, string> = {};
 const shapeRequests: string[] = [];
 /** The response ids `release_response` was called with, in order. */
 const releasedResponses: string[] = [];
+/** The response ids `copy_response_body` copied to the clipboard, in order. */
+const bodyCopies: string[] = [];
 let settingsServed = false;
 /** The bodies the viewer fetched with `response_body`, in order. */
 let bodyRequests: { id: string; view: string }[] = [];
@@ -469,6 +471,9 @@ window.addEventListener(
   },
   get releasedResponses() {
     return [...releasedResponses];
+  },
+  get bodyCopies() {
+    return [...bodyCopies];
   },
   /** The `?response=` kind the next send uses. */
   set response(kind: string | null) {
@@ -1097,6 +1102,16 @@ mockIPC(
         textBodies.delete(args.responseId);
         binaryBodies.delete(args.responseId);
         return null;
+      case "copy_response_body": {
+        // Like the shell: text as text, binary as base64, written through the clipboard plugin.
+        const body = textBodies.get(args.responseId)?.body ?? binaryBodies.get(args.responseId);
+        if (body === undefined) throw RESPONSE_GONE;
+        if (clipboardFails) throw "The clipboard can't be written";
+        clipboardText = body;
+        clipboardWrites.push(body);
+        bodyCopies.push(args.responseId);
+        return null;
+      }
       case "hexdump": {
         const b64 = binaryBodies.get(args.responseId);
         if (b64 === undefined) throw RESPONSE_GONE;
