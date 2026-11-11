@@ -48,19 +48,3 @@ export function loadDoc(tabId: string, view: DocView, responseId: string, build:
 export function dropDocs(responseId: string): void {
   for (const [k, entry] of kept) if (entry.responseId === responseId) kept.delete(k);
 }
-
-/** How long building a document runs before giving the browser a turn. */
-const BUILD_SLICE_MS = 8;
-
-/**
- * A pause for `buildDoc` between pieces: once a slice of work has run for
- * `BUILD_SLICE_MS`, it waits for a new task, so input and paint get a turn.
- */
-export function slicedPause(): () => Promise<void> {
-  let start = performance.now();
-  return async () => {
-    if (performance.now() - start < BUILD_SLICE_MS) return;
-    await new Promise((r) => setTimeout(r));
-    start = performance.now();
-  };
-}

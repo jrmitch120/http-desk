@@ -622,18 +622,31 @@ const RESPONSE_GONE: &str = "Response is no longer available";
 /// its tab closed, got a newer response, or closed with the workspace.
 #[tauri::command]
 fn release_response(state: State<'_, AppState>, response_id: String) {
-    // Bodies before parsed documents, the order `json_doc` locks them in.
-    let mut bodies = state.bodies.lock().unwrap();
-    bodies.remove(&response_id);
-    state.json_docs.lock().unwrap().remove(&response_id);
+    drop_kept(&state, Some(&response_id));
 }
 
 /// A page load (including a reload): no tab can still refer to a kept body, so
 /// they all go, with everything cached from them.
 fn page_loaded(state: &AppState) {
+    drop_kept(state, None);
+}
+
+/// Drops response `response_id`'s kept body, or every kept body (`None`), with
+/// everything cached from them (parsed JSON and key completion).
+fn drop_kept(state: &AppState, response_id: Option<&str>) {
+    // Bodies before parsed documents, the order `json_doc` locks them in.
     let mut bodies = state.bodies.lock().unwrap();
-    bodies.clear();
-    state.json_docs.lock().unwrap().clear();
+    let mut json_docs = state.json_docs.lock().unwrap();
+    match response_id {
+        Some(id) => {
+            bodies.remove(id);
+            json_docs.remove(id);
+        }
+        None => {
+            bodies.clear();
+            json_docs.clear();
+        }
+    }
 }
 
 /// The stored body of `response_id`, or [`RESPONSE_GONE`].

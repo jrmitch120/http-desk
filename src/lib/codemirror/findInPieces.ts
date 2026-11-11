@@ -16,6 +16,7 @@ import {
 } from "@codemirror/search";
 import { EditorSelection, type EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type KeyBinding } from "@codemirror/view";
+import { slices } from "../timeSlices";
 
 /** A match's range in the document. */
 export interface Match {
@@ -199,9 +200,6 @@ export function* allOccurrences(state: EditorState, size = PIECE): Generator<voi
   return tooMany ? null : { ranges, main };
 }
 
-/** How long a search works before letting the window paint and take input. */
-const SLICE_MS = 12;
-
 /** Each view's search in progress (what abandons it), and who's told when one starts or stops running. */
 const running = new WeakMap<EditorView, () => void>();
 const watchers = new WeakMap<EditorView, (searching: boolean) => void>();
@@ -238,9 +236,9 @@ function select(view: EditorView, m: Match): void {
 }
 
 /**
- * Runs `search` in slices of a few milliseconds, letting the window paint and
- * take input in between, then hands what it found to `found` (nothing, if it
- * found nothing). One search runs per view: this abandons the one before.
+ * Runs `search` in slices (timeSlices.ts), letting the window paint and take
+ * input in between, then hands what it found to `found` (nothing, if it found
+ * nothing). One search runs per view: this abandons the one before.
  */
 function run<T>(view: EditorView, search: Generator<void, T | null, void>, found: (result: T) => void): void {
   abandonSearch(view);
@@ -256,9 +254,9 @@ function run<T>(view: EditorView, search: Generator<void, T | null, void>, found
     if (running.get(view) === stop) running.delete(view);
     setSearching(false);
   };
-  const slice = () => {
+  const slice = slices();
+  const work = () => {
     if (abandoned) return;
-    const until = performance.now() + SLICE_MS;
     for (;;) {
       const step = search.next();
       if (step.done) {
@@ -266,14 +264,14 @@ function run<T>(view: EditorView, search: Generator<void, T | null, void>, found
         if (step.value) found(step.value);
         return;
       }
-      if (performance.now() >= until) break;
+      if (slice.due()) break;
     }
     setSearching(true);
-    setTimeout(slice);
+    void slice.pause().then(work);
   };
   running.set(view, stop);
   // The first slice runs now, so a find in a small document is as immediate as ever.
-  slice();
+  work();
 }
 
 /** CodeMirror's findNext or findPrevious, in pieces. With no valid query, it opens the find bar instead. */
