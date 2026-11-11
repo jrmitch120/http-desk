@@ -5,6 +5,7 @@
 mod app_info;
 mod bodies;
 mod confinement;
+mod copying;
 mod deleting;
 mod fetch;
 mod folder_envs;
