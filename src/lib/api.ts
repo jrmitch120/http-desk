@@ -97,8 +97,8 @@ export const api = {
   /**
    * A stored response body as raw bytes: its text (`raw`, decoded from the
    * declared charset) or Pretty text (`pretty`, lossless JSON or XML) as UTF-8,
-   * or the body's own `bytes`. Rejects when the body has been evicted, isn't
-   * text, or has no Pretty text (not JSON or XML, or it doesn't parse).
+   * or the body's own `bytes`. Rejects when the body has been released, isn't
+   * text (its kind is binary), or has no Pretty text (not JSON or XML, or it doesn't parse).
    */
   responseBody: (responseId: string, view: BodyFetchView) => invoke<ArrayBuffer>("response_body", { responseId, view }),
   /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
