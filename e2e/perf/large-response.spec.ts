@@ -64,14 +64,12 @@ test.fixme("the long-task check fails a step that blocks the main thread for ove
   });
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("1. sending and receiving the 50 MB body", async ({ page }) => {
+test("1. sending and receiving the 50 MB body", async ({ page }) => {
   await prepare(page);
   await expectNoLongTasks(page, () => sendAndShowPretty(page));
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("2. opening Raw (a single 50 MB line), then scrolling and wrapping it", async ({ page }) => {
+test("2. opening Raw (a single 50 MB line), then scrolling and wrapping it", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
@@ -85,8 +83,7 @@ test.fixme("2. opening Raw (a single 50 MB line), then scrolling and wrapping it
   });
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
+test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await views(page).getByRole("radio", { name: "Raw" }).click();
@@ -141,8 +138,7 @@ test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
   await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(0);
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("7. switching tabs away and back", async ({ page }) => {
+test("7. switching tabs away and back", async ({ page }) => {
   await prepare(page, "Create pet");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await sendAndShowPretty(page);
