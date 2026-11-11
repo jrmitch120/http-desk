@@ -129,6 +129,31 @@ test("5. finding a term that matches only near the end", async ({ page }) => {
   });
 });
 
+// Step 5 as on WebKit, our webview on macOS and Linux, which has no
+// requestIdleCallback: without one, CodeMirror's parse worker falls back to
+// setTimeout and 100 ms slices, so parseSlices.ts supplies one. The fallback's
+// first slice comes 500 ms after the match is selected, and the parse doesn't
+// reach a match this far down (it stops after 3 s of work), so this measures a
+// fixed 2 s after selecting: long enough for several slices either way.
+test("5b. finding a term that matches only near the end, without requestIdleCallback", async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as { requestIdleCallback?: unknown; cancelIdleCallback?: unknown };
+    delete w.requestIdleCallback;
+    delete w.cancelIdleCallback;
+  });
+  await prepare(page);
+  expect(await page.evaluate(() => typeof window.requestIdleCallback)).toBe("function"); // parseSlices.ts's own
+  await sendAndShowPretty(page);
+  await expectNoLongTasks(page, async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+    await field.fill(NEAR_THE_END);
+    await field.press("Enter");
+    await expect(page.locator(".cm-searchMatch-selected")).toHaveText(NEAR_THE_END);
+    await page.waitForTimeout(2_000);
+  });
+});
+
 // Fails until #115 (Fold all runs in pieces, with a measured size limit).
 test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
   await prepare(page);
