@@ -114,12 +114,10 @@ test("4. finding a term that doesn't match", async ({ page }) => {
   });
 });
 
-// Fails until scrolling to the end of the body is smooth, as step 3 (#113) needs too.
-// The Find itself stays under 50 ms (#114), but selecting the match scrolls to the
-// end, and then CodeMirror's background parse works toward it in 100 ms slices
-// (@codemirror/language's Work.Slice, used in Chromium because it has
-// navigator.scheduling.isInputPending). With that hidden, this step passes.
-test.fixme("5. finding a term that matches only near the end", async ({ page }) => {
+// The Find runs in pieces (#114). Selecting the match scrolls to the end, and
+// CodeMirror's background parse then works toward it in slices, which stay
+// under 50 ms because src/lib/codemirror/parseSlices.ts hides isInputPending.
+test("5. finding a term that matches only near the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
