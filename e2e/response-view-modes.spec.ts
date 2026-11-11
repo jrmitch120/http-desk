@@ -1,7 +1,7 @@
 // Pretty is offered only where the core can format the body (JSON and XML).
 // For HTML or plain text it would show the same text as Raw, so it isn't there.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, setMockResponse } from "./helpers";
+import { mockState, openApp, openRequest, setMockResponse } from "./helpers";
 
 async function send(page: Page, response: string): Promise<void> {
   await openApp(page, `?response=${response}`);
@@ -97,6 +97,52 @@ test("Raw and Preview stay mounted, so switching back keeps Raw's scroll positio
   await views(page).getByRole("radio", { name: "Preview" }).click();
   // The same frame, not a reloaded one.
   expect(await frame.evaluate((el, old) => el === old, frameHandle)).toBe(true);
+});
+
+test("the HTML preview is a sandboxed frame loading the response's bytes from a blob: URL", async ({ page }) => {
+  await send(page, "html");
+  await views(page).getByRole("radio", { name: "Preview" }).click();
+
+  const frame = page.locator("iframe[title='HTML preview']");
+  await expect(frame).toHaveAttribute("src", /^blob:/);
+  await expect(frame).toHaveAttribute("sandbox", "");
+  await expect(frame).not.toHaveAttribute("srcdoc");
+  await expect(page.frameLocator("iframe[title='HTML preview']").getByRole("heading", { name: "Pets" })).toBeVisible();
+  expect(await mockState(page, "bodyRequests")).toContainEqual({ id: "r1-1", view: "bytes" });
+});
+
+test("an image preview loads the response's bytes from a blob: URL", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await page.keyboard.press("Meta+Enter");
+
+  const img = page.getByRole("img", { name: "Response preview" });
+  await expect(img).toHaveAttribute("src", /^blob:/);
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBe(128);
+  expect(await mockState(page, "bodyRequests")).toEqual([{ id: "r2-1", view: "bytes" }]);
+});
+
+test("a re-sent or closed preview's blob: URL is revoked", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await page.keyboard.press("Meta+Enter");
+  const img = page.getByRole("img", { name: "Response preview" });
+  await expect(img).toHaveAttribute("src", /^blob:/);
+  const first = (await img.getAttribute("src"))!;
+  /** Whether `url` still loads in the page. */
+  const loads = (url: string) => page.evaluate((u) => fetch(u).then(() => true, () => false), url);
+  expect(await loads(first)).toBe(true);
+
+  await page.keyboard.press("Meta+Enter");
+  await expect(img).not.toHaveAttribute("src", first);
+  const second = (await img.getAttribute("src"))!;
+  expect(second).toMatch(/^blob:/);
+  await expect.poll(() => loads(first)).toBe(false);
+  expect(await loads(second)).toBe(true);
+
+  await page.keyboard.press("Meta+W");
+  await expect(img).toHaveCount(0);
+  await expect.poll(() => loads(second)).toBe(false);
 });
 
 test("a plain-text response has no view switch, only its text", async ({ page }) => {
