@@ -12,7 +12,7 @@ import { api, errorMessage } from "./api";
 import { buildDoc, longestLine, textDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
 import { keptDoc, keptPreview, loadDoc, loadPreview, type DocView, type Preview } from "./responseDocs";
-import { slices } from "./timeSlices";
+import { nextTask } from "./timeSlices";
 import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./types";
 
 export type BodyMode = "pretty" | "raw" | "preview";
@@ -168,7 +168,7 @@ export class BodyView {
     if (!res || !view) return;
     const { id } = res;
     const failed = (e: unknown) => textDoc(`(${errorMessage(e)})`);
-    const fetchDoc = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => buildDoc(bytes, slices().pause));
+    const fetchDoc = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => buildDoc(bytes, nextTask));
     const raw = () => loadDoc(tabId, "raw", id, () => fetchDoc("raw").catch(failed));
     const loaded =
       view === "hex"

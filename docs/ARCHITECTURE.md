@@ -916,7 +916,8 @@ Decisions made during implementation, beyond the plan above:
   in §8). No main-thread task may run over 50 ms with a 50 MB body, which the perf test
   (`e2e/perf/`) checks step by step. Long work runs in 8 ms slices with a posted message
   (not `setTimeout`, whose nested calls are held back 4 ms each) between them
-  (`src/lib/timeSlices.ts`).
+  (`src/lib/timeSlices.ts`); building a document yields after every 256 KB piece (up
+  to 16 ms each), as a GC or a paint landing on top of a longer slice could pass 50 ms.
   - *Documents built in pieces and kept per tab.* The fetched bytes become a CodeMirror
     `Text` 256 KB at a time (`docBuilder.ts`: a streaming `TextDecoder`, so a character
     or a `\r\n` split between pieces comes out whole), with "Preparing…" meanwhile. It is
