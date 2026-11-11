@@ -9,6 +9,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
 import { toSendError } from "./sendError";
+import { dropDocs } from "./responseDocs";
 import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
 import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
@@ -1194,9 +1195,12 @@ class AppStore {
 
   /** Lets the shell drop a response no tab shows any more (closed, replaced or
    *  gone with the workspace); until then it keeps the body for Save, Hex,
-   *  Pretty and the filter. A failure only means it was already gone. */
+   *  Pretty and the filter. A failure only means it was already gone. The
+   *  editor documents built from it go too. */
   private releaseResponse(response: HttpResponse | undefined) {
-    if (response) api.releaseResponse(response.id).catch(() => {});
+    if (!response) return;
+    dropDocs(response.id);
+    api.releaseResponse(response.id).catch(() => {});
   }
 
   /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */

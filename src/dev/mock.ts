@@ -454,6 +454,8 @@ window.addEventListener(
   releaseSettings: () => releaseSettings(),
   /** Lets held Pretty text through (`?pretty=hold`). */
   releasePretty: () => releasePretty(),
+  /** Lets held bodies through (`?body=hold`). */
+  releaseBody: () => releaseBody(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
@@ -633,6 +635,10 @@ const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSetting
 const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
 let releasePretty: () => void = () => {};
 const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)) : Promise.resolve();
+// `?body=hold`: every `response_body` waits until a test calls `__mock.releaseBody()`.
+const bodyHeld = new URLSearchParams(location.search).get("body") === "hold";
+let releaseBody: () => void = () => {};
+const bodyReleased = bodyHeld ? new Promise<void>((r) => (releaseBody = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -785,9 +791,11 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
 
 /**
  * Text response bodies by response id, with their kind, like the shell's stored
- * bodies. `pretty`, when set, is the body's Pretty text, worked out ahead.
+ * bodies. `pretty`, when set, is the body's Pretty text, worked out ahead, and
+ * `encoded` its raw and Pretty texts as UTF-8 (the perf bodies, so fetching
+ * them doesn't encode 50 MB on the page's main thread during a measured step).
  */
-const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string }>();
+const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string; encoded?: { raw: Uint8Array; pretty: Uint8Array } }>();
 let responseCount = 0;
 
 /** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise. */
@@ -815,7 +823,7 @@ function storeBinary<T extends { id: string }>(response: T, bytes: Uint8Array): 
  * during a measured step. Once built, JSON sends answer with the 50 MB body and
  * the image request with the 25 MB image.
  */
-let perf: { json: string; pretty: string; image: Uint8Array } | null = null;
+let perf: { json: string; pretty: string; encoded: { raw: Uint8Array; pretty: Uint8Array }; image: Uint8Array } | null = null;
 /** The term that matches only in the 50 MB body's last item. */
 const PERF_LAST = "needle-near-the-end";
 /** A 25 MB image. */
@@ -823,7 +831,9 @@ const PERF_IMAGE = { width: 2048, height: 4266, contentType: "image/bmp" };
 
 function preparePerf(jsonBytes = 50 * 1000 * 1000): void {
   const { json, pretty } = largeJson(jsonBytes, PERF_LAST);
-  perf = { json, pretty, image: bmpImage(PERF_IMAGE.width, PERF_IMAGE.height) };
+  const encoder = new TextEncoder();
+  const encoded = { raw: encoder.encode(json), pretty: encoder.encode(pretty) };
+  perf = { json, pretty, encoded, image: bmpImage(PERF_IMAGE.width, PERF_IMAGE.height) };
 }
 
 /** The send reply for a perf body: the image for the image request, else the 50 MB JSON. */
@@ -841,7 +851,7 @@ function perfResponse(url: string, method: string) {
     }, perf.image);
   }
   const id = `r1-${++responseCount}`;
-  textBodies.set(id, { body: perf.json, kind: "json", pretty: perf.pretty });
+  textBodies.set(id, { body: perf.json, kind: "json", pretty: perf.pretty, encoded: perf.encoded });
   return {
     ...common, id, headers: [["content-type", "application/json"], ["content-length", String(perf.json.length)]],
     bodySize: perf.json.length, transferredSize: perf.json.length, contentType: "application/json", bodyKind: "json" as const,
@@ -1101,6 +1111,7 @@ mockIPC(
         // Like the shell: raw bytes (an ArrayBuffer), text as UTF-8.
         const { responseId: id, view } = args as { responseId: string; view: "raw" | "pretty" | "bytes" };
         bodyRequests.push({ id, view });
+        await bodyReleased;
         if (view === "pretty") {
           if (largeBody) await delay(400); // as a large body takes a while to format
           await prettyReleased;
@@ -1113,6 +1124,7 @@ mockIPC(
         }
         const stored = textBodies.get(id);
         if (stored === undefined) throw RESPONSE_GONE;
+        if (stored.encoded) return stored.encoded[view === "pretty" ? "pretty" : "raw"].buffer;
         return new TextEncoder().encode(view === "pretty" ? (stored.pretty ?? prettyText(stored)) : stored.body).buffer;
       }
       case "release_response":

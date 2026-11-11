@@ -212,6 +212,11 @@ export function releasePretty(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releasePretty: () => void } }).__mock.releasePretty());
 }
 
+/** Lets held bodies through (`?body=hold`). */
+export function releaseBody(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { releaseBody: () => void } }).__mock.releaseBody());
+}
+
 /** An open request tab in the tab bar, by request name. */
 export function tab(page: Page, name: string): Locator {
   return page

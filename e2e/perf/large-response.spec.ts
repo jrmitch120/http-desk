@@ -65,14 +65,12 @@ test.fixme("the long-task check fails a step that blocks the main thread for ove
   });
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("1. sending and receiving the 50 MB body", async ({ page }) => {
+test("1. sending and receiving the 50 MB body", async ({ page }) => {
   await prepare(page);
   await expectNoLongTasks(page, () => sendAndShowPretty(page));
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("2. opening Raw (a single 50 MB line), then scrolling and wrapping it", async ({ page }) => {
+test("2. opening Raw (a single 50 MB line), then scrolling and wrapping it", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
@@ -86,8 +84,7 @@ test.fixme("2. opening Raw (a single 50 MB line), then scrolling and wrapping it
   });
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
+test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await views(page).getByRole("radio", { name: "Raw" }).click();
@@ -117,7 +114,8 @@ test("4. finding a term that doesn't match", async ({ page }) => {
 
 // The Find runs in pieces (#114). Selecting the match scrolls to the end, and
 // CodeMirror's background parse then works toward it in slices, which stay
-// under 50 ms because src/lib/codemirror/parseSlices.ts hides isInputPending.
+// under 50 ms because src/lib/codemirror/parseSlices.ts hides isInputPending
+// and caps every idle deadline.
 test("5. finding a term that matches only near the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
@@ -187,8 +185,7 @@ test("6b. Fold all on a body at its size limit", async ({ page }) => {
   });
 });
 
-// Fails until #113 (large documents are built in pieces and kept per tab).
-test.fixme("7. switching tabs away and back", async ({ page }) => {
+test("7. switching tabs away and back", async ({ page }) => {
   await prepare(page, "Create pet");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await sendAndShowPretty(page);

@@ -137,10 +137,10 @@
     <div class="pane" class:hidden={showingPreview}>
       {#if res.bodySize === 0}
         <div class="empty-state small">The response has no body.</div>
-      {:else if view.loading}
-        <div class="empty-state small" role="status"><span class="spinner"></span>{view.loading === "pretty" ? "Formatting…" : "Loading…"}</div>
+      {:else if !view.doc}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Preparing…</div>
       {:else}
-        <Editor bind:this={editor} bind:folding bind:canFoldAll value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
+        <Editor bind:this={editor} bind:folding bind:canFoldAll doc={view.doc} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}
     </div>
   {/if}
@@ -182,6 +182,13 @@
     flex: 1;
     min-height: 0;
     border-top: 1px solid var(--border);
+  }
+  /* Wrapped, a line breaks at any character, so its rows are as full as
+     CodeMirror assumes when it estimates the height of what it hasn't drawn.
+     Broken at punctuation instead, a long minified body's rows come out a third
+     shorter: the line grows as it's scrolled, and its end can't be reached. */
+  .body :global(.cm-content.cm-lineWrapping) {
+    word-break: break-all;
   }
   /* Raw and Preview are stacked in the same place; the hidden one keeps its
      layout (visibility, not display: none), so switching needs no re-layout. */

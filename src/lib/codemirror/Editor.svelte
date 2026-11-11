@@ -1,14 +1,20 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
+  import { onDestroy, onMount, untrack } from "svelte";
+  import { Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
   import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { forceParsing, unfoldAll } from "@codemirror/language";
+  import { foldEffect, foldedRanges, forceParsing, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
 
   interface Props {
-    value: string;
+    value?: string;
+    /**
+     * A document built ahead (a large response body), shown instead of
+     * `value`. A new one replaces the whole document; nothing is compared or
+     * turned back into a string.
+     */
+    doc?: Text;
     onchange?: (value: string) => void;
     language?: Language;
     readonly?: boolean;
@@ -25,7 +31,7 @@
     /** Out: whether the document is small enough for Fold all (`foldAll.ts`). */
     canFoldAll?: boolean;
   }
-  let { value, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created:
@@ -39,11 +45,57 @@
   const langC = new Compartment();
   const varC = new Compartment();
 
+  // A prebuilt document goes into a wrapped view only once the view has
+  // measured itself without it, so it's laid out like a document replaced in
+  // an open editor. Laid out wrapped from scratch (a new view, or wrapping
+  // turned on or off), CodeMirror measures a very long line (a 50 MB minified
+  // body) with the unwrapped stand-in for its hidden part, takes it to be a
+  // short line, and draws all of it, freezing the window for seconds.
+
+  /** What the view holds meanwhile: a line of text, so it measures a real line's height. */
+  const STAND_IN = " ";
+  /** The view is waiting a frame to put `doc` in. */
+  let docPending = false;
+  let destroyed = false;
+
+  /**
+   * Puts `doc` into `v` (holding the stand-in) after its next measure: the selection,
+   * folds and the position at the top of `keep` come back if it's the same document.
+   */
+  function putDocAfterMeasure(v: EditorView, keep?: { doc: Text; selection: EditorSelection; folds: StateEffect<unknown>[]; top: number }) {
+    docPending = true;
+    // Runs after CodeMirror's own measure, which it asked a frame for first.
+    requestAnimationFrame(() => {
+      docPending = false;
+      if (destroyed || !doc) return;
+      const same = keep?.doc === doc;
+      v.dispatch({
+        changes: { from: 0, to: v.state.doc.length, insert: doc },
+        selection: same ? keep.selection : undefined,
+        effects: same ? [...keep.folds, EditorView.scrollIntoView(keep.top, { y: "start" })] : [],
+        annotations: Transaction.addToHistory.of(false),
+      });
+    });
+  }
+
+  /** Applies `effects` (wrapping on or off) to a prebuilt document's view, laying the document out afresh. */
+  function relayOut(v: EditorView, effects: StateEffect<unknown>) {
+    const { state } = v;
+    const folds: StateEffect<unknown>[] = [];
+    foldedRanges(state).between(0, state.doc.length, (from, to) => void folds.push(foldEffect.of({ from, to })));
+    const r = v.scrollDOM.getBoundingClientRect();
+    const top = v.posAtCoords({ x: r.left + r.width / 2, y: r.top + 1 }, false);
+    const keep = { doc: state.doc, selection: state.selection, folds, top };
+    v.dispatch({ changes: { from: 0, to: state.doc.length, insert: STAND_IN }, effects, annotations: Transaction.addToHistory.of(false) });
+    putDocAfterMeasure(v, keep);
+  }
+
   onMount(() => {
+    const deferDoc = !!doc && wrap;
     view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: value,
+        doc: deferDoc ? STAND_IN : (doc ?? value),
         extensions: [
           baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
           langC.of(languageExtension(language)),
@@ -72,10 +124,19 @@
     // Parse what's in view now, before the first paint, so switching back to an
     // editor (Preview → Raw) is coloured at once. Capped so a huge body can't stall.
     forceParsing(view, view.viewport.to, PARSE_ON_MOUNT_MS);
+    if (deferDoc) putDocAfterMeasure(view);
   });
-  onDestroy(() => view?.destroy());
+  onDestroy(() => {
+    destroyed = true;
+    view?.destroy();
+  });
 
   $effect(() => {
+    const d = doc;
+    if (d) {
+      if (view && !docPending && d !== view.state.doc) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: d }, annotations: Transaction.addToHistory.of(false) });
+      return;
+    }
     const v = value;
     if (view && v !== view.state.doc.toString()) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });
@@ -85,9 +146,16 @@
     const l = language;
     view?.dispatch({ effects: langC.reconfigure(languageExtension(l)) });
   });
+  /** Whether the view's lines wrap now. */
+  let wrapped = untrack(() => wrap);
   $effect(() => {
     const opts = { readonly, wrap, placeholder, gutters };
-    view?.dispatch({ effects: baseC.reconfigure(editorExtensions(opts)) });
+    if (!view) return;
+    const effects = baseC.reconfigure(editorExtensions(opts));
+    const rewrap = wrap !== wrapped;
+    wrapped = wrap;
+    if (rewrap && untrack(() => doc) && !docPending) relayOut(view, effects);
+    else view.dispatch({ effects });
   });
   $effect(() => {
     const p = variables;
