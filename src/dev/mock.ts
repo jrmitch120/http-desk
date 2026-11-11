@@ -452,8 +452,8 @@ window.addEventListener(
   releaseSettings: () => releaseSettings(),
   /** Lets held Pretty text through (`?pretty=hold`). */
   releasePretty: () => releasePretty(),
-  /** Builds the perf test's large bodies; from then on sends answer with them (e2e/perf). */
-  preparePerf: () => preparePerf(),
+  /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
+  preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
     return clone(settings);
   },
@@ -811,8 +811,8 @@ const PERF_LAST = "needle-near-the-end";
 /** At most what the shell sends inline as base64 (the core's `BINARY_PREVIEW_LIMIT`, 25 MB). */
 const PERF_IMAGE = { width: 2048, height: 4266, contentType: "image/bmp" };
 
-function preparePerf(): void {
-  const { json, pretty } = largeJson(50 * 1000 * 1000, PERF_LAST);
+function preparePerf(jsonBytes = 50 * 1000 * 1000): void {
+  const { json, pretty } = largeJson(jsonBytes, PERF_LAST);
   perf = { json, pretty, image: toBase64(bmpImage(PERF_IMAGE.width, PERF_IMAGE.height)) };
 }
 
