@@ -23,6 +23,22 @@ test("body text uses the bundled Inter and the code editor the bundled JetBrains
   await expect.poll(() => loadedFamilies(page)).toEqual(expect.arrayContaining(["Inter", "JetBrains Mono"]));
 });
 
+// JetBrains Mono's ligatures make WebKit shape text slowly enough that paging
+// through a body with very long lines showed blank text in the macOS app (#118).
+test("the code editor draws JetBrains Mono without ligatures", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await page.getByRole("button", { name: "Body" }).click();
+  await expect(bodyEditor(page)).toBeVisible();
+
+  const style = await bodyEditor(page).evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { ligatures: s.fontVariantLigatures, features: s.fontFeatureSettings };
+  });
+  expect(style.ligatures).toBe("none");
+  expect(style.features).toMatch(/"calt" 0/);
+});
+
 test("fonts are served from the app itself, never fetched from the network", async ({ page, baseURL }) => {
   const fontRequests: string[] = [];
   page.on("request", (req) => {

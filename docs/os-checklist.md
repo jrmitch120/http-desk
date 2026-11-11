@@ -27,7 +27,8 @@ control or the popup layer.
 
 - [ ] Text is Inter and code (URL bar, editors, methods) is JetBrains Mono, at the same
       size and weight on all three. Arrows, ⌘ and other symbols outside the bundled
-      Latin subsets come from system fonts; that's expected.
+      Latin subsets come from system fonts; that's expected. Editors draw `=>`, `!=` and
+      `<=` as separate characters, not ligatures (#118).
 - [ ] Tabbing shows the same 2px blue focus ring on buttons, inputs, switches, checkboxes,
       segmented options and the split separators.
 - [ ] Scrollbars (sidebar tree, long response, Settings) are the thin themed ones, not
@@ -98,6 +99,9 @@ control or the popup layer.
       the text near the end gets coloured within a few seconds. Fold all is off with
       its tooltip pointing to the filter; on a body of a few MB it shows "Folding…"
       and then folds.
+- [ ] Long lines (#118): send `GET https://www.google.com/` and page through Raw with
+      Page Down and Page Up, wrapped and not. The text doesn't go blank while it's
+      redrawn. A faint blink with wrap off is known.
 - [ ] Previews from `blob:` URLs, on macOS and Linux especially (the content security
       policy allows `blob:` for them): an HTML page (in its sandboxed frame), an
       image, a PDF and an audio or video file each show. Switch to another tab and
