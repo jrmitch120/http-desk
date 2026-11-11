@@ -126,8 +126,8 @@
     <div class="pane" class:hidden={showingPreview}>
       {#if res.bodySize === 0}
         <div class="empty-state small">The response has no body.</div>
-      {:else if view.formatting}
-        <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
+      {:else if view.loading}
+        <div class="empty-state small" role="status"><span class="spinner"></span>{view.loading === "pretty" ? "Formatting…" : "Loading…"}</div>
       {:else}
         <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}

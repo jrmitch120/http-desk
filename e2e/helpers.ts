@@ -98,8 +98,8 @@ export interface MockState {
   envFiles: { shared: EnvFile; private: EnvFile };
   /** Each folder's own environments below the root, as last saved, by folder ("api"). */
   folderPairs: Record<string, { shared: unknown[]; environments: { name: string; variables: { name: string; value: string; secret: boolean }[] }[] }>;
-  /** How many times the viewer called `pretty_response`. */
-  prettyRequests: number;
+  /** The bodies the viewer fetched with `response_body`, in order: response id and view. */
+  bodyRequests: { id: string; view: "raw" | "pretty" | "bytes" }[];
   /** How many times the resolved preview called `preview_request`. */
   previewRequests: number;
   /** Whether the app has been given its settings yet. */
@@ -188,11 +188,9 @@ export function setClipboardFails(page: Page, fails: boolean): Promise<void> {
   }, fails);
 }
 
-/** Starts the mock's `pretty_response` count from zero. */
-export function resetPrettyRequests(page: Page): Promise<void> {
-  return page.evaluate(() => {
-    (window as unknown as { __mock: MockState }).__mock.prettyRequests = 0;
-  });
+/** Forgets the bodies the viewer has fetched so far (`bodyRequests`). */
+export function resetBodyRequests(page: Page): Promise<void> {
+  return page.evaluate(() => (window as unknown as { __mock: { resetBodyRequests: () => void } }).__mock.resetBodyRequests());
 }
 
 /** Makes the mock's next sends answer like `?response=<kind>` (null: the default JSON). */
@@ -207,7 +205,7 @@ export function releaseSettings(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releaseSettings: () => void } }).__mock.releaseSettings());
 }
 
-/** Lets formatting held by `?pretty=hold` through. */
+/** Lets Pretty text held by `?pretty=hold` through. */
 export function releasePretty(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { releasePretty: () => void } }).__mock.releasePretty());
 }
