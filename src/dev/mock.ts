@@ -313,7 +313,8 @@ const savedBodies: Record<string, string> = {};
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
 const shapeRequests: string[] = [];
 let settingsServed = false;
-let prettyRequests = 0;
+/** The bodies the viewer fetched with `response_body`, in order. */
+let bodyRequests: { id: string; view: string }[] = [];
 let previewRequests = 0;
 let windowTitle: string | null = null;
 let windowCloseRequests = 0;
@@ -428,12 +429,13 @@ window.addEventListener(
   get webviewZoom() {
     return webviewZoom;
   },
-  /** How many times the viewer called `pretty_response`; a test may reset it. */
-  get prettyRequests() {
-    return prettyRequests;
+  /** The bodies the viewer fetched with `response_body` (response id and view), in order. */
+  get bodyRequests() {
+    return clone(bodyRequests);
   },
-  set prettyRequests(n: number) {
-    prettyRequests = n;
+  /** Forgets the fetches so far. */
+  resetBodyRequests: () => {
+    bodyRequests = [];
   },
   /** How many times the resolved preview called `preview_request`. */
   get previewRequests() {
@@ -445,7 +447,7 @@ window.addEventListener(
   },
   /** Lets held settings through (`?settingsDelay=hold`). */
   releaseSettings: () => releaseSettings(),
-  /** Lets held formatting through (`?pretty=hold`). */
+  /** Lets held Pretty text through (`?pretty=hold`). */
   releasePretty: () => releasePretty(),
   get settings() {
     return clone(settings);
@@ -589,10 +591,9 @@ const reasonPhrases: Record<number, string> = { 200: "OK", 201: "Created", 404: 
 // `?bigBinary=1`: the image response is a 2 MB binary body instead of a small PNG.
 const bigBinary = new URLSearchParams(location.search).get("bigBinary") === "1";
 const BIG_BINARY_BYTES = 2 * 1024 * 1024;
-// `?largeBody=1`: the JSON response counts as over the shell's inline Pretty
-// limit, so it arrives without `prettyText` and Pretty view asks for it.
+// `?largeBody=1`: the JSON response's Pretty text takes a while to format.
 const largeBody = new URLSearchParams(location.search).get("largeBody") === "1";
-// `?evicted=1`: `pretty_response` finds no stored body, as after eviction.
+// `?evicted=1`: `response_body` finds no stored body, as after eviction.
 const evicted = new URLSearchParams(location.search).get("evicted") === "1";
 // `?timing=reused`: the JSON response's final request went over an open
 // connection after two redirects, so it has no DNS or connect phase.
@@ -610,7 +611,7 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
-// `?pretty=hold`: `pretty_response` waits until a test calls `__mock.releasePretty()`,
+// `?pretty=hold`: `response_body`'s Pretty text waits until a test calls `__mock.releasePretty()`,
 // so the viewer's loading state lasts as long as the test needs.
 const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
 let releasePretty: () => void = () => {};
@@ -769,12 +770,14 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
 const textBodies = new Map<string, { body: string; kind: ResponseKind }>();
 let responseCount = 0;
 
-/** Stand-in for the shell's Pretty text: formatted JSON, or the body as is if it doesn't parse. */
-function prettyText(body: string): string {
+/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise. */
+function prettyText({ body, kind }: { body: string; kind: ResponseKind }): string {
+  if (kind === "xml") return formatXml(body, "pretty");
+  if (kind !== "json") throw "Response body isn't JSON or XML";
   try {
     return formatJson(body, "pretty");
-  } catch {
-    return body;
+  } catch (e) {
+    throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
   }
 }
 
@@ -1001,7 +1004,7 @@ mockIPC(
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
-          bodyText: body, prettyText: largeBody || bodyKind === "html" || bodyKind === "text" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
+          bodyText: body, prettyText: null, bodyBase64: null, truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
@@ -1018,19 +1021,23 @@ mockIPC(
         } catch (e) {
           throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
         }
-      case "pretty_response": {
-        prettyRequests++;
-        await delay(400); // as a large body takes a while
-        await prettyReleased;
-        const stored = evicted ? undefined : textBodies.get(args.responseId);
-        if (stored === undefined) throw RESPONSE_GONE;
-        if (stored.kind === "xml") return formatXml(stored.body, "pretty");
-        if (stored.kind !== "json") throw "Response body isn't JSON or XML";
-        try {
-          return formatJson(stored.body, "pretty");
-        } catch (e) {
-          throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+      case "response_body": {
+        // Like the shell: raw bytes (an ArrayBuffer), text as UTF-8.
+        const { responseId: id, view } = args as { responseId: string; view: "raw" | "pretty" | "bytes" };
+        bodyRequests.push({ id, view });
+        if (view === "pretty") {
+          if (largeBody) await delay(400); // as a large body takes a while to format
+          await prettyReleased;
         }
+        if (evicted) throw RESPONSE_GONE;
+        const b64 = binaryBodies.get(id);
+        if (b64 !== undefined) {
+          if (view !== "bytes") throw "Response body isn't text";
+          return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+        }
+        const stored = textBodies.get(id);
+        if (stored === undefined) throw RESPONSE_GONE;
+        return new TextEncoder().encode(view === "pretty" ? prettyText(stored) : stored.body).buffer;
       }
       case "hexdump": {
         const b64 = binaryBodies.get(args.responseId);

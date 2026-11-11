@@ -34,6 +34,9 @@ export type RequestArgs = {
   promptValues: Record<string, string>;
 };
 
+/** Which form of a stored response body `api.responseBody` fetches. */
+export type BodyFetchView = "raw" | "pretty" | "bytes";
+
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   getTree: () => invoke<TreeNode>("get_tree"),
@@ -81,11 +84,12 @@ export const api = {
    */
   filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
   /**
-   * The Pretty view of a response too large to arrive with its `prettyText`,
-   * formatted from the body the shell stored. Rejects when it doesn't parse or
-   * has been evicted.
+   * A stored response body as raw bytes: its text (`raw`, decoded from the
+   * declared charset) or Pretty text (`pretty`, lossless JSON or XML) as UTF-8,
+   * or the body's own `bytes`. Rejects when the body has been evicted, isn't
+   * text, or has no Pretty text (not JSON or XML, or it doesn't parse).
    */
-  prettyResponse: (responseId: string) => invoke<string>("pretty_response", { responseId }),
+  responseBody: (responseId: string, view: BodyFetchView) => invoke<ArrayBuffer>("response_body", { responseId, view }),
   /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
   responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
