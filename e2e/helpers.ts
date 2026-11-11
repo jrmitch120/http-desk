@@ -124,6 +124,8 @@ export interface MockState {
   clipboard: string;
   /** The texts the clipboard plugin wrote, in order. */
   clipboardWrites: string[];
+  /** The response ids `release_response` was called with, in order. */
+  releasedResponses: string[];
 }
 
 /** A native menu entry as the app sends it (src/lib/menuLayout.ts `NativeEntry`). */

@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   sendRequest: vi.fn(),
   previewRequest: vi.fn(),
   cancelRequest: vi.fn(),
+  releaseResponse: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
   openWorkspace: vi.fn(),
@@ -92,6 +93,7 @@ beforeEach(() => {
   pathExists.mockResolvedValue(true);
   deletePath.mockResolvedValue("trashed");
   loadFolderEnvironments.mockResolvedValue([]);
+  api.releaseResponse.mockResolvedValue(undefined);
   app.dialog = null;
   app.toasts = [];
   app.tree = null;
@@ -404,6 +406,48 @@ describe("cancelling a request", () => {
 
     expect(app.runs[tab.id]).toMatchObject({ loading: false, cancelled: true, response: previous });
     expect(app.runs[tab.id].error).toBeUndefined();
+  });
+});
+
+describe("releasing responses", () => {
+  const released = () => api.releaseResponse.mock.calls.map(([id]) => id);
+  const response = (id: string) => ({ id, status: 200 }) as HttpResponse;
+
+  it("releases the previous response when a send fails, since the tab no longer shows it", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce(response("r1"));
+    await app.send(tab.id);
+    api.sendRequest.mockRejectedValueOnce({ kind: "connection", message: "refused", details: null });
+    await app.send(tab.id);
+
+    expect(app.runs[tab.id].response).toBeUndefined();
+    expect(released()).toEqual(["r1"]);
+  });
+
+  it("releases a response that arrives after its tab closed", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    let resolve!: (r: HttpResponse) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const sending = app.send(tab.id);
+    await app.closeTab(tab.id);
+
+    resolve(response("late"));
+    await sending;
+    expect(released()).toEqual(["late"]);
+  });
+
+  it("releases every tab's response when another workspace opens", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce(response("r1")).mockResolvedValueOnce(response("r2"));
+    await app.send(list.id);
+    await app.send(create.id);
+    openWorkspace.mockResolvedValue({ root: "/other", tree: { name: "other", path: "/other", kind: "dir", children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+
+    await app.openWorkspace("/other");
+
+    expect(released().sort()).toEqual(["r1", "r2"]);
   });
 });
 
