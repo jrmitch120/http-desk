@@ -5,14 +5,15 @@
 use std::sync::{Arc, RwLock};
 
 use base64::Engine;
-use httpdesk_core::exec;
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::bodies::KeptBody;
+
 /// What Copy body puts on the clipboard for a stored body: its text, decoded
-/// the way the viewer shows it (its charset, else UTF-8), or base64 when it
-/// isn't text.
-pub fn clipboard_text(body: &[u8], content_type: Option<&str>) -> String {
-    exec::decode_text(body, content_type).unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode(body))
+/// the way the viewer shows it (its charset, else UTF-8), or base64 when its
+/// kind is binary.
+pub fn clipboard_text(body: &KeptBody) -> String {
+    body.text().unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode(&body.bytes))
 }
 
 /// Writes text to the clipboard.

@@ -29,7 +29,7 @@ mod self_writes;
 mod theme;
 mod watcher;
 mod window_state;
-use bodies::KeptBodies;
+use bodies::{KeptBodies, KeptBody};
 use copying::Clipboard;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
@@ -597,7 +597,8 @@ async fn send_request<R: tauri::Runtime>(
     match result {
         Ok(Ok(outcome)) => {
             let response = outcome.response;
-            state.bodies.lock().unwrap().push(response.id.clone(), outcome.body, response.content_type.clone());
+            let (id, content_type) = (response.id.clone(), response.content_type.clone());
+            state.bodies.lock().unwrap().push(id, outcome.body, content_type, response.body_kind);
             Ok(response)
         }
         Ok(Err(e)) => Err(e),
@@ -640,9 +641,9 @@ fn stored_body(state: &AppState, response_id: &str) -> CmdResult<Arc<[u8]>> {
     state.bodies.lock().unwrap().get(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
 }
 
-/// The stored body of `response_id` with its content type, or [`RESPONSE_GONE`].
-fn stored_body_with_type(state: &AppState, response_id: &str) -> CmdResult<(Arc<[u8]>, Option<String>)> {
-    state.bodies.lock().unwrap().get_with_type(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+/// The stored body of `response_id` with its content type and kind, or [`RESPONSE_GONE`].
+fn kept_body(state: &AppState, response_id: &str) -> CmdResult<KeptBody> {
+    state.bodies.lock().unwrap().get_kept(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
 }
 
 #[tauri::command]
@@ -662,8 +663,8 @@ async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: S
 async fn copy_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<()> {
     let handle = app.clone();
     off_main(app, move |state| {
-        let (body, content_type) = stored_body_with_type(state, &response_id)?;
-        state.clipboard.write(&handle, copying::clipboard_text(&body, content_type.as_deref()))
+        let body = kept_body(state, &response_id)?;
+        state.clipboard.write(&handle, copying::clipboard_text(&body))
     })
     .await
 }
@@ -696,9 +697,8 @@ fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>>
     if let Some(parsed) = state.json_docs.lock().unwrap().get(response_id) {
         return parsed;
     }
-    let (body, content_type) = stored_body_with_type(state, response_id)?;
-    // Decoded the way the response's `bodyText` was (its charset, else UTF-8).
-    let text = exec::decode_text(&body, content_type.as_deref()).ok_or("The body isn't text")?;
+    // Decoded the way Raw shows it (its charset, else UTF-8).
+    let text = kept_body(state, response_id)?.text().ok_or("The body isn't text")?;
     let parsed = JsonDocument::parse(&text).map(Arc::new).map_err(err);
     // Not kept if the body was released while parsing, or it would never go.
     let bodies = state.bodies.lock().unwrap();
@@ -735,8 +735,9 @@ enum BodyView {
 /// A stored body for the viewer, by response id, as raw bytes (an
 /// `ArrayBuffer` in the webview, not a JSON string): text as UTF-8. Decoding
 /// and formatting run on the blocking pool. Rejects when the body has been
-/// evicted, isn't text, or (for Pretty) isn't JSON or XML or doesn't parse;
-/// the viewer shows the raw text instead of a Pretty one it can't have.
+/// released, isn't text (its kind is binary), or (for Pretty) isn't JSON or
+/// XML or doesn't parse; the viewer shows the raw text instead of a Pretty one
+/// it can't have.
 #[tauri::command]
 async fn response_body<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -744,16 +745,15 @@ async fn response_body<R: tauri::Runtime>(
     view: BodyView,
 ) -> CmdResult<tauri::ipc::Response> {
     off_main(app, move |state| {
-        let (body, content_type) = stored_body_with_type(state, &response_id)?;
-        let content_type = content_type.as_deref();
-        let text = || exec::decode_text(&body, content_type).ok_or("Response body isn't text");
+        let body = kept_body(state, &response_id)?;
+        let text = || body.text().ok_or("Response body isn't text");
         let bytes = match view {
             BodyView::Raw => text()?.into_bytes(),
-            BodyView::Pretty => body_format::pretty_response(content_type, &text()?)
+            BodyView::Pretty => body_format::pretty_response(body.content_type.as_deref(), &text()?)
                 .ok_or("Response body isn't JSON or XML")?
                 .map_err(err)?
                 .into_bytes(),
-            BodyView::Bytes => body.to_vec(),
+            BodyView::Bytes => body.bytes.to_vec(),
         };
         Ok(tauri::ipc::Response::new(bytes))
     })

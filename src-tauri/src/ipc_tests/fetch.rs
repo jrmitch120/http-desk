@@ -72,10 +72,3 @@ fn pretty_text_is_refused_for_a_body_that_isnt_json_or_xml_or_doesnt_parse() {
     let err = fetch(&h, &bad["id"], "pretty").unwrap_err();
     assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
 }
-
-#[test]
-fn a_small_json_response_arrives_without_its_pretty_text() {
-    let h = Harness::new();
-    let resp = send_get(&h, &serve_once("application/json", br#"{"id":1}"#.to_vec()));
-    assert_eq!(resp["prettyText"], Value::Null);
-}

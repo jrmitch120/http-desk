@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use httpdesk_core::body_format::ResponseKind;
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, execute_on, prepare, ClientPool, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
@@ -18,10 +19,19 @@ fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 }
 
 async fn send(req: &Request, vars: HashMap<String, String>, base_dir: &Path) -> Result<exec::HttpResponse, ExecError> {
+    send_for_body(req, vars, base_dir).await.map(|o| o.response)
+}
+
+/// Like [`send`], with the body's bytes (the reply itself carries no body).
+async fn send_for_body(
+    req: &Request,
+    vars: HashMap<String, String>,
+    base_dir: &Path,
+) -> Result<exec::ExecOutcome, ExecError> {
     let resolver = Resolver::new(vars);
     let settings = ExecSettings::default();
     let prepared = prepare(req, &resolver, base_dir, &settings)?;
-    execute(prepared, &settings, &SslConfig::default()).await.map(|o| o.response)
+    execute(prepared, &settings, &SslConfig::default()).await
 }
 
 async fn last_request(server: &MockServer) -> Received {
@@ -58,9 +68,9 @@ async fn disabled_components_are_not_sent() {
     let req = parse(&text).requests.remove(0);
     assert!(!req.auth.enabled && !req.body.enabled);
 
-    let resp = send(&req, HashMap::new(), Path::new(".")).await.unwrap();
-    assert_eq!(resp.status, 200);
-    assert_eq!(resp.body_text.as_deref(), Some(r#"{"ok":true}"#));
+    let out = send_for_body(&req, HashMap::new(), Path::new(".")).await.unwrap();
+    assert_eq!(out.response.status, 200);
+    assert_eq!(out.body, br#"{"ok":true}"#);
 
     let got = last_request(&server).await;
     assert_eq!(got.url.query(), Some("keep=1"));
@@ -259,9 +269,9 @@ async fn redirects_timeouts_and_methods() {
     let vars = env(&[("base", &server.uri())]);
 
     let follow = parse("GET {{base}}/old\n").requests.remove(0);
-    let resp = send(&follow, vars.clone(), Path::new(".")).await.unwrap();
-    assert_eq!((resp.status, resp.body_text.as_deref()), (200, Some("new")));
-    assert!(resp.url.ends_with("/new"));
+    let out = send_for_body(&follow, vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!((out.response.status, &out.body[..]), (200, &b"new"[..]));
+    assert!(out.response.url.ends_with("/new"));
 
     let no_follow = parse("# @no-redirect\nGET {{base}}/old\n").requests.remove(0);
     let resp = send(&no_follow, vars.clone(), Path::new(".")).await.unwrap();
@@ -336,9 +346,9 @@ async fn a_body_that_keeps_streaming_outlives_the_idle_timeout() {
     let base = trickle_server(parts, Duration::from_millis(100));
     let req = parse(&format!("# @timeout 400 ms\nGET {base}/download\n")).requests.remove(0);
 
-    let resp = send(&req, HashMap::new(), Path::new(".")).await.unwrap();
-    assert_eq!(resp.body_text.as_deref(), Some("abcdefgh"));
-    assert!(resp.time_ms > 400.0, "took {} ms", resp.time_ms);
+    let out = send_for_body(&req, HashMap::new(), Path::new(".")).await.unwrap();
+    assert_eq!(out.body, b"abcdefgh");
+    assert!(out.response.time_ms > 400.0, "took {} ms", out.response.time_ms);
 }
 
 #[tokio::test]
@@ -380,7 +390,7 @@ async fn a_slow_connection_reports_a_connection_timeout_naming_the_value() {
 }
 
 #[tokio::test]
-async fn binary_responses_are_base64_and_text_is_decoded() {
+async fn binary_responses_are_binary_and_text_is_decoded_from_its_charset() {
     let server = MockServer::start().await;
     Mock::given(path("/img"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(vec![0x89, b'P', b'N', b'G', 0, 1], "image/png"))
@@ -392,15 +402,27 @@ async fn binary_responses_are_base64_and_text_is_decoded() {
         )
         .mount(&server)
         .await;
+    // Named like a text kind (SVG is XML) but not a textual type, so there's no text.
+    Mock::given(path("/svg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(b"<svg/>".to_vec(), "image/svg"))
+        .mount(&server)
+        .await;
     let vars = env(&[("base", &server.uri())]);
 
-    let resp = send(&parse("GET {{base}}/img\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
-    assert!(resp.body_text.is_none());
-    assert_eq!(resp.body_base64.as_deref(), Some("iVBORwAB"));
-    assert_eq!(resp.body_size, 6);
+    let out = send_for_body(&parse("GET {{base}}/svg\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(out.response.body_kind, ResponseKind::Binary, "a text kind with no text is binary");
 
-    let resp = send(&parse("GET {{base}}/latin1\n").requests[0], vars, Path::new(".")).await.unwrap();
-    assert_eq!(resp.body_text.as_deref(), Some("café"));
+    let out = send_for_body(&parse("GET {{base}}/img\n").requests[0], vars.clone(), Path::new(".")).await.unwrap();
+    assert_eq!(out.response.body_kind, ResponseKind::Image);
+    assert_eq!(out.body, [0x89, b'P', b'N', b'G', 0, 1]);
+    assert_eq!(out.response.body_size, 6);
+    let ct = out.response.content_type.as_deref();
+    assert_eq!(exec::body_text(&out.body, ct, out.response.body_kind), None);
+
+    let out = send_for_body(&parse("GET {{base}}/latin1\n").requests[0], vars, Path::new(".")).await.unwrap();
+    assert_eq!(out.response.body_kind, ResponseKind::Text);
+    let ct = out.response.content_type.as_deref();
+    assert_eq!(exec::body_text(&out.body, ct, out.response.body_kind).as_deref(), Some("café"));
 }
 
 #[test]
@@ -631,13 +653,15 @@ async fn an_encoded_response_reports_transferred_and_decoded_sizes_and_its_encod
         let server = encoded_server(encoding, wire.clone()).await;
         let vars = env(&[("base", &server.uri())]);
 
-        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+        let out = send_for_body(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+        let resp = out.response;
 
         assert_eq!(resp.content_encoding.as_deref(), Some(encoding));
         assert_eq!(resp.transferred_size, wire.len(), "{encoding}: raw bytes on the wire");
         assert_eq!(resp.body_size, json.len(), "{encoding}: decoded size");
         assert!(resp.transferred_size < resp.body_size, "{encoding}");
-        assert_eq!(resp.body_text.as_deref(), Some(std::str::from_utf8(&json).unwrap()), "{encoding}");
+        assert_eq!(resp.body_kind, ResponseKind::Json, "{encoding}");
+        assert_eq!(out.body, json, "{encoding}");
         assert!(resp.warnings.is_empty(), "{encoding}: {:?}", resp.warnings);
     }
 }
@@ -665,13 +689,13 @@ async fn an_unsupported_encoding_shows_the_bytes_as_received_with_a_warning() {
     let server = encoded_server("compress", wire.clone()).await;
     let vars = env(&[("base", &server.uri())]);
 
-    let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+    let out = send_for_body(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+    let resp = out.response;
 
     assert_eq!(resp.content_encoding.as_deref(), Some("compress"));
     assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
-    assert!(resp.body_text.is_none(), "still-encoded bytes are binary even though the type is JSON");
-    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
-    assert_eq!(raw, wire);
+    assert_eq!(resp.body_kind, ResponseKind::Binary, "still-encoded bytes are binary even though the type is JSON");
+    assert_eq!(out.body, wire);
     assert_eq!(resp.warnings, ["Content-Encoding compress isn't supported; showing the bytes as received"]);
 }
 
@@ -708,16 +732,15 @@ async fn a_body_that_does_not_decode_is_shown_as_received_with_a_warning() {
             .await;
         let vars = env(&[("base", &server.uri())]);
 
-        let resp = send(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+        let out = send_for_body(&parse("GET {{base}}/data\n").requests[0], vars, Path::new(".")).await.unwrap();
+        let resp = out.response;
 
         assert_eq!(resp.status, 201, "status, headers and cookies survive");
         assert!(resp.headers.iter().any(|(n, v)| n == "content-encoding" && v == "gzip"));
         assert_eq!(resp.cookies.len(), 1);
         assert_eq!((resp.transferred_size, resp.body_size), (wire.len(), wire.len()));
-        assert!(resp.body_text.is_none(), "still-encoded bytes are binary");
-        let raw =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, resp.body_base64.unwrap()).unwrap();
-        assert_eq!(raw, wire);
+        assert_eq!(resp.body_kind, ResponseKind::Binary, "still-encoded bytes are binary");
+        assert_eq!(out.body, wire);
         assert_eq!(resp.warnings.len(), 1, "{:?}", resp.warnings);
         let warning = &resp.warnings[0];
         assert!(warning.starts_with("Couldn't decode the gzip body ("), "{warning}");

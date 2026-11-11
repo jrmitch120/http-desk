@@ -12,6 +12,7 @@ mod folder_envs;
 mod paths;
 mod preview;
 mod renaming;
+mod reply;
 mod usages;
 mod watcher;
 mod window_state;
@@ -174,7 +175,7 @@ fn vertical_slice_over_ipc() {
         json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": "local" }),
     );
     assert_eq!(resp["status"], 200);
-    assert_eq!(resp["bodyText"], r#"{"ok":true}"#);
+    assert_eq!(fetch::fetch(&h, &resp["id"], "raw").unwrap(), br#"{"ok":true}"#);
     assert_eq!(resp["warnings"][0], "Undefined variables: token");
     let raw = received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(raw.starts_with("GET /items?page=1 HTTP/1.1"), "{raw}");
@@ -356,6 +357,7 @@ fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
         "resp-1".into(),
         b"\x89PNG\r\n\x1a\n".to_vec(),
         Some("image/png".into()),
+        httpdesk_core::body_format::ResponseKind::Image,
     );
 
     let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
@@ -995,5 +997,5 @@ fn a_second_send_reuses_the_connection_the_first_left_open() {
 
     assert_eq!(first["timings"]["reused"], false, "{}", first["timings"]);
     assert_eq!(second["timings"]["reused"], true, "{}", second["timings"]);
-    assert_eq!(second["bodyText"], "ok");
+    assert_eq!(fetch::fetch(&h, &second["id"], "raw").unwrap(), b"ok");
 }

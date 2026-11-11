@@ -20,18 +20,18 @@ export const FILTER_DEBOUNCE_MS = 120;
 /**
  * Per kind of body: its editor highlighting, the extension Save suggests (`null`:
  * from the content type), whether the core can format it for Pretty (only JSON
- * and XML; for anything else Pretty would show the raw text), and whether it has
- * a Preview.
+ * and XML; for anything else Pretty would show the raw text), whether it has a
+ * Preview, and whether it's binary (Hex instead of Raw, copied as base64).
  */
-export const KIND_INFO: Record<ResponseKind, { language: Language; ext: string | null; pretty: boolean; preview: boolean }> = {
-  json: { language: "json", ext: "json", pretty: true, preview: false },
-  xml: { language: "xml", ext: "xml", pretty: true, preview: false },
-  html: { language: "html", ext: "html", pretty: false, preview: true },
-  image: { language: "text", ext: null, pretty: false, preview: true },
-  pdf: { language: "text", ext: null, pretty: false, preview: true },
-  media: { language: "text", ext: null, pretty: false, preview: true },
-  text: { language: "text", ext: null, pretty: false, preview: false },
-  binary: { language: "text", ext: null, pretty: false, preview: false },
+export const KIND_INFO: Record<ResponseKind, { language: Language; ext: string | null; pretty: boolean; preview: boolean; binary: boolean }> = {
+  json: { language: "json", ext: "json", pretty: true, preview: false, binary: false },
+  xml: { language: "xml", ext: "xml", pretty: true, preview: false, binary: false },
+  html: { language: "html", ext: "html", pretty: false, preview: true, binary: false },
+  image: { language: "text", ext: null, pretty: false, preview: true, binary: true },
+  pdf: { language: "text", ext: null, pretty: false, preview: true, binary: true },
+  media: { language: "text", ext: null, pretty: false, preview: true, binary: true },
+  text: { language: "text", ext: null, pretty: false, preview: false, binary: false },
+  binary: { language: "text", ext: null, pretty: false, preview: false, binary: true },
 };
 
 /** The file name Save suggests for a response: `response.<ext>`, the extension by kind or else from the content type. */
@@ -65,8 +65,8 @@ export class BodyView {
   readonly kind = $derived<ResponseKind>(this.res?.bodyKind ?? "binary");
   readonly canPretty = $derived(KIND_INFO[this.kind].pretty);
   readonly canPreview = $derived(KIND_INFO[this.kind].preview);
-  /** A body that isn't text (still-encoded bytes count as binary). */
-  readonly isBinary = $derived(!!this.res && this.res.bodyText === null);
+  /** A body that isn't text, by its kind (the core makes still-encoded bytes binary). */
+  readonly isBinary = $derived(!!this.res && KIND_INFO[this.kind].binary);
   /**
    * The view actually shown. A binary body has Hex (or Preview); otherwise a view
    * the body doesn't have (Pretty for HTML or text, Preview for JSON) falls back to
@@ -182,7 +182,7 @@ export class BodyView {
   // id, so a re-send re-runs it on the new response. Only for whole JSON bodies;
   // otherwise the expression is kept for the next JSON response in this tab.
 
-  readonly canFilter = $derived(!!this.res && this.kind === "json" && this.res.bodyText !== null && !this.res.truncated);
+  readonly canFilter = $derived(!!this.res && this.kind === "json" && !this.res.truncated);
   readonly #expression = $derived(this.canFilter ? this.#input().filter.trim() : "");
   #filterOutcome = $state<{ id: string; expression: string; result?: FilterResult; error?: string } | null>(null);
 
