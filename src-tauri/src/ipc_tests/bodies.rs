@@ -4,6 +4,7 @@
 use serde_json::{json, Value};
 use tauri::Manager;
 
+use super::fetch::fetch;
 use super::{send_get, serve_once, Harness};
 
 const GONE: &str = "Response is no longer available";
@@ -28,27 +29,28 @@ fn the_first_of_25_responses_can_still_be_saved_filtered_and_opened_in_pretty() 
     let filtered = h.ok("filter_response", json!({ "responseId": first, "expression": "$.n" }));
     assert_eq!(filtered["text"], "[\n  0\n]");
 
-    let pretty = h.ok("pretty_response", json!({ "responseId": first }));
-    assert_eq!(pretty, json!("{\n  \"n\": 0,\n  \"id\": 1234567890123456789\n}"));
+    let pretty = fetch(&h, first, "pretty").unwrap();
+    assert_eq!(String::from_utf8(pretty).unwrap(), "{\n  \"n\": 0,\n  \"id\": 1234567890123456789\n}");
 }
 
-/// What Save, Hex, the filter, key completion and Pretty report for response `id`,
-/// `None` where they succeed.
-fn uses(h: &Harness, id: &Value) -> [Option<Value>; 5] {
+/// What Save, Hex, the filter, key completion and fetching the body as raw
+/// text, Pretty text or bytes report for response `id`, `None` where they succeed.
+fn uses(h: &Harness, id: &Value) -> [Option<Value>; 7] {
     let out = tempfile::tempdir().unwrap();
     [
-        h.call("save_response_body", json!({ "responseId": id, "path": out.path().join("body") })),
-        h.call("hexdump", json!({ "responseId": id })),
-        h.call("filter_response", json!({ "responseId": id, "expression": "$.n" })),
-        h.call("response_shape", json!({ "responseId": id })),
-        h.call("pretty_response", json!({ "responseId": id })),
+        h.call("save_response_body", json!({ "responseId": id, "path": out.path().join("body") })).err(),
+        h.call("hexdump", json!({ "responseId": id })).err(),
+        h.call("filter_response", json!({ "responseId": id, "expression": "$.n" })).err(),
+        h.call("response_shape", json!({ "responseId": id })).err(),
+        fetch(h, id, "raw").err(),
+        fetch(h, id, "pretty").err(),
+        fetch(h, id, "bytes").err(),
     ]
-    .map(Result::err)
 }
 
-const ALL_OK: [Option<Value>; 5] = [None, None, None, None, None];
+const ALL_OK: [Option<Value>; 7] = [None, None, None, None, None, None, None];
 
-fn all_gone() -> [Option<Value>; 5] {
+fn all_gone() -> [Option<Value>; 7] {
     std::array::from_fn(|_| Some(json!(GONE)))
 }
 

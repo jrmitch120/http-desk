@@ -10,7 +10,7 @@ use tauri::webview::InvokeRequest;
 use super::{send_get, serve_once, Harness, APP_URL};
 
 /// Fetches `view` of the body of `response_id`: its raw bytes, or the error.
-fn fetch(h: &Harness, response_id: &Value, view: &str) -> Result<Vec<u8>, Value> {
+pub(super) fn fetch(h: &Harness, response_id: &Value, view: &str) -> Result<Vec<u8>, Value> {
     let body = get_ipc_response(
         &h.webview,
         InvokeRequest {
