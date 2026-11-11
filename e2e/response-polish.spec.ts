@@ -1,7 +1,7 @@
 // Response viewer polish (#71): status explanations, per-tab word-wrap, and
 // copying a binary body as base64.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, openApp, openRequest, tab } from "./helpers";
+import { clipboard, dialog, mockState, openApp, openRequest, tab } from "./helpers";
 
 async function send(page: Page): Promise<void> {
   await page.keyboard.press("Meta+Enter");
@@ -65,7 +65,20 @@ test("word-wrap is remembered per tab and survives switching tabs", async ({ pag
   await expect(wrapButton).not.toHaveClass(/active/);
 });
 
-test("Copy body copies a binary response as base64", async ({ page }) => {
+test("Copy body copies a text response through the shell, not the webview's clipboard", async ({ page }) => {
+  await recordClipboard(page);
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+
+  await page.getByRole("button", { name: "Copy body" }).click();
+  await expect(page.getByText("Response body copied", { exact: true })).toBeVisible();
+  expect(await mockState(page, "bodyCopies")).toHaveLength(1);
+  expect(await clipboard(page)).toContain('"name":"Rex"');
+  expect(await copied(page)).toEqual([]);
+});
+
+test("Copy body copies a binary response as base64 through the shell", async ({ page }) => {
   await recordClipboard(page);
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "Get pet image");
@@ -73,13 +86,15 @@ test("Copy body copies a binary response as base64", async ({ page }) => {
 
   await page.getByRole("button", { name: "Copy body" }).click();
   await expect(page.getByText("Response body copied as base64")).toBeVisible();
-  const [text] = await copied(page);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await mockState(page, "bodyCopies")).toHaveLength(1);
+  const text = await clipboard(page);
   expect(text.startsWith("iVBORw0KGgo")).toBe(true); // a PNG's signature, base64-encoded
   expect(atob(text).length).toBe(2749);
-  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await copied(page)).toEqual([]);
 });
 
-test("Copy body asks before copying a large binary response as base64", async ({ page }) => {
+test("Copy body asks before copying a large binary response as base64, then copies it through the shell", async ({ page }) => {
   await recordClipboard(page);
   await openApp(page, "?bigBinary=1");
   await openRequest(page, ["api", "pets.http"], "Get pet image");
@@ -88,13 +103,25 @@ test("Copy body asks before copying a large binary response as base64", async ({
   const confirm = dialog(page, "Copy as base64?");
 
   await copy.click();
-  await expect(confirm).toContainText("2.00 MB");
+  await expect(confirm).toContainText("The body is 2.00 MB, which is 2.67 MB of text as base64.");
   await confirm.getByRole("button", { name: "Cancel" }).click();
-  expect(await copied(page)).toEqual([]);
+  await expect(confirm).toHaveCount(0);
+  expect(await mockState(page, "bodyCopies")).toEqual([]);
 
   await copy.click();
   await confirm.getByRole("button", { name: "Copy" }).click();
   await expect(page.getByText("Response body copied as base64")).toBeVisible();
-  const [text] = await copied(page);
-  expect(atob(text).length).toBe(2 * 1024 * 1024);
+  expect(await mockState(page, "bodyCopies")).toHaveLength(1);
+  expect(atob(await clipboard(page)).length).toBe(2 * 1024 * 1024);
+  expect(await copied(page)).toEqual([]);
+});
+
+test("Copy body reports a clipboard that can't be written", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await page.evaluate(() => ((window as unknown as { __mock: { clipboardFails: boolean } }).__mock.clipboardFails = true));
+
+  await page.getByRole("button", { name: "Copy body" }).click();
+  await expect(page.getByText("The clipboard can't be written")).toBeVisible();
 });

@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod bodies;
 mod confine;
+mod copying;
 mod deleting;
 mod json_docs;
 mod menu;
@@ -29,6 +30,7 @@ mod theme;
 mod watcher;
 mod window_state;
 use bodies::KeptBodies;
+use copying::Clipboard;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
 use self_writes::SelfWrites;
@@ -179,6 +181,8 @@ struct AppState {
     /// What our own file operations left on disk, to ignore their watcher events.
     self_writes: SelfWrites,
     trash: Trash,
+    /// Where Copy body writes (the OS clipboard; tests replace it).
+    clipboard: Clipboard,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
     clients: exec::ClientPool,
@@ -650,6 +654,20 @@ async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: S
     .await
 }
 
+/// Copy body: puts the stored body of `response_id` on the clipboard, text as
+/// text and binary as base64, on the blocking pool, so a body of any size is
+/// copied without the webview holding it. Rejects when the body has been
+/// released or the clipboard can't be written.
+#[tauri::command]
+async fn copy_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<()> {
+    let handle = app.clone();
+    off_main(app, move |state| {
+        let (body, content_type) = stored_body_with_type(state, &response_id)?;
+        state.clipboard.write(&handle, copying::clipboard_text(&body, content_type.as_deref()))
+    })
+    .await
+}
+
 /// Beautify and Minify: re-lays out a request body without changing any token
 /// (`body_format`). On the blocking pool, since bodies can be large.
 #[tauri::command]
@@ -956,6 +974,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             preview_request,
             cancel_request,
             save_response_body,
+            copy_response_body,
             release_response,
             format_body,
             hexdump,
