@@ -4,8 +4,8 @@
 // line just over or just under the limit (`__mock.preparePerf` overshoots the
 // size asked for by at most one item, under 200 characters).
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
-import { UNWRAP_LIMIT } from "../src/lib/codemirror/unwrap";
+import { openApp, openRequest, tabTo } from "./helpers";
+import { UNWRAP_LIMIT } from "../src/lib/codemirror/longLines";
 
 /** The term only the body's last item has (src/dev/mock.ts `PERF_LAST`). */
 const NEAR_THE_END = "needle-near-the-end";
@@ -37,6 +37,11 @@ test("a body with a line over the limit shows wrapped, with Wrap lines on but di
   await expect(wrapButton(page)).toHaveAttribute("aria-pressed", "true");
   await wrapButton(page).hover();
   await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
+  // Reachable from the keyboard too, and read out as the button's description.
+  await page.mouse.move(0, 0);
+  await tabTo(page, wrapButton(page));
+  await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
+  await expect(wrapButton(page)).toHaveAccessibleDescription("Lines too long to unwrap");
 
   // The tab's own choice (unwrapped) is kept for a view whose lines fit.
   await viewRadio(page, "Pretty").click();

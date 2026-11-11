@@ -373,6 +373,10 @@ Global classes in `src/app.css`, not components:
   behaviour is a [Toggle](#toggle).
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
+  One that's unavailable for a reason (Fold all on a body too large, Wrap lines on one
+  with lines too long) takes `aria-disabled="true"` rather than `disabled`, with the
+  reason as its tooltip, and its click does nothing: it stays focusable, so the reason
+  is reachable from the keyboard and read out as its description. It shows dimmed.
   `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
   conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
 - `.link`: a button that reads as a link.

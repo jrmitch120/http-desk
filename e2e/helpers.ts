@@ -59,6 +59,12 @@ export function activeTab(page: Page): Locator {
   return page.getByRole("tablist", { name: "Open requests" }).getByRole("tab", { selected: true });
 }
 
+/** Presses Tab until `target` has keyboard focus (as a keyboard user would reach it), at most `presses` times. */
+export async function tabTo(page: Page, target: Locator, presses = 40): Promise<void> {
+  for (let i = 0; i < presses && !(await target.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab");
+  await expect(target).toBeFocused();
+}
+
 /** The active request's body editor (a CodeMirror editor; open the Body section first). */
 export function bodyEditor(page: Page): Locator {
   return page.locator(".panel .cm-content");
