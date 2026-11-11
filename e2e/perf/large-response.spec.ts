@@ -8,6 +8,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, tab } from "../helpers";
 import { expectNoLongTasks } from "./longtasks";
+import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
 
 /** The 50 MB body's first item, as Raw shows it. */
 const RAW_START = '{"items":[{"id":1000000000987654321,';
@@ -131,8 +132,7 @@ test.fixme("5. finding a term that matches only near the end", async ({ page }) 
   });
 });
 
-// Fails until #115 (Fold all runs in pieces, with a measured size limit).
-test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
+test("6. Fold all is turned off at this size", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   const foldAll = page.getByRole("button", { name: "Fold all", exact: true });
@@ -144,6 +144,24 @@ test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
   });
   await expect(foldAll).toBeDisabled();
   await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(0);
+});
+
+// At the limit (just under it), Fold all parses in pieces and its last step,
+// which builds the whole tree and folds, stays under 50 ms (#115).
+test("6b. Fold all on a body at its size limit", async ({ page }) => {
+  await openApp(page);
+  // Pretty text is about 1.76 times the minified body: this keeps it just under the limit.
+  const jsonBytes = Math.floor(FOLD_ALL_LIMIT / 1.77);
+  await page.evaluate((n) => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(n), jsonBytes);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await sendAndShowPretty(page);
+  const foldAll = page.getByRole("button", { name: "Fold all", exact: true });
+  await expect(foldAll).toBeEnabled();
+  await expectNoLongTasks(page, async () => {
+    await foldAll.click();
+    await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(1);
+    await expect(page.getByText("Folding…")).toHaveCount(0);
+  });
 });
 
 // Fails until #113 (large documents are built in pieces and kept per tab).

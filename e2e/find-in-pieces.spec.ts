@@ -12,7 +12,7 @@ const NEAR_THE_START = '"pet-3"';
 
 async function openFindInLargeBody(page: Page): Promise<void> {
   await openApp(page);
-  await page.evaluate(() => (window as unknown as { __mock: { preparePerf(bytes: number): void } }).__mock.preparePerf(4_000_000));
+  await page.evaluate(() => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(4_000_000));
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".body .cm-content")).toContainText('"items": [');
