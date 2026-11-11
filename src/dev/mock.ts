@@ -6,7 +6,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { promptMasked, requestPrompts, segments } from "../lib/http";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
@@ -792,10 +792,11 @@ function prettyText({ body, kind }: { body: string; kind: ResponseKind }): strin
   }
 }
 
-/** Binary response bodies by response id, like the shell's stored bodies. */
-const binaryBodies = new Map<string, string>();
-function storeBinary<T extends { id: string; bodyBase64: string }>(response: T): T {
-  binaryBodies.set(response.id, response.bodyBase64);
+/** Binary response bodies by response id, as bytes, like the shell's stored bodies. */
+const binaryBodies = new Map<string, Uint8Array>();
+/** Stores a binary response's body: `bytes`, or else its reply's base64 decoded. */
+function storeBinary<T extends { id: string; bodyBase64: string | null }>(response: T, bytes?: Uint8Array): T {
+  binaryBodies.set(response.id, bytes ?? Uint8Array.from(atob(response.bodyBase64 ?? ""), (c) => c.charCodeAt(0)));
   return response;
 }
 
@@ -805,15 +806,15 @@ function storeBinary<T extends { id: string; bodyBase64: string }>(response: T):
  * during a measured step. Once built, JSON sends answer with the 50 MB body and
  * the image request with the 25 MB image.
  */
-let perf: { json: string; pretty: string; image: string } | null = null;
+let perf: { json: string; pretty: string; image: Uint8Array } | null = null;
 /** The term that matches only in the 50 MB body's last item. */
 const PERF_LAST = "needle-near-the-end";
-/** At most what the shell sends inline as base64 (the core's `BINARY_PREVIEW_LIMIT`, 25 MB). */
+/** A 25 MB image. */
 const PERF_IMAGE = { width: 2048, height: 4266, contentType: "image/bmp" };
 
 function preparePerf(): void {
   const { json, pretty } = largeJson(50 * 1000 * 1000, PERF_LAST);
-  perf = { json, pretty, image: toBase64(bmpImage(PERF_IMAGE.width, PERF_IMAGE.height)) };
+  perf = { json, pretty, image: bmpImage(PERF_IMAGE.width, PERF_IMAGE.height) };
 }
 
 /** The send reply for a perf body: the image for the image request, else the 50 MB JSON. */
@@ -824,11 +825,12 @@ function perfResponse(url: string, method: string) {
     truncated: false, request: { method, url, headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: jsonTimings, cookies: [],
   };
   if (url.includes("png")) {
-    const size = base64DecodedLength(perf.image);
+    const size = perf.image.length;
+    // No base64: Preview fetches the bytes by id, so nothing reads it.
     return storeBinary({
       ...common, id: `r2-${++responseCount}`, headers: [["content-type", PERF_IMAGE.contentType], ["content-length", String(size)]],
-      bodySize: size, transferredSize: size, contentType: PERF_IMAGE.contentType, bodyKind: "image" as const, bodyText: null, bodyBase64: perf.image,
-    });
+      bodySize: size, transferredSize: size, contentType: PERF_IMAGE.contentType, bodyKind: "image" as const, bodyText: null, bodyBase64: null,
+    }, perf.image);
   }
   const id = `r1-${++responseCount}`;
   textBodies.set(id, { body: perf.json, kind: "json", pretty: perf.pretty });
@@ -841,17 +843,17 @@ function perfResponse(url: string, method: string) {
 }
 
 /** Stand-in for the core's `hexdump`: the first 64 KB of a stored body. */
-function hexdump(b64: string): string {
+function hexdump(body: Uint8Array): string {
   const limit = 64 * 1024;
-  const bytes = atob(b64.slice(0, Math.ceil(limit / 3) * 4)).slice(0, limit);
+  const bytes = body.subarray(0, limit);
   const lines: string[] = [];
   for (let off = 0; off < bytes.length; off += 16) {
-    const chunk = [...bytes.slice(off, off + 16)].map((c) => c.charCodeAt(0));
+    const chunk = [...bytes.subarray(off, off + 16)];
     const hex = chunk.map((b) => b.toString(16).padStart(2, "0")).join(" ");
     const ascii = chunk.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
     lines.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
   }
-  if (base64DecodedLength(b64) > limit) lines.push("… (truncated preview)");
+  if (body.length > limit) lines.push("… (truncated preview)");
   return lines.join("\n");
 }
 
@@ -1083,10 +1085,10 @@ mockIPC(
           await prettyReleased;
         }
         if (evicted) throw RESPONSE_GONE;
-        const b64 = binaryBodies.get(id);
-        if (b64 !== undefined) {
+        const bytes = binaryBodies.get(id);
+        if (bytes !== undefined) {
           if (view !== "bytes") throw "Response body isn't text";
-          return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
+          return bytes.slice().buffer; // a copy, as over IPC
         }
         const stored = textBodies.get(id);
         if (stored === undefined) throw RESPONSE_GONE;
@@ -1098,9 +1100,9 @@ mockIPC(
         binaryBodies.delete(args.responseId);
         return null;
       case "hexdump": {
-        const b64 = binaryBodies.get(args.responseId);
-        if (b64 === undefined) throw RESPONSE_GONE;
-        return hexdump(b64);
+        const bytes = binaryBodies.get(args.responseId);
+        if (bytes === undefined) throw RESPONSE_GONE;
+        return hexdump(bytes);
       }
       case "filter_response": {
         const body = textBodies.get(args.responseId)?.body;
@@ -1122,7 +1124,8 @@ mockIPC(
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {
         // Binary bodies are recorded as their base64.
-        const body = textBodies.get(args.responseId)?.body ?? binaryBodies.get(args.responseId);
+        const bytes = binaryBodies.get(args.responseId);
+        const body = textBodies.get(args.responseId)?.body ?? (bytes && toBase64(bytes));
         if (body === undefined) throw RESPONSE_GONE;
         savedBodies[args.path] = body;
         return null;
