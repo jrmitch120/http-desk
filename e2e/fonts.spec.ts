@@ -9,11 +9,16 @@ function loadedFamilies(page: Page): Promise<string[]> {
   });
 }
 
-test("body text uses the bundled Inter and the code editor the bundled JetBrains Mono", async ({ page }) => {
+/** Opens a request's body editor. */
+async function openBodyEditor(page: Page): Promise<void> {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "Create pet");
   await page.getByRole("button", { name: "Body" }).click();
   await expect(bodyEditor(page)).toBeVisible();
+}
+
+test("body text uses the bundled Inter and the code editor the bundled JetBrains Mono", async ({ page }) => {
+  await openBodyEditor(page);
 
   const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
   const editorFont = await bodyEditor(page).evaluate((el) => getComputedStyle(el).fontFamily);
@@ -26,10 +31,7 @@ test("body text uses the bundled Inter and the code editor the bundled JetBrains
 // JetBrains Mono's ligatures make WebKit shape text slowly enough that paging
 // through a body with very long lines showed blank text in the macOS app (#118).
 test("the code editor draws JetBrains Mono without ligatures", async ({ page }) => {
-  await openApp(page);
-  await openRequest(page, ["api", "pets.http"], "Create pet");
-  await page.getByRole("button", { name: "Body" }).click();
-  await expect(bodyEditor(page)).toBeVisible();
+  await openBodyEditor(page);
 
   const style = await bodyEditor(page).evaluate((el) => {
     const s = getComputedStyle(el);
