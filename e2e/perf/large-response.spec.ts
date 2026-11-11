@@ -6,7 +6,7 @@
 // Steps that can't pass yet are `test.fixme`, each naming the ticket that
 // switches it on. Run with `pnpm test:perf`.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, tab } from "../helpers";
+import { mockState, openApp, openRequest, tab } from "../helpers";
 import { expectNoLongTasks } from "./longtasks";
 import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
 
@@ -172,19 +172,17 @@ test.fixme("7. switching tabs away and back", async ({ page }) => {
   });
 });
 
-// Fails until #111 (Copy body goes through the shell).
-test.fixme("8. copying the body", async ({ page }) => {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+test("8. copying the body", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
     await page.getByRole("button", { name: "Copy body" }).click();
     await expect(page.getByText("Response body copied")).toBeVisible();
   });
+  expect(await mockState(page, "bodyCopies")).toHaveLength(1);
 });
 
-// Fails until #112 (Preview uses blob: URLs).
-test.fixme("9. sending the 25 MB image and opening Preview", async ({ page }) => {
+test("9. sending the 25 MB image and opening Preview", async ({ page }) => {
   await prepare(page, "Get pet image");
   await expectNoLongTasks(page, async () => {
     await page.keyboard.press("Meta+Enter");

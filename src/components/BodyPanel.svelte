@@ -39,7 +39,7 @@
   const isBinary = $derived(view.isBinary);
   const effectiveMode = $derived(view.effectiveMode);
   const filtered = $derived(view.filtered);
-  const dataUrl = $derived(view.dataUrl);
+  const previewUrl = $derived(view.previewUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
   // Raw and Preview are each built the first time they're shown for a response,
@@ -116,15 +116,19 @@
 <div class="body" oncontextmenu={bodyMenu}>
   {#if mountPreview}
     <div class="pane" class:hidden={!showingPreview}>
-      {#if kind === "html"}
-        <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
+      {#if view.previewError}
+        <div class="empty-state small">{view.previewError}</div>
+      {:else if !previewUrl}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Loading…</div>
+      {:else if kind === "html"}
+        <iframe title="HTML preview" sandbox="" src={previewUrl}></iframe>
       {:else if kind === "image"}
-        <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
+        <div class="preview-img"><img src={previewUrl} alt="Response preview" /></div>
       {:else if kind === "pdf"}
-        <iframe title="PDF preview" src={dataUrl}></iframe>
+        <iframe title="PDF preview" src={previewUrl}></iframe>
       {:else if kind === "media"}
         <div class="preview-img">
-          {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
+          {#if ct.startsWith("audio/")}<audio controls src={previewUrl}></audio>{:else}<video controls src={previewUrl}><track kind="captions" /></video>{/if}
         </div>
       {/if}
     </div>
