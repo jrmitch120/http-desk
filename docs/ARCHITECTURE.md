@@ -965,6 +965,10 @@ Decisions made during implementation, beyond the plan above:
     position. A document with a line CodeMirror draws only in part when wrapped (over
     20,000 characters) breaks it at any character (`word-break: break-all`), so its
     rows are as full as CodeMirror's estimate; other text wraps between words.
+  - *No ligatures in editors* (`setup.ts`'s theme). Shaping JetBrains Mono's ligatures
+    (mostly contextual alternates, `calt`) on lines tens of thousands of characters
+    long made WKWebView fall behind while paging, blanking the whole view (#118).
+    Editors turn them off; other monospace text is short and keeps them.
   - *Parse slices* (`parseSlices.ts`, imported first in `main.ts`). CodeMirror's
     background parse sizes its slices from what the browser offers: with
     `navigator.scheduling.isInputPending` (Chromium, so WebView2) it runs 100 ms
