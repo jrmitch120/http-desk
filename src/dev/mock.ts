@@ -6,13 +6,15 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { promptMasked, requestPrompts, segments } from "../lib/http";
+import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
+import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
 import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
-/** What the shell rejects with for a response id whose body has been evicted. */
+/** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
 
 const ROOT = "/demo";
@@ -312,8 +314,13 @@ const sentPrompts: Record<string, string>[] = [];
 const savedBodies: Record<string, string> = {};
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
 const shapeRequests: string[] = [];
+/** The response ids `release_response` was called with, in order. */
+const releasedResponses: string[] = [];
+/** The response ids `copy_response_body` copied to the clipboard, in order. */
+const bodyCopies: string[] = [];
 let settingsServed = false;
-let prettyRequests = 0;
+/** The bodies the viewer fetched with `response_body`, in order. */
+let bodyRequests: { id: string; view: BodyFetchView }[] = [];
 let previewRequests = 0;
 let windowTitle: string | null = null;
 let windowCloseRequests = 0;
@@ -428,12 +435,13 @@ window.addEventListener(
   get webviewZoom() {
     return webviewZoom;
   },
-  /** How many times the viewer called `pretty_response`; a test may reset it. */
-  get prettyRequests() {
-    return prettyRequests;
+  /** The bodies the viewer fetched with `response_body` (response id and view), in order. */
+  get bodyRequests() {
+    return clone(bodyRequests);
   },
-  set prettyRequests(n: number) {
-    prettyRequests = n;
+  /** Forgets the fetches so far. */
+  resetBodyRequests: () => {
+    bodyRequests = [];
   },
   /** How many times the resolved preview called `preview_request`. */
   get previewRequests() {
@@ -445,8 +453,12 @@ window.addEventListener(
   },
   /** Lets held settings through (`?settingsDelay=hold`). */
   releaseSettings: () => releaseSettings(),
-  /** Lets held formatting through (`?pretty=hold`). */
+  /** Lets held Pretty text through (`?pretty=hold`). */
   releasePretty: () => releasePretty(),
+  /** Lets held bodies through (`?body=hold`). */
+  releaseBody: () => releaseBody(),
+  /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
+  preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
     return clone(settings);
   },
@@ -459,6 +471,12 @@ window.addEventListener(
   },
   get shapeRequests() {
     return [...shapeRequests];
+  },
+  get releasedResponses() {
+    return [...releasedResponses];
+  },
+  get bodyCopies() {
+    return [...bodyCopies];
   },
   /** The `?response=` kind the next send uses. */
   set response(kind: string | null) {
@@ -553,6 +571,8 @@ const extraHeaders: [string, string][] = manyHeaders
   ? [["cache-control", "public, max-age=60"], ["etag", '"pets-v1"'], ["x-cache", "HIT"], ["access-control-allow-origin", "*"], ["ratelimit-remaining", "42"]]
   : [];
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
+// `?response=asReceived`: the JSON response's Content-Encoding couldn't be undone, so
+//   its bytes are kept as received and, like the core says, its kind is binary.
 // `?response=bigint`: the JSON response carries an ID above 2^53 and a `10.50`.
 // `?response=invalidJson`: a JSON content type with a body that doesn't parse.
 // `?response=store`: items with a `status` and 19-digit IDs, and item 2 becomes
@@ -589,10 +609,11 @@ const reasonPhrases: Record<number, string> = { 200: "OK", 201: "Created", 404: 
 // `?bigBinary=1`: the image response is a 2 MB binary body instead of a small PNG.
 const bigBinary = new URLSearchParams(location.search).get("bigBinary") === "1";
 const BIG_BINARY_BYTES = 2 * 1024 * 1024;
-// `?largeBody=1`: the JSON response counts as over the shell's inline Pretty
-// limit, so it arrives without `prettyText` and Pretty view asks for it.
+/** The image the "Get pet image" request answers with: a 128 × 128 PNG. */
+const PNG_BYTES = Uint8Array.from(atob("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"), (c) => c.charCodeAt(0));
+// `?largeBody=1`: the JSON response's Pretty text takes a while to format.
 const largeBody = new URLSearchParams(location.search).get("largeBody") === "1";
-// `?evicted=1`: `pretty_response` finds no stored body, as after eviction.
+// `?evicted=1`: `response_body` finds no stored body, as after a release.
 const evicted = new URLSearchParams(location.search).get("evicted") === "1";
 // `?timing=reused`: the JSON response's final request went over an open
 // connection after two redirects, so it has no DNS or connect phase.
@@ -610,11 +631,15 @@ const settingsHeld = settingsDelayParam === "hold";
 const settingsDelay = settingsHeld ? 0 : Number(settingsDelayParam ?? 0);
 let releaseSettings: () => void = () => {};
 const settingsReleased = settingsHeld ? new Promise<void>((r) => (releaseSettings = r)) : Promise.resolve();
-// `?pretty=hold`: `pretty_response` waits until a test calls `__mock.releasePretty()`,
+// `?pretty=hold`: `response_body`'s Pretty text waits until a test calls `__mock.releasePretty()`,
 // so the viewer's loading state lasts as long as the test needs.
 const prettyHeld = new URLSearchParams(location.search).get("pretty") === "hold";
 let releasePretty: () => void = () => {};
 const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)) : Promise.resolve();
+// `?body=hold`: every `response_body` waits until a test calls `__mock.releaseBody()`.
+const bodyHeld = new URLSearchParams(location.search).get("body") === "hold";
+let releaseBody: () => void = () => {};
+const bodyReleased = bodyHeld ? new Promise<void>((r) => (releaseBody = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -765,38 +790,103 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
   return mode === "pretty" ? lines.join("\n") : lines.map((l) => l.trim()).join("");
 }
 
-/** Text response bodies by response id, with their kind, like the shell's stored bodies. */
-const textBodies = new Map<string, { body: string; kind: ResponseKind }>();
+/**
+ * Text response bodies by response id, with their kind, like the shell's stored
+ * bodies. `pretty`, when set, is the body's Pretty text, worked out ahead, and
+ * `encoded` its raw and Pretty texts as UTF-8 (the perf bodies, so fetching
+ * them doesn't encode 50 MB on the page's main thread during a measured step).
+ */
+const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string; encoded?: { raw: Uint8Array; pretty: Uint8Array } }>();
 let responseCount = 0;
 
-/** Stand-in for the shell's Pretty text: formatted JSON, or the body as is if it doesn't parse. */
-function prettyText(body: string): string {
+/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise (not JSON or XML, or doesn't parse). */
+function prettyText({ body, kind }: { body: string; kind: ResponseKind }): string {
   try {
-    return formatJson(body, "pretty");
+    if (kind === "xml") return formatXml(body, "pretty");
+    if (kind === "json") return formatJson(body, "pretty");
   } catch {
-    return body;
+    // reported as below, as the shell does
   }
+  throw "Response body isn't JSON or XML";
 }
 
-/** Binary response bodies by response id, like the shell's stored bodies. */
-const binaryBodies = new Map<string, string>();
-function storeBinary<T extends { id: string; bodyBase64: string }>(response: T): T {
-  binaryBodies.set(response.id, response.bodyBase64);
+/** Binary response bodies by response id, as bytes, like the shell's stored bodies. */
+const binaryBodies = new Map<string, Uint8Array>();
+/** Stores a binary response's body (`bytes`) and returns its reply, which carries no body. */
+function storeBinary<T extends { id: string }>(response: T, bytes: Uint8Array): T {
+  binaryBodies.set(response.id, bytes);
   return response;
 }
 
+/**
+ * The perf test's large bodies (e2e/perf), built by `__mock.preparePerf()`
+ * before a test starts measuring, so none of the mock's own work on them runs
+ * during a measured step. Once built, JSON sends answer with the 50 MB body and
+ * the image request with the 25 MB image.
+ */
+let perf: { json: string; pretty: string; encoded: { raw: Uint8Array; pretty: Uint8Array }; image: Uint8Array } | null = null;
+/** The term that matches only in the 50 MB body's last item. */
+const PERF_LAST = "needle-near-the-end";
+/** A 25 MB image. */
+const PERF_IMAGE = { width: 2048, height: 4266, contentType: "image/bmp" };
+
+function preparePerf(jsonBytes = 50 * 1000 * 1000): void {
+  const { json, pretty } = largeJson(jsonBytes, PERF_LAST);
+  const encoder = new TextEncoder();
+  const encoded = { raw: encoder.encode(json), pretty: encoder.encode(pretty) };
+  perf = { json, pretty, encoded, image: bmpImage(PERF_IMAGE.width, PERF_IMAGE.height) };
+}
+
+/** The send reply for a perf body: the image for the image request, else the 50 MB JSON. */
+function perfResponse(url: string, method: string) {
+  if (!perf) throw new Error("preparePerf() first");
+  const common = {
+    status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/pets?limit=20", timeMs: 900.4, ttfbMs: 31.2, headersSize: 120, contentEncoding: null,
+    truncated: false, request: { method, url, headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: jsonTimings, cookies: [],
+  };
+  if (url.includes("png")) {
+    const size = perf.image.length;
+    return storeBinary({
+      ...common, id: `r2-${++responseCount}`, headers: [["content-type", PERF_IMAGE.contentType], ["content-length", String(size)]],
+      bodySize: size, transferredSize: size, contentType: PERF_IMAGE.contentType, bodyKind: "image" as const,
+    }, perf.image);
+  }
+  const id = `r1-${++responseCount}`;
+  textBodies.set(id, { body: perf.json, kind: "json", pretty: perf.pretty, encoded: perf.encoded });
+  return {
+    ...common, id, headers: [["content-type", "application/json"], ["content-length", String(perf.json.length)]],
+    bodySize: perf.json.length, transferredSize: perf.json.length, contentType: "application/json", bodyKind: "json" as const,
+  };
+}
+
+/** Still-compressed bytes that happen to read as JSON, which only the body kind says aren't text. */
+const AS_RECEIVED_BYTES = new TextEncoder().encode('{"still":"compressed"}');
+
+/** The send reply for `?response=asReceived`: a JSON content type, but binary. */
+function asReceivedResponse(method: string) {
+  const size = AS_RECEIVED_BYTES.length;
+  const url = "http://127.0.0.1:8765/pets?limit=20";
+  return storeBinary({
+    id: `r4-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url,
+    headers: [["content-type", "application/json"], ["content-encoding", "compress"], ["content-length", String(size)]],
+    timeMs: 38.4, ttfbMs: 31.2, bodySize: size, transferredSize: size, headersSize: 90, contentType: "application/json", bodyKind: "binary" as const,
+    contentEncoding: "compress", truncated: false, request: { method, url, headers: [], bodyPreview: null, bodySize: 0 },
+    warnings: ["Content-Encoding compress isn't supported; showing the bytes as received"], timings: jsonTimings, cookies: [],
+  }, AS_RECEIVED_BYTES);
+}
+
 /** Stand-in for the core's `hexdump`: the first 64 KB of a stored body. */
-function hexdump(b64: string): string {
+function hexdump(body: Uint8Array): string {
   const limit = 64 * 1024;
-  const bytes = atob(b64.slice(0, Math.ceil(limit / 3) * 4)).slice(0, limit);
+  const bytes = body.subarray(0, limit);
   const lines: string[] = [];
   for (let off = 0; off < bytes.length; off += 16) {
-    const chunk = [...bytes.slice(off, off + 16)].map((c) => c.charCodeAt(0));
+    const chunk = [...bytes.subarray(off, off + 16)];
     const hex = chunk.map((b) => b.toString(16).padStart(2, "0")).join(" ");
     const ascii = chunk.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
     lines.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  ${ascii}`);
   }
-  if (base64DecodedLength(b64) > limit) lines.push("… (truncated preview)");
+  if (body.length > limit) lines.push("… (truncated preview)");
   return lines.join("\n");
 }
 
@@ -952,23 +1042,23 @@ mockIPC(
         // An environment defines the missing variable, so picking one fixes it.
         if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
         const r = args.request;
+        if (perf) return perfResponse(r.url, r.method);
+        if (responseKind === "asReceived") return asReceivedResponse(r.method);
         if (r.url.includes("png") && bigBinary) {
           return storeBinary({
-            id: "r3", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+            id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
             headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
-            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null, bodyText: null,
-            bodyBase64: "AAAA".repeat(Math.floor(BIG_BINARY_BYTES / 3)) + "AAA=", // 2 MB of zero bytes (2 MB = 3n + 2)
+            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
             truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          });
+          }, new Uint8Array(BIG_BINARY_BYTES)); // 2 MB of zero bytes
         }
         if (r.url.includes("png")) {
           return storeBinary({
-            id: "r2", status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+            id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
             headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
-            contentType: "image/png", bodyKind: "image", contentEncoding: null, bodyText: null,
-            bodyBase64: "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",
+            contentType: "image/png", bodyKind: "image", contentEncoding: null,
             truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          });
+          }, PNG_BYTES);
         }
         const body =
           responseKind === "bigint"
@@ -1001,7 +1091,7 @@ mockIPC(
           url: "http://127.0.0.1:8765/pets?limit=20",
           headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
           timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
-          bodyText: body, prettyText: largeBody || bodyKind === "html" || bodyKind === "text" ? null : prettyText(body), bodyBase64: null, truncated: responseKind === "truncated",
+          truncated: responseKind === "truncated",
           request: {
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
@@ -1018,24 +1108,46 @@ mockIPC(
         } catch (e) {
           throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
         }
-      case "pretty_response": {
-        prettyRequests++;
-        await delay(400); // as a large body takes a while
-        await prettyReleased;
-        const stored = evicted ? undefined : textBodies.get(args.responseId);
-        if (stored === undefined) throw RESPONSE_GONE;
-        if (stored.kind === "xml") return formatXml(stored.body, "pretty");
-        if (stored.kind !== "json") throw "Response body isn't JSON or XML";
-        try {
-          return formatJson(stored.body, "pretty");
-        } catch (e) {
-          throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+      case "response_body": {
+        // Like the shell: raw bytes (an ArrayBuffer), text as UTF-8.
+        const { responseId: id, view } = args as { responseId: string; view: BodyFetchView };
+        bodyRequests.push({ id, view });
+        await bodyReleased;
+        if (view === "pretty") {
+          if (largeBody) await delay(400); // as a large body takes a while to format
+          await prettyReleased;
         }
+        if (evicted) throw RESPONSE_GONE;
+        const bytes = binaryBodies.get(id);
+        if (bytes !== undefined) {
+          if (view !== "bytes") throw "Response body isn't text";
+          return bytes.slice().buffer; // a copy, as over IPC
+        }
+        const stored = textBodies.get(id);
+        if (stored === undefined) throw RESPONSE_GONE;
+        if (stored.encoded) return stored.encoded[view === "pretty" ? "pretty" : "raw"].buffer;
+        return new TextEncoder().encode(view === "pretty" ? (stored.pretty ?? prettyText(stored)) : stored.body).buffer;
+      }
+      case "release_response":
+        releasedResponses.push(args.responseId);
+        textBodies.delete(args.responseId);
+        binaryBodies.delete(args.responseId);
+        return null;
+      case "copy_response_body": {
+        // Like the shell: text as text, binary as base64, written through the clipboard plugin.
+        const bytes = binaryBodies.get(args.responseId);
+        const body = textBodies.get(args.responseId)?.body ?? (bytes && toBase64(bytes));
+        if (body === undefined) throw RESPONSE_GONE;
+        if (clipboardFails) throw "The clipboard can't be written";
+        clipboardText = body;
+        clipboardWrites.push(body);
+        bodyCopies.push(args.responseId);
+        return null;
       }
       case "hexdump": {
-        const b64 = binaryBodies.get(args.responseId);
-        if (b64 === undefined) throw RESPONSE_GONE;
-        return hexdump(b64);
+        const bytes = binaryBodies.get(args.responseId);
+        if (bytes === undefined) throw RESPONSE_GONE;
+        return hexdump(bytes);
       }
       case "filter_response": {
         const body = textBodies.get(args.responseId)?.body;
@@ -1057,7 +1169,8 @@ mockIPC(
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {
         // Binary bodies are recorded as their base64.
-        const body = textBodies.get(args.responseId)?.body ?? binaryBodies.get(args.responseId);
+        const bytes = binaryBodies.get(args.responseId);
+        const body = textBodies.get(args.responseId)?.body ?? (bytes && toBase64(bytes));
         if (body === undefined) throw RESPONSE_GONE;
         savedBodies[args.path] = body;
         return null;

@@ -3,12 +3,16 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod app_info;
+mod bodies;
 mod confinement;
+mod copying;
 mod deleting;
+mod fetch;
 mod folder_envs;
 mod paths;
 mod preview;
 mod renaming;
+mod reply;
 mod usages;
 mod watcher;
 mod window_state;
@@ -171,7 +175,7 @@ fn vertical_slice_over_ipc() {
         json!({ "runId": "r1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": "local" }),
     );
     assert_eq!(resp["status"], 200);
-    assert_eq!(resp["bodyText"], r#"{"ok":true}"#);
+    assert_eq!(fetch::fetch(&h, &resp["id"], "raw").unwrap(), br#"{"ok":true}"#);
     assert_eq!(resp["warnings"][0], "Undefined variables: token");
     let raw = received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(raw.starts_with("GET /items?page=1 HTTP/1.1"), "{raw}");
@@ -349,11 +353,12 @@ fn format_body_beautifies_xml_and_rejects_xml_that_doesnt_nest() {
 fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
     let h = Harness::new();
     // What send_request does with a response's body.
-    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
-        "resp-1".into(),
-        b"\x89PNG\r\n\x1a\n".to_vec(),
-        Some("image/png".into()),
-    );
+    let body = super::KeptBody {
+        bytes: b"\x89PNG\r\n\x1a\n".as_slice().into(),
+        content_type: Some("image/png".into()),
+        kind: httpdesk_core::body_format::ResponseKind::Image,
+    };
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push("resp-1".into(), body);
 
     let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
     assert_eq!(dump, json!(format!("00000000  89 50 4e 47 0d 0a 1a 0a{}  .PNG....", " ".repeat(24))));
@@ -394,64 +399,6 @@ fn send_get(h: &Harness, url: &str) -> Value {
         "send_request",
         json!({ "runId": "p1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
     )
-}
-
-#[test]
-fn a_small_json_response_arrives_with_its_pretty_text_numbers_as_sent() {
-    let h = Harness::new();
-    let url = serve_once("application/json", br#"{"id":9007199254740993,"price":10.50}"#.to_vec());
-    let resp = send_get(&h, &url);
-    assert_eq!(resp["prettyText"], json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50\n}"));
-}
-
-#[test]
-fn a_small_response_that_doesnt_parse_has_its_raw_body_as_pretty_text() {
-    let h = Harness::new();
-    let url = serve_once("application/json", br#"{"id": 1, oops}"#.to_vec());
-    assert_eq!(send_get(&h, &url)["prettyText"], json!(r#"{"id": 1, oops}"#));
-}
-
-#[test]
-fn a_plain_text_response_has_no_pretty_text() {
-    let h = Harness::new();
-    let url = serve_once("text/plain", b"hello".to_vec());
-    assert_eq!(send_get(&h, &url)["prettyText"], Value::Null);
-}
-
-#[test]
-fn a_large_json_response_is_formatted_only_when_asked_for_by_response_id() {
-    let h = Harness::new();
-    let items: Vec<String> = (0..60_000).map(|i| format!(r#"{{"id":1{i:05}0000000001,"n":"item"}}"#)).collect();
-    let body = format!("[{}]", items.join(","));
-    assert!(body.len() > super::PRETTY_INLINE_BYTES);
-    let url = serve_once("application/json; charset=utf-8", body.into_bytes());
-
-    let resp = send_get(&h, &url);
-    assert_eq!(resp["prettyText"], Value::Null);
-
-    let pretty = h.ok("pretty_response", json!({ "responseId": resp["id"] }));
-    let pretty = pretty.as_str().unwrap();
-    assert!(
-        pretty.starts_with("[\n  {\n    \"id\": 1000000000000001,\n    \"n\": \"item\"\n  },\n"),
-        "{}",
-        &pretty[..80]
-    );
-    assert!(pretty.ends_with("    \"id\": 1599990000000001,\n    \"n\": \"item\"\n  }\n]"));
-}
-
-#[test]
-fn pretty_response_rejects_an_evicted_id_and_a_body_that_doesnt_parse() {
-    let h = Harness::new();
-    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
-        "bad".into(),
-        br#"{"id": 1, oops}"#.to_vec(),
-        Some("application/json".into()),
-    );
-    let err = h.call("pretty_response", json!({ "responseId": "bad" })).unwrap_err();
-    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
-
-    let err = h.call("pretty_response", json!({ "responseId": "gone" })).unwrap_err();
-    assert_eq!(err, json!("Response is no longer available"));
 }
 
 #[test]
@@ -1050,5 +997,5 @@ fn a_second_send_reuses_the_connection_the_first_left_open() {
 
     assert_eq!(first["timings"]["reused"], false, "{}", first["timings"]);
     assert_eq!(second["timings"]["reused"], true, "{}", second["timings"]);
-    assert_eq!(second["bodyText"], "ok");
+    assert_eq!(fetch::fetch(&h, &second["id"], "raw").unwrap(), b"ok");
 }

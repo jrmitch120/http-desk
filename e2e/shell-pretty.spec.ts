@@ -1,14 +1,15 @@
-// The response Pretty view is formatted in the shell by response id (#61): a
-// small body arrives with its Pretty text; a large one (`?largeBody=1`) is
-// formatted on demand with `pretty_response` when Pretty is opened.
+// Raw and Pretty show text the viewer fetches from the shell by response id
+// (`response_body`, #110), never text from the send reply. Each view fetches
+// only its own text, once per response. `?largeBody=1` makes Pretty slow to
+// format, and `?pretty=hold` holds it until the test lets it through.
 import { expect, test, type Page } from "@playwright/test";
-import { mockState, openApp, openRequest, releasePretty, resetPrettyRequests } from "./helpers";
+import { mockState, openApp, openRequest, releasePretty, resetBodyRequests } from "./helpers";
 
 const RAW = '{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"GET"}';
 
-/** How many times the viewer asked the shell to format a response. */
-function prettyRequests(page: Page): Promise<number> {
-  return mockState(page, "prettyRequests");
+/** The views the viewer fetched, in order. */
+async function fetchedViews(page: Page): Promise<string[]> {
+  return (await mockState(page, "bodyRequests")).map((r) => r.view);
 }
 
 async function send(page: Page, query: string) {
@@ -17,59 +18,63 @@ async function send(page: Page, query: string) {
   await page.keyboard.press("Meta+Enter");
 }
 
-test("a small JSON response shows its Pretty text without asking the shell again", async ({ page }) => {
+test("Pretty fetches only the Pretty text, and Raw only the raw text, each once per response", async ({ page }) => {
   await send(page, "?response=bigint");
 
   const body = page.locator(".body .cm-content");
   await expect(body).toContainText('"id": 9007199254740993,');
   await expect(body).toContainText('"price": 10.50,');
-  expect(await prettyRequests(page)).toBe(0);
-});
+  expect(await fetchedViews(page)).toEqual(["pretty"]);
 
-test("a large JSON response is formatted when Pretty is opened, with a loading state meanwhile", async ({ page }) => {
-  await send(page, "?response=bigint&largeBody=1&pretty=hold");
-
-  // Formatting is held until the test lets it through, so the loading state stays.
-  await expect(page.getByRole("status").filter({ hasText: "Formatting…" })).toBeVisible();
-  const body = page.locator(".body .cm-content");
-  await expect(body).toHaveCount(0);
-  await releasePretty(page);
-  await expect(body).toContainText('"id": 9007199254740993,');
-  await expect(page.getByRole("status").filter({ hasText: "Formatting…" })).toHaveCount(0);
-  expect(await prettyRequests(page)).toBe(1);
-
-  // Raw needs no formatting; back in Pretty, the text is already there.
   const views = page.getByRole("radiogroup", { name: "Response view" });
   await views.getByRole("radio", { name: "Raw" }).click();
   await expect(body).toHaveText(RAW);
   await views.getByRole("radio", { name: "Pretty" }).click();
   await expect(body).toContainText('"price": 10.50,');
-  expect(await prettyRequests(page)).toBe(1);
+  await views.getByRole("radio", { name: "Raw" }).click();
+  await expect(body).toHaveText(RAW);
+  expect(await fetchedViews(page)).toEqual(["pretty", "raw"]);
+  const [first, second] = await mockState(page, "bodyRequests");
+  expect(second.id).toBe(first.id);
 });
 
-test("a large response opened in Raw isn't formatted until Pretty is chosen", async ({ page }) => {
+test("a slow Pretty text shows a loading state until it arrives", async ({ page }) => {
+  await send(page, "?response=bigint&largeBody=1&pretty=hold");
+
+  // The Pretty text is held until the test lets it through, so the loading state stays.
+  await expect(page.getByRole("status").filter({ hasText: "Preparing…" })).toBeVisible();
+  const body = page.locator(".body .cm-content");
+  await expect(body).toHaveCount(0);
+  await releasePretty(page);
+  await expect(body).toContainText('"id": 9007199254740993,');
+  await expect(page.getByRole("status").filter({ hasText: "Preparing…" })).toHaveCount(0);
+});
+
+test("a tab left in Raw doesn't fetch the next response's Pretty text", async ({ page }) => {
   await send(page, "?response=bigint&largeBody=1");
   const views = page.getByRole("radiogroup", { name: "Response view" });
   await expect(page.locator(".body .cm-content")).toContainText('"id": 9007199254740993,');
   await views.getByRole("radio", { name: "Raw" }).click();
+  await expect(page.locator(".body .cm-content")).toHaveText(RAW);
 
   // The tab remembers Raw, so the next response isn't formatted.
-  await resetPrettyRequests(page);
+  await resetBodyRequests(page);
   await page.keyboard.press("Meta+Enter");
   await expect(page.getByText(/^Sending/)).toHaveCount(0);
+  await expect.poll(() => fetchedViews(page)).toEqual(["raw"]);
   await expect(page.locator(".body .cm-content")).toHaveText(RAW);
-  expect(await prettyRequests(page)).toBe(0);
 
   await views.getByRole("radio", { name: "Pretty" }).click();
   await expect(page.locator(".body .cm-content")).toContainText('"price": 10.50,');
-  expect(await prettyRequests(page)).toBe(1);
+  expect(await fetchedViews(page)).toEqual(["raw", "pretty"]);
 });
 
-test("a response whose stored body was evicted shows its raw body in Pretty view", async ({ page }) => {
-  await send(page, "?response=bigint&largeBody=1&evicted=1");
+test("a response whose stored body is gone says so in Pretty and Raw", async ({ page }) => {
+  await send(page, "?response=bigint&evicted=1");
 
   await expect(page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Pretty" })).toBeChecked();
-  await expect(page.locator(".body .cm-content")).toHaveText(RAW);
-  await expect(page.getByRole("status").filter({ hasText: "Formatting…" })).toHaveCount(0);
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  const body = page.locator(".body .cm-content");
+  await expect(body).toHaveText("(Response is no longer available)");
+  await page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Raw" }).click();
+  await expect(body).toHaveText("(Response is no longer available)");
 });

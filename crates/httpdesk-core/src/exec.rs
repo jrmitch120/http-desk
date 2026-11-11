@@ -640,20 +640,13 @@ pub struct HttpResponse {
     pub transferred_size: usize,
     pub headers_size: usize,
     pub content_type: Option<String>,
-    /// What the body is, for the viewer (see [`body_format::response_kind`]).
+    /// What the body is, for the viewer, including whether it's text or binary
+    /// (see [`body_kind`]). The response carries no body: the viewer fetches it
+    /// by id from the shell, which keeps [`ExecOutcome::body`] (ADR 0006).
     #[serde(default)]
     pub body_kind: ResponseKind,
     /// The response's `Content-Encoding` header, as sent by the server.
     pub content_encoding: Option<String>,
-    /// Decoded text for textual content types.
-    pub body_text: Option<String>,
-    /// The Pretty view's text for a JSON or XML body (the raw text if it
-    /// doesn't parse). The shell fills it in for bodies small enough to send
-    /// twice; `None` means fetch it by response id when Pretty is opened.
-    #[serde(default)]
-    pub pretty_text: Option<String>,
-    /// Base64 for binary content (only below the preview limit).
-    pub body_base64: Option<String>,
     pub truncated: bool,
     pub request: SentRequest,
     pub warnings: Vec<String>,
@@ -667,11 +660,10 @@ pub struct HttpResponse {
 
 pub struct ExecOutcome {
     pub response: HttpResponse,
-    /// The complete (possibly truncated) body, for "save to file".
+    /// The complete (possibly truncated) body, after Content-Encoding is undone
+    /// (or as received, if it couldn't be).
     pub body: Vec<u8>,
 }
-
-const BINARY_PREVIEW_LIMIT: usize = 25 * 1024 * 1024;
 
 fn error_chain(e: &dyn std::error::Error) -> String {
     let mut msg = e.to_string();
@@ -958,8 +950,8 @@ fn is_textual(content_type: &str) -> bool {
 }
 
 /// A body as text: in its `charset`, else UTF-8 for textual or unknown content
-/// types; `None` for binary. The shell re-decodes stored bodies with it, so
-/// they match the response's `body_text`.
+/// types; `None` for binary. The shell decodes stored bodies with it, through
+/// [`body_text`].
 pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     let charset = content_type.and_then(|ct| {
         ct.split(';').find_map(|p| p.trim().strip_prefix("charset=").map(|c| c.trim_matches('"').to_string()))
@@ -972,6 +964,27 @@ pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
         (Some(ct), Err(_)) if is_textual(ct) => Some(String::from_utf8_lossy(bytes).into_owned()),
         _ => None,
     }
+}
+
+/// What the viewer treats a received body as (see [`body_format::response_kind`]).
+/// Bytes kept `as_received`, because their Content-Encoding couldn't be undone,
+/// are binary whatever the content type says, as is a body with no text for a
+/// content type that names a text kind.
+fn body_kind(body: &[u8], content_type: Option<&str>, as_received: bool) -> ResponseKind {
+    if as_received {
+        return ResponseKind::Binary;
+    }
+    let text = decode_text(body, content_type);
+    match body_format::response_kind(content_type, text.as_deref()) {
+        kind if kind.is_text() && text.is_none() => ResponseKind::Binary,
+        kind => kind,
+    }
+}
+
+/// A stored body as the text the viewer shows (decoded as [`decode_text`]
+/// does), or `None` when its `kind` is binary.
+pub fn body_text(body: &[u8], content_type: Option<&str>, kind: ResponseKind) -> Option<String> {
+    kind.is_text().then(|| decode_text(body, content_type)).flatten()
 }
 
 /// What the Request tab shows: the request as it reached the server that sent
@@ -1141,10 +1154,7 @@ pub async fn execute_on(
     warnings.extend(unsupported);
     warnings.extend(decode_failure);
 
-    // Still-encoded bytes are binary whatever the content type says.
-    let body_text = if as_received { None } else { decode_text(&body, content_type.as_deref()) };
-    let body_base64 = (body_text.is_none() && body.len() <= BINARY_PREVIEW_LIMIT)
-        .then(|| base64::engine::general_purpose::STANDARD.encode(&body));
+    let body_kind = body_kind(&body, content_type.as_deref(), as_received);
 
     Ok(ExecOutcome {
         response: HttpResponse {
@@ -1159,12 +1169,9 @@ pub async fn execute_on(
             body_size: body.len(),
             transferred_size: transferred,
             headers_size,
-            body_kind: body_format::response_kind(content_type.as_deref(), body_text.as_deref()),
+            body_kind,
             content_type,
             content_encoding,
-            body_text,
-            pretty_text: None,
-            body_base64,
             truncated,
             request,
             warnings,

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   applyUrlText,
-  base64DecodedLength,
   buildForm,
   buildMultipart,
   composeUrl,
@@ -433,15 +432,5 @@ describe("custom methods", () => {
 
   it("rejects text the .http parser wouldn't read back as a method", () => {
     for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
-  });
-});
-
-describe("base64DecodedLength", () => {
-  it("counts the bytes a base64 string decodes to, padding included", () => {
-    expect(base64DecodedLength("")).toBe(0);
-    expect(base64DecodedLength("QQ==")).toBe(1); // "A"
-    expect(base64DecodedLength("QUI=")).toBe(2); // "AB"
-    expect(base64DecodedLength("QUJD")).toBe(3); // "ABC"
-    expect(base64DecodedLength("QUJDRA==")).toBe(4);
   });
 });

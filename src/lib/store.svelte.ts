@@ -9,6 +9,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
 import { toSendError } from "./sendError";
+import { dropDocs } from "./responseDocs";
 import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
 import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
@@ -475,6 +476,7 @@ class AppStore {
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
+      for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
       this.runs = {};
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
@@ -845,6 +847,7 @@ class AppStore {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
+    this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
     // An orphaned request lives only in its tab.
@@ -1132,12 +1135,21 @@ class AppStore {
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc) });
-      if (this.runs[tabId]?.runId === runId) this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
+      // A tab that closed (or a workspace that changed) meanwhile never shows it.
+      if (this.runs[tabId]?.runId !== runId) {
+        this.releaseResponse(response);
+        return;
+      }
+      this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
+      if (previous?.id !== response.id) this.releaseResponse(previous);
     } catch (e) {
       if (this.runs[tabId]?.runId !== runId) return;
-      this.runs[tabId] = this.cancelled.delete(runId)
-        ? { runId, loading: false, startedAt: 0, cancelled: true, response: previous }
-        : { runId, loading: false, startedAt: 0, error: toSendError(e) };
+      if (this.cancelled.delete(runId)) {
+        this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous };
+      } else {
+        this.runs[tabId] = { runId, loading: false, startedAt: 0, error: toSendError(e) };
+        this.releaseResponse(previous);
+      }
     } finally {
       this.cancelled.delete(runId);
     }
@@ -1179,6 +1191,16 @@ class AppStore {
   onSendProgress(runId: string, received: number) {
     const run = Object.values(this.runs).find((r) => r.runId === runId);
     if (run?.loading) run.received = received;
+  }
+
+  /** Lets the shell drop a response no tab shows any more (closed, replaced or
+   *  gone with the workspace); until then it keeps the body for Save, Hex,
+   *  Pretty and the filter. A failure only means it was already gone. The
+   *  editor documents and the preview made from it go too. */
+  private releaseResponse(response: HttpResponse | undefined) {
+    if (!response) return;
+    dropDocs(response.id);
+    api.releaseResponse(response.id).catch(() => {});
   }
 
   /** Runs the user cancelled; their failure is shown as Cancelled, not as an error. */

@@ -14,7 +14,10 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import ResponseFilter from "./ResponseFilter.svelte";
   import { addMenuItems } from "../lib/editMenu";
-  import { pathAt } from "../lib/jsonpath";
+  import { pathInPieces } from "../lib/jsonpath";
+  import { writeClipboard } from "../lib/clipboard";
+  import { errorMessage } from "../lib/api";
+  import type { Text } from "@codemirror/state";
   import type { HttpResponse } from "../lib/types";
   import { formatShortcut, type Shortcut } from "../lib/platform";
 
@@ -31,12 +34,15 @@
   let { res, view, mode = $bindable(), wrap = $bindable(), filter = $bindable() }: Props = $props();
 
   let editor: Editor | undefined = $state();
+  /** Fold all is parsing the body before it folds; and whether the body is small enough for Fold all at all. */
+  let folding = $state(false);
+  let canFoldAll = $state(true);
 
   const kind = $derived(view.kind);
   const isBinary = $derived(view.isBinary);
   const effectiveMode = $derived(view.effectiveMode);
   const filtered = $derived(view.filtered);
-  const dataUrl = $derived(view.dataUrl);
+  const previewUrl = $derived(view.previewUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
   // Raw and Preview are each built the first time they're shown for a response,
@@ -67,16 +73,21 @@
     if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
     const ed = editor;
     const offset = ed.caretForMenu(e);
-    addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) }]);
+    const doc = ed.document();
+    if (doc) addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => void copyPath(doc, offset) }]);
   }
-  async function copyText(text: string, message: string) {
-    await navigator.clipboard.writeText(text);
-    app.toast("success", message);
-  }
-  function copyPath(text: string, offset: number) {
-    const path = pathAt(text, offset);
-    if (path === null) app.toast("error", "There's no JSON value at the cursor");
-    else void copyText(path, `Copied ${path}`);
+  // The body is read up to the caret a slice at a time (a large one takes a
+  // moment), so the path goes on the clipboard through the shell: a webview
+  // lets a page write to it only while handling a click.
+  async function copyPath(doc: Text, offset: number) {
+    const path = await pathInPieces(doc.iter(), offset);
+    if (path === null) return app.toast("error", "There's no JSON value at the cursor");
+    try {
+      await writeClipboard(path);
+      app.toast("success", `Copied ${path}`);
+    } catch (e) {
+      app.toast("error", `Couldn't copy the path: ${errorMessage(e)}`);
+    }
   }
 </script>
 
@@ -93,7 +104,11 @@
   {#if effectiveMode !== "preview"}
     <button class="icon-btn" aria-label="Search" use:tooltip={`Search (${formatShortcut(SEARCH)})`} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
     {#if kind === "json" || kind === "xml"}
-      <button class="icon-btn" aria-label="Fold all" use:tooltip onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+      {#if folding}<span class="folding muted" role="status"><span class="spinner"></span>Folding…</span>{/if}
+      <!-- Above the limit, folding everything would freeze the window; the filter narrows a large body instead. -->
+      <span class="tip" use:tooltip={canFoldAll ? "" : view.canFilter ? "Too large to fold all. Use the filter to narrow it down" : "Too large to fold all"}>
+        <button class="icon-btn" aria-label="Fold all" use:tooltip={canFoldAll ? undefined : null} disabled={!canFoldAll || folding} onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+      </span>
       <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
     {/if}
     <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
@@ -106,18 +121,22 @@
 {/if}
 <!-- Adds Copy path to the body editor's edit menu. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="body" oncontextmenu={bodyMenu}>
+<div class="body" class:long-lines={view.longLines} oncontextmenu={bodyMenu}>
   {#if mountPreview}
     <div class="pane" class:hidden={!showingPreview}>
-      {#if kind === "html"}
-        <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
+      {#if view.previewError}
+        <div class="empty-state small">{view.previewError}</div>
+      {:else if !previewUrl}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Loading…</div>
+      {:else if kind === "html"}
+        <iframe title="HTML preview" sandbox="" src={previewUrl}></iframe>
       {:else if kind === "image"}
-        <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
+        <div class="preview-img"><img src={previewUrl} alt="Response preview" /></div>
       {:else if kind === "pdf"}
-        <iframe title="PDF preview" src={dataUrl}></iframe>
+        <iframe title="PDF preview" src={previewUrl}></iframe>
       {:else if kind === "media"}
         <div class="preview-img">
-          {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
+          {#if ct.startsWith("audio/")}<audio controls src={previewUrl}></audio>{:else}<video controls src={previewUrl}><track kind="captions" /></video>{/if}
         </div>
       {/if}
     </div>
@@ -126,10 +145,10 @@
     <div class="pane" class:hidden={showingPreview}>
       {#if res.bodySize === 0}
         <div class="empty-state small">The response has no body.</div>
-      {:else if view.formatting}
-        <div class="empty-state small" role="status"><span class="spinner"></span>Formatting…</div>
+      {:else if !view.doc}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Preparing…</div>
       {:else}
-        <Editor bind:this={editor} value={view.text} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
+        <Editor bind:this={editor} bind:folding bind:canFoldAll doc={view.doc} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}
     </div>
   {/if}
@@ -155,6 +174,12 @@
     padding: 0 var(--bar-pad-end) var(--bar-pad-y) var(--bar-pad-start);
     flex: none;
   }
+  .folding {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
   .lang {
     font-size: 11px;
     font-weight: 600;
@@ -165,6 +190,14 @@
     flex: 1;
     min-height: 0;
     border-top: 1px solid var(--border);
+  }
+  /* Wrapped, a very long line (BodyView.longLines) breaks at any character, so
+     its rows are as full as CodeMirror assumes when it estimates the height of
+     what it hasn't drawn. Broken at punctuation instead, a long minified body's
+     rows come out a third shorter: the line grows as it's scrolled, and its end
+     can't be reached. */
+  .body.long-lines :global(.cm-content.cm-lineWrapping) {
+    word-break: break-all;
   }
   /* Raw and Preview are stacked in the same place; the hidden one keeps its
      layout (visibility, not display: none), so switching needs no re-layout. */

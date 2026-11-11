@@ -14,7 +14,7 @@
   import { save } from "@tauri-apps/plugin-dialog";
   import { app, CANCEL, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
-  import { base64DecodedLength, formatBytes, formatDuration } from "../lib/http";
+  import { formatBytes, formatDuration } from "../lib/http";
   import { explainStatus } from "../lib/status";
   import { BodyView, saveName } from "../lib/bodyView.svelte";
   import Badge from "./Badge.svelte";
@@ -44,7 +44,7 @@
     viewByTab.set(tab.id, { tab: viewerTab, mode, wrap, filter });
   });
 
-  const body = new BodyView(() => ({ res, mode, filter }));
+  const body = new BodyView(() => ({ tabId: tab.id, res, mode, filter }));
   const isBinary = $derived(body.isBinary);
   const filtered = $derived(body.filtered);
 
@@ -63,24 +63,23 @@
       app.toast("success", "Filter matches copied");
       return;
     }
-    if (res.bodyText !== null) {
-      await navigator.clipboard.writeText(res.bodyText);
-      app.toast("success", "Response body copied");
-      return;
-    }
-    const b64 = res.bodyBase64;
-    if (!b64) return;
-    const bytes = base64DecodedLength(b64);
-    if (bytes > BASE64_COPY_CONFIRM_BYTES) {
-      const message = `The body is ${formatBytes(bytes)}, which is ${formatBytes(b64.length)} of text as base64. Copy it to the clipboard?`;
+    // The shell copies the body itself, so the webview never holds it.
+    const binary = isBinary;
+    if (binary && res.bodySize > BASE64_COPY_CONFIRM_BYTES) {
+      const base64Size = 4 * Math.ceil(res.bodySize / 3);
+      const message = `The body is ${formatBytes(res.bodySize)}, which is ${formatBytes(base64Size)} of text as base64. Copy it to the clipboard?`;
       const r = await app.choose("Copy as base64?", message, [
         CANCEL,
         { label: "Copy", value: "copy", role: "primary" },
       ]);
       if (r.button !== "copy") return;
     }
-    await navigator.clipboard.writeText(b64);
-    app.toast("success", "Response body copied as base64");
+    try {
+      await api.copyResponseBody(res.id);
+      app.toast("success", binary ? "Response body copied as base64" : "Response body copied");
+    } catch (e) {
+      app.toast("error", errorMessage(e));
+    }
   }
 
   async function saveBody() {
@@ -148,7 +147,7 @@
         <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
-        <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} disabled={isBinary && !res.bodyBase64} onclick={copyBody}><Icon name="copy" /></button>
+        <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>

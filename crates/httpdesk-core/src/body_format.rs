@@ -88,6 +88,15 @@ pub enum ResponseKind {
     Binary,
 }
 
+impl ResponseKind {
+    /// Whether the viewer shows a body of this kind as text (Raw, Pretty, the
+    /// filter, copied as text). The others are binary: Hex or Preview, and
+    /// copied as base64.
+    pub fn is_text(self) -> bool {
+        matches!(self, Self::Json | Self::Html | Self::Xml | Self::Text)
+    }
+}
+
 /// The kind of a body of `content_type`: the content type when it names JSON,
 /// HTML, XML/SVG, images, PDF or media; otherwise, for a text body (`text`),
 /// its first non-blank character (`{`/`[` JSON, `<` XML, else plain text). A

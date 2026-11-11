@@ -34,6 +34,9 @@ export type RequestArgs = {
   promptValues: Record<string, string>;
 };
 
+/** Which form of a stored response body `api.responseBody` fetches. */
+export type BodyFetchView = "raw" | "pretty" | "bytes";
+
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   getTree: () => invoke<TreeNode>("get_tree"),
@@ -66,13 +69,24 @@ export const api = {
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
+   * Lets the shell drop a response's body and everything cached from it, once no
+   * tab shows it. Until then it's kept, however many other responses arrive.
+   */
+  releaseResponse: (responseId: string) => invoke<void>("release_response", { responseId }),
+  /**
+   * Copy body: the shell puts a stored body on the clipboard, text as text and
+   * binary as base64, so the webview never holds it. Rejects when the body has
+   * been released or the clipboard can't be written.
+   */
+  copyResponseBody: (responseId: string) => invoke<void>("copy_response_body", { responseId }),
+  /**
    * Re-lays out a body in the core without changing any token (numbers and
    * strings stay exactly as written). Rejects with a message for invalid input.
    */
   formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
   /**
    * The Hex view of a binary response: a dump of the first 64 KB of the body
-   * the shell stored for it. Rejects once the body has been evicted.
+   * the shell stored for it. Rejects once the body has been released.
    */
   hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
   /**
@@ -81,11 +95,12 @@ export const api = {
    */
   filterResponse: (responseId: string, expression: string) => invoke<FilterResult>("filter_response", { responseId, expression }),
   /**
-   * The Pretty view of a response too large to arrive with its `prettyText`,
-   * formatted from the body the shell stored. Rejects when it doesn't parse or
-   * has been evicted.
+   * A stored response body as raw bytes: its text (`raw`, decoded from the
+   * declared charset) or Pretty text (`pretty`, lossless JSON or XML) as UTF-8,
+   * or the body's own `bytes`. Rejects when the body has been released, isn't
+   * text (its kind is binary), or has no Pretty text (not JSON or XML, or it doesn't parse).
    */
-  prettyResponse: (responseId: string) => invoke<string>("pretty_response", { responseId }),
+  responseBody: (responseId: string, view: BodyFetchView) => invoke<ArrayBuffer>("response_body", { responseId, view }),
   /** The keys reachable at each place in a stored JSON response body, for filter key completion. */
   responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 

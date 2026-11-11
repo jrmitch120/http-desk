@@ -1,91 +1,68 @@
-//! Recent response bodies, kept so "save to file" can write the bytes the
-//! UI only shows as text, the Hex view can dump them, and the Pretty view can
-//! format them on demand. Memory is capped by count and by total bytes.
+//! Response bodies by response id. The send reply carries no body (ADR 0006),
+//! so this is where the viewer fetches it from (Raw, Pretty, Preview, Hex),
+//! and where Copy, Save and the filter work on it. A body is kept until the
+//! webview releases it (its tab closed or got a newer response) or the page
+//! loads again, so an open tab never loses its response; there is no count or
+//! byte limit.
 
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-pub(crate) struct RecentBodies {
-    max_count: usize,
-    max_bytes: usize,
-    total_bytes: usize,
-    entries: VecDeque<(String, Stored)>,
+use base64::Engine;
+use httpdesk_core::body_format::ResponseKind;
+use httpdesk_core::exec;
+
+#[derive(Default)]
+pub(crate) struct KeptBodies {
+    entries: HashMap<String, KeptBody>,
 }
 
-/// A body and its response's content type (which says how to decode it as text).
-struct Stored {
-    bytes: Arc<[u8]>,
-    content_type: Option<String>,
+/// A kept body, with its response's content type (which says how to decode it
+/// as text) and body kind (which says whether it is text at all).
+#[derive(Clone)]
+pub(crate) struct KeptBody {
+    pub bytes: Arc<[u8]>,
+    pub content_type: Option<String>,
+    pub kind: ResponseKind,
 }
 
-impl Default for RecentBodies {
-    fn default() -> Self {
-        RecentBodies::new(20, 256 * 1024 * 1024)
-    }
-}
-
-impl RecentBodies {
-    pub(crate) fn new(max_count: usize, max_bytes: usize) -> Self {
-        RecentBodies { max_count, max_bytes, total_bytes: 0, entries: VecDeque::new() }
+impl KeptBody {
+    /// The body as the text the viewer shows (see `exec::body_text`), or
+    /// `None` when its kind is binary.
+    pub(crate) fn text(&self) -> Option<String> {
+        exec::body_text(&self.bytes, self.content_type.as_deref(), self.kind)
     }
 
-    /// Adds the newest body, evicting the oldest ones until both caps hold.
-    /// The newest is always kept, even if it alone is over the byte cap, so
-    /// the response on screen can still be saved.
-    pub(crate) fn push(&mut self, id: String, body: Vec<u8>, content_type: Option<String>) {
-        self.total_bytes += body.len();
-        self.entries.push_back((id, Stored { bytes: body.into(), content_type }));
-        while self.entries.len() > 1 && (self.entries.len() > self.max_count || self.total_bytes > self.max_bytes) {
-            if let Some((_, old)) = self.entries.pop_front() {
-                self.total_bytes -= old.bytes.len();
-            }
-        }
-    }
-
-    pub(crate) fn get(&self, id: &str) -> Option<Arc<[u8]>> {
-        self.get_with_type(id).map(|(bytes, _)| bytes)
-    }
-
-    /// The body and its response's content type.
-    pub(crate) fn get_with_type(&self, id: &str) -> Option<(Arc<[u8]>, Option<String>)> {
-        self.entries.iter().find(|(i, _)| i == id).map(|(_, s)| (s.bytes.clone(), s.content_type.clone()))
+    /// What Copy body puts on the clipboard: the body's text, decoded the way
+    /// the viewer shows it (its charset, else UTF-8), or base64 when its kind
+    /// is binary.
+    pub(crate) fn clipboard_text(&self) -> String {
+        self.text().unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode(&self.bytes))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::RecentBodies;
-
-    fn kept(b: &RecentBodies, ids: &[&str]) -> Vec<String> {
-        ids.iter().filter(|id| b.get(id).is_some()).map(|s| s.to_string()).collect()
+impl KeptBodies {
+    /// Keeps `body` as response `id`'s until it's released.
+    pub(crate) fn push(&mut self, id: String, body: KeptBody) {
+        self.entries.insert(id, body);
     }
 
-    #[test]
-    fn evicts_oldest_bodies_once_total_bytes_exceed_the_cap() {
-        let mut b = RecentBodies::new(20, 100);
-        b.push("a".into(), vec![1; 40], None);
-        b.push("b".into(), vec![2; 40], None);
-        b.push("c".into(), vec![3; 40], None);
-        assert_eq!(kept(&b, &["a", "b", "c"]), ["b", "c"]);
-        assert_eq!(&*b.get("c").unwrap(), &[3; 40][..]);
-        b.push("d".into(), vec![4; 90], None);
-        assert_eq!(kept(&b, &["a", "b", "c", "d"]), ["d"]);
+    /// Response `id`'s kept body.
+    pub(crate) fn get(&self, id: &str) -> Option<KeptBody> {
+        self.entries.get(id).cloned()
     }
 
-    #[test]
-    fn keeps_the_newest_body_even_when_it_alone_exceeds_the_cap() {
-        let mut b = RecentBodies::new(20, 100);
-        b.push("a".into(), vec![1; 10], None);
-        b.push("big".into(), vec![0; 500], None);
-        assert_eq!(kept(&b, &["a", "big"]), ["big"]);
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
     }
 
-    #[test]
-    fn evicts_oldest_bodies_beyond_the_count_cap() {
-        let mut b = RecentBodies::new(2, 1000);
-        for id in ["a", "b", "c"] {
-            b.push(id.into(), vec![0; 1], None);
-        }
-        assert_eq!(kept(&b, &["a", "b", "c"]), ["b", "c"]);
+    /// Drops response `id`'s body (nothing if it isn't kept).
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.entries.remove(id);
+    }
+
+    /// Drops every body.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
     }
 }

@@ -16,9 +16,11 @@
     /** Read-only editors (a response body) get no replace row. */
     readonly: boolean;
     actions: FindActions;
+    /** A find next or previous is still working through a large document. */
+    searching: boolean;
   }
 
-  let { query, readonly, actions }: Props = $props();
+  let { query, readonly, actions, searching }: Props = $props();
   const id = $props.id();
   let root: HTMLDivElement | undefined;
 
@@ -69,6 +71,7 @@
     onkeydown={findKey}
   />
   <span class="controls">
+    {#if searching}<span class="status" role="status">Searching…</span>{/if}
     <span class="group">
       {#each toggles as t (t.key)}
         <button
@@ -134,6 +137,10 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+  }
+  .status {
+    color: var(--muted);
+    white-space: nowrap;
   }
   .error {
     grid-column: 1 / -1;

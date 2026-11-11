@@ -6,6 +6,7 @@
 // JetBrains/Jayway dialect read the same way: `$`, `.name` for plain ASCII
 // identifiers, `['other key']` for every other key, and `[0]` indices.
 import { matchSuggestions, type SuggestionMatch } from "./suggest";
+import { slices } from "./timeSlices";
 import type { JsonShape } from "./types";
 
 /** One step of a path: a member name or an array index. */
@@ -47,14 +48,64 @@ interface Frame {
 }
 
 /**
+ * Text read front to back, a piece at a time (a CodeMirror document's
+ * `iter()`, or a string as one piece), so a large body is never joined into
+ * one string.
+ */
+class Reader {
+  #pieces: Iterator<string>;
+  #piece = "";
+  /** Where the current piece starts. */
+  #start = 0;
+  #ended = false;
+  constructor(pieces: Iterator<string>) {
+    this.#pieces = pieces;
+  }
+  /** The character at `i`, or "" past the end. `i` never goes back before the current piece. */
+  at(i: number): string {
+    while (i >= this.#start + this.#piece.length) {
+      if (this.#ended) return "";
+      const next = this.#pieces.next();
+      if (next.done) {
+        this.#ended = true;
+        return "";
+      }
+      this.#start += this.#piece.length;
+      this.#piece = next.value;
+    }
+    return this.#piece[i - this.#start];
+  }
+}
+
+/** About how many characters `pathScan` reads between pauses. */
+export const PATH_PIECE = 65_536;
+
+/** `pathScan`: pauses (yields) every so often, and returns the path or null. */
+export type PathScan = Generator<void, string | null, void>;
+
+/**
  * The path of the JSON value at `offset` in `text` (a caret position, so a
  * value counts from just before its first character to just after its last).
  * A key names its member's value; a place between values names the innermost
  * object or array around it. Only the text up to the offset is read, so a
- * large body costs little and a truncated one still works. Returns null where
- * the text before the offset isn't JSON.
+ * truncated body still works. Returns null where the text before the offset
+ * isn't JSON.
  */
 export function pathAt(text: string, offset: number): string | null {
+  const scan = pathScan([text][Symbol.iterator](), offset);
+  for (;;) {
+    const step = scan.next();
+    if (step.done) return step.value;
+  }
+}
+
+/**
+ * `pathAt` for text that comes in `pieces` (a large body's document, read
+ * without joining it into one string). It pauses (yields) after about every
+ * `piece` characters, so the caller can run it a slice at a time.
+ */
+export function* pathScan(pieces: Iterator<string>, offset: number, piece = PATH_PIECE): PathScan {
+  const text = new Reader(pieces);
   const stack: Frame[] = [];
   const top = () => stack[stack.length - 1];
   /** The path of a value starting at the current position. */
@@ -79,11 +130,16 @@ export function pathAt(text: string, offset: number): string | null {
   };
   // Objects: whether a key and its ':' have been read and the value is next.
   let expectValue = false;
+  /** Where the next pause comes. */
+  let pause = piece;
 
   let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === " " || c === "\n" || c === "\r" || c === "\t" || c === ",") {
+  for (let c = text.at(0); c !== ""; c = text.at(i)) {
+    if (i >= pause) {
+      yield;
+      pause = i + piece;
+    }
+    if (c === " "|| c === "\n" || c === "\r" || c === "\t" || c === ",") {
       if (c === "," && i >= offset) return between();
       i++;
       continue;
@@ -113,21 +169,27 @@ export function pathAt(text: string, offset: number): string | null {
       i++;
       continue;
     }
-    // A string or a scalar: find where it ends.
-    const start = i;
-    if (c === '"') {
-      i++;
-      while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
-      i++;
-    } else {
-      while (i < text.length && !/[\s,:{}[\]"]/.test(text[i])) i++;
-    }
+    // A string or a scalar: find where it ends, keeping its text if it's a key.
     const f = top();
     const isKey = !!f && !f.array && !expectValue;
+    let raw = "";
+    const take = (n: number) => {
+      for (let k = 0; k < n; k++, i++) if (isKey) raw += text.at(i);
+    };
+    const end = c === '"' ? (d: string) => d === '"' : (d: string) => /[\s,:{}[\]"]/.test(d);
+    if (c === '"') take(1);
+    for (let d = text.at(i); d !== "" && !end(d); d = text.at(i)) {
+      take(d === "\\" && c === '"' ? 2 : 1);
+      if (i >= pause) {
+        yield;
+        pause = i + piece;
+      }
+    }
+    if (c === '"') take(1);
     if (isKey) {
       let key: string;
       try {
-        key = JSON.parse(text.slice(start, i));
+        key = JSON.parse(raw);
       } catch {
         return null;
       }
@@ -143,6 +205,21 @@ export function pathAt(text: string, offset: number): string | null {
     expectValue = false;
   }
   return between();
+}
+
+/**
+ * `pathAt` on a document of any size, read in `pieces` (CodeMirror's
+ * `doc.iter()`) a slice at a time between tasks, so a 50 MB body neither
+ * blocks the window nor becomes one string.
+ */
+export async function pathInPieces(pieces: Iterator<string>, offset: number): Promise<string | null> {
+  const scan = pathScan(pieces, offset);
+  const slice = slices();
+  for (;;) {
+    const step = scan.next();
+    if (step.done) return step.value;
+    await slice.pause();
+  }
 }
 
 // ------------------------------------------------------------ key completion

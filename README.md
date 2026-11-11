@@ -112,6 +112,7 @@ cargo test --workspace  # parser/serializer, enablement, execution, env, OpenAPI
 pnpm test               # frontend helpers (URL⇄params sync, form/multipart editors, …)
 pnpm check              # svelte-check / TypeScript
 pnpm test:e2e           # browser tests (Playwright, headless Chromium)
+pnpm test:perf          # large responses keep the window responsive (e2e/perf)
 cargo fmt --all         # format Rust (CI runs `cargo fmt --all --check`; config in rustfmt.toml)
 ```
 
@@ -121,6 +122,11 @@ mocked backend described below. Playwright starts the Vite dev server itself
 browser once with `pnpm exec playwright install chromium`. Use
 `pnpm test:e2e --headed` or `--ui` to watch them, and
 `pnpm exec playwright show-trace test-results/…/trace.zip` after a failure.
+
+The perf tests in `e2e/perf/` walk through a 50 MB response step by step and fail
+a step if it blocks the main thread for over 50 ms. They run apart from the
+browser tests, since their timings suffer when the machine is busy, so re-run a
+failing step on its own before believing it.
 
 UI-only work: `pnpm dev` and open <http://localhost:1420>. Outside Tauri the app
 runs against a mocked backend (`src/dev/mock.ts`, never shipped in production

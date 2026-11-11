@@ -241,18 +241,14 @@ export interface HttpResponse {
   transferredSize: number;
   headersSize: number;
   contentType: string | null;
-  /** What the body is, decided by the core from the content type (else the text). */
+  /**
+   * What the body is, decided by the core from the content type (else the text);
+   * it says whether the body is text or binary. The reply carries no body: the
+   * viewer fetches it by response id (`api.responseBody`).
+   */
   bodyKind: ResponseKind;
   /** The response's Content-Encoding header, if any. */
   contentEncoding: string | null;
-  bodyText: string | null;
-  /**
-   * The Pretty view's text, formatted by the shell, for a small JSON or XML
-   * body (its raw text if it doesn't parse). Null for other bodies, and for
-   * large ones: fetch those with `api.prettyResponse` when Pretty is opened.
-   */
-  prettyText: string | null;
-  bodyBase64: string | null;
   truncated: boolean;
   request: SentRequest;
   warnings: string[];

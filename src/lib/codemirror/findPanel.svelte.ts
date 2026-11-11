@@ -2,19 +2,11 @@
 // through the app's own FindBar.svelte instead of the default panel (which
 // builds native checkboxes and unstyled buttons). Plugged in with
 // `search({ createPanel: createFindPanel })` in setup.ts.
-import {
-  closeSearchPanel,
-  findNext,
-  findPrevious,
-  getSearchQuery,
-  replaceAll,
-  replaceNext,
-  SearchQuery,
-  setSearchQuery,
-} from "@codemirror/search";
+import { closeSearchPanel, getSearchQuery, replaceAll, replaceNext, SearchQuery, setSearchQuery } from "@codemirror/search";
 import { runScopeHandlers, type EditorView, type Panel, type ViewUpdate } from "@codemirror/view";
 import { flushSync, mount, unmount } from "svelte";
 import FindBar from "./FindBar.svelte";
+import { abandonSearch, findNextInPieces, findPreviousInPieces, watchSearching } from "./findInPieces";
 
 /** What the find bar edits: the fields of a CodeMirror SearchQuery. */
 export interface FindQuery {
@@ -44,15 +36,19 @@ function toFindQuery(q: SearchQuery): FindQuery {
 export function createFindPanel(view: EditorView): Panel {
   let current = getSearchQuery(view.state);
   const query = $state<FindQuery>(toFindQuery(current));
+  // Next and previous work through the document in pieces (findInPieces.ts); this is whether one is running.
+  let searching = $state(false);
+  const unwatch = watchSearching(view, (on) => (searching = on));
   const actions: FindActions = {
     commit() {
       const next = new SearchQuery({ ...query });
       if (next.eq(current)) return;
       current = next;
+      abandonSearch(view); // a new query, a new search
       view.dispatch({ effects: setSearchQuery.of(next) });
     },
-    next: () => findNext(view),
-    previous: () => findPrevious(view),
+    next: () => findNextInPieces(view),
+    previous: () => findPreviousInPieces(view),
     replaceNext: () => replaceNext(view),
     replaceAll: () => replaceAll(view),
     close: () => closeSearchPanel(view),
@@ -63,7 +59,17 @@ export function createFindPanel(view: EditorView): Panel {
   dom.addEventListener("keydown", (e) => {
     if (!e.defaultPrevented && runScopeHandlers(view, e, "search-panel")) e.preventDefault();
   });
-  const bar = mount(FindBar, { target: dom, props: { query, readonly: view.state.readOnly, actions } });
+  const bar = mount(FindBar, {
+    target: dom,
+    props: {
+      query,
+      readonly: view.state.readOnly,
+      actions,
+      get searching() {
+        return searching;
+      },
+    },
+  });
   flushSync(); // mount doesn't run effects, and the bar's bind:this is one
   const field = bar.findField();
   // openSearchPanel (⌘F / Ctrl+F while the bar is open) focuses the [main-field] input.
@@ -80,8 +86,14 @@ export function createFindPanel(view: EditorView): Panel {
           if (effect.is(setSearchQuery) && !effect.value.eq(current)) {
             current = effect.value;
             Object.assign(query, toFindQuery(effect.value));
+            abandonSearch(view);
           }
     },
-    destroy: () => void unmount(bar),
+    // Closing the bar abandons the search in progress.
+    destroy: () => {
+      abandonSearch(view);
+      unwatch();
+      void unmount(bar);
+    },
   };
 }
