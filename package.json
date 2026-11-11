@@ -11,7 +11,8 @@
     "test": "vitest run",
     "tauri": "tauri",
     "test:rust": "cargo test --workspace",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --project=chromium",
+    "test:perf": "playwright test --project=perf"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
