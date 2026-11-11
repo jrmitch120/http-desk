@@ -5,6 +5,7 @@
 mod app_info;
 mod confinement;
 mod deleting;
+mod fetch;
 mod folder_envs;
 mod paths;
 mod preview;
@@ -394,64 +395,6 @@ fn send_get(h: &Harness, url: &str) -> Value {
         "send_request",
         json!({ "runId": "p1", "request": file["requests"][0], "filePath": path, "fileVariables": [], "environment": null }),
     )
-}
-
-#[test]
-fn a_small_json_response_arrives_with_its_pretty_text_numbers_as_sent() {
-    let h = Harness::new();
-    let url = serve_once("application/json", br#"{"id":9007199254740993,"price":10.50}"#.to_vec());
-    let resp = send_get(&h, &url);
-    assert_eq!(resp["prettyText"], json!("{\n  \"id\": 9007199254740993,\n  \"price\": 10.50\n}"));
-}
-
-#[test]
-fn a_small_response_that_doesnt_parse_has_its_raw_body_as_pretty_text() {
-    let h = Harness::new();
-    let url = serve_once("application/json", br#"{"id": 1, oops}"#.to_vec());
-    assert_eq!(send_get(&h, &url)["prettyText"], json!(r#"{"id": 1, oops}"#));
-}
-
-#[test]
-fn a_plain_text_response_has_no_pretty_text() {
-    let h = Harness::new();
-    let url = serve_once("text/plain", b"hello".to_vec());
-    assert_eq!(send_get(&h, &url)["prettyText"], Value::Null);
-}
-
-#[test]
-fn a_large_json_response_is_formatted_only_when_asked_for_by_response_id() {
-    let h = Harness::new();
-    let items: Vec<String> = (0..60_000).map(|i| format!(r#"{{"id":1{i:05}0000000001,"n":"item"}}"#)).collect();
-    let body = format!("[{}]", items.join(","));
-    assert!(body.len() > super::PRETTY_INLINE_BYTES);
-    let url = serve_once("application/json; charset=utf-8", body.into_bytes());
-
-    let resp = send_get(&h, &url);
-    assert_eq!(resp["prettyText"], Value::Null);
-
-    let pretty = h.ok("pretty_response", json!({ "responseId": resp["id"] }));
-    let pretty = pretty.as_str().unwrap();
-    assert!(
-        pretty.starts_with("[\n  {\n    \"id\": 1000000000000001,\n    \"n\": \"item\"\n  },\n"),
-        "{}",
-        &pretty[..80]
-    );
-    assert!(pretty.ends_with("    \"id\": 1599990000000001,\n    \"n\": \"item\"\n  }\n]"));
-}
-
-#[test]
-fn pretty_response_rejects_an_evicted_id_and_a_body_that_doesnt_parse() {
-    let h = Harness::new();
-    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
-        "bad".into(),
-        br#"{"id": 1, oops}"#.to_vec(),
-        Some("application/json".into()),
-    );
-    let err = h.call("pretty_response", json!({ "responseId": "bad" })).unwrap_err();
-    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
-
-    let err = h.call("pretty_response", json!({ "responseId": "gone" })).unwrap_err();
-    assert_eq!(err, json!("Response is no longer available"));
 }
 
 #[test]

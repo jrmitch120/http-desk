@@ -647,9 +647,8 @@ pub struct HttpResponse {
     pub content_encoding: Option<String>,
     /// Decoded text for textual content types.
     pub body_text: Option<String>,
-    /// The Pretty view's text for a JSON or XML body (the raw text if it
-    /// doesn't parse). The shell fills it in for bodies small enough to send
-    /// twice; `None` means fetch it by response id when Pretty is opened.
+    /// Always `None`: the viewer fetches the Pretty view's text by response id
+    /// (the shell's `response_body`), whatever the body's size.
     #[serde(default)]
     pub pretty_text: Option<String>,
     /// Base64 for binary content (only below the preview limit).
