@@ -38,7 +38,17 @@ export type Language = "json" | "xml" | "html" | "text";
 export const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--text)", height: "100%", fontSize: "12.5px" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
+  // No ligatures: shaping JetBrains Mono's ligatures (mostly contextual
+  // alternates, `calt`) made WebKit draw lines tens of thousands of characters
+  // long so slowly that paging through such a body showed blank text (#118).
+  // `font-variant-ligatures: none` alone should cover `calt` and `liga`; the
+  // feature settings say so outright, as in the fix checked in the macOS app.
+  ".cm-scroller": {
+    fontFamily: "var(--mono)",
+    lineHeight: "1.55",
+    fontVariantLigatures: "none",
+    fontFeatureSettings: '"calt" 0, "liga" 0',
+  },
   ".cm-content": { caretColor: "var(--accent)" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
