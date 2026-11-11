@@ -29,6 +29,7 @@ import {
 import { tags as t } from "@lezer/highlight";
 import { popupLayer } from "../popup/layer";
 import { createFindPanel } from "./findPanel.svelte";
+import { findInPieces } from "./findInPieces";
 import { extractExtension } from "./extract";
 
 export type Language = "json" | "xml" | "html" | "text";
@@ -509,6 +510,7 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
     drawSelection(),
     bracketMatching(),
     highlightSelectionMatches(),
+    findInPieces, // ahead of searchKeymap, whose find next and previous keys it takes over
     search({ top: true, createPanel: createFindPanel }),
     keymap.of([...searchKeymap, ...foldKeymap, ...defaultKeymap, ...historyKeymap]),
   ];
