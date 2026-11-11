@@ -164,8 +164,7 @@ test("8. copying the body", async ({ page }) => {
   expect(await mockState(page, "bodyCopies")).toHaveLength(1);
 });
 
-// Fails until #112 (Preview uses blob: URLs).
-test.fixme("9. sending the 25 MB image and opening Preview", async ({ page }) => {
+test("9. sending the 25 MB image and opening Preview", async ({ page }) => {
   await prepare(page, "Get pet image");
   await expectNoLongTasks(page, async () => {
     await page.keyboard.press("Meta+Enter");
