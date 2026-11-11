@@ -1106,7 +1106,8 @@ mockIPC(
         return null;
       case "copy_response_body": {
         // Like the shell: text as text, binary as base64, written through the clipboard plugin.
-        const body = textBodies.get(args.responseId)?.body ?? binaryBodies.get(args.responseId);
+        const bytes = binaryBodies.get(args.responseId);
+        const body = textBodies.get(args.responseId)?.body ?? (bytes && toBase64(bytes));
         if (body === undefined) throw RESPONSE_GONE;
         if (clipboardFails) throw "The clipboard can't be written";
         clipboardText = body;
