@@ -36,9 +36,8 @@ impl Clipboard {
         if let Some(f) = self.0.read().unwrap().clone() {
             return f(text);
         }
-        let plugin = app
-            .try_state::<tauri_plugin_clipboard_manager::Clipboard<R>>()
-            .ok_or("The clipboard isn't available")?;
+        let plugin =
+            app.try_state::<tauri_plugin_clipboard_manager::Clipboard<R>>().ok_or("The clipboard isn't available")?;
         plugin.write_text(text).map_err(|e| e.to_string())
     }
 }
