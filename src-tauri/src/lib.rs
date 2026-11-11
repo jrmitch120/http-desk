@@ -598,7 +598,8 @@ async fn send_request<R: tauri::Runtime>(
         Ok(Ok(outcome)) => {
             let response = outcome.response;
             let (id, content_type) = (response.id.clone(), response.content_type.clone());
-            state.bodies.lock().unwrap().push(id, outcome.body, content_type, response.body_kind);
+            let body = KeptBody { bytes: outcome.body.into(), content_type, kind: response.body_kind };
+            state.bodies.lock().unwrap().push(id, body);
             Ok(response)
         }
         Ok(Err(e)) => Err(e),
@@ -622,40 +623,48 @@ const RESPONSE_GONE: &str = "Response is no longer available";
 /// its tab closed, got a newer response, or closed with the workspace.
 #[tauri::command]
 fn release_response(state: State<'_, AppState>, response_id: String) {
-    // Bodies before parsed documents, the order `json_doc` locks them in.
-    let mut bodies = state.bodies.lock().unwrap();
-    bodies.remove(&response_id);
-    state.json_docs.lock().unwrap().remove(&response_id);
+    drop_kept(&state, Some(&response_id));
 }
 
 /// A page load (including a reload): no tab can still refer to a kept body, so
 /// they all go, with everything cached from them.
 fn page_loaded(state: &AppState) {
+    drop_kept(state, None);
+}
+
+/// Drops response `response_id`'s kept body, or every kept body (`None`), with
+/// everything cached from them (parsed JSON and key completion).
+fn drop_kept(state: &AppState, response_id: Option<&str>) {
+    // Bodies before parsed documents, the order `json_doc` locks them in.
     let mut bodies = state.bodies.lock().unwrap();
-    bodies.clear();
-    state.json_docs.lock().unwrap().clear();
+    let mut json_docs = state.json_docs.lock().unwrap();
+    match response_id {
+        Some(id) => {
+            bodies.remove(id);
+            json_docs.remove(id);
+        }
+        None => {
+            bodies.clear();
+            json_docs.clear();
+        }
+    }
 }
 
-/// The stored body of `response_id`, or [`RESPONSE_GONE`].
-fn stored_body(state: &AppState, response_id: &str) -> CmdResult<Arc<[u8]>> {
-    state.bodies.lock().unwrap().get(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
-}
-
-/// The stored body of `response_id` with its content type and kind, or [`RESPONSE_GONE`].
+/// The kept body of `response_id` (with its content type and kind), or [`RESPONSE_GONE`].
 fn kept_body(state: &AppState, response_id: &str) -> CmdResult<KeptBody> {
-    state.bodies.lock().unwrap().get_kept(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
+    state.bodies.lock().unwrap().get(response_id).ok_or_else(|| RESPONSE_GONE.to_string())
 }
 
 #[tauri::command]
 async fn save_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: String, path: PathBuf) -> CmdResult<()> {
     off_main(app, move |state| {
-        let body = stored_body(state, &response_id)?;
-        std::fs::write(&path, body).map_err(err)
+        let body = kept_body(state, &response_id)?;
+        std::fs::write(&path, &body.bytes).map_err(err)
     })
     .await
 }
 
-/// Copy body: puts the stored body of `response_id` on the clipboard, text as
+/// Copy body: puts the kept body of `response_id` on the clipboard, text as
 /// text and binary as base64, on the blocking pool, so a body of any size is
 /// copied without the webview holding it. Rejects when the body has been
 /// released or the clipboard can't be written.
@@ -664,7 +673,7 @@ async fn copy_response_body<R: tauri::Runtime>(app: AppHandle<R>, response_id: S
     let handle = app.clone();
     off_main(app, move |state| {
         let body = kept_body(state, &response_id)?;
-        state.clipboard.write(&handle, copying::clipboard_text(&body))
+        state.clipboard.write(&handle, body.clipboard_text())
     })
     .await
 }
@@ -678,19 +687,19 @@ async fn format_body(text: String, kind: BodyKind, mode: FormatMode) -> CmdResul
         .map_err(err)?
 }
 
-/// The Hex view of a binary response: a dump of the start of the stored body
+/// The Hex view of a binary response: a dump of the start of the kept body
 /// (`body_format::hexdump`), so it works even for bodies too big to send to
 /// the UI as base64.
 #[tauri::command]
 async fn hexdump<R: tauri::Runtime>(app: AppHandle<R>, response_id: String) -> CmdResult<String> {
     off_main(app, move |state| {
-        let body = stored_body(state, &response_id)?;
-        Ok(body_format::hexdump(&body))
+        let body = kept_body(state, &response_id)?;
+        Ok(body_format::hexdump(&body.bytes))
     })
     .await
 }
 
-/// The stored body of `response_id` parsed as JSON, parsed on first use and
+/// The kept body of `response_id` parsed as JSON, parsed on first use and
 /// then kept (see `json_docs`). The lock isn't held while parsing, so a large
 /// body doesn't hold up queries on other responses.
 fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>> {
@@ -708,7 +717,7 @@ fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>>
     parsed
 }
 
-/// The filter bar: evaluates a JSONPath expression against a stored response
+/// The filter bar: evaluates a JSONPath expression against a kept response
 /// body, returning the match count and the matches as lossless pretty JSON.
 #[tauri::command]
 async fn filter_response<R: tauri::Runtime>(
@@ -719,10 +728,10 @@ async fn filter_response<R: tauri::Runtime>(
     off_main(app, move |state| json_doc(state, &response_id)?.filter(&expression).map_err(err)).await
 }
 
-/// Which form of a stored body [`response_body`] sends.
+/// Which form of a kept body [`response_body`] sends.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum BodyView {
+enum BodyFetchView {
     /// The body as text, decoded from its declared charset.
     Raw,
     /// The Pretty view's text: the body as JSON or XML laid out by the lossless
@@ -732,28 +741,28 @@ enum BodyView {
     Bytes,
 }
 
-/// A stored body for the viewer, by response id, as raw bytes (an
+/// A kept body for the viewer, by response id, as raw bytes (an
 /// `ArrayBuffer` in the webview, not a JSON string): text as UTF-8. Decoding
 /// and formatting run on the blocking pool. Rejects when the body has been
 /// released, isn't text (its kind is binary), or (for Pretty) isn't JSON or
-/// XML or doesn't parse; the viewer shows the raw text instead of a Pretty one
-/// it can't have.
+/// XML or doesn't parse, which reports "isn't JSON or XML" either way; the
+/// viewer shows the raw text instead of a Pretty one it can't have.
 #[tauri::command]
 async fn response_body<R: tauri::Runtime>(
     app: AppHandle<R>,
     response_id: String,
-    view: BodyView,
+    view: BodyFetchView,
 ) -> CmdResult<tauri::ipc::Response> {
     off_main(app, move |state| {
         let body = kept_body(state, &response_id)?;
         let text = || body.text().ok_or("Response body isn't text");
         let bytes = match view {
-            BodyView::Raw => text()?.into_bytes(),
-            BodyView::Pretty => body_format::pretty_response(body.content_type.as_deref(), &text()?)
+            BodyFetchView::Raw => text()?.into_bytes(),
+            BodyFetchView::Pretty => body_format::pretty_response(body.content_type.as_deref(), &text()?)
+                .and_then(Result::ok)
                 .ok_or("Response body isn't JSON or XML")?
-                .map_err(err)?
                 .into_bytes(),
-            BodyView::Bytes => body.bytes.to_vec(),
+            BodyFetchView::Bytes => body.bytes.to_vec(),
         };
         Ok(tauri::ipc::Response::new(bytes))
     })

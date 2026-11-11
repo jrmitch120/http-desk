@@ -1,11 +1,22 @@
-// Find next and previous, worked through the document a piece at a time, so a
-// search of a huge body never blocks the window. CodeMirror's own findNext and
-// findPrevious scan the whole document in one go (seconds on a 50 MB body); the
-// generators here make the same choices with CodeMirror's search cursors, but
-// yield after each piece of the document.
-import { findNext, getSearchQuery, openSearchPanel, searchKeymap, type SearchQuery } from "@codemirror/search";
+// Find next and previous, and selecting the next occurrence (Mod-d) or every
+// occurrence (Mod-Shift-l) of the selection, worked through the document a
+// piece at a time, so a search of a huge body never blocks the window.
+// CodeMirror's own commands scan the whole document in one go (seconds on a
+// 50 MB body); the generators here make the same choices with CodeMirror's
+// search cursors, but yield after each piece of the document.
+import {
+  findNext,
+  getSearchQuery,
+  openSearchPanel,
+  SearchCursor,
+  searchKeymap,
+  selectNextOccurrence,
+  selectSelectionMatches,
+  type SearchQuery,
+} from "@codemirror/search";
 import { EditorSelection, type EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type Command, type KeyBinding } from "@codemirror/view";
+import { slices } from "../timeSlices";
 
 /** A match's range in the document. */
 export interface Match {
@@ -119,8 +130,75 @@ export function* previousMatch(state: EditorState, query: SearchQuery, pos: numb
   return found && !(found.from === pos && found.to === pos) ? found : null;
 }
 
-/** How long a search works before letting the window paint and take input. */
-const SLICE_MS = 12;
+/**
+ * Goes through the occurrences of `text` in [from, to] as one SearchCursor
+ * would (in order, not overlapping), a piece at a time, telling `each` about
+ * every one until it returns true. Returns whether it did.
+ */
+function* occurrences(state: EditorState, text: string, from: number, to: number, size: number, each: (m: Match) => boolean): Generator<void, boolean, void> {
+  // Where the cursor would carry on from: the end of the last occurrence, or the piece's start.
+  for (let pos = from; pos < to; ) {
+    const end = Math.min(to, pos + size);
+    // A piece owns the occurrences that start in it; it looks past its end so they're found whole.
+    const cursor = new SearchCursor(state.doc, text, pos, Math.min(to, end + text.length));
+    for (cursor.next(); !cursor.done && cursor.value.from < end; cursor.next()) {
+      if (each({ from: cursor.value.from, to: cursor.value.to })) return true;
+      pos = cursor.value.to;
+    }
+    pos = Math.max(pos, end);
+    if (pos < to) yield;
+  }
+  return false;
+}
+
+/**
+ * The occurrence Mod-d (CodeMirror's selectNextOccurrence) adds for a
+ * selection of ranges that all hold `text`: the next one after the last range,
+ * wrapping round to the start, a whole word if the main selection is one.
+ */
+export function* nextOccurrence(state: EditorState, text: string, size = PIECE): PieceSearch {
+  const { main, ranges } = state.selection;
+  const word = state.wordAt(main.head);
+  const fullWord = !!word && word.from === main.from && word.to === main.to;
+  const isWord = (m: Match) => {
+    const w = state.wordAt(m.from);
+    return !fullWord || (!!w && w.from === m.from && w.to === m.to);
+  };
+  const last = ranges[ranges.length - 1];
+  let found = null as Match | null;
+  if (yield* occurrences(state, text, last.to, state.doc.length, size, (m) => isWord(m) && !!(found = m))) return found;
+  yield;
+  const taken = (m: Match) => ranges.some((r) => r.from === m.from);
+  if (yield* occurrences(state, text, 0, Math.max(0, last.from - 1), size, (m) => !taken(m) && isWord(m) && !!(found = m))) return found;
+  return null;
+}
+
+/** As CodeMirror's selectSelectionMatches: more occurrences than this select none. */
+const MAX_OCCURRENCES = 1000;
+
+/** What Mod-Shift-l selects: every occurrence of the main selection's text, and which is the main one. */
+export interface Occurrences {
+  ranges: Match[];
+  main: number;
+}
+
+/**
+ * Every occurrence of the (single, non-empty) selection's text, as Mod-Shift-l
+ * (CodeMirror's selectSelectionMatches) selects them; null if there are more
+ * than it selects.
+ */
+export function* allOccurrences(state: EditorState, size = PIECE): Generator<void, Occurrences | null, void> {
+  const { from, to } = state.selection.main;
+  const ranges: Match[] = [];
+  let main = 0;
+  const tooMany = yield* occurrences(state, state.sliceDoc(from, to), 0, state.doc.length, size, (m) => {
+    if (ranges.length > MAX_OCCURRENCES) return true;
+    if (m.from === from) main = ranges.length;
+    ranges.push({ from: m.from, to: m.to });
+    return false;
+  });
+  return tooMany ? null : { ranges, main };
+}
 
 /** Each view's search in progress (what abandons it), and who's told when one starts or stops running. */
 const running = new WeakMap<EditorView, () => void>();
@@ -158,11 +236,11 @@ function select(view: EditorView, m: Match): void {
 }
 
 /**
- * Runs `search` in slices of a few milliseconds, letting the window paint and
- * take input in between, then selects what it found. One search runs per
- * view: this abandons the one before.
+ * Runs `search` in slices (timeSlices.ts), letting the window paint and take
+ * input in between, then hands what it found to `found` (nothing, if it found
+ * nothing). One search runs per view: this abandons the one before.
  */
-function run(view: EditorView, search: PieceSearch): void {
+function run<T>(view: EditorView, search: Generator<void, T | null, void>, found: (result: T) => void): void {
   abandonSearch(view);
   let abandoned = false;
   let searching = false;
@@ -176,24 +254,24 @@ function run(view: EditorView, search: PieceSearch): void {
     if (running.get(view) === stop) running.delete(view);
     setSearching(false);
   };
-  const slice = () => {
+  const slice = slices();
+  const work = () => {
     if (abandoned) return;
-    const until = performance.now() + SLICE_MS;
     for (;;) {
       const step = search.next();
       if (step.done) {
         stop();
-        if (step.value) select(view, step.value);
+        if (step.value) found(step.value);
         return;
       }
-      if (performance.now() >= until) break;
+      if (slice.due()) break;
     }
     setSearching(true);
-    setTimeout(slice);
+    void slice.pause().then(work);
   };
   running.set(view, stop);
   // The first slice runs now, so a find in a small document is as immediate as ever.
-  slice();
+  work();
 }
 
 /** CodeMirror's findNext or findPrevious, in pieces. With no valid query, it opens the find bar instead. */
@@ -202,23 +280,59 @@ function finder(direction: "next" | "previous"): Command {
     const query = getSearchQuery(view.state);
     if (!query.valid) return openSearchPanel(view);
     const { from, to } = view.state.selection.main;
-    run(view, direction === "next" ? nextMatch(view.state, query, to) : previousMatch(view.state, query, from));
+    const search = direction === "next" ? nextMatch(view.state, query, to) : previousMatch(view.state, query, from);
+    run(view, search, (m) => select(view, m));
     return true;
   };
 }
+
+/** CodeMirror's selectNextOccurrence (Mod-d), in pieces. An empty selection selects its word, which needs no search. */
+export const selectNextOccurrenceInPieces: Command = (view) => {
+  const { state } = view;
+  const { ranges } = state.selection;
+  if (ranges.some((r) => r.empty)) return selectNextOccurrence(view);
+  const text = state.sliceDoc(ranges[0].from, ranges[0].to);
+  if (ranges.some((r) => state.sliceDoc(r.from, r.to) !== text)) return false;
+  run(view, nextOccurrence(state, text), (m) =>
+    view.dispatch({
+      selection: view.state.selection.addRange(EditorSelection.range(m.from, m.to), false),
+      effects: EditorView.scrollIntoView(m.to),
+    }),
+  );
+  return true;
+};
+
+/** CodeMirror's selectSelectionMatches (Mod-Shift-l), in pieces. */
+export const selectSelectionMatchesInPieces: Command = (view) => {
+  const { selection } = view.state;
+  if (selection.ranges.length > 1 || selection.main.empty) return false;
+  run(view, allOccurrences(view.state), ({ ranges, main }) =>
+    view.dispatch({
+      selection: EditorSelection.create(ranges.map((m) => EditorSelection.range(m.from, m.to)), main),
+      userEvent: "select.search.matches",
+    }),
+  );
+  return true;
+};
 
 /** Find next, in pieces. */
 export const findNextInPieces: Command = finder("next");
 /** Find previous, in pieces. */
 export const findPreviousInPieces: Command = finder("previous");
 
-/** searchKeymap's find next and previous keys (F3 and Mod-g, Shift for previous), bound to the searches in pieces. */
-const findKeymap: KeyBinding[] = searchKeymap.filter((b) => b.run === findNext).map((b) => ({ ...b, run: findNextInPieces, shift: findPreviousInPieces }));
+/** searchKeymap's keys that search the document, bound to the searches in pieces. */
+const inPieces = new Map<Command | undefined, Partial<KeyBinding>>([
+  [findNext, { run: findNextInPieces, shift: findPreviousInPieces }], // F3 and Mod-g, Shift for previous
+  [selectNextOccurrence, { run: selectNextOccurrenceInPieces }], // Mod-d
+  [selectSelectionMatches, { run: selectSelectionMatchesInPieces }], // Mod-Shift-l
+]);
+const findKeymap: KeyBinding[] = searchKeymap.filter((b) => inPieces.has(b.run)).map((b) => ({ ...b, ...inPieces.get(b.run) }));
 
 /**
- * Find next and previous in pieces, for an editor with `search()`. Its keys
- * go ahead of searchKeymap's, so it must come before that in the extensions.
- * A change to the document abandons a search, as does destroying the editor.
+ * Find next and previous, and Mod-d and Mod-Shift-l, in pieces, for an editor
+ * with `search()`. Its keys go ahead of searchKeymap's, so it must come before
+ * that in the extensions. A change to the document abandons a search, as does
+ * destroying the editor.
  */
 export const findInPieces: Extension = [
   keymap.of(findKeymap),

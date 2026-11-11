@@ -1,20 +1,11 @@
-//! Copy body: the shell puts a stored body on the clipboard itself (text as
-//! text, binary as base64), so a large body never has to pass through the
-//! webview. Copying the filter's matches stays in the webview.
+//! Copy body: the shell puts a kept body on the clipboard itself (text as
+//! text, binary as base64: `KeptBody::clipboard_text`), so a large body never
+//! has to pass through the webview. Copying the filter's matches stays in the
+//! webview.
 
 use std::sync::{Arc, RwLock};
 
-use base64::Engine;
 use tauri::{AppHandle, Manager, Runtime};
-
-use crate::bodies::KeptBody;
-
-/// What Copy body puts on the clipboard for a stored body: its text, decoded
-/// the way the viewer shows it (its charset, else UTF-8), or base64 when its
-/// kind is binary.
-pub fn clipboard_text(body: &KeptBody) -> String {
-    body.text().unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode(&body.bytes))
-}
 
 /// Writes text to the clipboard.
 pub type WriteFn = dyn Fn(String) -> Result<(), String> + Send + Sync;

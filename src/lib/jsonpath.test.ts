@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { keyCompletion, pathAt } from "./jsonpath";
+import { Text } from "@codemirror/state";
+import { keyCompletion, pathAt, pathInPieces, pathScan } from "./jsonpath";
 import type { JsonShape } from "./types";
 
 /** The shape of `{"items": [{"id", "name", "owner": {"name"}, "odd key"}], "total", "1": {"x"}}`. */
@@ -97,5 +98,40 @@ describe("Copy path", () => {
   it("gives up on text that isn't JSON before the cursor", () => {
     expect(at("{1: |2}")).toBeNull();
     expect(at('{"a": 1]|')).toBeNull();
+  });
+});
+
+describe("Copy path in pieces", () => {
+  /** `marked` split into `size`-character pieces, and the caret offset of its `|`. */
+  const pieces = (marked: string, size: number) => {
+    const text = marked.replace("|", "");
+    const parts: string[] = [];
+    for (let i = 0; i < text.length; i += size) parts.push(text.slice(i, i + size));
+    return { parts, offset: marked.indexOf("|") };
+  };
+
+  it("reads keys, strings and escapes split across pieces as one", () => {
+    for (const marked of [String.raw`{"a\"b": {"x]": "}{", "y": |1}}`, '{"a":{"odd key":[{"b":|1}]}}', '{"a": 1,| "b": 2}', "4|2"]) {
+      for (const size of [1, 2, 3, 5]) {
+        const { parts, offset } = pieces(marked, size);
+        const scan = pathScan(parts[Symbol.iterator](), offset);
+        let step = scan.next();
+        while (!step.done) step = scan.next();
+        expect(step.value, `${marked} in ${size}-character pieces`).toBe(at(marked));
+      }
+    }
+  });
+
+  it("pauses as it reads, and reads a CodeMirror document by its lines", async () => {
+    const lines = ["{", '  "items": [', ...Array.from({ length: 1000 }, (_, i) => `    {"id": ${i}},`), '    {"id": "last"}', "  ]", "}"];
+    const doc = Text.of(lines);
+    const offset = doc.toString().indexOf('"last"') + 1;
+    let pauses = 0;
+    const scan = pathScan(doc.iter(), offset, 1000);
+    let step = scan.next();
+    for (; !step.done; step = scan.next()) pauses++;
+    expect(step.value).toBe("$.items[1000].id");
+    expect(pauses).toBeGreaterThan(10);
+    expect(await pathInPieces(doc.iter(), offset)).toBe("$.items[1000].id");
   });
 });

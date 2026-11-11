@@ -3,12 +3,22 @@
 // if the main thread ran any task over 50 ms meanwhile. The mock's bodies (a
 // 50 MB minified JSON body with 19-digit ids, whose Pretty is about 88 MB over
 // millions of lines, and a 25 MB image) are built before measuring starts.
-// Steps that can't pass yet are `test.fixme`, each naming the ticket that
-// switches it on. Run with `pnpm test:perf`.
+// Run with `pnpm test:perf`.
+//
+// CI's runners are slower than a developer's machine, so a step can pass
+// locally and fail there. PERF_CPU_THROTTLE=<rate> slows the page's CPU by
+// that factor (Chromium's CPU throttling, as in DevTools) to see what CI sees:
+// a rate of 2 makes an M1 Pro about as fast as CI's ubuntu-22.04 runner
+// (calibrated on #58 with the Fold all step, 66–71 ms there and 69–72 ms here).
 import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, tab } from "../helpers";
 import { expectNoLongTasks } from "./longtasks";
 import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
+
+test.beforeEach(async ({ page }, info) => {
+  const rate = Number(info.project.metadata.cpuThrottle ?? 1); // PERF_CPU_THROTTLE (playwright.config.ts)
+  if (rate > 1) await (await page.context().newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate });
+});
 
 /** The 50 MB body's first item, as Raw shows it. */
 const RAW_START = '{"items":[{"id":1000000000987654321,';
@@ -45,6 +55,33 @@ async function scrollToEnd(page: Page, axis: "top" | "left", stops = 10): Promis
       [axis, i / stops] as const,
     );
   }
+}
+
+/**
+ * Scrolls the body editor from the top to the bottom as a reader dragging the
+ * scroll bar and turning the mouse wheel would: it jumps to each of `stops`
+ * evenly spaced places and turns the wheel there a few times, a frame or two
+ * per move, then jumps to the end.
+ */
+async function scrollThrough(page: Page, stops: number): Promise<void> {
+  const box = (await page.locator(".body .cm-scroller").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const jump = (f: number) =>
+    page.evaluate((f) => {
+      const s = document.querySelector<HTMLElement>(".body .cm-scroller")!;
+      s.scrollTop = f * (s.scrollHeight - s.clientHeight);
+    }, f);
+  for (let i = 0; i < stops; i++) {
+    await jump(i / stops);
+    await frames();
+    for (let turn = 0; turn < 3; turn++) {
+      await page.mouse.wheel(0, 300);
+      await frames();
+    }
+  }
+  await jump(1);
+  await frames();
 }
 
 /** A deliberate busy loop: shows the check fails a step that blocks the main thread. Kept off, as it always fails. */
@@ -93,6 +130,23 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
     await views(page).getByRole("radio", { name: "Pretty" }).click();
     await expect(editor(page)).toContainText('"items": [');
     await scrollToEnd(page, "top");
+    await expect(editor(page)).toContainText(NEAR_THE_END);
+  });
+});
+
+// Step 3 as a reader would scroll all 4.8 million lines: 200 stops, each about
+// 24,000 lines on from the last, with three turns of the mouse wheel at each.
+// Off, as it fails (#58 review): CodeMirror's own measuring after each scroll
+// blocks for 50–80 ms once many places have been visited (36 tasks over 50 ms,
+// the longest 78 ms, on an M1 Pro; at 2x CPU throttling, as on CI, 30 stops
+// already fail). It walks its whole height map on every measure, and re-reads
+// the DOM selection (forcing layout) on each of up to five passes per frame
+// ("Viewport failed to stabilize"). Step 3's ten jumps don't get that far.
+test.fixme("3b. scrolling Pretty top to bottom, a stop at a time, with the mouse wheel", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await expectNoLongTasks(page, async () => {
+    await scrollThrough(page, 200);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
 });
@@ -153,6 +207,41 @@ test("5b. finding a term that matches only near the end, without requestIdleCall
   });
 });
 
+// Find previous from the top wraps round and works back from the end (#114).
+test("5c. finding the previous match, near the end", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await expectNoLongTasks(page, async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+    await field.fill(NEAR_THE_END);
+    await field.press("Shift+Enter");
+    await expect(page.locator(".cm-searchMatch-selected")).toHaveText(NEAR_THE_END);
+  });
+});
+
+// Selecting the next occurrence (Mod-d) and every occurrence (Mod-Shift-l) of
+// the selection (the first pet's name, which occurs once): each goes through
+// the whole body, and round, from the top.
+test("5d. selecting the next occurrence and every occurrence", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await page.getByRole("button", { name: "Search" }).click();
+  const bar = page.getByRole("search", { name: "Find in editor" });
+  const field = bar.getByRole("textbox", { name: "Find" });
+  await field.fill('"pet-0"');
+  await field.press("Enter");
+  await expect(page.locator(".cm-searchMatch-selected")).toHaveText('"pet-0"');
+  await editor(page).focus();
+  await expectNoLongTasks(page, async () => {
+    for (const key of ["ControlOrMeta+d", "ControlOrMeta+Shift+l"]) {
+      await page.keyboard.press(key);
+      await expect(bar.getByText("Searching…")).toBeVisible();
+      await expect(bar.getByText("Searching…")).toHaveCount(0);
+    }
+  });
+});
+
 test("6. Fold all is turned off at this size", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
@@ -167,8 +256,9 @@ test("6. Fold all is turned off at this size", async ({ page }) => {
   await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(0);
 });
 
-// At the limit (just under it), Fold all parses in pieces and its last step,
-// which builds the whole tree and folds, stays under 50 ms (#115).
+// At the limit (just under it), Fold all parses in slices and stages, then
+// hands the tree to the view and folds, each step under 50 ms (#115). The
+// limit is set by this step (src/lib/codemirror/foldAll.ts FOLD_ALL_LIMIT).
 test("6b. Fold all on a body at its size limit", async ({ page }) => {
   await openApp(page);
   // Pretty text is about 1.76 times the minified body: this keeps it just under the limit.
@@ -205,6 +295,25 @@ test("8. copying the body", async ({ page }) => {
     await expect(page.getByText("Response body copied")).toBeVisible();
   });
   expect(await mockState(page, "bodyCopies")).toHaveLength(1);
+});
+
+// Copy path reads the body up to the caret, which here is nearly all 88 MB of
+// Pretty text, a slice at a time and without joining it into a string.
+test("8b. Copy path near the end of the 50 MB body", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await page.getByRole("button", { name: "Search" }).click();
+  const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+  await field.fill(NEAR_THE_END);
+  await field.press("Enter");
+  const match = page.locator(".cm-searchMatch-selected");
+  await expect(match).toHaveText(NEAR_THE_END);
+  await expectNoLongTasks(page, async () => {
+    await match.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy path" }).click();
+    await expect(page.getByText(/^Copied \$\.items\[\d+\]\.name$/)).toBeVisible();
+  });
+  expect(await mockState(page, "clipboardWrites")).toEqual([expect.stringMatching(/^\$\.items\[\d{6}\]\.name$/)]);
 });
 
 test("9. sending the 25 MB image and opening Preview", async ({ page }) => {

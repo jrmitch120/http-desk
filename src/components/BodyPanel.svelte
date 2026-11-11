@@ -14,7 +14,10 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import ResponseFilter from "./ResponseFilter.svelte";
   import { addMenuItems } from "../lib/editMenu";
-  import { pathAt } from "../lib/jsonpath";
+  import { pathInPieces } from "../lib/jsonpath";
+  import { writeClipboard } from "../lib/clipboard";
+  import { errorMessage } from "../lib/api";
+  import type { Text } from "@codemirror/state";
   import type { HttpResponse } from "../lib/types";
   import { formatShortcut, type Shortcut } from "../lib/platform";
 
@@ -70,16 +73,21 @@
     if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
     const ed = editor;
     const offset = ed.caretForMenu(e);
-    addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) }]);
+    const doc = ed.document();
+    if (doc) addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => void copyPath(doc, offset) }]);
   }
-  async function copyText(text: string, message: string) {
-    await navigator.clipboard.writeText(text);
-    app.toast("success", message);
-  }
-  function copyPath(text: string, offset: number) {
-    const path = pathAt(text, offset);
-    if (path === null) app.toast("error", "There's no JSON value at the cursor");
-    else void copyText(path, `Copied ${path}`);
+  // The body is read up to the caret a slice at a time (a large one takes a
+  // moment), so the path goes on the clipboard through the shell: a webview
+  // lets a page write to it only while handling a click.
+  async function copyPath(doc: Text, offset: number) {
+    const path = await pathInPieces(doc.iter(), offset);
+    if (path === null) return app.toast("error", "There's no JSON value at the cursor");
+    try {
+      await writeClipboard(path);
+      app.toast("success", `Copied ${path}`);
+    } catch (e) {
+      app.toast("error", `Couldn't copy the path: ${errorMessage(e)}`);
+    }
   }
 </script>
 
@@ -113,7 +121,7 @@
 {/if}
 <!-- Adds Copy path to the body editor's edit menu. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="body" oncontextmenu={bodyMenu}>
+<div class="body" class:long-lines={view.longLines} oncontextmenu={bodyMenu}>
   {#if mountPreview}
     <div class="pane" class:hidden={!showingPreview}>
       {#if view.previewError}
@@ -183,11 +191,12 @@
     min-height: 0;
     border-top: 1px solid var(--border);
   }
-  /* Wrapped, a line breaks at any character, so its rows are as full as
-     CodeMirror assumes when it estimates the height of what it hasn't drawn.
-     Broken at punctuation instead, a long minified body's rows come out a third
-     shorter: the line grows as it's scrolled, and its end can't be reached. */
-  .body :global(.cm-content.cm-lineWrapping) {
+  /* Wrapped, a very long line (BodyView.longLines) breaks at any character, so
+     its rows are as full as CodeMirror assumes when it estimates the height of
+     what it hasn't drawn. Broken at punctuation instead, a long minified body's
+     rows come out a third shorter: the line grows as it's scrolled, and its end
+     can't be reached. */
+  .body.long-lines :global(.cm-content.cm-lineWrapping) {
     word-break: break-all;
   }
   /* Raw and Preview are stacked in the same place; the hidden one keeps its

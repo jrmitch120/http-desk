@@ -1196,7 +1196,7 @@ class AppStore {
   /** Lets the shell drop a response no tab shows any more (closed, replaced or
    *  gone with the workspace); until then it keeps the body for Save, Hex,
    *  Pretty and the filter. A failure only means it was already gone. The
-   *  editor documents built from it go too. */
+   *  editor documents and the preview made from it go too. */
   private releaseResponse(response: HttpResponse | undefined) {
     if (!response) return;
     dropDocs(response.id);

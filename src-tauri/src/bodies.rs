@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use base64::Engine;
 use httpdesk_core::body_format::ResponseKind;
 use httpdesk_core::exec;
 
@@ -31,21 +32,23 @@ impl KeptBody {
     pub(crate) fn text(&self) -> Option<String> {
         exec::body_text(&self.bytes, self.content_type.as_deref(), self.kind)
     }
+
+    /// What Copy body puts on the clipboard: the body's text, decoded the way
+    /// the viewer shows it (its charset, else UTF-8), or base64 when its kind
+    /// is binary.
+    pub(crate) fn clipboard_text(&self) -> String {
+        self.text().unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode(&self.bytes))
+    }
 }
 
 impl KeptBodies {
     /// Keeps `body` as response `id`'s until it's released.
-    pub(crate) fn push(&mut self, id: String, body: Vec<u8>, content_type: Option<String>, kind: ResponseKind) {
-        self.entries.insert(id, KeptBody { bytes: body.into(), content_type, kind });
+    pub(crate) fn push(&mut self, id: String, body: KeptBody) {
+        self.entries.insert(id, body);
     }
 
-    /// The body's bytes.
-    pub(crate) fn get(&self, id: &str) -> Option<Arc<[u8]>> {
-        self.entries.get(id).map(|s| s.bytes.clone())
-    }
-
-    /// The body with its content type and kind.
-    pub(crate) fn get_kept(&self, id: &str) -> Option<KeptBody> {
+    /// Response `id`'s kept body.
+    pub(crate) fn get(&self, id: &str) -> Option<KeptBody> {
         self.entries.get(id).cloned()
     }
 

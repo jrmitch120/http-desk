@@ -16,12 +16,39 @@ export const PIECE_BYTES = 256 * 1024;
 /** A line break as CodeMirror reads one by default. */
 const LINE_BREAK = /\r\n?|\n/;
 
+/** The length of each document's longest line, noted as it's built. */
+const longest = new WeakMap<Text, number>();
+
+/**
+ * The length of `doc`'s longest line: noted when the document was built here,
+ * else measured once (going through every line).
+ */
+export function longestLine(doc: Text): number {
+  let n = longest.get(doc);
+  if (n === undefined) {
+    n = 0;
+    for (const lines = doc.iterLines(); !lines.next().done; ) n = Math.max(n, lines.value.length);
+    longest.set(doc, n);
+  }
+  return n;
+}
+
+/** A small text as a document, built at once. */
+export function textDoc(text: string): Text {
+  const lines = text.split(LINE_BREAK);
+  const doc = Text.of(lines);
+  longest.set(doc, lines.reduce((n, l) => Math.max(n, l.length), 0));
+  return doc;
+}
+
 export class DocBuilder {
   #decoder = new TextDecoder();
   /** The lines so far, all complete; null until the first line ends. */
   #doc: Text | null = null;
   /** The line still being read (it may continue in the next piece). */
   #line = "";
+  /** The longest line so far. */
+  #longest = 0;
   /** The last piece ended in `\r`, which is a break whether or not `\n` follows. */
   #cr = false;
 
@@ -38,6 +65,7 @@ export class DocBuilder {
     lines[0] = this.#line + lines[0];
     this.#line = "";
     this.#append(lines);
+    longest.set(this.#doc!, this.#longest);
     return this.#doc!;
   }
 
@@ -61,6 +89,7 @@ export class DocBuilder {
 
   /** Appends `lines`, each after a line break (the first one starts the document). */
   #append(lines: string[]) {
+    for (const l of lines) if (l.length > this.#longest) this.#longest = l.length;
     this.#doc = this.#doc ? this.#doc.append(Text.of(["", ...lines])) : Text.of(lines);
   }
 }

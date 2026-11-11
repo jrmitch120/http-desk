@@ -1,7 +1,7 @@
-import { EditorState } from "@codemirror/state";
-import { SearchQuery } from "@codemirror/search";
+import { EditorSelection, EditorState, type StateCommand } from "@codemirror/state";
+import { SearchQuery, selectNextOccurrence, selectSelectionMatches } from "@codemirror/search";
 import { describe, expect, it } from "vitest";
-import { nextMatch, previousMatch } from "./findInPieces";
+import { allOccurrences, nextMatch, nextOccurrence, previousMatch } from "./findInPieces";
 
 /** Runs a search to the end, counting the pieces it took. */
 function drain<T>(search: Generator<unknown, T>): { result: T; pieces: number } {
@@ -76,5 +76,69 @@ describe("previousMatch", () => {
 
   it("returns null when nothing matches", () => {
     expect(drain(previousMatch(doc("x".repeat(100)), q("needle"), 50, 10)).result).toBeNull();
+  });
+});
+
+/** What CodeMirror's own `command` selects in `state`, or null if it does nothing. */
+function cmSelects(state: EditorState, command: StateCommand): { from: number; to: number }[] | null {
+  let next: EditorState | null = null;
+  command({ state, dispatch: (tr) => (next = tr.state) });
+  return next ? (next as EditorState).selection.ranges.map((r) => ({ from: r.from, to: r.to })) : null;
+}
+
+const withSelection = (text: string, ranges: [number, number][]) =>
+  EditorState.create({
+    doc: text,
+    selection: EditorSelection.create(ranges.map(([a, h]) => EditorSelection.range(a, h))),
+    extensions: EditorState.allowMultipleSelections.of(true),
+  });
+
+describe("nextOccurrence (Mod-d)", () => {
+  const cases: [string, [number, number][]][] = [
+    ["cat dog cat dog cat", [[0, 3]]],
+    ["cat dog cat dog cat", [[0, 3], [8, 11]]],
+    ["cat dog cat dog cat", [[16, 19]]], // wraps round
+    ["concat cat scatter cat", [[7, 10]]], // a whole word finds whole words only
+    ["aaaaaaa", [[0, 2]]], // occurrences don't overlap
+    ["at cat at", [[4, 6]]], // part of a word finds parts too
+    ["only one here", [[5, 8]]],
+  ];
+  it("adds what CodeMirror's selectNextOccurrence adds, whatever the pieces", () => {
+    for (const [text, ranges] of cases) {
+      const state = withSelection(text, ranges);
+      const expected = cmSelects(state, selectNextOccurrence);
+      const sel = state.selection.ranges;
+      for (const size of [1, 2, 3, 7, 100]) {
+        const found = drain(nextOccurrence(state, state.sliceDoc(sel[0].from, sel[0].to), size)).result;
+        const added = found && state.selection.addRange(EditorSelection.range(found.from, found.to), false);
+        const got = added ? added.ranges.map((r) => ({ from: r.from, to: r.to })) : null;
+        expect(got, `${text} ${JSON.stringify(ranges)} in ${size}-character pieces`).toEqual(expected);
+      }
+    }
+  });
+});
+
+describe("allOccurrences (Mod-Shift-l)", () => {
+  it("selects what CodeMirror's selectSelectionMatches selects, whatever the pieces", () => {
+    const cases: [string, [number, number]][] = [
+      ["cat dog cat dog cat", [8, 11]],
+      ["aaaaaaa", [2, 4]],
+      ["xx needle xx needle", [3, 9]],
+    ];
+    for (const [text, sel] of cases) {
+      const state = withSelection(text, [sel]);
+      const expected = cmSelects(state, selectSelectionMatches);
+      for (const size of [1, 2, 3, 100]) {
+        const got = drain(allOccurrences(state, size)).result;
+        expect(got && got.ranges, `${text} in ${size}-character pieces`).toEqual(expected);
+        if (got) expect(got.ranges[got.main].from).toBe(state.selection.main.from);
+      }
+    }
+  });
+
+  it("selects none past CodeMirror's 1000", () => {
+    const state = withSelection("ab ".repeat(1200), [[0, 2]]);
+    expect(cmSelects(state, selectSelectionMatches)).toBeNull();
+    expect(drain(allOccurrences(state, 50)).result).toBeNull();
   });
 });

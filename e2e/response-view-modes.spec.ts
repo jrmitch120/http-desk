@@ -1,7 +1,7 @@
 // Pretty is offered only where the core can format the body (JSON and XML).
 // For HTML or plain text it would show the same text as Raw, so it isn't there.
 import { expect, test, type Page } from "@playwright/test";
-import { mockState, openApp, openRequest, setMockResponse } from "./helpers";
+import { mockState, openApp, openRequest, setMockResponse, tab } from "./helpers";
 
 async function send(page: Page, response: string): Promise<void> {
   await openApp(page, `?response=${response}`);
@@ -143,6 +143,25 @@ test("a re-sent or closed preview's blob: URL is revoked", async ({ page }) => {
   await page.keyboard.press("Meta+W");
   await expect(img).toHaveCount(0);
   await expect.poll(() => loads(second)).toBe(false);
+});
+
+test("a preview is kept with its tab: switching away and back shows it again without fetching it", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await page.keyboard.press("Meta+Enter");
+  const img = page.getByRole("img", { name: "Response preview" });
+  await expect(img).toHaveAttribute("src", /^blob:/);
+  const url = (await img.getAttribute("src"))!;
+  const loads = (u: string) => page.evaluate((u) => fetch(u).then(() => true, () => false), u);
+
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await expect(img).toHaveCount(0);
+  expect(await loads(url)).toBe(true); // not revoked by switching away
+
+  await tab(page, "Get pet image").click();
+  await expect(img).toHaveAttribute("src", url);
+  await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBe(128);
+  expect(await mockState(page, "bodyRequests")).toEqual([{ id: "r2-1", view: "bytes" }]);
 });
 
 test("a plain-text response has no view switch, only its text", async ({ page }) => {

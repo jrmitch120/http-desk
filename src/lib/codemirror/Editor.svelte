@@ -186,9 +186,9 @@
   export function focus() {
     view?.focus();
   }
-  /** The document's text as shown. */
-  export function text(): string {
-    return view?.state.doc.toString() ?? "";
+  /** The document as shown (never turned into one string: it may be a large body). */
+  export function document(): Text | null {
+    return view?.state.doc ?? null;
   }
   /** Selects line `n` (1-based) and scrolls it into view, focusing the editor so the selection shows. */
   export function revealLine(n: number) {

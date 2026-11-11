@@ -7,17 +7,21 @@
 // or built twice for the same response.
 
 import { untrack } from "svelte";
-import { Text } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import { api, errorMessage } from "./api";
-import { buildDoc } from "./codemirror/docBuilder";
+import { buildDoc, longestLine, textDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
-import { keptDoc, loadDoc, slicedPause, type DocView } from "./responseDocs";
+import { keptDoc, keptPreview, loadDoc, loadPreview, type DocView, type Preview } from "./responseDocs";
+import { nextTask } from "./timeSlices";
 import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./types";
 
 export type BodyMode = "pretty" | "raw" | "preview";
 
-/** A small text (filter matches, a Hex dump, a message) as an editor document, built at once. */
-const textDoc = (text: string): Text => Text.of(text.split(/\r\n?|\n/));
+/**
+ * Lines longer than this are drawn in part when wrapped (CodeMirror's line
+ * gaps), the rest estimated as full rows of text.
+ */
+const LONG_LINE = 20_000;
 
 /** Typing pauses this long before the filter runs again on the same response. */
 export const FILTER_DEBOUNCE_MS = 120;
@@ -65,7 +69,7 @@ export class BodyView {
     $effect(() => this.#loadDoc());
     $effect(() => this.#runFilter());
     $effect(() => this.#loadPreview());
-    $effect(() => () => this.#revokePreview());
+    $effect(() => () => void (this.#destroyed = true));
   }
 
   readonly res = $derived(this.#input().res);
@@ -94,15 +98,15 @@ export class BodyView {
 
   // Preview loads the body from a `blob:` URL: its bytes fetched from the shell
   // by response id (never base64 or text from the send reply), typed with the
-  // response's content type. Fetched once per response, when Preview is first
-  // shown. A re-sent response's preview keeps showing the previous one until
-  // its own URL is made, and then the previous URL is revoked; the last one is
-  // revoked when the viewer goes (its tab is closed or switched away from).
+  // response's content type. Made once per tab and response, when Preview is
+  // first shown, and kept per tab (responseDocs), so switching tabs and back
+  // shows it again without fetching it. A re-sent response's preview keeps
+  // showing the previous one until its own URL is made. A URL is revoked when
+  // the tab's preview is replaced, or the tab releases its response (closed,
+  // replaced, or gone with the workspace).
 
-  /** The preview's `blob:` URL (or why the bytes couldn't be fetched), for the response it was made for. */
-  #preview = $state.raw<{ id: string; kind: ResponseKind; url?: string; error?: string } | null>(null);
-  /** The response whose bytes are being fetched for Preview. */
-  #previewFetching: string | null = null;
+  /** The preview shown (or why the bytes couldn't be fetched), for the response it was made for. */
+  #preview = $state.raw<({ id: string; kind: ResponseKind } & Preview) | null>(null);
   /** The `blob:` URL Preview shows (the previous response's while this one's is made, if it's the same kind); null until there's one. */
   readonly previewUrl = $derived(this.#preview?.kind === this.kind ? (this.#preview.url ?? null) : null);
   /** Why this response's bytes couldn't be fetched for Preview. */
@@ -112,32 +116,25 @@ export class BodyView {
     const res = this.res;
     if (!res || !this.showingPreview) return;
     const { id } = res;
-    if (this.#previewFetching === id || untrack(() => this.#preview?.id === id)) return;
-    this.#previewFetching = id;
+    const { tabId } = this.#input();
+    if (untrack(() => this.#preview?.id === id)) return;
     const { kind } = this;
-    const type = res.contentType ?? "application/octet-stream";
-    const show = (next: { url?: string; error?: string }) => {
-      if (this.#previewFetching === id) this.#previewFetching = null;
-      if (this.#destroyed || this.res?.id !== id) {
-        if (next.url) URL.revokeObjectURL(next.url); // a newer response arrived first
-        return;
-      }
-      const old = this.#preview?.url;
-      this.#preview = { id, kind, ...next };
-      if (old) URL.revokeObjectURL(old);
+    const show = (preview: Preview) => {
+      if (!this.#destroyed && this.res?.id === id) this.#preview = { id, kind, ...preview };
     };
-    api.responseBody(id, "bytes").then(
-      (bytes) => show({ url: URL.createObjectURL(new Blob([bytes], { type })) }),
-      (e) => show({ error: `(${errorMessage(e)})` }),
-    );
+    const kept = keptPreview(tabId, id);
+    if (kept) return show(kept);
+    const type = res.contentType ?? "application/octet-stream";
+    void loadPreview(tabId, id, () =>
+      api.responseBody(id, "bytes").then(
+        (bytes) => ({ url: URL.createObjectURL(new Blob([bytes], { type })) }),
+        (e) => ({ error: `(${errorMessage(e)})` }),
+      ),
+    ).then(show);
   }
 
-  /** Set once the viewer is gone, so a fetch finishing afterwards makes no URL that outlives it. */
+  /** Set once the viewer is gone, so a preview made afterwards isn't shown by it. */
   #destroyed = false;
-  #revokePreview() {
-    this.#destroyed = true;
-    if (this.#preview?.url) URL.revokeObjectURL(this.#preview.url);
-  }
 
   // The editor's document, fetched from the shell by response id (never taken
   // from the send reply): the raw text or the Pretty JSON/XML from its lossless
@@ -171,7 +168,7 @@ export class BodyView {
     if (!res || !view) return;
     const { id } = res;
     const failed = (e: unknown) => textDoc(`(${errorMessage(e)})`);
-    const fetchDoc = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => buildDoc(bytes, slicedPause()));
+    const fetchDoc = (v: "raw" | "pretty") => api.responseBody(id, v).then((bytes) => buildDoc(bytes, nextTask));
     const raw = () => loadDoc(tabId, "raw", id, () => fetchDoc("raw").catch(failed));
     const loaded =
       view === "hex"
@@ -231,6 +228,13 @@ export class BodyView {
     const view = this.#docView ?? "raw";
     return this.#kept ?? (this.#shown?.view === view ? this.#shown.doc : null);
   });
+  /**
+   * Whether the document has lines CodeMirror draws only in part when wrapped
+   * (a minified body), which then break at any character: broken at
+   * punctuation, a row holds less than CodeMirror estimates, so the line grows
+   * as it's scrolled and its end can't be reached. Other text breaks between words.
+   */
+  readonly longLines = $derived(!!this.doc && longestLine(this.doc) > LONG_LINE);
 
   // Key completion: the body's shape summary, built once per response in the
   // core and fetched once when the filter box is first focused; every keystroke

@@ -68,7 +68,13 @@ fn pretty_text_is_refused_for_a_body_that_isnt_json_or_xml_or_doesnt_parse() {
     let text = send_get(&h, &serve_once("text/plain", b"hello".to_vec()));
     assert_eq!(fetch(&h, &text["id"], "pretty").unwrap_err(), json!("Response body isn't JSON or XML"));
 
-    let bad = send_get(&h, &serve_once("application/json", br#"{"id": 1, oops}"#.to_vec()));
-    let err = fetch(&h, &bad["id"], "pretty").unwrap_err();
-    assert!(err.as_str().unwrap().starts_with("Invalid JSON at line 1"), "{err}");
+    for (content_type, body) in [("application/json", r#"{"id": 1, oops}"#), ("application/xml", "<a><b></a>")] {
+        let bad = send_get(&h, &serve_once(content_type, body.as_bytes().to_vec()));
+        assert_eq!(
+            fetch(&h, &bad["id"], "pretty").unwrap_err(),
+            json!("Response body isn't JSON or XML"),
+            "{content_type}"
+        );
+        assert_eq!(fetch(&h, &bad["id"], "raw").unwrap(), body.as_bytes(), "{content_type}");
+    }
 }

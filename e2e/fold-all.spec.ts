@@ -15,7 +15,7 @@ async function showBody(page: Page, prettyBytes: number): Promise<void> {
   await page.evaluate((n) => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(n), jsonBytes);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
-  await expect(editor(page)).toContainText('"items": [', { timeout: 30_000 });
+  await expect(editor(page)).toContainText('"items": [', { timeout: 60_000 });
 }
 
 const editor = (page: Page) => page.locator(".body .cm-content");
@@ -24,7 +24,7 @@ const foldAll = (page: Page) => page.getByRole("button", { name: "Fold all", exa
 
 test("on a body under the limit, Fold all shows Folding… and then folds everything", async ({ page }) => {
   // Large enough to take a few hundred ms to parse, so "Folding…" shows.
-  await showBody(page, FOLD_ALL_LIMIT / 4);
+  await showBody(page, 3_000_000);
 
   await foldAll(page).click();
   await expect(page.getByRole("status").filter({ hasText: "Folding…" })).toBeVisible();
@@ -49,6 +49,7 @@ test("Ctrl-Alt-[ folds all in pieces too", async ({ page }) => {
 });
 
 test("on a body over the limit, Fold all is turned off and points to the filter; the gutter still folds", async ({ page }) => {
+  test.slow(); // a body the size of the perf test's
   await showBody(page, FOLD_ALL_LIMIT + 1_000_000);
 
   await expect(foldAll(page)).toBeDisabled();

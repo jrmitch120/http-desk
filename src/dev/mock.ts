@@ -8,6 +8,7 @@ import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { promptMasked, requestPrompts, segments } from "../lib/http";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
+import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
@@ -319,7 +320,7 @@ const releasedResponses: string[] = [];
 const bodyCopies: string[] = [];
 let settingsServed = false;
 /** The bodies the viewer fetched with `response_body`, in order. */
-let bodyRequests: { id: string; view: string }[] = [];
+let bodyRequests: { id: string; view: BodyFetchView }[] = [];
 let previewRequests = 0;
 let windowTitle: string | null = null;
 let windowCloseRequests = 0;
@@ -798,15 +799,15 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
 const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string; encoded?: { raw: Uint8Array; pretty: Uint8Array } }>();
 let responseCount = 0;
 
-/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise. */
+/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise (not JSON or XML, or doesn't parse). */
 function prettyText({ body, kind }: { body: string; kind: ResponseKind }): string {
-  if (kind === "xml") return formatXml(body, "pretty");
-  if (kind !== "json") throw "Response body isn't JSON or XML";
   try {
-    return formatJson(body, "pretty");
-  } catch (e) {
-    throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+    if (kind === "xml") return formatXml(body, "pretty");
+    if (kind === "json") return formatJson(body, "pretty");
+  } catch {
+    // reported as below, as the shell does
   }
+  throw "Response body isn't JSON or XML";
 }
 
 /** Binary response bodies by response id, as bytes, like the shell's stored bodies. */
@@ -1109,7 +1110,7 @@ mockIPC(
         }
       case "response_body": {
         // Like the shell: raw bytes (an ArrayBuffer), text as UTF-8.
-        const { responseId: id, view } = args as { responseId: string; view: "raw" | "pretty" | "bytes" };
+        const { responseId: id, view } = args as { responseId: string; view: BodyFetchView };
         bodyRequests.push({ id, view });
         await bodyReleased;
         if (view === "pretty") {
