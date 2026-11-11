@@ -798,15 +798,15 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
 const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string; encoded?: { raw: Uint8Array; pretty: Uint8Array } }>();
 let responseCount = 0;
 
-/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise. */
+/** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise (not JSON or XML, or doesn't parse). */
 function prettyText({ body, kind }: { body: string; kind: ResponseKind }): string {
-  if (kind === "xml") return formatXml(body, "pretty");
-  if (kind !== "json") throw "Response body isn't JSON or XML";
   try {
-    return formatJson(body, "pretty");
-  } catch (e) {
-    throw `Invalid JSON: ${e instanceof Error ? e.message : e}`;
+    if (kind === "xml") return formatXml(body, "pretty");
+    if (kind === "json") return formatJson(body, "pretty");
+  } catch {
+    // reported as below, as the shell does
   }
+  throw "Response body isn't JSON or XML";
 }
 
 /** Binary response bodies by response id, as bytes, like the shell's stored bodies. */

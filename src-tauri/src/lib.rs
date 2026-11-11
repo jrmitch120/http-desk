@@ -736,8 +736,8 @@ enum BodyView {
 /// `ArrayBuffer` in the webview, not a JSON string): text as UTF-8. Decoding
 /// and formatting run on the blocking pool. Rejects when the body has been
 /// released, isn't text (its kind is binary), or (for Pretty) isn't JSON or
-/// XML or doesn't parse; the viewer shows the raw text instead of a Pretty one
-/// it can't have.
+/// XML or doesn't parse, which reports "isn't JSON or XML" either way; the
+/// viewer shows the raw text instead of a Pretty one it can't have.
 #[tauri::command]
 async fn response_body<R: tauri::Runtime>(
     app: AppHandle<R>,
@@ -750,8 +750,8 @@ async fn response_body<R: tauri::Runtime>(
         let bytes = match view {
             BodyView::Raw => text()?.into_bytes(),
             BodyView::Pretty => body_format::pretty_response(body.content_type.as_deref(), &text()?)
+                .and_then(Result::ok)
                 .ok_or("Response body isn't JSON or XML")?
-                .map_err(err)?
                 .into_bytes(),
             BodyView::Bytes => body.bytes.to_vec(),
         };
