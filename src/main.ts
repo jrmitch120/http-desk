@@ -1,3 +1,5 @@
+// First, so CodeMirror finds it when its modules load.
+import "./lib/codemirror/parseSlices";
 import { mount } from "svelte";
 import "./fonts/fonts.css";
 import "./app.css";
