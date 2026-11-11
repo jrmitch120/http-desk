@@ -353,12 +353,12 @@ fn format_body_beautifies_xml_and_rejects_xml_that_doesnt_nest() {
 fn hexdump_renders_a_stored_body_by_response_id_and_reports_an_expired_one() {
     let h = Harness::new();
     // What send_request does with a response's body.
-    h.app.state::<super::AppState>().bodies.lock().unwrap().push(
-        "resp-1".into(),
-        b"\x89PNG\r\n\x1a\n".to_vec(),
-        Some("image/png".into()),
-        httpdesk_core::body_format::ResponseKind::Image,
-    );
+    let body = super::KeptBody {
+        bytes: b"\x89PNG\r\n\x1a\n".as_slice().into(),
+        content_type: Some("image/png".into()),
+        kind: httpdesk_core::body_format::ResponseKind::Image,
+    };
+    h.app.state::<super::AppState>().bodies.lock().unwrap().push("resp-1".into(), body);
 
     let dump = h.ok("hexdump", json!({ "responseId": "resp-1" }));
     assert_eq!(dump, json!(format!("00000000  89 50 4e 47 0d 0a 1a 0a{}  .PNG....", " ".repeat(24))));

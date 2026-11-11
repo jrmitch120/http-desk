@@ -4,6 +4,7 @@
 //   samples/jetbrains.http  JetBrains syntax samples
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
+import type { BodyFetchView } from "../src/lib/api";
 
 /**
  * Loads the app and waits for the mocked workspace tree to appear.
@@ -99,7 +100,7 @@ export interface MockState {
   /** Each folder's own environments below the root, as last saved, by folder ("api"). */
   folderPairs: Record<string, { shared: unknown[]; environments: { name: string; variables: { name: string; value: string; secret: boolean }[] }[] }>;
   /** The bodies the viewer fetched with `response_body`, in order: response id and view. */
-  bodyRequests: { id: string; view: "raw" | "pretty" | "bytes" }[];
+  bodyRequests: { id: string; view: BodyFetchView }[];
   /** How many times the resolved preview called `preview_request`. */
   previewRequests: number;
   /** Whether the app has been given its settings yet. */
