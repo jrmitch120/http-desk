@@ -66,6 +66,8 @@ test("Copy copies the filtered text and Save writes the full body", async ({ pag
   await expect.poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)).toEqual([
     "[\n  1234567890123456789,\n  9007199254740993\n]",
   ]);
+  await expect(page.getByText("Filter matches copied")).toBeVisible();
+  expect(await mockState(page, "bodyCopies")).toEqual([]); // the matches, not the body through the shell
 
   await page.getByRole("button", { name: "Save body to file" }).click();
   const saved = () => mockState(page, "savedBodies");
