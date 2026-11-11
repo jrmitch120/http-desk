@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
   import { Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
-  import { EditorView, keymap } from "@codemirror/view";
+  import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { foldAll, foldEffect, foldedRanges, forceParsing, unfoldAll } from "@codemirror/language";
+  import { foldEffect, foldedRanges, forceParsing, unfoldAll } from "@codemirror/language";
+  import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
 
   interface Props {
@@ -25,8 +26,12 @@
     onsend?: () => void;
     /** Extra extensions, fixed at mount. */
     extensions?: Extension;
+    /** Out: whether Fold all is parsing the document before it folds. */
+    folding?: boolean;
+    /** Out: whether the document is small enough for Fold all (`foldAll.ts`). */
+    canFoldAll?: boolean;
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [] }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created:
@@ -95,7 +100,18 @@
           baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
-          Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => (onsend ? (onsend(), true) : false) }])),
+          Prec.highest(
+            keymap.of([
+              { key: "Mod-Enter", run: () => (onsend ? (onsend(), true) : false) },
+              // Fold all's key (CodeMirror's folds at once): in pieces, and not above the limit.
+              { key: "Ctrl-Alt-[", run: () => (fold(true), true) },
+            ]),
+          ),
+          // Also when the whole state is replaced.
+          ViewPlugin.define((v) => {
+            canFoldAll = canFoldAllOf(v.state.doc.length);
+            return { update: (u) => void (u.docChanged && (canFoldAll = canFoldAllOf(u.state.doc.length))) };
+          }),
           extensions,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
@@ -149,8 +165,23 @@
   export function openSearch() {
     if (view) openSearchPanel(view);
   }
+  /** Bumped to drop a Fold all still parsing (Unfold all, or another Fold all). */
+  let foldRun = 0;
+  /** Fold all (in pieces, showing `folding` meanwhile; nothing above the limit) or Unfold all. */
   export function fold(all: boolean) {
-    if (view) (all ? foldAll : unfoldAll)(view);
+    const v = view;
+    if (!v) return;
+    const run = ++foldRun;
+    if (!all) {
+      folding = false;
+      unfoldAll(v);
+      return;
+    }
+    if (!canFoldAllOf(v.state.doc.length)) return;
+    folding = true;
+    void foldAllInPieces(v, () => run !== foldRun).finally(() => {
+      if (run === foldRun) folding = false;
+    });
   }
   export function focus() {
     view?.focus();

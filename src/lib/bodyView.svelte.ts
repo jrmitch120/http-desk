@@ -64,6 +64,8 @@ export class BodyView {
     this.#input = input;
     $effect(() => this.#loadDoc());
     $effect(() => this.#runFilter());
+    $effect(() => this.#loadPreview());
+    $effect(() => () => this.#revokePreview());
   }
 
   readonly res = $derived(this.#input().res);
@@ -85,11 +87,57 @@ export class BodyView {
     if (mode === "preview" && !this.canPreview) return this.canPretty ? "pretty" : "raw";
     return mode;
   });
-  readonly dataUrl = $derived(this.res?.bodyBase64 ? `data:${this.res.contentType ?? "application/octet-stream"};base64,${this.res.bodyBase64}` : null);
-  /** Whether Preview shows the body itself: HTML from its text, other kinds from base64 (too large a body has none, so it shows Hex). */
-  readonly showingPreview = $derived(this.effectiveMode === "preview" && (this.kind === "html" || !!this.dataUrl));
+  /** Whether Preview shows the body itself (any kind that has a preview, at any size). */
+  readonly showingPreview = $derived(this.effectiveMode === "preview");
   /** Whether a preview may stay mounted while hidden. Audio and video don't, so switching away stops them playing. */
   readonly previewStaysMounted = $derived(this.kind !== "media");
+
+  // Preview loads the body from a `blob:` URL: its bytes fetched from the shell
+  // by response id (never base64 or text from the send reply), typed with the
+  // response's content type. Fetched once per response, when Preview is first
+  // shown. A re-sent response's preview keeps showing the previous one until
+  // its own URL is made, and then the previous URL is revoked; the last one is
+  // revoked when the viewer goes (its tab is closed or switched away from).
+
+  /** The preview's `blob:` URL (or why the bytes couldn't be fetched), for the response it was made for. */
+  #preview = $state.raw<{ id: string; kind: ResponseKind; url?: string; error?: string } | null>(null);
+  /** The response whose bytes are being fetched for Preview. */
+  #previewFetching: string | null = null;
+  /** The `blob:` URL Preview shows (the previous response's while this one's is made, if it's the same kind); null until there's one. */
+  readonly previewUrl = $derived(this.#preview?.kind === this.kind ? (this.#preview.url ?? null) : null);
+  /** Why this response's bytes couldn't be fetched for Preview. */
+  readonly previewError = $derived(this.#preview?.id === this.res?.id ? (this.#preview?.error ?? null) : null);
+
+  #loadPreview() {
+    const res = this.res;
+    if (!res || !this.showingPreview) return;
+    const { id } = res;
+    if (this.#previewFetching === id || untrack(() => this.#preview?.id === id)) return;
+    this.#previewFetching = id;
+    const { kind } = this;
+    const type = res.contentType ?? "application/octet-stream";
+    const show = (next: { url?: string; error?: string }) => {
+      if (this.#previewFetching === id) this.#previewFetching = null;
+      if (this.#destroyed || this.res?.id !== id) {
+        if (next.url) URL.revokeObjectURL(next.url); // a newer response arrived first
+        return;
+      }
+      const old = this.#preview?.url;
+      this.#preview = { id, kind, ...next };
+      if (old) URL.revokeObjectURL(old);
+    };
+    api.responseBody(id, "bytes").then(
+      (bytes) => show({ url: URL.createObjectURL(new Blob([bytes], { type })) }),
+      (e) => show({ error: `(${errorMessage(e)})` }),
+    );
+  }
+
+  /** Set once the viewer is gone, so a fetch finishing afterwards makes no URL that outlives it. */
+  #destroyed = false;
+  #revokePreview() {
+    this.#destroyed = true;
+    if (this.#preview?.url) URL.revokeObjectURL(this.#preview.url);
+  }
 
   // The editor's document, fetched from the shell by response id (never taken
   // from the send reply): the raw text or the Pretty JSON/XML from its lossless
@@ -104,7 +152,7 @@ export class BodyView {
   /** The document the editor shows for the current view; null while the body shows as a preview. */
   readonly #docView = $derived.by<DocView | null>(() => {
     if (!this.res) return null;
-    if (this.isBinary) return this.effectiveMode === "preview" && this.dataUrl ? null : "hex";
+    if (this.isBinary) return this.effectiveMode === "preview" ? null : "hex";
     if (this.effectiveMode === "preview") return null;
     return this.effectiveMode === "pretty" && this.canPretty ? "pretty" : "raw";
   });

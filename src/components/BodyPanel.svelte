@@ -31,12 +31,15 @@
   let { res, view, mode = $bindable(), wrap = $bindable(), filter = $bindable() }: Props = $props();
 
   let editor: Editor | undefined = $state();
+  /** Fold all is parsing the body before it folds; and whether the body is small enough for Fold all at all. */
+  let folding = $state(false);
+  let canFoldAll = $state(true);
 
   const kind = $derived(view.kind);
   const isBinary = $derived(view.isBinary);
   const effectiveMode = $derived(view.effectiveMode);
   const filtered = $derived(view.filtered);
-  const dataUrl = $derived(view.dataUrl);
+  const previewUrl = $derived(view.previewUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
 
   // Raw and Preview are each built the first time they're shown for a response,
@@ -93,7 +96,11 @@
   {#if effectiveMode !== "preview"}
     <button class="icon-btn" aria-label="Search" use:tooltip={`Search (${formatShortcut(SEARCH)})`} onclick={() => editor?.openSearch()}><Icon name="search" size={14} /></button>
     {#if kind === "json" || kind === "xml"}
-      <button class="icon-btn" aria-label="Fold all" use:tooltip onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+      {#if folding}<span class="folding muted" role="status"><span class="spinner"></span>Folding…</span>{/if}
+      <!-- Above the limit, folding everything would freeze the window; the filter narrows a large body instead. -->
+      <span class="tip" use:tooltip={canFoldAll ? "" : view.canFilter ? "Too large to fold all. Use the filter to narrow it down" : "Too large to fold all"}>
+        <button class="icon-btn" aria-label="Fold all" use:tooltip={canFoldAll ? undefined : null} disabled={!canFoldAll || folding} onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
+      </span>
       <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
     {/if}
     <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
@@ -109,15 +116,19 @@
 <div class="body" oncontextmenu={bodyMenu}>
   {#if mountPreview}
     <div class="pane" class:hidden={!showingPreview}>
-      {#if kind === "html"}
-        <iframe title="HTML preview" sandbox="" srcdoc={res.bodyText ?? ""}></iframe>
+      {#if view.previewError}
+        <div class="empty-state small">{view.previewError}</div>
+      {:else if !previewUrl}
+        <div class="empty-state small" role="status"><span class="spinner"></span>Loading…</div>
+      {:else if kind === "html"}
+        <iframe title="HTML preview" sandbox="" src={previewUrl}></iframe>
       {:else if kind === "image"}
-        <div class="preview-img"><img src={dataUrl} alt="Response preview" /></div>
+        <div class="preview-img"><img src={previewUrl} alt="Response preview" /></div>
       {:else if kind === "pdf"}
-        <iframe title="PDF preview" src={dataUrl}></iframe>
+        <iframe title="PDF preview" src={previewUrl}></iframe>
       {:else if kind === "media"}
         <div class="preview-img">
-          {#if ct.startsWith("audio/")}<audio controls src={dataUrl}></audio>{:else}<video controls src={dataUrl}><track kind="captions" /></video>{/if}
+          {#if ct.startsWith("audio/")}<audio controls src={previewUrl}></audio>{:else}<video controls src={previewUrl}><track kind="captions" /></video>{/if}
         </div>
       {/if}
     </div>
@@ -129,7 +140,7 @@
       {:else if !view.doc}
         <div class="empty-state small" role="status"><span class="spinner"></span>Preparing…</div>
       {:else}
-        <Editor bind:this={editor} doc={view.doc} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
+        <Editor bind:this={editor} bind:folding bind:canFoldAll doc={view.doc} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}
     </div>
   {/if}
@@ -154,6 +165,12 @@
     display: flex;
     padding: 0 var(--bar-pad-end) var(--bar-pad-y) var(--bar-pad-start);
     flex: none;
+  }
+  .folding {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
   }
   .lang {
     font-size: 11px;

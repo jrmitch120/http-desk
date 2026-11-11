@@ -6,8 +6,9 @@
 // Steps that can't pass yet are `test.fixme`, each naming the ticket that
 // switches it on. Run with `pnpm test:perf`.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, tab } from "../helpers";
+import { mockState, openApp, openRequest, tab } from "../helpers";
 import { expectNoLongTasks } from "./longtasks";
+import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
 
 /** The 50 MB body's first item, as Raw shows it. */
 const RAW_START = '{"items":[{"id":1000000000987654321,';
@@ -96,8 +97,7 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
   });
 });
 
-// Fails until #114 (Find runs in pieces).
-test.fixme("4. finding a term that doesn't match", async ({ page }) => {
+test("4. finding a term that doesn't match", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
@@ -105,13 +105,14 @@ test.fixme("4. finding a term that doesn't match", async ({ page }) => {
     const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
     await field.fill("no-such-pet");
     await field.press("Enter");
+    // Through the whole body and round again, a piece at a time.
+    await expect(page.getByText("Searching…")).toBeVisible();
     await expect(page.getByText("Searching…")).toHaveCount(0);
     await expect(page.locator(".cm-searchMatch")).toHaveCount(0);
   });
 });
 
-// Fails until #114 (Find runs in pieces).
-test.fixme("5. finding a term that matches only near the end", async ({ page }) => {
+test("5. finding a term that matches only near the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
@@ -123,8 +124,7 @@ test.fixme("5. finding a term that matches only near the end", async ({ page }) 
   });
 });
 
-// Fails until #115 (Fold all runs in pieces, with a measured size limit).
-test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
+test("6. Fold all is turned off at this size", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   const foldAll = page.getByRole("button", { name: "Fold all", exact: true });
@@ -136,6 +136,24 @@ test.fixme("6. Fold all is turned off at this size", async ({ page }) => {
   });
   await expect(foldAll).toBeDisabled();
   await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(0);
+});
+
+// At the limit (just under it), Fold all parses in pieces and its last step,
+// which builds the whole tree and folds, stays under 50 ms (#115).
+test("6b. Fold all on a body at its size limit", async ({ page }) => {
+  await openApp(page);
+  // Pretty text is about 1.76 times the minified body: this keeps it just under the limit.
+  const jsonBytes = Math.floor(FOLD_ALL_LIMIT / 1.77);
+  await page.evaluate((n) => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(n), jsonBytes);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await sendAndShowPretty(page);
+  const foldAll = page.getByRole("button", { name: "Fold all", exact: true });
+  await expect(foldAll).toBeEnabled();
+  await expectNoLongTasks(page, async () => {
+    await foldAll.click();
+    await expect(page.locator(".body .cm-foldPlaceholder")).toHaveCount(1);
+    await expect(page.getByText("Folding…")).toHaveCount(0);
+  });
 });
 
 test("7. switching tabs away and back", async ({ page }) => {
@@ -150,19 +168,17 @@ test("7. switching tabs away and back", async ({ page }) => {
   });
 });
 
-// Fails until #111 (Copy body goes through the shell).
-test.fixme("8. copying the body", async ({ page }) => {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+test("8. copying the body", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
     await page.getByRole("button", { name: "Copy body" }).click();
     await expect(page.getByText("Response body copied")).toBeVisible();
   });
+  expect(await mockState(page, "bodyCopies")).toHaveLength(1);
 });
 
-// Fails until #112 (Preview uses blob: URLs).
-test.fixme("9. sending the 25 MB image and opening Preview", async ({ page }) => {
+test("9. sending the 25 MB image and opening Preview", async ({ page }) => {
   await prepare(page, "Get pet image");
   await expectNoLongTasks(page, async () => {
     await page.keyboard.press("Meta+Enter");

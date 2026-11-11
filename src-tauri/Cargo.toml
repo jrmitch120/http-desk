@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.23.1"
 dunce = "1.0.5"
 httpdesk-core = { path = "../crates/httpdesk-core" }
 notify-debouncer-mini = "0.7.0"

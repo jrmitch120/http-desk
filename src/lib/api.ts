@@ -74,6 +74,12 @@ export const api = {
    */
   releaseResponse: (responseId: string) => invoke<void>("release_response", { responseId }),
   /**
+   * Copy body: the shell puts a stored body on the clipboard, text as text and
+   * binary as base64, so the webview never holds it. Rejects when the body has
+   * been released or the clipboard can't be written.
+   */
+  copyResponseBody: (responseId: string) => invoke<void>("copy_response_body", { responseId }),
+  /**
    * Re-lays out a body in the core without changing any token (numbers and
    * strings stay exactly as written). Rejects with a message for invalid input.
    */
