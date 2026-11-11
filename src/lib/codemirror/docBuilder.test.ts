@@ -3,7 +3,7 @@
 // whole text at once.
 import { describe, expect, it } from "vitest";
 import { EditorState, type Text } from "@codemirror/state";
-import { buildDoc, DocBuilder, PIECE_BYTES } from "./docBuilder";
+import { buildDoc, DocBuilder, longestLine, PIECE_BYTES, textDoc } from "./docBuilder";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
@@ -89,5 +89,19 @@ describe("buildDoc", () => {
     const doc = await buildDoc(bytes.buffer, async () => void pauses++);
     expectDoc(doc, text);
     expect(pauses).toBe(Math.ceil(bytes.length / PIECE_BYTES) - 1);
+  });
+});
+
+describe("longestLine", () => {
+  it("is noted while building, whatever the pieces split", async () => {
+    const long = "x".repeat(3 * PIECE_BYTES + 7); // across four pieces
+    const text = ["short", long, "also short"].join("\n");
+    const doc = await buildDoc(utf8(text).buffer, async () => {});
+    expect(longestLine(doc)).toBe(long.length);
+  });
+
+  it("is noted for a text built at once, and measured for any other document", () => {
+    expect(longestLine(textDoc("ab\r\nabcd\nabc"))).toBe(4);
+    expect(longestLine(expected("a\nabcde\n"))).toBe(5);
   });
 });

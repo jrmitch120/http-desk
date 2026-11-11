@@ -41,6 +41,22 @@ test("an unlisted status code's tooltip falls back to its class", async ({ page 
   await expect(page.getByRole("tooltip")).toContainText("4xx client error");
 });
 
+test("wrapped, only a body with very long lines breaks them at any character", async ({ page }) => {
+  const wordBreak = () => page.locator(".body .cm-content").evaluate((el) => getComputedStyle(el).wordBreak);
+  await openApp(page);
+  await page.evaluate(() => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(200_000));
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await page.getByRole("button", { name: "Wrap lines" }).click();
+  await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(1);
+  // Pretty: short lines, broken between words (CodeMirror's own wrapping).
+  expect(await wordBreak()).not.toBe("break-all");
+  // Raw: the minified body is one 200 KB line.
+  await page.getByRole("radiogroup", { name: "Response view" }).getByRole("radio", { name: "Raw" }).click();
+  await expect(page.locator(".body .cm-content")).toContainText('{"items":[');
+  await expect.poll(wordBreak).toBe("break-all");
+});
+
 test("word-wrap is remembered per tab and survives switching tabs", async ({ page }) => {
   await openApp(page);
   const wrapButton = page.getByRole("button", { name: "Wrap lines" });

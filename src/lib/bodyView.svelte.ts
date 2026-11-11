@@ -7,9 +7,9 @@
 // or built twice for the same response.
 
 import { untrack } from "svelte";
-import { Text } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import { api, errorMessage } from "./api";
-import { buildDoc } from "./codemirror/docBuilder";
+import { buildDoc, longestLine, textDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
 import { keptDoc, keptPreview, loadDoc, loadPreview, type DocView, type Preview } from "./responseDocs";
 import { slices } from "./timeSlices";
@@ -17,8 +17,11 @@ import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./type
 
 export type BodyMode = "pretty" | "raw" | "preview";
 
-/** A small text (filter matches, a Hex dump, a message) as an editor document, built at once. */
-const textDoc = (text: string): Text => Text.of(text.split(/\r\n?|\n/));
+/**
+ * Lines longer than this are drawn in part when wrapped (CodeMirror's line
+ * gaps), the rest estimated as full rows of text.
+ */
+const LONG_LINE = 20_000;
 
 /** Typing pauses this long before the filter runs again on the same response. */
 export const FILTER_DEBOUNCE_MS = 120;
@@ -225,6 +228,13 @@ export class BodyView {
     const view = this.#docView ?? "raw";
     return this.#kept ?? (this.#shown?.view === view ? this.#shown.doc : null);
   });
+  /**
+   * Whether the document has lines CodeMirror draws only in part when wrapped
+   * (a minified body), which then break at any character: broken at
+   * punctuation, a row holds less than CodeMirror estimates, so the line grows
+   * as it's scrolled and its end can't be reached. Other text breaks between words.
+   */
+  readonly longLines = $derived(!!this.doc && longestLine(this.doc) > LONG_LINE);
 
   // Key completion: the body's shape summary, built once per response in the
   // core and fetched once when the filter box is first focused; every keystroke
