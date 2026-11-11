@@ -3,6 +3,7 @@
 // "Copy path" in the body editor's context menu.
 import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, sentRequests } from "./helpers";
+import { largeJson } from "../src/dev/perfFixtures";
 
 async function send(page: Page): Promise<void> {
   await page.keyboard.press("Meta+Enter");
@@ -13,18 +14,8 @@ const filterBox = (page: Page) => page.getByRole("combobox", { name: "Filter wit
 const keyList = (page: Page) => page.getByRole("listbox", { name: "Key suggestions" });
 const bodyLines = (page: Page) => page.locator(".body .cm-content .cm-line");
 const shapeRequests = (page: Page) => mockState(page, "shapeRequests");
-const copied = (page: Page) => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied);
-
-/** Records clipboard writes instead of touching the real clipboard. */
-async function recordClipboard(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __copied: string[] };
-    w.__copied = [];
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: async (text: string) => void w.__copied.push(text), readText: async () => w.__copied.at(-1) ?? "" },
-    });
-  });
-}
+/** The texts the clipboard plugin wrote (Copy path writes through the shell). */
+const copied = (page: Page) => mockState(page, "clipboardWrites");
 
 test("typing a path suggests the keys of the items there, and accepting one completes it", async ({ page }) => {
   await openApp(page);
@@ -65,7 +56,6 @@ test("the shape summary is fetched once per response", async ({ page }) => {
 });
 
 test("Copy path gives the path of the value under the cursor in Pretty view", async ({ page }) => {
-  await recordClipboard(page);
   await openApp(page, "?response=nested");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
@@ -79,6 +69,28 @@ test("Copy path gives the path of the value under the cursor in Pretty view", as
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Copy path" }).click();
   await expect.poll(() => copied(page)).toEqual(["$.a['odd key'][0].b", "$.a['odd key']"]);
+});
+
+test("Copy path works near the end of a large body, read a piece at a time", async ({ page }) => {
+  const needle = "needle-near-the-end";
+  const jsonBytes = 4_000_000; // Pretty is about 7 MB
+  const last = (JSON.parse(largeJson(jsonBytes, needle).json) as { items: unknown[] }).items.length - 1;
+  await openApp(page);
+  await page.evaluate((n) => (window as unknown as { __mock: { preparePerf(jsonBytes: number): void } }).__mock.preparePerf(n), jsonBytes);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await expect(bodyLines(page).first()).toHaveText("{");
+
+  // Find puts the caret at the end of the last item's name.
+  await page.getByRole("button", { name: "Search" }).click();
+  const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+  await field.fill(needle);
+  await field.press("Enter");
+  await expect(page.locator(".cm-searchMatch-selected")).toHaveText(needle);
+  await page.locator(".cm-searchMatch-selected").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Copy path" }).click();
+  await expect.poll(() => copied(page)).toEqual([`$.items[${last}].name`]);
+  await expect(page.getByText(`Copied $.items[${last}].name`)).toBeVisible();
 });
 
 test("Copy path is disabled while a filter is on, and absent for non-JSON bodies", async ({ page }) => {

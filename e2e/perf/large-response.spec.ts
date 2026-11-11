@@ -218,6 +218,25 @@ test("8. copying the body", async ({ page }) => {
   expect(await mockState(page, "bodyCopies")).toHaveLength(1);
 });
 
+// Copy path reads the body up to the caret, which here is nearly all 88 MB of
+// Pretty text, a slice at a time and without joining it into a string.
+test("8b. Copy path near the end of the 50 MB body", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await page.getByRole("button", { name: "Search" }).click();
+  const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+  await field.fill(NEAR_THE_END);
+  await field.press("Enter");
+  const match = page.locator(".cm-searchMatch-selected");
+  await expect(match).toHaveText(NEAR_THE_END);
+  await expectNoLongTasks(page, async () => {
+    await match.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Copy path" }).click();
+    await expect(page.getByText(/^Copied \$\.items\[\d+\]\.name$/)).toBeVisible();
+  });
+  expect(await mockState(page, "clipboardWrites")).toEqual([expect.stringMatching(/^\$\.items\[\d{6}\]\.name$/)]);
+});
+
 test("9. sending the 25 MB image and opening Preview", async ({ page }) => {
   await prepare(page, "Get pet image");
   await expectNoLongTasks(page, async () => {

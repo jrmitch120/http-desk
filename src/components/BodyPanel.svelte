@@ -14,7 +14,10 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import ResponseFilter from "./ResponseFilter.svelte";
   import { addMenuItems } from "../lib/editMenu";
-  import { pathAt } from "../lib/jsonpath";
+  import { pathInPieces } from "../lib/jsonpath";
+  import { writeClipboard } from "../lib/clipboard";
+  import { errorMessage } from "../lib/api";
+  import type { Text } from "@codemirror/state";
   import type { HttpResponse } from "../lib/types";
   import { formatShortcut, type Shortcut } from "../lib/platform";
 
@@ -70,16 +73,21 @@
     if (!jsonBody || !editor || !(e.target as HTMLElement).closest?.(".cm-editor")) return;
     const ed = editor;
     const offset = ed.caretForMenu(e);
-    addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => copyPath(ed.text(), offset) }]);
+    const doc = ed.document();
+    if (doc) addMenuItems(e, [{ label: "Copy path", icon: "code", disabled: !!filtered, action: () => void copyPath(doc, offset) }]);
   }
-  async function copyText(text: string, message: string) {
-    await navigator.clipboard.writeText(text);
-    app.toast("success", message);
-  }
-  function copyPath(text: string, offset: number) {
-    const path = pathAt(text, offset);
-    if (path === null) app.toast("error", "There's no JSON value at the cursor");
-    else void copyText(path, `Copied ${path}`);
+  // The body is read up to the caret a slice at a time (a large one takes a
+  // moment), so the path goes on the clipboard through the shell: a webview
+  // lets a page write to it only while handling a click.
+  async function copyPath(doc: Text, offset: number) {
+    const path = await pathInPieces(doc.iter(), offset);
+    if (path === null) return app.toast("error", "There's no JSON value at the cursor");
+    try {
+      await writeClipboard(path);
+      app.toast("success", `Copied ${path}`);
+    } catch (e) {
+      app.toast("error", `Couldn't copy the path: ${errorMessage(e)}`);
+    }
   }
 </script>
 
