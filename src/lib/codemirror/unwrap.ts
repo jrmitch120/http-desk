@@ -16,8 +16,8 @@ import { longestLine } from "./docBuilder";
  * no gap reaches VP.MaxHorizGap below about 266,000 characters (measured on
  * #119: scrolled right in steps, a 250,000-character line shows its end and a
  * 300,000-character one shows nothing). This leaves room for a wider fallback
- * font (up to 10 px). The interface's zoom doesn't
- * change it: the whole webview zooms, so the width in CSS px stays the same.
+ * font (up to 10 px). The interface's zoom doesn't change it: the whole webview
+ * zooms, so the width in CSS px stays the same.
  */
 export const UNWRAP_LIMIT = 200_000;
 

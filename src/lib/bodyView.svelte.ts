@@ -11,7 +11,7 @@ import type { Text } from "@codemirror/state";
 import { api, errorMessage } from "./api";
 import { buildDoc, longestLine, textDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
-import { canUnwrap } from "./codemirror/unwrap";
+import { canUnwrap as canUnwrapOf } from "./codemirror/unwrap";
 import { keptDoc, keptPreview, loadDoc, loadPreview, type DocView, type Preview } from "./responseDocs";
 import { nextTask } from "./timeSlices";
 import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./types";
@@ -241,7 +241,7 @@ export class BodyView {
    * CodeMirror to draw that way (unwrap.ts). Otherwise it's shown wrapped,
    * whatever the tab's wrap choice, which is kept for the other views.
    */
-  readonly canUnwrap = $derived(!this.doc || canUnwrap(this.doc));
+  readonly canUnwrap = $derived(!this.doc || canUnwrapOf(this.doc));
 
   // Key completion: the body's shape summary, built once per response in the
   // core and fetched once when the filter box is first focused; every keystroke

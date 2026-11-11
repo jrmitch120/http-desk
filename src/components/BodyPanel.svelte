@@ -115,7 +115,7 @@
     {/if}
     <!-- A line too long to draw unwrapped (#119) keeps the body wrapped; `wrap` stays the tab's choice. -->
     <span class="tip" use:tooltip={view.canUnwrap ? "" : "Lines too long to unwrap"}>
-      <button class="icon-btn" class:active={wrapped} aria-label="Wrap lines" use:tooltip={view.canUnwrap ? undefined : null} disabled={!view.canUnwrap} onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
+      <button class="icon-btn" class:active={wrapped} aria-pressed={wrapped} aria-label="Wrap lines" use:tooltip={view.canUnwrap ? undefined : null} disabled={!view.canUnwrap} onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
     </span>
   {/if}
 </div>

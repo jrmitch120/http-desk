@@ -24,7 +24,7 @@ async function sendBody(page: Page, jsonBytes: number): Promise<void> {
   await expect(editor(page)).toContainText('"items": [');
 }
 
-test("a body with a line over the limit shows wrapped, with Wrap lines turned off and saying why", async ({ page }) => {
+test("a body with a line over the limit shows wrapped, with Wrap lines on but disabled, saying why", async ({ page }) => {
   await sendBody(page, UNWRAP_LIMIT + 1000);
   // Pretty's lines are short: unwrapped, as the tab is.
   await expect(wrapButton(page)).toBeEnabled();
@@ -34,7 +34,7 @@ test("a body with a line over the limit shows wrapped, with Wrap lines turned of
   await expect(editor(page)).toContainText('{"items":[');
   await expect(wrapped(page)).toHaveCount(1);
   await expect(wrapButton(page)).toBeDisabled();
-  await expect(wrapButton(page)).toHaveClass(/active/);
+  await expect(wrapButton(page)).toHaveAttribute("aria-pressed", "true");
   await wrapButton(page).hover();
   await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
 
@@ -43,7 +43,7 @@ test("a body with a line over the limit shows wrapped, with Wrap lines turned of
   await expect(editor(page)).toContainText('"items": [');
   await expect(wrapped(page)).toHaveCount(0);
   await expect(wrapButton(page)).toBeEnabled();
-  await expect(wrapButton(page)).not.toHaveClass(/active/);
+  await expect(wrapButton(page)).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a body with a line just under the limit shows unwrapped, and scrolls to the line's end", async ({ page }) => {

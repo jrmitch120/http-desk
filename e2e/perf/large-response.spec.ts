@@ -103,8 +103,8 @@ test("1. sending and receiving the 50 MB body", async ({ page }) => {
   await expectNoLongTasks(page, () => sendAndShowPretty(page));
 });
 
-// A line this long is too long to show unwrapped (#119), so Raw opens wrapped
-// with Wrap lines turned off.
+// A line this long is too long to show unwrapped (#119), so Raw opens wrapped,
+// with Wrap lines on but disabled.
 test("2. opening Raw (a single 50 MB line), wrapped, and scrolling it to the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
@@ -112,7 +112,10 @@ test("2. opening Raw (a single 50 MB line), wrapped, and scrolling it to the end
     await views(page).getByRole("radio", { name: "Raw" }).click();
     await expect(editor(page)).toContainText(RAW_START);
     await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Wrap lines" })).toBeDisabled();
+    const wrap = page.getByRole("button", { name: "Wrap lines" });
+    await expect(wrap).toBeDisabled();
+    await wrap.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
     await scrollToEnd(page);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
@@ -126,6 +129,8 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
   await expectNoLongTasks(page, async () => {
     await views(page).getByRole("radio", { name: "Pretty" }).click();
     await expect(editor(page)).toContainText('"items": [');
+    // Unwrapped again, as the tab is: only Raw had lines too long to unwrap.
+    await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(0);
     await scrollToEnd(page);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
