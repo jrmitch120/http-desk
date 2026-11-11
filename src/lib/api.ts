@@ -66,13 +66,18 @@ export const api = {
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
+   * Lets the shell drop a response's body and everything cached from it, once no
+   * tab shows it. Until then it's kept, however many other responses arrive.
+   */
+  releaseResponse: (responseId: string) => invoke<void>("release_response", { responseId }),
+  /**
    * Re-lays out a body in the core without changing any token (numbers and
    * strings stay exactly as written). Rejects with a message for invalid input.
    */
   formatBody: (text: string, kind: BodyKind, mode: FormatMode) => invoke<string>("format_body", { text, kind, mode }),
   /**
    * The Hex view of a binary response: a dump of the first 64 KB of the body
-   * the shell stored for it. Rejects once the body has been evicted.
+   * the shell stored for it. Rejects once the body has been released.
    */
   hexdump: (responseId: string) => invoke<string>("hexdump", { responseId }),
   /**
