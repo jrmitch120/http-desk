@@ -53,6 +53,29 @@ test("the find keys search in pieces too, and Find previous wraps round", async 
   await expect(selectedMatch(page)).toBeInViewport();
 });
 
+test("selecting the next occurrence (Mod-d) and every occurrence (Mod-Shift-l) search in pieces too", async ({ page }) => {
+  await openFindInLargeBody(page);
+  const bar = findBar(page);
+  const field = bar.getByRole("textbox", { name: "Find" });
+  await field.fill(NEEDLE);
+  await field.press("Enter");
+  await expect(selectedMatch(page)).toHaveText(NEEDLE);
+  await page.locator(".body .cm-content").focus();
+  const selected = () => page.locator(".body .cm-content").evaluate(() => getSelection()?.toString());
+
+  // The only occurrence: on through the end and round from the start, finding no other.
+  await page.keyboard.press("ControlOrMeta+d");
+  await expect(bar.getByText("Searching…")).toBeVisible();
+  await expect(bar.getByText("Searching…")).toHaveCount(0);
+  expect(await selected()).toBe(NEEDLE);
+
+  // Every occurrence: the whole body, which has just the one.
+  await page.keyboard.press("ControlOrMeta+Shift+l");
+  await expect(bar.getByText("Searching…")).toBeVisible();
+  await expect(bar.getByText("Searching…")).toHaveCount(0);
+  expect(await selected()).toBe(NEEDLE);
+});
+
 test("a new query, or closing the bar, abandons the search in progress", async ({ page }) => {
   await openFindInLargeBody(page);
   const bar = findBar(page);

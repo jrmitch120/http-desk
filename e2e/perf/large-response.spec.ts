@@ -163,6 +163,41 @@ test("5b. finding a term that matches only near the end, without requestIdleCall
   });
 });
 
+// Find previous from the top wraps round and works back from the end (#114).
+test("5c. finding the previous match, near the end", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await expectNoLongTasks(page, async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
+    await field.fill(NEAR_THE_END);
+    await field.press("Shift+Enter");
+    await expect(page.locator(".cm-searchMatch-selected")).toHaveText(NEAR_THE_END);
+  });
+});
+
+// Selecting the next occurrence (Mod-d) and every occurrence (Mod-Shift-l) of
+// the selection (the first pet's name, which occurs once): each goes through
+// the whole body, and round, from the top.
+test("5d. selecting the next occurrence and every occurrence", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  await page.getByRole("button", { name: "Search" }).click();
+  const bar = page.getByRole("search", { name: "Find in editor" });
+  const field = bar.getByRole("textbox", { name: "Find" });
+  await field.fill('"pet-0"');
+  await field.press("Enter");
+  await expect(page.locator(".cm-searchMatch-selected")).toHaveText('"pet-0"');
+  await editor(page).focus();
+  await expectNoLongTasks(page, async () => {
+    for (const key of ["ControlOrMeta+d", "ControlOrMeta+Shift+l"]) {
+      await page.keyboard.press(key);
+      await expect(bar.getByText("Searching…")).toBeVisible();
+      await expect(bar.getByText("Searching…")).toHaveCount(0);
+    }
+  });
+});
+
 test("6. Fold all is turned off at this size", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
