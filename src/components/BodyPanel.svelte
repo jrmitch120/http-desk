@@ -166,6 +166,13 @@
     min-height: 0;
     border-top: 1px solid var(--border);
   }
+  /* Wrapped, a line breaks at any character, so its rows are as full as
+     CodeMirror assumes when it estimates the height of what it hasn't drawn.
+     Broken at punctuation instead, a long minified body's rows come out a third
+     shorter: the line grows as it's scrolled, and its end can't be reached. */
+  .body :global(.cm-content.cm-lineWrapping) {
+    word-break: break-all;
+  }
   /* Raw and Preview are stacked in the same place; the hidden one keeps its
      layout (visibility, not display: none), so switching needs no re-layout. */
   .pane {
