@@ -28,7 +28,7 @@ mod self_writes;
 mod theme;
 mod watcher;
 mod window_state;
-use bodies::RecentBodies;
+use bodies::KeptBodies;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
 use self_writes::SelfWrites;
@@ -182,8 +182,8 @@ struct AppState {
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
     clients: exec::ClientPool,
-    /// Recent response bodies by response id (for "save to file").
-    bodies: Mutex<RecentBodies>,
+    /// Response bodies by response id, kept until released (see bodies.rs).
+    bodies: Mutex<KeptBodies>,
     /// Recent bodies parsed as JSON, by response id (for the filter bar).
     json_docs: Mutex<JsonDocs>,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
@@ -609,8 +609,27 @@ fn cancel_request(state: State<'_, AppState>, run_id: String) {
     }
 }
 
-/// The error for a response id whose body has been evicted (or never stored).
+/// The error for a response id whose body has been released (or never stored).
 const RESPONSE_GONE: &str = "Response is no longer available";
+
+/// Drops response `response_id`'s body and everything cached from it (its parsed
+/// JSON and key completion). The webview calls it once no tab shows the response:
+/// its tab closed, got a newer response, or closed with the workspace.
+#[tauri::command]
+fn release_response(state: State<'_, AppState>, response_id: String) {
+    // Bodies before parsed documents, the order `json_doc` locks them in.
+    let mut bodies = state.bodies.lock().unwrap();
+    bodies.remove(&response_id);
+    state.json_docs.lock().unwrap().remove(&response_id);
+}
+
+/// A page load (including a reload): no tab can still refer to a kept body, so
+/// they all go, with everything cached from them.
+fn page_loaded(state: &AppState) {
+    let mut bodies = state.bodies.lock().unwrap();
+    bodies.clear();
+    state.json_docs.lock().unwrap().clear();
+}
 
 /// The stored body of `response_id`, or [`RESPONSE_GONE`].
 fn stored_body(state: &AppState, response_id: &str) -> CmdResult<Arc<[u8]>> {
@@ -663,7 +682,11 @@ fn json_doc(state: &AppState, response_id: &str) -> CmdResult<Arc<JsonDocument>>
     // Decoded the way the response's `bodyText` was (its charset, else UTF-8).
     let text = exec::decode_text(&body, content_type.as_deref()).ok_or("The body isn't text")?;
     let parsed = JsonDocument::parse(&text).map(Arc::new).map_err(err);
-    state.json_docs.lock().unwrap().insert(response_id.to_owned(), parsed.clone());
+    // Not kept if the body was released while parsing, or it would never go.
+    let bodies = state.bodies.lock().unwrap();
+    if bodies.contains(response_id) {
+        state.json_docs.lock().unwrap().insert(response_id.to_owned(), parsed.clone());
+    }
     parsed
 }
 
@@ -898,6 +921,11 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
         .manage(AppState::default())
         .manage(menu::NativeMenu::<R>::new())
         .on_menu_event(|app, event| menu::clicked(app, event.id().as_ref()))
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                page_loaded(&webview.state::<AppState>());
+            }
+        })
         .setup(move |app| {
             load_settings(app.handle());
             Ok(after_setup(app)?)
@@ -923,6 +951,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             preview_request,
             cancel_request,
             save_response_body,
+            release_response,
             format_body,
             hexdump,
             filter_response,

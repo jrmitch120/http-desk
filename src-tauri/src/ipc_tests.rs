@@ -3,6 +3,7 @@
 //! covering the vertical slice open → edit → toggle → send → save → reopen.
 
 mod app_info;
+mod bodies;
 mod confinement;
 mod deleting;
 mod folder_envs;

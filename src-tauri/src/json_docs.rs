@@ -38,6 +38,16 @@ impl JsonDocs {
             self.entries.pop_front();
         }
     }
+
+    /// Drops response `id`'s parsed document (nothing if it isn't kept).
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.entries.retain(|(i, _)| i != id);
+    }
+
+    /// Drops every parsed document.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 #[cfg(test)]
