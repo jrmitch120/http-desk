@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { base64DecodedLength, promptMasked, requestPrompts, segments } from "../lib/http";
+import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
@@ -451,6 +452,8 @@ window.addEventListener(
   releaseSettings: () => releaseSettings(),
   /** Lets held Pretty text through (`?pretty=hold`). */
   releasePretty: () => releasePretty(),
+  /** Builds the perf test's large bodies; from then on sends answer with them (e2e/perf). */
+  preparePerf: () => preparePerf(),
   get settings() {
     return clone(settings);
   },
@@ -771,8 +774,11 @@ function formatXml(text: string, mode: "pretty" | "minify"): string {
   return mode === "pretty" ? lines.join("\n") : lines.map((l) => l.trim()).join("");
 }
 
-/** Text response bodies by response id, with their kind, like the shell's stored bodies. */
-const textBodies = new Map<string, { body: string; kind: ResponseKind }>();
+/**
+ * Text response bodies by response id, with their kind, like the shell's stored
+ * bodies. `pretty`, when set, is the body's Pretty text, worked out ahead.
+ */
+const textBodies = new Map<string, { body: string; kind: ResponseKind; pretty?: string }>();
 let responseCount = 0;
 
 /** Stand-in for the shell's Pretty text: formatted JSON or XML; rejects like the shell otherwise. */
@@ -791,6 +797,47 @@ const binaryBodies = new Map<string, string>();
 function storeBinary<T extends { id: string; bodyBase64: string }>(response: T): T {
   binaryBodies.set(response.id, response.bodyBase64);
   return response;
+}
+
+/**
+ * The perf test's large bodies (e2e/perf), built by `__mock.preparePerf()`
+ * before a test starts measuring, so none of the mock's own work on them runs
+ * during a measured step. Once built, JSON sends answer with the 50 MB body and
+ * the image request with the 25 MB image.
+ */
+let perf: { json: string; pretty: string; image: string } | null = null;
+/** The term that matches only in the 50 MB body's last item. */
+const PERF_LAST = "needle-near-the-end";
+/** At most what the shell sends inline as base64 (the core's `BINARY_PREVIEW_LIMIT`, 25 MB). */
+const PERF_IMAGE = { width: 2048, height: 4266, contentType: "image/bmp" };
+
+function preparePerf(): void {
+  const { json, pretty } = largeJson(50 * 1000 * 1000, PERF_LAST);
+  perf = { json, pretty, image: toBase64(bmpImage(PERF_IMAGE.width, PERF_IMAGE.height)) };
+}
+
+/** The send reply for a perf body: the image for the image request, else the 50 MB JSON. */
+function perfResponse(url: string, method: string) {
+  if (!perf) throw new Error("preparePerf() first");
+  const common = {
+    status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/pets?limit=20", timeMs: 900.4, ttfbMs: 31.2, headersSize: 120, contentEncoding: null,
+    truncated: false, request: { method, url, headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: jsonTimings, cookies: [],
+  };
+  if (url.includes("png")) {
+    const size = base64DecodedLength(perf.image);
+    return storeBinary({
+      ...common, id: `r2-${++responseCount}`, headers: [["content-type", PERF_IMAGE.contentType], ["content-length", String(size)]],
+      bodySize: size, transferredSize: size, contentType: PERF_IMAGE.contentType, bodyKind: "image" as const, bodyText: null, bodyBase64: perf.image,
+    });
+  }
+  const id = `r1-${++responseCount}`;
+  textBodies.set(id, { body: perf.json, kind: "json", pretty: perf.pretty });
+  return {
+    ...common, id, headers: [["content-type", "application/json"], ["content-length", String(perf.json.length)]],
+    bodySize: perf.json.length, transferredSize: perf.json.length, contentType: "application/json", bodyKind: "json" as const,
+    // Like the shell: a body over its inline limit arrives without Pretty text.
+    bodyText: perf.json, prettyText: null, bodyBase64: null,
+  };
 }
 
 /** Stand-in for the core's `hexdump`: the first 64 KB of a stored body. */
@@ -960,6 +1007,7 @@ mockIPC(
         // An environment defines the missing variable, so picking one fixes it.
         if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
         const r = args.request;
+        if (perf) return perfResponse(r.url, r.method);
         if (r.url.includes("png") && bigBinary) {
           return storeBinary({
             id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
@@ -1042,7 +1090,7 @@ mockIPC(
         }
         const stored = textBodies.get(id);
         if (stored === undefined) throw RESPONSE_GONE;
-        return new TextEncoder().encode(view === "pretty" ? prettyText(stored) : stored.body).buffer;
+        return new TextEncoder().encode(view === "pretty" ? (stored.pretty ?? prettyText(stored)) : stored.body).buffer;
       }
       case "release_response":
         releasedResponses.push(args.responseId);
