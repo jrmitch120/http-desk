@@ -42,18 +42,14 @@ async function sendAndShowPretty(page: Page): Promise<void> {
   await expect(editor(page)).toContainText('"items": [');
 }
 
-/** Scrolls the body editor from where it is to the end along `axis`, a frame or two per stop. */
-async function scrollToEnd(page: Page, axis: "top" | "left", stops = 10): Promise<void> {
+/** Scrolls the body editor from where it is down to the end, a frame or two per stop. */
+async function scrollToEnd(page: Page, stops = 10): Promise<void> {
   for (let i = 1; i <= stops; i++) {
-    await page.evaluate(
-      async ([axis, f]) => {
-        const s = document.querySelector<HTMLElement>(".body .cm-scroller")!;
-        if (axis === "top") s.scrollTop = f * (s.scrollHeight - s.clientHeight);
-        else s.scrollLeft = f * (s.scrollWidth - s.clientWidth);
-        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      },
-      [axis, i / stops] as const,
-    );
+    await page.evaluate(async (f) => {
+      const s = document.querySelector<HTMLElement>(".body .cm-scroller")!;
+      s.scrollTop = f * (s.scrollHeight - s.clientHeight);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }, i / stops);
   }
 }
 
@@ -107,16 +103,20 @@ test("1. sending and receiving the 50 MB body", async ({ page }) => {
   await expectNoLongTasks(page, () => sendAndShowPretty(page));
 });
 
-test("2. opening Raw (a single 50 MB line), then scrolling and wrapping it", async ({ page }) => {
+// A line this long is too long to show unwrapped (#119), so Raw opens wrapped,
+// with Wrap lines on but disabled.
+test("2. opening Raw (a single 50 MB line), wrapped, and scrolling it to the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
   await expectNoLongTasks(page, async () => {
     await views(page).getByRole("radio", { name: "Raw" }).click();
     await expect(editor(page)).toContainText(RAW_START);
-    await scrollToEnd(page, "left");
-    await page.getByRole("button", { name: "Wrap lines" }).click();
     await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(1);
-    await scrollToEnd(page, "top");
+    const wrap = page.getByRole("button", { name: "Wrap lines" });
+    await expect(wrap).toBeDisabled();
+    await wrap.hover();
+    await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
+    await scrollToEnd(page);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
 });
@@ -129,7 +129,9 @@ test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {
   await expectNoLongTasks(page, async () => {
     await views(page).getByRole("radio", { name: "Pretty" }).click();
     await expect(editor(page)).toContainText('"items": [');
-    await scrollToEnd(page, "top");
+    // Unwrapped again, as the tab is: only Raw had lines too long to unwrap.
+    await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(0);
+    await scrollToEnd(page);
     await expect(editor(page)).toContainText(NEAR_THE_END);
   });
 });

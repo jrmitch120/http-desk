@@ -9,19 +9,14 @@
 import { untrack } from "svelte";
 import type { Text } from "@codemirror/state";
 import { api, errorMessage } from "./api";
-import { buildDoc, longestLine, textDoc } from "./codemirror/docBuilder";
+import { buildDoc, textDoc } from "./codemirror/docBuilder";
 import type { Language } from "./codemirror/setup";
+import { canUnwrap as canUnwrapOf, hasLongLines } from "./codemirror/longLines";
 import { keptDoc, keptPreview, loadDoc, loadPreview, type DocView, type Preview } from "./responseDocs";
 import { nextTask } from "./timeSlices";
 import type { FilterResult, HttpResponse, JsonShape, ResponseKind } from "./types";
 
 export type BodyMode = "pretty" | "raw" | "preview";
-
-/**
- * Lines longer than this are drawn in part when wrapped (CodeMirror's line
- * gaps), the rest estimated as full rows of text.
- */
-const LONG_LINE = 20_000;
 
 /** Typing pauses this long before the filter runs again on the same response. */
 export const FILTER_DEBOUNCE_MS = 120;
@@ -230,11 +225,16 @@ export class BodyView {
   });
   /**
    * Whether the document has lines CodeMirror draws only in part when wrapped
-   * (a minified body), which then break at any character: broken at
-   * punctuation, a row holds less than CodeMirror estimates, so the line grows
-   * as it's scrolled and its end can't be reached. Other text breaks between words.
+   * (a minified body), which then break at any character (longLines.ts).
+   * Other text breaks between words.
    */
-  readonly longLines = $derived(!!this.doc && longestLine(this.doc) > LONG_LINE);
+  readonly longLines = $derived(!!this.doc && hasLongLines(this.doc));
+  /**
+   * Whether the document may be shown unwrapped: no line too long for
+   * CodeMirror to draw that way (longLines.ts). Otherwise it's shown wrapped,
+   * whatever the tab's wrap choice, which is kept for the other views.
+   */
+  readonly canUnwrap = $derived(!this.doc || canUnwrapOf(this.doc));
 
   // Key completion: the body's shape summary, built once per response in the
   // core and fetched once when the filter box is first focused; every keystroke

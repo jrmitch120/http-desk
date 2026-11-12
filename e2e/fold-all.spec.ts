@@ -2,7 +2,7 @@
 // showing "Folding…", then folds; above a measured size it's turned off and
 // points to the filter instead, while Unfold all and the gutter still work.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { openApp, openRequest, tabTo } from "./helpers";
 import { FOLD_ALL_LIMIT } from "../src/lib/codemirror/foldAll";
 
 /** Pretty text is about this many times the minified body (src/dev/perfFixtures.ts `largeJson`). */
@@ -53,8 +53,13 @@ test("on a body over the limit, Fold all is turned off and points to the filter;
   await showBody(page, FOLD_ALL_LIMIT + 1_000_000);
 
   await expect(foldAll(page)).toBeDisabled();
-  await foldAll(page).locator("..").hover();
+  await foldAll(page).hover();
   await expect(page.getByRole("tooltip")).toContainText("filter");
+  // Reachable from the keyboard too, and read out as the button's description.
+  await page.mouse.move(0, 0);
+  await tabTo(page, foldAll(page));
+  await expect(page.getByRole("tooltip")).toContainText("filter");
+  await expect(foldAll(page)).toHaveAccessibleDescription(/filter/);
 
   // Neither the key nor the button folds it.
   await editor(page).click();

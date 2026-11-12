@@ -294,6 +294,19 @@ textarea.input {
 .icon-btn.active {
   color: var(--accent);
 }
+/* Unavailable for now: aria-disabled, not disabled, so it can still take focus
+   and its tooltip (saying why) is reachable from the keyboard. */
+.icon-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.icon-btn[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--muted);
+}
+.icon-btn.active[aria-disabled="true"] {
+  color: var(--accent);
+}
 /* A short text glyph instead of an icon (the find bar's Aa, .*, ab toggles). */
 .icon-btn.glyph {
   font-family: var(--mono);

@@ -44,6 +44,8 @@
   const filtered = $derived(view.filtered);
   const previewUrl = $derived(view.previewUrl);
   const ct = $derived((res.contentType ?? "").toLowerCase());
+  /** Whether the body shows wrapped: as the tab chose, or always when its lines are too long to unwrap. */
+  const wrapped = $derived(wrap || !view.canUnwrap);
 
   // Raw and Preview are each built the first time they're shown for a response,
   // then stay mounted and are switched by hiding one: going back to Raw doesn't
@@ -106,12 +108,11 @@
     {#if kind === "json" || kind === "xml"}
       {#if folding}<span class="folding muted" role="status"><span class="spinner"></span>Folding…</span>{/if}
       <!-- Above the limit, folding everything would freeze the window; the filter narrows a large body instead. -->
-      <span class="tip" use:tooltip={canFoldAll ? "" : view.canFilter ? "Too large to fold all. Use the filter to narrow it down" : "Too large to fold all"}>
-        <button class="icon-btn" aria-label="Fold all" use:tooltip={canFoldAll ? undefined : null} disabled={!canFoldAll || folding} onclick={() => editor?.fold(true)}><Icon name="fold" size={14} /></button>
-      </span>
+      <button class="icon-btn" aria-label="Fold all" use:tooltip={canFoldAll ? undefined : view.canFilter ? "Too large to fold all. Use the filter to narrow it down" : "Too large to fold all"} aria-disabled={!canFoldAll || folding} onclick={() => canFoldAll && !folding && editor?.fold(true)}><Icon name="fold" size={14} /></button>
       <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
     {/if}
-    <button class="icon-btn" class:active={wrap} aria-label="Wrap lines" use:tooltip onclick={() => (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
+    <!-- A line too long to draw unwrapped (#119) keeps the body wrapped; `wrap` stays the tab's choice. -->
+    <button class="icon-btn" class:active={wrapped} aria-pressed={wrapped} aria-label="Wrap lines" use:tooltip={view.canUnwrap ? undefined : "Lines too long to unwrap"} aria-disabled={!view.canUnwrap} onclick={() => view.canUnwrap && (wrap = !wrap)}><Icon name="wrap" size={14} /></button>
   {/if}
 </div>
 {#if view.canFilter}
@@ -148,7 +149,7 @@
       {:else if !view.doc}
         <div class="empty-state small" role="status"><span class="spinner"></span>Preparing…</div>
       {:else}
-        <Editor bind:this={editor} bind:folding bind:canFoldAll doc={view.doc} readonly {wrap} language={isBinary ? "text" : KIND_INFO[kind].language} />
+        <Editor bind:this={editor} bind:folding bind:canFoldAll doc={view.doc} readonly wrap={wrapped} language={isBinary ? "text" : KIND_INFO[kind].language} />
       {/if}
     </div>
   {/if}
