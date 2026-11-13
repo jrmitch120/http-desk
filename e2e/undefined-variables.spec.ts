@@ -49,7 +49,9 @@ test("an Undefined header variable is underlined, counted on the Headers tab and
   const cell = await headerValue(page, "{{apiKey}}-{{tenant}}");
   const marks = cell.locator(".cm-var-bad");
   await expect(marks).toHaveText(["{{apiKey}}", "{{tenant}}"]);
-  expect(await marks.first().evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("underline");
+  // Retried: leaving the cell swaps its editor for the static rendering, and a mark
+  // read just as it is swapped out has no style at all ("", not "none").
+  await expect(marks.first()).toHaveCSS("text-decoration-line", "underline");
 
   await expect(count(page, "Headers")).toHaveText("2");
   await expect(count(page, "Params")).toHaveCount(0);

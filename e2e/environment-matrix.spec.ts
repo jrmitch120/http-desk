@@ -111,8 +111,9 @@ test("Add variable to all environments adds a row every environment saves", asyn
   await expect(field("staging")).toHaveAttribute("aria-placeholder", "Empty");
   await expect(field("Shared")).toHaveAttribute("aria-placeholder", "Not set");
   const placeholderStyle = (column: string) => field(column).evaluate((el) => getComputedStyle(el, "::before").fontStyle);
-  expect(await placeholderStyle("staging")).toBe("italic"); // local has focus, so it shows its editor
-  expect(await placeholderStyle("Shared")).toBe("normal");
+  // Retried: a VarField re-rendered just as it is read has no style at all ("").
+  await expect.poll(() => placeholderStyle("staging")).toBe("italic"); // local has focus, so it shows its editor
+  await expect.poll(() => placeholderStyle("Shared")).toBe("normal");
   await cell(modal, "apiKey", "staging").locator(".var-field").click();
   await page.keyboard.type("k-stg");
   await page.keyboard.press("Tab");

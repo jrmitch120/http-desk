@@ -27,12 +27,29 @@ test("a circular reference in the URL has its own colour and hover, unlike an Un
   await page.keyboard.press("End");
   await page.keyboard.type("/{{a}}/{{nope}}/{{api}}");
 
-  const circular = page.locator(".url-input .cm-var-circular");
-  const undefinedVar = page.locator(".url-input .cm-var-bad");
+  const circularMark = ".url-input .cm-var-circular";
+  const undefinedMark = ".url-input .cm-var-bad";
+  const circular = page.locator(circularMark);
+  const undefinedVar = page.locator(undefinedMark);
   await expect(circular).toHaveText("{{a}}");
   await expect(undefinedVar).toHaveText("{{nope}}");
-  const color = (l: typeof circular) => l.evaluate((el) => getComputedStyle(el).color);
-  expect(await color(circular)).not.toBe(await color(undefinedVar));
+  // Retried, and both read in one go in the page, so CodeMirror can't redraw a mark
+  // between finding it and reading it (a mark no longer in the page reads as "").
+  const colours = () =>
+    page.evaluate(
+      (sels) =>
+        sels.map((s) => {
+          const el = document.querySelector(s);
+          return el && getComputedStyle(el).color; // null while a mark is mid-redraw, never a throw: expect.poll doesn't retry those
+        }),
+      [circularMark, undefinedMark],
+    );
+  await expect
+    .poll(async () => {
+      const [c, u] = await colours();
+      return !c || !u ? "a mark is missing" : c === u ? `both ${c}` : "different";
+    })
+    .toBe("different");
 
   await circular.hover();
   await expect(tooltip(page)).toContainText("Circular: a → b → a");
