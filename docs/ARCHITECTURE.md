@@ -938,7 +938,9 @@ Decisions made during implementation, beyond the plan above:
     position lands depends on where the viewport is; after a jump it went round up to
     five times, redrawing each time ("Viewport failed to stabilize"). A scroll that
     lands outside the drawn viewport of such a document becomes a scroll to the line
-    found there, which settles in one pass.
+    found there, which settles in one pass. Only a real scroll counts: CodeMirror also
+    runs scroll handlers with an event of its own when part of the document comes into
+    view, which can come before a scroll it was asked for is done (#125).
   - *Find in pieces* (`findInPieces.ts`). Find next and previous, Mod-d (next
     occurrence) and Mod-Shift-l (every occurrence) make the same choices as
     CodeMirror's commands with its search cursors, but go through the document 32 KB at
@@ -961,10 +963,15 @@ Decisions made during implementation, beyond the plan above:
     goes into a wrapped view only after the view has measured itself holding a
     one-space stand-in, as if replaced in an open editor; laid out wrapped from scratch,
     CodeMirror takes a 50 MB line for a short one and draws all of it. Turning wrapping
-    on or off does the same (`relayOut`), keeping the selection, folds and scroll
-    position. A document with a line CodeMirror draws only in part when wrapped (20,000
-    characters or more, `longLines.ts`) breaks it at any character (`word-break: break-all`), so its
-    rows are as full as CodeMirror's estimate; other text wraps between words.
+    on or off does the same (`relayOut`), keeping the selection, folds and the place:
+    the position in the middle of the top row comes back at the top, and across to the
+    middle on a long line unwrapped. The scroll there goes in an update of its own once
+    the document is back, as CodeMirror clips a scroll target to the document before
+    the update, the stand-in (#125). `e2e/wrap-keeps-place.spec.ts` toggles wrapping
+    back and forth; perf step 3c unwraps the 50 MB body's Pretty at its end. A document
+    with a line CodeMirror draws only in part when wrapped (20,000 characters or more,
+    `longLines.ts`) breaks it at any character (`word-break: break-all`), so its rows
+    are as full as CodeMirror's estimate; other text wraps between words.
   - *Lines too long to unwrap* (`longLines.ts`). Unwrapped, CodeMirror stands in for the
     undrawn parts of a long line with gaps as wide as the text, but draws none wider
     than 2,000,000 px (its `VP.MaxHorizGap`); past that, the scroll range covers only a

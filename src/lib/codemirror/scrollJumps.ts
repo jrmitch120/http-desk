@@ -49,8 +49,12 @@ function lineAtHeight(view: EditorView, height: number): number {
 
 /** Turns a scroll far into a scaled document into a scroll to the line there. */
 export const scrollJumps = EditorView.domEventHandlers({
-  scroll(_e, view) {
-    if (!scaled(view)) return false;
+  scroll(e, view) {
+    // Only a real scroll can be a jump. CodeMirror also runs scroll handlers
+    // with an event of its own when part of the document comes into view, and
+    // that can be before a scroll it has been asked for is done (a rewrap's
+    // place put back, #125): the scroll position is then still the old one.
+    if (!e.isTrusted || !scaled(view)) return false;
     const scroller = view.scrollDOM;
     const top = scroller.getBoundingClientRect().top - view.documentTop;
     const { from, to } = view.viewport;

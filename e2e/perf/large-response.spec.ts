@@ -155,6 +155,25 @@ test.fixme("3b. scrolling Pretty top to bottom, a stop at a time, with the mouse
   });
 });
 
+// Turning wrapping off lays the 88 MB of Pretty out afresh, and keeps its place
+// at the end (#125).
+test("3c. unwrapping Pretty, scrolled to its end", async ({ page }) => {
+  await prepare(page);
+  await sendAndShowPretty(page);
+  const wrap = page.getByRole("button", { name: "Wrap lines" });
+  await wrap.click();
+  await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(1);
+  await scrollToEnd(page);
+  // On screen, not only drawn: CodeMirror draws some lines above and below.
+  const showing = page.locator(".body .cm-line", { hasText: NEAR_THE_END });
+  await expect(showing).toBeInViewport();
+  await expectNoLongTasks(page, async () => {
+    await wrap.click();
+    await expect(page.locator(".body .cm-lineWrapping")).toHaveCount(0);
+    await expect(showing).toBeInViewport();
+  });
+});
+
 test("4. finding a term that doesn't match", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
