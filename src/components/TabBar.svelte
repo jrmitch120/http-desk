@@ -4,6 +4,7 @@
   import { basename, displayName } from "../lib/http";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import TestMark from "./TestMark.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
 
@@ -73,6 +74,7 @@
           <Badge method={req.method} class="tab-method" />
           <span class="name ellipsis">{displayName(req)}</span>
         {/if}
+        <TestMark requestKey={tab.key} />
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}

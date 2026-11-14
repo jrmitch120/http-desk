@@ -7,6 +7,7 @@
   import TreeItem from "./TreeItem.svelte";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import TestMark from "./TestMark.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { wording } from "../lib/platform";
 
@@ -138,6 +139,7 @@
       >
         <Badge method={req.method} />
         <span class="label ellipsis">{displayName(req)}</span>
+        <TestMark requestKey={req._key!} />
         {#if app.isRequestDirty(node.path, req._key!)}<span class="dot"></span>{/if}
       </div>
     {:else}

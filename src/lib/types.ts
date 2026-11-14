@@ -258,7 +258,7 @@ export interface HttpResponse {
   /** The response handler's `client.test`/`client.assert` results and its own
    *  failure, if any. Empty when no handler ran (`httpdesk_core::script`). */
   tests: TestResult[];
-  /** What the scripts logged. Empty until `client.log` is implemented. */
+  /** What the scripts logged with `client.log`, a line per call, in order. */
   logs: string[];
 }
 

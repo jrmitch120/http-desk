@@ -43,6 +43,17 @@ if (new URLSearchParams(location.search).get("requestVars") === "1") {
   (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
   files[`${ROOT}/api/pets.http`] = withVars;
 }
+// `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
+// log "Checking the status" before its test and "Done" after it.
+if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
+  const withLogs = structuredClone(jetbrains);
+  const req = withLogs.requests.find((r) => r.responseHandler?.startsWith("> {%")) as { responseHandler: string; raw: unknown };
+  req.responseHandler = req.responseHandler
+    .replace("> {%\n", '> {%\n    client.log("Checking the status");\n')
+    .replace(/\n%\}$/, '\n    client.log("Done");\n%}');
+  req.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withLogs;
+}
 const tree = {
   name: "demo",
   path: ROOT,
@@ -332,6 +343,10 @@ function mockTests(handler: string, status: number) {
       const passed = !assert || Number(assert[1]) === status;
       return { name, passed, message: passed ? null : assert![2] };
     });
+}
+/** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
+function mockLogs(handler: string) {
+  return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
 }
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
@@ -1151,7 +1166,7 @@ mockIPC(
           timings: jsonTimings,
           cookies,
           tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
-          logs: [],
+          logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
         };
       }
       case "format_body":
