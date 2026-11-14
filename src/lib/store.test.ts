@@ -33,6 +33,10 @@ const api = vi.hoisted(() => ({
   getTree: vi.fn(),
   trustWorkspace: vi.fn(),
   revokeWorkspaceTrust: vi.fn(),
+  sessionCookies: vi.fn(),
+  deleteCookie: vi.fn(),
+  clearCookies: vi.fn(),
+  clearSession: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -1991,6 +1995,64 @@ describe("Prompt variables", () => {
     const before = app.sessionVersion;
     await app.openWorkspace("/other");
     expect(app.sessionVersion).not.toBe(before);
+  });
+});
+
+describe("the Session panel", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("a finished send tells views showing the Session to read it again, as its cookies may have changed", async () => {
+    const [tab] = await openAll(fileOf(["GET", "Login", "https://x/login"]));
+    let resolve!: (r: HttpResponse) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const sending = app.send(tab.id);
+    const during = app.sessionVersion;
+    resolve({ id: "r1", status: 200 } as HttpResponse);
+    await sending;
+    expect(app.sessionVersion).not.toBe(during);
+  });
+
+  it("deleting a cookie or clearing them asks the shell and tells the panel to read the jar again", async () => {
+    let before = app.sessionVersion;
+    await app.deleteCookie({ domain: "example.com", path: "/", name: "sid" });
+    expect(api.deleteCookie).toHaveBeenCalledWith("example.com", "/", "sid");
+    expect(app.sessionVersion).not.toBe(before);
+
+    before = app.sessionVersion;
+    await app.clearCookies();
+    expect(api.clearCookies).toHaveBeenCalledTimes(1);
+    expect(app.sessionVersion).not.toBe(before);
+  });
+
+  it("Clear session empties the shell's Session only once the user confirms", async () => {
+    const before = app.sessionVersion;
+    let clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog?.title).toBe("Clear the session?"));
+    app.closeDialog("cancel");
+    await clearing;
+    expect(api.clearSession).not.toHaveBeenCalled();
+    expect(app.sessionVersion).toBe(before);
+
+    clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("clear");
+    await clearing;
+    expect(api.clearSession).toHaveBeenCalledTimes(1);
+    expect(app.sessionVersion).not.toBe(before);
+  });
+
+  it("the Session command shows the panel, and runs again to hide it", () => {
+    app.panel = null;
+    expect(runCommand("toggle-session")).toBe(true);
+    expect(app.panel).toBe("session");
+    expect(command("toggle-session").checked?.()).toBe(true);
+    runCommand("toggle-session");
+    expect(app.panel).toBeNull();
   });
 });
 

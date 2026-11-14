@@ -12,7 +12,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -293,6 +293,7 @@ let settings = {
   showDescriptions: true,
   sidebarWidth: 280,
   sidebarHidden: false,
+  panelHeight: 260,
   zoom: 1,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
@@ -318,6 +319,24 @@ const promptAnswers = (requestKey?: string) => ({ ...(requestKey ? sessionPrompt
 const sentPrompts: Record<string, string>[] = [];
 /** Each send's `skipScripts` ("Send without scripts"). */
 const sentSkipScripts: boolean[] = [];
+/** Like the Session's cookie jar: the cookies responses set, by domain, path and name. Opening a workspace empties it. */
+let sessionJar = new Map<string, StoredCookie>();
+const jarKey = (c: Pick<StoredCookie, "domain" | "path" | "name">) => `${c.domain}\t${c.path}\t${c.name}`;
+/** The Cookie header the jar gave each `send_request`, in order ("" for none). Unlike the shell's
+ *  jar it sends every cookie it holds, whatever the URL. */
+const sentCookies: string[] = [];
+/** Keeps the cookies a mock response set, as the shell's jar would. */
+function keepCookies(cookies: ResponseCookie[]) {
+  for (const c of cookies) {
+    if (c.parseError !== null) continue;
+    const expires = c.maxAge !== null ? new Date(Date.now() + c.maxAge * 1000).toISOString().replace(/\.\d+Z$/, "Z") : c.expires;
+    const kept: StoredCookie = {
+      name: c.name, value: c.value, domain: c.domain ?? new URL(c.url).hostname, hostOnly: c.domain === null,
+      path: c.path ?? "/", expires, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite,
+    };
+    sessionJar.set(jarKey(kept), kept);
+  }
+}
 
 /** What the shell's script engine would report for `handler`, roughly: each
  *  `client.test("name", …)` passes unless it asserts `response.status === N`
@@ -411,6 +430,7 @@ window.addEventListener(
   sent,
   sentPrompts,
   sentSkipScripts,
+  sentCookies,
   get savedPaths() {
     return [...savedPaths];
   },
@@ -979,6 +999,7 @@ mockIPC(
         // (the mock always opens the demo workspace, though).
         settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
         sessionPrompts = new Map();
+        sessionJar = new Map();
         return { root: ROOT, tree, gitignoreUpdated: false };
       case "set_menu":
         menuBar = clone(args.layout);
@@ -1068,6 +1089,17 @@ mockIPC(
       case "forget_prompt_answers":
         sessionPrompts.delete(args.requestKey);
         return null;
+      case "session_cookies":
+        return [...sessionJar.values()].sort((a, b) => jarKey(a).localeCompare(jarKey(b)));
+      case "delete_cookie":
+        return sessionJar.delete(jarKey(args as StoredCookie));
+      case "clear_cookies":
+        sessionJar.clear();
+        return null;
+      case "clear_session":
+        sessionPrompts = new Map();
+        sessionJar = new Map();
+        return null;
       case "cancel_request":
         cancelledRuns.add(args.runId);
         return null;
@@ -1075,6 +1107,7 @@ mockIPC(
         sent.push(clone(args.request));
         sentPrompts.push(promptAnswers(args.requestKey));
         sentSkipScripts.push(!!args.skipScripts);
+        sentCookies.push([...sessionJar.values()].map((c) => `${c.name}=${c.value}`).join("; "));
         // Like the shell: a script in a workspace that isn't trusted is refused, unsent.
         const runScripts = hasScripts(args.request) && !args.skipScripts;
         if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
@@ -1136,6 +1169,7 @@ mockIPC(
         const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
         textBodies.set(id, { body, kind: bodyKind });
         const cookies = responseKind === "cookies" ? mockCookies : [];
+        keepCookies(cookies);
         const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
         return {
           id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",

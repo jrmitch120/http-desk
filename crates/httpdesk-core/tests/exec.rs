@@ -1298,6 +1298,23 @@ async fn the_jar_lists_its_cookies_and_deletes_one_or_all() {
     assert!(jar.list().is_empty());
 }
 
+#[tokio::test]
+async fn clearing_the_session_forgets_its_cookies_and_prompt_answers_and_it_keeps_working() {
+    let server = login_server(&["sid=abc"]).await;
+    let (pool, session) = (ClientPool::default(), session::Session::default());
+    send_with_jar(&pool, session.cookies(), "POST {{base}}/login\n", &server.uri()).await;
+    session.prompt_answers().answer("req-1", env(&[("otp", "123456")]));
+
+    session.clear();
+
+    assert!(session.cookies().list().is_empty());
+    assert_eq!(session.prompt_answers().get("req-1"), HashMap::new());
+    send_with_jar(&pool, session.cookies(), "GET {{base}}/me\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/me").await, None);
+    send_with_jar(&pool, session.cookies(), "POST {{base}}/login\n", &server.uri()).await;
+    assert_eq!(session.cookies().list().len(), 1, "a cleared Session keeps cookies set afterwards");
+}
+
 // ---------------------------------------------------------------- the final request after redirects
 
 /// The header `name` as the Request tab shows it.

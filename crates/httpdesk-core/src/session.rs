@@ -9,6 +9,9 @@
 //! one never waits on another. Today that is prompt answers and the cookie jar. The
 //! latest exchange of each named request and Global variables join them as further
 //! sections.
+//!
+//! A new section is a private field with an accessor, and a line in [`Session::clear`]
+//! (which won't compile until it has one), so Clear session empties it too.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -33,6 +36,15 @@ impl Session {
     /// send in the Session uses it, whichever pooled client it goes out on.
     pub fn cookies(&self) -> &CookieJar {
         &self.cookies
+    }
+
+    /// Empties every section, as a new Session would be (Clear session). A send
+    /// under way when it's cleared may still add to it as it finishes.
+    pub fn clear(&self) {
+        // Destructured, so a new section fails to compile until it's cleared here too.
+        let Session { prompt_answers, cookies } = self;
+        prompt_answers.clear();
+        cookies.clear();
     }
 }
 
@@ -60,6 +72,11 @@ impl PromptAnswers {
     /// Forgets every answer for `request`, so its next send asks again.
     pub fn forget(&self, request: &str) {
         self.lock().remove(request);
+    }
+
+    /// Forgets every request's answers.
+    pub fn clear(&self) {
+        self.lock().clear();
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashMap<String, String>>> {

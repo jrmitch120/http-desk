@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cookieExpiry } from "./cookies";
-import type { ResponseCookie } from "./types";
+import { cookieExpiry, storedCookieExpiry } from "./cookies";
+import type { ResponseCookie, StoredCookie } from "./types";
 
 const cookie = (c: Partial<ResponseCookie>): ResponseCookie => ({
   name: "a", value: "1", domain: null, path: null, expires: null, maxAge: null, secure: false, httpOnly: false,
@@ -30,5 +30,17 @@ describe("cookieExpiry", () => {
 
   it("says nothing for a cookie that didn't parse", () => {
     expect(cookieExpiry(cookie({ parseError: "bad" }))).toBe("");
+  });
+});
+
+describe("storedCookieExpiry", () => {
+  const stored = (expires?: string | null): StoredCookie => ({
+    name: "a", value: "1", domain: "example.com", hostOnly: true, path: "/", expires, secure: false, httpOnly: false, sameSite: null,
+  });
+
+  it("shows when a jar's cookie expires as an HTTP date in GMT, and one without an expiry as a session cookie", () => {
+    expect(storedCookieExpiry(stored("2026-12-01T00:00:00Z"))).toBe("Tue, 01 Dec 2026 00:00:00 GMT");
+    expect(storedCookieExpiry(stored(undefined))).toBe("Session");
+    expect(storedCookieExpiry(stored(null))).toBe("Session");
   });
 });
