@@ -23,6 +23,7 @@ import type {
   SearchHit,
   SpecSummary,
   StoredCookie,
+  GlobalVariable,
   TreeNode,
   Variable,
   WorkspaceInfo,
@@ -120,7 +121,13 @@ export const api = {
   deleteCookie: (domain: string, path: string, name: string) => invoke<boolean>("delete_cookie", { domain, path, name }),
   /** Deletes every cookie in the Session's jar. */
   clearCookies: () => invoke<void>("clear_cookies"),
-  /** Empties the whole Session: cookies, prompt answers and every other section. */
+  /** The Session's Global variables, by name. */
+  sessionGlobals: () => invoke<GlobalVariable[]>("session_globals"),
+  /** Deletes one Global variable. False if it wasn't set. */
+  deleteGlobal: (name: string) => invoke<boolean>("delete_global", { name }),
+  /** Deletes every Global variable. */
+  clearGlobals: () => invoke<void>("clear_globals"),
+  /** Empties the whole Session: cookies, Global variables, prompt answers and every other section. */
   clearSession: () => invoke<void>("clear_session"),
   /** Each named request with a latest exchange in the Session, by file, then name. */
   namedExchanges: () => invoke<NamedExchange[]>("named_exchanges"),

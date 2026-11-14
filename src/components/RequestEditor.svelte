@@ -7,10 +7,11 @@
   import { onDestroy, tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import type { KeyValue } from "../lib/types";
+  import type { GlobalVariable, KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
+  import { sessionView } from "../lib/sessionView.svelte";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
@@ -43,6 +44,8 @@
   // doesn't define gives none, like the send.
   const envSet = $derived(app.envSetFor(tab.path));
   const answers = promptAnswersOf(() => tab);
+  // The Session's Global variables, which every request can use: read again whenever the Session changes.
+  const globals = sessionView<GlobalVariable[]>(() => app.globalVariables(), []);
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = {
@@ -50,6 +53,7 @@
       fileVars: fileVariables(doc.file),
       headerVars: doc.file.header.variables,
       requestVars: req?.variables ?? [],
+      globals: Object.fromEntries((globals.current ?? []).map((g) => [g.name, g.value])),
       envName: app.envName,
       prompts: req ? requestPrompts(req) : [],
       answers: answers.current,

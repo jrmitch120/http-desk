@@ -6,10 +6,12 @@
 //! `script/prelude.js` is. The prelude builds the JetBrains `client`/`response`/
 //! `request` objects from two things `install` hands it: `data`, the exchange
 //! as JSON, and `host`, the Rust functions it calls (`host.test`, `host.log`,
-//! `host.setVariable`). A response handler's `data` is the response; a
-//! pre-request script's is the environment and the variables set so far.
+//! `host.setVariable`, `host.global*`). A response handler's `data` is the
+//! response; a pre-request script's is the environment and the variables set so far.
+//! Both read and write the Session's Global variables ([`GlobalVariables`]) as
+//! they run, so a value set before a script throws stays set.
 //!
-//! To implement a JetBrains API (`client.global.*`): add a Rust function to
+//! To implement a JetBrains API: add a Rust function to
 //! `host` in `install` (state it needs goes on `Recorded` or alongside it,
 //! like `SetVariables`), call it from the prelude, take the name out of the
 //! prelude's unsupported namespace it falls under, and list it in
@@ -36,6 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::exec::{decode_text, ExecError, HttpResponse};
 use crate::model::{HandlerPart, PreRequestPart, Request};
+use crate::session::GlobalVariables;
 
 /// How long a script may run. Fixed: there is no setting.
 pub const TIME_LIMIT: Duration = Duration::from_secs(5);
@@ -84,13 +87,14 @@ pub struct PreRequestResults {
 
 /// Runs `request`'s pre-request script, before its variables are substituted.
 /// `environment` is what `request.environment.get` reads: the selected
-/// environment's variables, private ones included. A script that throws, runs
-/// out of time or memory, or can't run is an error, and the request mustn't be
-/// sent.
+/// environment's variables, private ones included. `client.global` reads and
+/// writes `globals`. A script that throws, runs out of time or memory, or can't
+/// run is an error, and the request mustn't be sent.
 pub fn run_pre_request_script(
     request: &Request,
     environment: &HashMap<String, String>,
     files: &ScriptFiles,
+    globals: &GlobalVariables,
 ) -> Result<PreRequestResults, ExecError> {
     let mut out = PreRequestResults::default();
     for part in request.pre_request_parts() {
@@ -104,7 +108,7 @@ pub fn run_pre_request_script(
         let data = serde_json::json!({
             "request": { "environment": environment, "variables": out.variables },
         });
-        let mut run = Sandbox::run(&script.source, &data);
+        let mut run = Sandbox::run(&script.source, &data, globals);
         out.results.tests.append(&mut run.results.tests);
         out.results.logs.append(&mut run.results.logs);
         out.variables.extend(run.variables);
@@ -121,13 +125,14 @@ pub fn run_pre_request_script(
     Ok(out)
 }
 
-/// Runs `request`'s response handler against the response it got. `>>` output
-/// redirects are not run.
+/// Runs `request`'s response handler against the response it got. `client.global`
+/// reads and writes `globals`. `>>` output redirects are not run.
 pub fn run_response_handler(
     request: &Request,
     response: &HttpResponse,
     body: &[u8],
     files: &ScriptFiles,
+    globals: &GlobalVariables,
 ) -> ScriptResults {
     let parts = request.response_handler_parts();
     let mut results = ScriptResults::default();
@@ -148,7 +153,7 @@ pub fn run_response_handler(
             },
             HandlerPart::Redirect { .. } => continue,
         };
-        let mut run = Sandbox::run(&script.source, &data);
+        let mut run = Sandbox::run(&script.source, &data, globals);
         if let Some(e) = run.error {
             run.results.tests.push(failed(script.origin.describe(e)));
         }
@@ -290,10 +295,10 @@ type SetVariables = Rc<RefCell<HashMap<String, String>>>;
 struct Sandbox;
 
 impl Sandbox {
-    fn run(source: &str, data: &serde_json::Value) -> Run {
+    fn run(source: &str, data: &serde_json::Value, globals: &GlobalVariables) -> Run {
         let recorded = Recorded::default();
         let variables = SetVariables::default();
-        let error = Self::try_run(source, data, &recorded, &variables).err();
+        let error = Self::try_run(source, data, &recorded, &variables, globals).err();
         let results = recorded.take();
         Run { results, variables: variables.take(), error }
     }
@@ -303,6 +308,7 @@ impl Sandbox {
         data: &serde_json::Value,
         recorded: &Recorded,
         variables: &SetVariables,
+        globals: &GlobalVariables,
     ) -> Result<(), ScriptError> {
         let engine = |e: rquickjs::Error| ScriptError { message: format!("Script engine error: {e}"), line: None };
         let rt = Runtime::new().map_err(engine)?;
@@ -320,7 +326,7 @@ impl Sandbox {
         })));
         let ctx = Context::full(&rt).map_err(engine)?;
         let outcome = ctx.with(|ctx| {
-            let result = install(&ctx, data, recorded, variables).and_then(|()| {
+            let result = install(&ctx, data, recorded, variables, globals).and_then(|()| {
                 ctx.eval_with_options::<(), _>(source, options(SCRIPT_FILE))?;
                 while ctx.execute_pending_job() {}
                 Ok(())
@@ -349,6 +355,7 @@ fn install<'js>(
     data: &serde_json::Value,
     recorded: &Recorded,
     variables: &SetVariables,
+    globals: &GlobalVariables,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
     let tests = recorded.clone();
@@ -365,6 +372,14 @@ fn install<'js>(
             set.borrow_mut().insert(name, value);
         })?,
     )?;
+    let global = globals.clone();
+    host.set("globalGet", Function::new(ctx.clone(), move |name: String| global.get(&name))?)?;
+    let global = globals.clone();
+    host.set("globalSet", Function::new(ctx.clone(), move |name: String, value: String| global.set(&name, &value))?)?;
+    let global = globals.clone();
+    host.set("globalClear", Function::new(ctx.clone(), move |name: String| global.remove(&name))?)?;
+    let global = globals.clone();
+    host.set("globalIsEmpty", Function::new(ctx.clone(), move || global.is_empty())?)?;
     let logs = recorded.clone();
     let logged = Cell::new(0);
     host.set("log", Function::new(ctx.clone(), move |line: String| log(&mut logs.borrow_mut().logs, &logged, line))?)?;

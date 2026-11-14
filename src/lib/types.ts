@@ -340,6 +340,12 @@ export interface ResponseCookie {
   parseError: string | null;
 }
 
+/** A Global variable in the Session: a value a script stored with `client.global.set`. */
+export interface GlobalVariable {
+  name: string;
+  value: string;
+}
+
 /**
  * A cookie in the Session's jar (`httpdesk_core::cookies::StoredCookie`). Its
  * domain, path and name identify it.

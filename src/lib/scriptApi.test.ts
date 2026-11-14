@@ -42,6 +42,13 @@ describe("script completion", () => {
     expect(offered("request.|")).toBeNull();
   });
 
+  it("offers client.global's Global variable API in a handler and a pre-request script (#139)", () => {
+    expect(offered("client.|")?.labels).toContain("global");
+    for (const kind of ["handler", "pre-request"] as const) {
+      expect(offered("client.global.|", kind)?.labels).toEqual(["set", "get", "clear", "isEmpty"]);
+    }
+  });
+
   it("stays out of strings and comments, and of members of other objects", () => {
     expect(offered('client.test("client.|')).toBeNull();
     expect(offered("// client.|")).toBeNull();

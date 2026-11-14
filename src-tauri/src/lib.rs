@@ -873,8 +873,34 @@ fn clear_cookies(state: State<'_, AppState>) {
     state.session().cookies().clear();
 }
 
-/// Empties the whole Session (Clear session): every section, cookies and prompt
-/// answers included.
+/// A Global variable, as the Session panel lists it.
+#[derive(Serialize)]
+struct GlobalVariable {
+    name: String,
+    value: String,
+}
+
+/// The Session's Global variables, for the Session panel and the editor's variable
+/// checks: by name.
+#[tauri::command]
+fn session_globals(state: State<'_, AppState>) -> Vec<GlobalVariable> {
+    state.session().globals().list().into_iter().map(|(name, value)| GlobalVariable { name, value }).collect()
+}
+
+/// Deletes one Global variable, so later sends don't use it. False if it wasn't set.
+#[tauri::command]
+fn delete_global(state: State<'_, AppState>, name: String) -> bool {
+    state.session().globals().remove(&name)
+}
+
+/// Deletes every Global variable.
+#[tauri::command]
+fn clear_globals(state: State<'_, AppState>) {
+    state.session().globals().clear();
+}
+
+/// Empties the whole Session (Clear session): every section, cookies, Global
+/// variables and prompt answers included.
 #[tauri::command]
 fn clear_session(state: State<'_, AppState>) {
     state.session().clear();
@@ -1310,6 +1336,9 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             session_cookies,
             delete_cookie,
             clear_cookies,
+            session_globals,
+            delete_global,
+            clear_globals,
             clear_session,
             save_response_body,
             copy_response_body,

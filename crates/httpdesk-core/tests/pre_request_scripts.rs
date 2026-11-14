@@ -34,7 +34,7 @@ async fn send_in(
 ) -> Result<(), ExecError> {
     let file = parse(&file.replace("<server>", &server.uri()));
     let req = &file.requests[0];
-    let pre = run_pre_request_script(req, env, files)?;
+    let pre = run_pre_request_script(req, env, files, &Default::default())?;
     let resolver = Resolver::for_request(env, &file.header.variables, &req.variables, None)
         .with_pre_request_variables(&pre.variables);
     let settings = ExecSettings::default();
@@ -140,29 +140,30 @@ X-None: {{none}}
     assert_eq!(header(&got, "x-none").as_deref(), Some("null"));
 }
 
-/// The JetBrains-documented order (env > global > in-place > per-request), until
-/// #129 observes Rider's; see `Resolver::with_pre_request_variables`.
+/// Rider's order, measured with `ijhttp` (#129): a value the script sets wins over the
+/// environment, the File variables and the request's own `@name` (see `Resolver`'s
+/// scopes). The JetBrains docs give the reverse.
 #[tokio::test]
-async fn a_name_the_environment_file_or_request_defines_wins_over_request_variables_set() {
+async fn request_variables_set_wins_over_a_name_the_environment_file_or_request_defines() {
     let server = server().await;
     let file = r#"@fromFile = file
 
 ###
 @fromRequest = request
 < {%
-    for (const n of ["fromEnv", "fromFile", "fromRequest", "fromScript"]) request.variables.set(n, "script");
+    for (const n of ["fromEnv", "fromFile", "fromRequest"]) request.variables.set(n, "script-" + n);
 %}
 GET <server>/x
 X-Env: {{fromEnv}}
 X-File: {{fromFile}}
 X-Request: {{fromRequest}}
-X-Script: {{fromScript}}
+X-Untouched: {{untouched}}
 "#;
-    send(&server, file, &env(&[("fromEnv", "env")])).await.unwrap();
+    send(&server, file, &env(&[("fromEnv", "env"), ("untouched", "env")])).await.unwrap();
     let got = received(&server).await;
     let headers: Vec<_> =
-        ["x-env", "x-file", "x-request", "x-script"].iter().map(|h| header(&got, h).unwrap_or_default()).collect();
-    assert_eq!(headers, ["env", "file", "request", "script"]);
+        ["x-env", "x-file", "x-request", "x-untouched"].iter().map(|h| header(&got, h).unwrap_or_default()).collect();
+    assert_eq!(headers, ["script-fromEnv", "script-fromFile", "script-fromRequest", "env"]);
 }
 
 #[tokio::test]
@@ -204,7 +205,8 @@ async fn tests_and_asserts_in_a_pre_request_script_are_results_and_do_not_block_
     send(&server, file, &env(&[])).await.unwrap();
     received(&server).await;
     let req = parse(file).requests.remove(0);
-    let tests = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default()).unwrap().results.tests;
+    let tests =
+        run_pre_request_script(&req, &env(&[]), &ScriptFiles::default(), &Default::default()).unwrap().results.tests;
     let summary: Vec<_> = tests.iter().map(|t| (t.name.as_str(), t.passed, t.message.as_deref())).collect();
     assert_eq!(summary, [("needs a token", false, Some("needs a token")), ("ok", true, None)]);
 }
@@ -239,7 +241,7 @@ async fn unimplemented_request_apis_fail_naming_the_api() {
         ("request.iteration()", "request.iteration"),
         ("request.variables.set(\"ids\", [1, 2])", "request.variables.set with an array (iterations)"),
         ("crypto.sha256()", "crypto.sha256"),
-        ("client.global.set(\"a\", \"b\")", "client.global.set"),
+        ("client.global.clearAll()", "client.global.clearAll"),
     ];
     for (call, api) in calls {
         let (message, line) =
@@ -303,7 +305,7 @@ async fn a_missing_pre_request_script_file_or_one_outside_the_workspace_sends_no
 #[tokio::test]
 async fn a_request_without_a_pre_request_script_sets_nothing() {
     let req = parse("GET https://example.com\n\n> {% client.test(\"t\", () => {}); %}\n").requests.remove(0);
-    let pre = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default()).unwrap();
+    let pre = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default(), &Default::default()).unwrap();
     assert!(pre.variables.is_empty());
     assert!(pre.results.tests.is_empty());
 }

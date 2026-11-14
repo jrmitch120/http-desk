@@ -245,7 +245,7 @@ An `@v = …` line after a request's headers and blank line is that request's bo
 
 ### HttpDesk today
 
-HttpDesk (#140, `Resolver::with_pre_request_variables` in `crates/httpdesk-core/src/vars.rs`) does **not** match: it puts `request.variables.set` lowest (below the environment, the File variable and the request's own `@name`), where `ijhttp` puts it highest; in-place over environment and private over public do match, Global variables aren't resolved yet, and a request's own `@name` beats a same-named File variable where JetBrains ignores both. #139 follows the measured order.
+HttpDesk (#139, `Scopes::lookup` in `crates/httpdesk-core/src/vars.rs`, and `makeVarProvider` in `src/lib/vars.ts`) now matches the measured order: `request.variables.set`, then in-place, then Global variables, then the private and then the public environment file. Each pair above is a case in `crates/httpdesk-core/tests/fixtures/resolution-cases.json`, which both resolvers run, and `crates/httpdesk-core/tests/global_variables.rs` sends every pair against a mock server. Two rules are HttpDesk's own, from the GLOSSARY: an answered Prompt variable wins over everything, and a name declared with `@` twice is not ignored: the request's own declaration beats one elsewhere in the file.
 
 ---
 

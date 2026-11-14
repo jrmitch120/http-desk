@@ -9,6 +9,7 @@ mod copying;
 mod deleting;
 mod fetch;
 mod folder_envs;
+mod global_variables;
 mod paths;
 mod pre_request;
 mod preview;
