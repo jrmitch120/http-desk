@@ -144,3 +144,23 @@ describe("an environment the request's folder doesn't define", () => {
     expect(checks(null).map((c) => c.kind)).toEqual(["undefined"]);
   });
 });
+
+describe("a # @name another request in the file also has", () => {
+  const named = (name: string) => request((r) => r.directives.push({ name: "name", value: name }));
+  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), null, null, "", file).filter((c) => c.kind === "duplicateName");
+
+  it("is flagged on each of them, naming it and counting the others", () => {
+    const [a, b, c] = [named("login"), named(" login "), named("me")];
+    expect(checks(a, [a, b, c])).toEqual([{ kind: "duplicateName", name: "login", others: 1 }]);
+    expect(checks(b, [a, b, c])).toEqual([{ kind: "duplicateName", name: "login", others: 1 }]);
+    expect(checks(c, [a, b, c])).toEqual([]);
+    expect(checks(a, [a, b, named("login")])).toEqual([{ kind: "duplicateName", name: "login", others: 2 }]);
+  });
+
+  it("isn't flagged for an unnamed request, or a name given only by ###", () => {
+    const unnamed = request(() => {});
+    const titled = request((r) => (r.name = "login"));
+    expect(checks(unnamed, [unnamed, request(() => {})])).toEqual([]);
+    expect(checks(titled, [titled, named("login")])).toEqual([]);
+  });
+});

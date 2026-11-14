@@ -356,6 +356,101 @@ async fn the_rest_client_docs_chain_runs_through_file_variables() {
     assert_eq!(header(&created, "authorization"), Some("tok-1"));
 }
 
+// ---------------------------------------------------------------- the Session panel's Named exchanges
+
+#[tokio::test]
+async fn named_exchanges_lists_each_latest_exchange_with_its_file_status_and_time() {
+    let server = login_server(serde_json::json!({ "token": "abc123" })).await;
+    Mock::given(path("/gone")).respond_with(ResponseTemplate::new(404)).mount(&server).await;
+    let session = Session::default();
+    let (api, other) = (Path::new("/ws/b/api.http"), Path::new("/ws/a/other.http"));
+    send(&session, api, &chain(&server, "$.token"), 0).await.unwrap();
+    send(&session, other, &format!("# @name zeta\nGET {}/gone\n", server.uri()), 0).await.unwrap();
+    send(&session, other, &chain(&server, "$.token"), 0).await.unwrap();
+
+    let list = session.exchanges().list();
+
+    let entries: Vec<_> = list.iter().map(|e| (e.file.as_path(), e.name.as_str(), e.status)).collect();
+    assert_eq!(entries, [(other, "login", 200), (other, "zeta", 404), (api, "login", 200)], "by file, then name");
+    assert_eq!(list[2].received, session.exchanges().latest(api, "login").unwrap().received);
+    let json = serde_json::to_value(&list[2]).unwrap();
+    assert_eq!(json["name"], "login");
+    assert_eq!(json["status"], 200);
+    assert_eq!(json["received"], list[2].received.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+}
+
+#[tokio::test]
+async fn removing_a_named_exchange_makes_its_request_variables_unsent_again() {
+    let server = login_server(serde_json::json!({ "token": "abc123" })).await;
+    let session = Session::default();
+    let (api, other) = (Path::new("/ws/api.http"), Path::new("/ws/other.http"));
+    let text = chain(&server, "$.token");
+    send(&session, api, &text, 0).await.unwrap();
+    send(&session, other, &text, 0).await.unwrap();
+
+    assert!(session.exchanges().remove(api, "login"));
+    assert!(!session.exchanges().remove(api, "login"), "nothing left to remove");
+
+    let err = send(&session, api, &text, 1).await.unwrap_err();
+    assert!(matches!(&err, ExecError::UnsentRequest(names) if names == &["login"]), "{err:?}");
+    send(&session, other, &text, 1).await.expect("the other file's exchange stays");
+    assert_eq!(session.exchanges().list().len(), 1);
+}
+
+// ---------------------------------------------------------------- the hover
+
+#[tokio::test]
+async fn a_request_variable_reads_as_unsent_its_value_or_why_it_matches_nothing() {
+    use exchange::Reading;
+    let server = login_server(serde_json::json!({ "token": "abc123", "n": 7 })).await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let read = |reference: &str| session.exchanges().read(file, reference);
+
+    assert_eq!(read("login.response.body.$.token"), Some(Reading::Unsent { request: "login".into() }));
+    assert_eq!(read("login"), None, "a plain name is never a Request variable");
+
+    send(&session, file, &chain(&server, "$.token"), 0).await.unwrap();
+    let received = session.exchanges().latest(file, "login").unwrap().received;
+
+    assert_eq!(
+        read("login.response.body.$.token"),
+        Some(Reading::Value { request: "login".into(), status: 200, received, value: "abc123".into() })
+    );
+    let Some(Reading::Value { value, .. }) = read("login.response.headers.x-token") else { panic!() };
+    assert_eq!(value, "from-header");
+    let Some(Reading::Value { value, .. }) = read("login.response.body.$.n") else { panic!() };
+    assert_eq!(value, "7", "as the send inserts it");
+    assert_eq!(
+        read("login.response.body.$.tok"),
+        Some(Reading::Unmatched {
+            request: "login".into(),
+            status: 200,
+            received,
+            reason: "`$.tok` matches nothing".into()
+        })
+    );
+    let json = serde_json::to_value(read("login.response.body.$.tok")).unwrap();
+    assert_eq!(json["state"], "unmatched");
+    assert_eq!(json["received"], received.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+}
+
+#[tokio::test]
+async fn a_long_value_reads_shortened_for_the_hover() {
+    let long = "x".repeat(exchange::READING_LIMIT + 50);
+    let server = login_server(serde_json::json!({ "token": long })).await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    send(&session, file, &chain(&server, "$.token"), 0).await.unwrap();
+
+    let Some(exchange::Reading::Value { value, .. }) = session.exchanges().read(file, "login.response.body.$.token")
+    else {
+        panic!()
+    };
+    assert_eq!(value.chars().count(), exchange::READING_LIMIT + 1);
+    assert!(value.ends_with('…'), "{value}");
+}
+
 #[tokio::test]
 async fn the_latest_exchanges_shape_lists_each_sides_json_keys_and_header_names_for_completion() {
     let server = MockServer::start().await;

@@ -4,7 +4,7 @@
 // (`makeVarProvider`), which gives the core's answers, so they follow every edit.
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
-import { variableNameError } from "./http";
+import { getDirective, variableNameError } from "./http";
 import type { Auth, Body, EnvironmentSet, Request } from "./types";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
@@ -26,16 +26,25 @@ export interface UndefinedVariable {
 export type Check =
   | { kind: "undefined"; name: string; sections: Section[]; fixes: QuickFix[] }
   /** The selected environment `env` isn't defined for the request's folder `dir`, so it's sent with none (ADR-0004). */
-  | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] };
+  | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] }
+  /**
+   * The request's `# @name` is also that of `others` other requests in its file, so its
+   * Request variables read whichever of them was sent last. It never blocks the send.
+   */
+  | { kind: "duplicateName"; name: string; others: number };
 
 /**
  * Everything the strip lists for a request, in order. Empty: the strip is hidden.
  * `set` is the request's own environments (its folder's) and `dir` its folder,
- * relative to the workspace root.
+ * relative to the workspace root. `file` is every request of the request's file (it
+ * included), whose `# @name`s it may share.
  */
-export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = ""): Check[] {
+export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = "", file: Request[] = []): Check[] {
   const missing = !!envName && !set?.environments.some((e) => e.name === envName);
   const checks: Check[] = missing ? [{ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] }] : [];
+  const name = getDirective(req, "name")?.trim();
+  const others = name ? file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length : 0;
+  if (name && others) checks.push({ kind: "duplicateName", name, others });
   const env = missing ? null : envName;
   for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, env) });
   return checks;

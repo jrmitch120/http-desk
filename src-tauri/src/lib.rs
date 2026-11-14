@@ -786,6 +786,60 @@ fn forget_prompt_answers(state: State<'_, AppState>, request_key: String) {
     state.session().prompt_answers().forget(&request_key);
 }
 
+/// The Session panel's Named exchanges: each named request with a latest exchange,
+/// by file, then name, with its status and when it arrived.
+#[tauri::command]
+fn named_exchanges(state: State<'_, AppState>) -> Vec<httpdesk_core::exchange::NamedExchange> {
+    state.session().exchanges().list()
+}
+
+/// Forgets the latest exchange of the request named `name` in `file_path`, so its
+/// Request variables read as unsent. False if there was none.
+#[tauri::command]
+fn remove_named_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -> bool {
+    state.session().exchanges().remove(&file_path, &name)
+}
+
+/// Forgets every named request's latest exchange.
+#[tauri::command]
+fn clear_named_exchanges(state: State<'_, AppState>) {
+    state.session().exchanges().clear();
+}
+
+/// Shows the latest exchange of the request named `name` in `file_path` again: its
+/// response as the viewer showed it, under a new id whose body (the exchange's own,
+/// not copied) is kept like any response's until released (ADR-0006). A tab showing
+/// the original response keeps it, and releasing either leaves the other.
+#[tauri::command]
+fn open_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -> CmdResult<HttpResponse> {
+    let exchange = state
+        .session()
+        .exchanges()
+        .latest(&file_path, &name)
+        .ok_or_else(|| format!("`{name}` has no exchange in this Session"))?;
+    let response = exchange.reopened();
+    let body = KeptBody {
+        bytes: exchange.response.body.clone(),
+        content_type: response.content_type.clone(),
+        kind: response.body_kind,
+    };
+    state.bodies.lock().unwrap().push(response.id.clone(), body);
+    Ok(response)
+}
+
+/// What Request variable `reference` (trimmed, without braces) of a request in
+/// `file_path` reads now, for its hover: unsent, its value and the exchange it comes
+/// from, or why it matches nothing. Null when it isn't a Request variable. Off the
+/// main thread, since it may parse a body.
+#[tauri::command]
+async fn request_variable<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: PathBuf,
+    reference: String,
+) -> CmdResult<Option<httpdesk_core::exchange::Reading>> {
+    off_main(app, move |state| Ok(state.session().exchanges().read(&file_path, &reference))).await
+}
+
 /// The shape of the latest exchange of the request named `name` in `file_path`, in the
 /// Session: its status, when it arrived, and each side's header names and JSON keys,
 /// which its Request variables' paths complete from. Null when it hasn't been sent.
@@ -1247,6 +1301,11 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             prompt_answers,
             answer_prompts,
             forget_prompt_answers,
+            named_exchanges,
+            remove_named_exchange,
+            clear_named_exchanges,
+            open_exchange,
+            request_variable,
             exchange_shape,
             session_cookies,
             delete_cookie,

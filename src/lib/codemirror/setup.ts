@@ -34,6 +34,7 @@ import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
+import type { ReadingCard } from "../exchanges";
 
 export type Language = "json" | "xml" | "html" | "javascript" | "text";
 
@@ -218,6 +219,12 @@ export interface VarProvider {
    * place of the selection. Without it fields don't offer Extract to variable.
    */
   extract?: (value: string) => Promise<string | null>;
+  /**
+   * What a Request variable (`login.response.body.$.token`) reads now and from which
+   * exchange, for its hover card (null if it can't tell). Without it the card says
+   * only that it's read when sent.
+   */
+  readRequestVariable?: (reference: string) => Promise<ReadingCard | null>;
 }
 
 /** The `{{…}}` references on the visible lines, as `segments` reads them (like the resolver): document range and name. */
@@ -259,7 +266,8 @@ function varTooltip(provider: VarProvider) {
       const [from, to, name] = [line.from + s.from, line.from + s.from + s.text.length, s.ref];
       if (pos < from || pos > to) continue;
       const close = () => view.dispatch({ effects: closeHoverTooltips });
-      return { pos: from, end: to, create: () => ({ dom: varCard(name, provider.info(name), { edit: provider.edit, findUsages: provider.findUsages, close }) }) };
+      const actions = { edit: provider.edit, findUsages: provider.findUsages, readRequestVariable: provider.readRequestVariable, close };
+      return { pos: from, end: to, create: () => ({ dom: varCard(name, provider.info(name), actions) }) };
     }
     return null;
   });
@@ -270,13 +278,20 @@ function varTooltip(provider: VarProvider) {
  * Secret (or a value a Secret went into) is masked until Reveal, in this card
  * only. With `edit` and a definition that has a row in the app, Edit closes the
  * card (`close`) and opens that row; with `findUsages`, Find usages closes it and
- * lists the references to a named (not `$`) variable. Shared by editors' hover
+ * lists the references to a named (not `$`) variable. A Request variable's card
+ * fills in what it reads now and from which exchange (`readRequestVariable`), and
+ * always notes that Rider won't send it (ADR-0007). Shared by editors' hover
  * tooltips and VarField's static rendering, so both show the same card.
  */
 export function varCard(
   name: string,
   info: VarInfo,
-  actions: { edit?: (d: Definition) => void; findUsages?: (name: string) => void; close?: () => void } = {},
+  actions: {
+    edit?: (d: Definition) => void;
+    findUsages?: (name: string) => void;
+    readRequestVariable?: VarProvider["readRequestVariable"];
+    close?: () => void;
+  } = {},
 ): HTMLElement {
   const div = (cls: string, text = "") => {
     const el = document.createElement("div");
@@ -301,7 +316,19 @@ export function varCard(
   else if (info.state === "request") body.textContent = "Request variable (read when sent)";
   else showValue();
   dom.append(div("var-card-name", name), body);
-  if (info.source) dom.append(div("var-card-source", `from ${info.source}`));
+  const source = info.source ? div("var-card-source", `from ${info.source}`) : null;
+  if (source) dom.append(source);
+  if (info.state === "request" && actions.readRequestVariable) {
+    body.classList.add("var-card-long");
+    void actions.readRequestVariable(name).then((read) => {
+      if (!read) return;
+      body.textContent = read.value;
+      body.classList.toggle("var-card-bad", read.bad);
+      if (source) source.textContent = read.source;
+    });
+  }
+  // The note on portability (ADR-0007): quiet, and on every Request variable.
+  if (requestVariable(name)) dom.append(div("var-card-note", "Rider refuses to send a request containing this"));
 
   const buttons: HTMLButtonElement[] = [];
   const button = (label: string, onclick: (b: HTMLButtonElement) => void) => {

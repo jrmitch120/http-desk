@@ -91,9 +91,18 @@ pub struct Exchange {
     /// The response's status code.
     pub status: u16,
     pub received: DateTime<Utc>,
+    /// The response as the viewer showed it, without its body (ADR-0006): what
+    /// opening the exchange from the Session panel shows again, with `response.body`.
+    pub shown: HttpResponse,
 }
 
 impl Exchange {
+    /// The response as the viewer showed it, under a new response id, for showing it
+    /// again with `response.body` kept under that id.
+    pub fn reopened(&self) -> HttpResponse {
+        HttpResponse { id: uuid::Uuid::new_v4().to_string(), ..self.shown.clone() }
+    }
+
     /// What completion offers for this exchange's paths, with its status and when it arrived.
     pub fn shape(&self) -> ExchangeShape {
         ExchangeShape {
@@ -196,6 +205,43 @@ impl Exchanges {
         self.lock().insert((file.to_path_buf(), name.to_string()), Arc::new(exchange));
     }
 
+    /// Every latest exchange held (the Session panel's Named exchanges): by file, then name.
+    pub fn list(&self) -> Vec<NamedExchange> {
+        let mut list: Vec<NamedExchange> = self
+            .lock()
+            .iter()
+            .map(|((file, name), e)| NamedExchange {
+                file: file.clone(),
+                name: name.clone(),
+                status: e.status,
+                received: e.received,
+            })
+            .collect();
+        list.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
+        list
+    }
+
+    /// What Request variable `reference` (trimmed, without braces) of a request in
+    /// `file` reads now, for its hover: unsent, its value (shortened past
+    /// [`READING_LIMIT`] characters), or why it matches nothing. `None` when the
+    /// reference isn't a Request variable.
+    pub fn read(&self, file: &Path, reference: &str) -> Option<Reading> {
+        let (name, path) = split_reference(reference)?;
+        let request = name.to_string();
+        let Some(exchange) = self.latest(file, name) else { return Some(Reading::Unsent { request }) };
+        let (status, received) = (exchange.status, exchange.received);
+        Some(match exchange.value(path) {
+            Ok(value) => Reading::Value { request, status, received, value: shorten(value) },
+            Err(reason) => Reading::Unmatched { request, status, received, reason },
+        })
+    }
+
+    /// Forgets the latest exchange of the request named `name` in `file`, so its
+    /// Request variables read as unsent. False if there was none.
+    pub fn remove(&self, file: &Path, name: &str) -> bool {
+        self.lock().remove(&(file.to_path_buf(), name.to_string())).is_some()
+    }
+
     /// Forgets every exchange, so every Request variable reads as unsent.
     pub fn clear(&self) {
         self.lock().clear();
@@ -204,6 +250,54 @@ impl Exchanges {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(PathBuf, String), Arc<Exchange>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// One entry of the Session panel's Named exchanges: a named request with a latest
+/// exchange, its file, the response's status and when it arrived.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NamedExchange {
+    pub file: PathBuf,
+    pub name: String,
+    pub status: u16,
+    /// Serialized as RFC 3339 in UTC, with milliseconds.
+    #[serde(serialize_with = "rfc3339")]
+    pub received: DateTime<Utc>,
+}
+
+/// How many characters of a Request variable's value its hover shows.
+pub const READING_LIMIT: usize = 2_000;
+
+fn shorten(value: String) -> String {
+    match value.char_indices().nth(READING_LIMIT) {
+        Some((at, _)) => format!("{}…", &value[..at]),
+        None => value,
+    }
+}
+
+/// What a Request variable reads now ([`Exchanges::read`]): what its hover shows.
+/// Each names the request it reads; the last two say which exchange (its status and
+/// when it arrived).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum Reading {
+    /// The request hasn't been sent in this Session: a send would be blocked.
+    Unsent { request: String },
+    /// The value a send would insert.
+    Value {
+        request: String,
+        status: u16,
+        #[serde(serialize_with = "rfc3339")]
+        received: DateTime<Utc>,
+        value: String,
+    },
+    /// The path reads nothing from the exchange (`reason` says why): a send would be blocked.
+    Unmatched {
+        request: String,
+        status: u16,
+        #[serde(serialize_with = "rfc3339")]
+        received: DateTime<Utc>,
+        reason: String,
+    },
 }
 
 /// A named request's send in flight: the request as it goes out, waiting for its response.
@@ -231,9 +325,9 @@ impl PendingExchange {
     /// Records the exchange, with `response` and its `body`, as the latest of its
     /// request in `exchanges`, received now.
     pub fn finish(self, exchanges: &Exchanges, response: &HttpResponse, body: Arc<[u8]>) {
-        let status = response.status;
+        let (status, shown) = (response.status, response.clone());
         let response = Message { headers: response.headers.clone(), body, content_type: response.content_type.clone() };
-        let exchange = Exchange { request: self.request, response, status, received: Utc::now() };
+        let exchange = Exchange { request: self.request, response, status, received: Utc::now(), shown };
         exchanges.record(&self.file, &self.name, exchange);
     }
 }
