@@ -30,7 +30,10 @@ fn parses_jetbrains_fixture() {
             "Post with JSON body",
             "Multi-line query",
             "Basic auth",
-            "Send a form with the text and file fields"
+            "Send a form with the text and file fields",
+            "Per-request variable from a pre-request script",
+            "Signed with a pre-request script",
+            "Pre-request script file",
         ]
     );
 
@@ -231,6 +234,38 @@ fn response_handlers_parse_into_parts_and_the_file_is_unchanged() {
     let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
     assert_eq!(runs, [true, true, true, true, false]);
     assert_eq!(serialize(&f), HANDLERS);
+}
+
+#[test]
+fn pre_request_scripts_parse_into_parts_and_the_file_is_unchanged() {
+    let f = parse(JETBRAINS);
+    let parts: Vec<_> = f.requests[5..].iter().map(Request::pre_request_parts).collect();
+    assert_eq!(
+        parts[0],
+        [PreRequestPart::Inline { source: r#" request.variables.set("firstname", "John") "#.into(), line: 1 }]
+    );
+    let PreRequestPart::Inline { source, line: 1 } = &parts[1][0] else { panic!("{:?}", parts[1]) };
+    assert!(source.starts_with("\nconst signature = crypto.hmac.sha256()\n"), "{source}");
+    assert!(source.ends_with("request.variables.set(\"hash\", hash)\n"), "{source}");
+    assert_eq!(parts[2], [PreRequestPart::File { path: "scripts/my-script.js".into() }]);
+    assert!(f.requests[..5].iter().all(|r| r.pre_request_parts().is_empty()));
+
+    let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
+    assert_eq!(runs, [false, true, false, false, false, true, true, true], "a pre-request script needs trust too");
+    assert_eq!(serialize(&f), JETBRAINS);
+}
+
+#[test]
+fn several_pre_request_blocks_each_count_lines_from_the_whole_script() {
+    let req = parse("< {% a(); %}\n< {%\n  b();\n%}\n< ./c.js\nGET https://x\n").requests.remove(0);
+    assert_eq!(
+        req.pre_request_parts(),
+        [
+            PreRequestPart::Inline { source: " a(); ".into(), line: 1 },
+            PreRequestPart::Inline { source: "\n  b();\n".into(), line: 2 },
+            PreRequestPart::File { path: "./c.js".into() },
+        ]
+    );
 }
 
 #[test]
@@ -596,9 +631,9 @@ fn added_and_removed_requests_serialize_cleanly() {
     f.requests.push(Request { name: "New".into(), url: "https://new".into(), ..Default::default() });
     let out = serialize(&f);
     assert!(!out.contains("Multi-line query"));
-    assert!(out.ends_with(">> response.json\n\n### New\nGET https://new\n"), "{out}");
+    assert!(out.ends_with("GET https://example.org/pets\n\n### New\nGET https://new\n"), "{out}");
     let back = parse(&out);
-    assert_eq!(back.requests.len(), 5);
+    assert_eq!(back.requests.len(), 8);
 }
 
 #[test]

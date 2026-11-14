@@ -22,6 +22,7 @@ const HEADINGS: Record<SendErrorKind, string> = {
   unmatchedPath: "A Request variable matched nothing",
   file: "Couldn't read a file",
   untrustedWorkspace: "Scripts aren't trusted here",
+  preRequestScript: "Pre-request script failed",
   other: "Could not send request",
 };
 
@@ -70,6 +71,10 @@ function hint(err: SendError): string | null {
       return err.details.chains
         .map((chain) => `Change a value in ${chain.join(" → ")} so the chain doesn't come back to ${chain[chain.length - 1]}.`)
         .join(" ");
+    case "preRequestScript":
+      return err.details.line === null
+        ? "Nothing was sent."
+        : `Nothing was sent. The error is at line ${err.details.line} of the pre-request script.`;
     case "unsentRequest": {
       const names = err.details.names.map((n) => `\`${n}\``);
       return names.length === 1
