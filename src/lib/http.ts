@@ -636,11 +636,13 @@ export interface BodySyntaxWarning {
 
 /**
  * Whether sending the request would run a script, which only a Trusted workspace
- * may do: a `> {% %}` or `> file.js` response handler line. `>>` output redirects
- * aren't scripts. Mirrors the core's `script::has_scripts`.
+ * may do: a `< {% %}` or `< file.js` pre-request script line, or a `> {% %}` or
+ * `> file.js` response handler line. `>>` output redirects aren't scripts.
+ * Mirrors the core's `script::has_scripts`.
  */
 export function hasScripts(req: Request): boolean {
-  return (req.responseHandler ?? "").split("\n").some((l) => l.startsWith(">") && !l.startsWith(">>") && l.slice(1).trim() !== "");
+  const pre = (req.preScript ?? "").split("\n").some((l) => l.trimStart().startsWith("<") && l.trimStart().slice(1).trim() !== "");
+  return pre || (req.responseHandler ?? "").split("\n").some((l) => l.startsWith(">") && !l.startsWith(">>") && l.slice(1).trim() !== "");
 }
 
 /** Response handler or output redirect at column 0, the same rule as the parser. */

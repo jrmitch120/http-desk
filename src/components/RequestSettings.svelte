@@ -116,7 +116,7 @@
         </ul>
       {/if}
       {#if preserved.length}
-        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact. Response handlers run after a send in a Trusted workspace; pre-request scripts and output redirects don't run yet.</p>
+        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact. In a Trusted workspace, a pre-request script runs before the request is built and a response handler after the response arrives; output redirects don't run yet.</p>
       {/if}
     </section>
   {/if}

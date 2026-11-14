@@ -353,6 +353,8 @@ export type SendError = { message: string } & (
   | { kind: "file"; details: { path: string; reason: string } }
   /** The request has a script and the workspace isn't a Trusted workspace. */
   | { kind: "untrustedWorkspace"; details: null }
+  /** The pre-request script failed, so nothing was sent. `line` counts from its first `<` line. */
+  | { kind: "preRequestScript"; details: { line: number | null } }
   | { kind: "other"; details: null }
 );
 

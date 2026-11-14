@@ -69,6 +69,11 @@ pub enum ExecError {
     /// The request has a script, and the workspace isn't a Trusted workspace.
     #[error("This request has a script, and this workspace isn't trusted to run scripts. Trust it, or send without scripts.")]
     UntrustedWorkspace,
+    /// The pre-request script threw, ran out of time or memory, or couldn't run,
+    /// so nothing was sent. `line` is the pre-request script's line (1-based,
+    /// counted from its first `<` line), when the error has one.
+    #[error("{message}{}", line.map(|l| format!(" (line {l})")).unwrap_or_default())]
+    PreRequestScript { message: String, line: Option<usize> },
 }
 
 /// `a → b → a`, chains separated by `; `.
@@ -101,6 +106,7 @@ pub enum ErrorKind {
     CircularVariable,
     File,
     UntrustedWorkspace,
+    PreRequestScript,
     Other,
 }
 
@@ -118,6 +124,7 @@ impl ExecError {
             ExecError::CircularHost(_) => ErrorKind::CircularVariable,
             ExecError::File { .. } => ErrorKind::File,
             ExecError::UntrustedWorkspace => ErrorKind::UntrustedWorkspace,
+            ExecError::PreRequestScript { .. } => ErrorKind::PreRequestScript,
             ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
             | ExecError::InvalidHeader(_)
@@ -141,6 +148,7 @@ impl ExecError {
             ExecError::UnresolvedHost(names) => json!({ "names": names }),
             ExecError::CircularHost(chains) => json!({ "chains": chains }),
             ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
+            ExecError::PreRequestScript { line, .. } => json!({ "line": line }),
             _ => serde_json::Value::Null,
         }
     }
@@ -590,11 +598,15 @@ fn auth_fields(auth: &Auth, resolver: &Resolver) -> Vec<(String, String)> {
     fields.iter().map(|(label, text)| (label.to_string(), resolve(label, text))).collect()
 }
 
+/// The preview's warning for a request with a pre-request script, which it never runs.
+pub const PRE_REQUEST_NOT_PREVIEWED: &str =
+    "The pre-request script runs only when the request is sent, so values it sets aren't shown here.";
+
 /// The request as [`prepare`] would make it, without sending it. Dynamic variables
 /// that generate a new value on every send are shown as written, not generated.
 /// Each value a Secret went into is between [`crate::vars::SECRET_MARKS`], for the UI
 /// to mask (never in `error`, which masks it). The body isn't shown and no file is
-/// read, but the Content-Type it implies is.
+/// read, but the Content-Type it implies is. Scripts never run here.
 pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let resolver = resolver.previewing();
     let Head { method, url, mut headers, error } = head(req, &resolver);
@@ -611,7 +623,12 @@ pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
     add_default_headers(&req.body, &mut headers);
     let auth = auth_fields(&req.auth, &resolver);
-    let warnings = warnings(req, &resolver, &headers);
+    let mut warnings = warnings(req, &resolver, &headers);
+    // Scripts only run on a send: the preview is redrawn as you type, and a
+    // script's effects (and the trust it needs) belong to the send.
+    if !req.pre_request_parts().is_empty() {
+        warnings.push(PRE_REQUEST_NOT_PREVIEWED.into());
+    }
     let shown =
         |pairs: &[(String, String)]| pairs.iter().map(|(n, v)| (resolver.shown(n), resolver.shown(v))).collect();
     RequestPreview { method, url: resolver.shown(&url), headers: shown(&headers), auth: shown(&auth), warnings, error }

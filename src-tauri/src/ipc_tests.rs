@@ -10,6 +10,7 @@ mod deleting;
 mod fetch;
 mod folder_envs;
 mod paths;
+mod pre_request;
 mod preview;
 mod renaming;
 mod reply;
