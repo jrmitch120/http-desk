@@ -85,6 +85,17 @@ describe("send error hints", () => {
     expect(describeSendError(err({ kind: "file", details: { path: "/a.json", reason: "not found" } })).hint).toBeNull();
   });
 
+  it("says a failed pre-request script stopped the send, at which line", () => {
+    const e = { kind: "preRequestScript", message: "ReferenceError: sign is not defined (line 3)", details: { line: 3 } } as const;
+    expect(describeSendError(e)).toEqual({
+      heading: "Pre-request script failed",
+      hint: "Nothing was sent. The error is at line 3 of the pre-request script.",
+    });
+    expect(describeSendError({ ...e, details: { line: null } }).hint).toBe("Nothing was sent.");
+    expect(toSendError(e)).toBe(e);
+    expect(sendErrorFix(e)).toBeNull();
+  });
+
   it("keeps the general hint for other errors only", () => {
     const general = /Check the URL, the selected environment/;
     expect(describeSendError(err({ kind: "other", details: null }))).toEqual({
@@ -102,6 +113,7 @@ describe("send error hints", () => {
       err({ kind: "unresolvedVariable", details: { names: ["a"] } }),
       err({ kind: "circularVariable", details: { chains: [["a", "a"]] } }),
       err({ kind: "file", details: { path: "p", reason: "r" } }),
+      err({ kind: "preRequestScript", details: { line: 1 } }),
     ];
     for (const e of others) expect(describeSendError(e).hint ?? "", e.kind).not.toMatch(general);
   });

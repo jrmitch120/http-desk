@@ -42,7 +42,7 @@
 <section class="scripts" role="group" aria-label="Scripts">
   <h3>Scripts</h3>
   <p class="muted sub">
-    JetBrains HTTP Client scripts. A pre-request script runs before the request is built, and a response handler after the response arrives. HttpDesk runs response handlers in a Trusted workspace; it doesn't run pre-request scripts yet.
+    JetBrains HTTP Client scripts. A pre-request script runs before the request is built, and a response handler after the response arrives. HttpDesk runs both in a Trusted workspace.
   </p>
   {#each scripts as s (key(s))}
     <div class="script" role="group" aria-label={label(s)}>

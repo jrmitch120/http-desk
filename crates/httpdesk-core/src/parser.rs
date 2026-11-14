@@ -239,26 +239,53 @@ pub(crate) fn handler_parts(text: &str) -> Vec<HandlerPart> {
                 }
                 continue;
             };
-            let mut source = String::new();
-            let mut current = script;
-            loop {
-                if let Some(end) = current.find("%}") {
-                    source.push_str(&current[..end]);
-                    break;
-                }
-                source.push_str(current);
-                match lines.next() {
-                    Some((_, next)) => {
-                        source.push('\n');
-                        current = next;
-                    }
-                    None => break,
-                }
-            }
+            let source = inline_script(script, &mut lines);
             parts.push(HandlerPart::Inline { source, line: i + 1 });
         }
     }
     parts
+}
+
+/// Splits a verbatim pre-request script into its parts: `< {%` takes everything
+/// up to the next `%}` as its script, `< path` is a script file.
+pub(crate) fn pre_request_parts(text: &str) -> Vec<PreRequestPart> {
+    let mut parts = Vec::new();
+    let mut lines = text.split('\n').enumerate();
+    while let Some((i, line)) = lines.next() {
+        let Some(rest) = line.trim_start().strip_prefix('<') else { continue };
+        let rest = rest.trim_start();
+        match rest.strip_prefix("{%") {
+            Some(script) => {
+                let source = inline_script(script, &mut lines);
+                parts.push(PreRequestPart::Inline { source, line: i + 1 });
+            }
+            None if !rest.trim().is_empty() => parts.push(PreRequestPart::File { path: rest.trim().to_string() }),
+            None => {}
+        }
+    }
+    parts
+}
+
+/// The text of an inline `{% … %}` script that starts with `first` (just after
+/// `{%`): up to the next `%}`, taking further lines from `lines` as needed.
+fn inline_script<'a>(first: &'a str, lines: &mut impl Iterator<Item = (usize, &'a str)>) -> String {
+    let mut source = String::new();
+    let mut current = first;
+    loop {
+        if let Some(end) = current.find("%}") {
+            source.push_str(&current[..end]);
+            break;
+        }
+        source.push_str(current);
+        match lines.next() {
+            Some((_, next)) => {
+                source.push('\n');
+                current = next;
+            }
+            None => break,
+        }
+    }
+    source
 }
 
 fn trim_blank_lines<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {

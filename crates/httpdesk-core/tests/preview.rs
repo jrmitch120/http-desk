@@ -219,3 +219,17 @@ fn a_send_uses_prompted_values_including_masked_ones() {
     let sent = prepare(&req, &resolver, Path::new("."), &ExecSettings::default()).unwrap();
     assert_eq!(sent.url, "https://x.example/?p=s3cret");
 }
+
+#[test]
+fn the_preview_never_runs_a_pre_request_script_and_says_so() {
+    let req = request("< {% request.variables.set(\"sig\", \"abc\"); %}\nGET https://x.example/\nX-Sig: {{sig}}\n");
+    let shown = preview(&req, Resolver::new(HashMap::new()));
+    assert_eq!(shown.headers[0], ("X-Sig".to_string(), "{{sig}}".to_string()));
+    assert_eq!(
+        shown.warnings,
+        [
+            "Undefined variables: sig",
+            "The pre-request script runs only when the request is sent, so values it sets aren't shown here."
+        ]
+    );
+}
