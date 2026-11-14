@@ -56,6 +56,26 @@ fn a_request_variable_reads_the_named_requests_latest_exchange_in_the_preview_an
 }
 
 #[test]
+fn a_named_requests_latest_exchange_gives_its_shape_for_completion() {
+    let h = Harness::new();
+    let (login_url, _) = json_server(r#"{"token":"abc123","user":{"id":1}}"#);
+    let (_ws, login, _) = chained_workspace(&h, &login_url, "http://127.0.0.1:9");
+    let ask = json!({ "filePath": login["filePath"], "name": "login" });
+
+    assert_eq!(h.ok("exchange_shape", ask.clone()), Value::Null, "not sent yet");
+    h.ok("send_request", login);
+
+    let shape = h.ok("exchange_shape", ask);
+    assert_eq!(shape["status"], 200);
+    assert!(shape["received"].is_string(), "{shape}");
+    assert_eq!(shape["response"]["body"], json!({ "keys": [["token", {}], ["user", { "keys": [["id", {}]] }]] }));
+    assert!(!shape["response"]["headers"].as_array().unwrap().is_empty(), "{shape}");
+    assert!(shape["request"]["headers"].is_array(), "{shape}");
+    let other = json!({ "filePath": "/elsewhere/api.http", "name": "login" });
+    assert_eq!(h.ok("exchange_shape", other), Value::Null, "an exchange belongs to its file");
+}
+
+#[test]
 fn opening_another_workspace_forgets_every_exchange() {
     let h = Harness::new();
     let (login_url, _) = json_server(r#"{"token":"abc123"}"#);

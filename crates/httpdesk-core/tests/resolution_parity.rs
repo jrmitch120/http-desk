@@ -150,7 +150,7 @@ fn the_core_resolver_gives_the_shared_answers() {
             .map(|name| {
                 let exchange = c.exchanges.get(name).map(|e| {
                     let (request, response) = (e.request.message(), e.response.message());
-                    std::sync::Arc::new(Exchange { request, response, received: chrono::Utc::now() })
+                    std::sync::Arc::new(Exchange { request, response, status: 200, received: chrono::Utc::now() })
                 });
                 (name.clone(), exchange)
             })

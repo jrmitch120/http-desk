@@ -12,7 +12,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, HttpResponse, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -626,8 +626,20 @@ function unsentError(names: string[]): Omit<SendError & { kind: "unsentRequest" 
     details: { names },
   };
 }
-/** Which named requests have a latest exchange in the mock's Session, as `path\0name`. */
-const exchanges = new Set<string>();
+/** The named requests with a latest exchange in the mock's Session, by `path\0name`: its shape (`exchange_shape`). */
+const exchanges = new Map<string, ExchangeShape>();
+/** Stand-in for the core's `Message::shape`: header names once each, and a JSON body's shape. */
+function messageShape(headers: [string, string][], body: string | null): MessageShape {
+  const names: string[] = [];
+  for (const [name] of headers) if (!names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  let json: JsonShape | null = null;
+  try {
+    if (body) json = mockShape(JSON.parse(body));
+  } catch {
+    json = null;
+  }
+  return { headers: names, body: json };
+}
 /**
  * Like the core's send: the named requests (of `requestNames`) whose Request variables
  * the request reads but which haven't been sent in this Session, sorted.
@@ -1044,7 +1056,14 @@ async function mockSend(args: any) {
   if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
   const r = args.request;
   const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
-  if (named) exchanges.add(`${args.filePath}\0${named}`);
+  // Like the core: a named request's exchange becomes its latest (its response side once known).
+  const sentHeaders: [string, string][] = r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]);
+  const record = (status: number, headers: [string, string][], body: string | null) => {
+    if (!named) return;
+    const request = messageShape(sentHeaders, r.body.enabled ? r.body.text : null);
+    exchanges.set(`${args.filePath}\0${named}`, { received: new Date().toISOString(), status, response: messageShape(headers, body), request });
+  };
+  record(200, [], null);
   if (perf) return perfResponse(r.url, r.method);
   if (responseKind === "asReceived") return asReceivedResponse(r.method);
   if (r.url.includes("png") && bigBinary) {
@@ -1089,11 +1108,13 @@ async function mockSend(args: any) {
   textBodies.set(id, { body, kind: bodyKind });
   const cookies = responseKind === "cookies" ? mockCookies : [];
   keepCookies(cookies);
-  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
+  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
+  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
+  record(status, headers, body);
   return {
     id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
     url: "http://127.0.0.1:8765/pets?limit=20",
-    headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
+    headers,
     timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
     truncated: responseKind === "truncated",
     request: {
@@ -1258,6 +1279,8 @@ mockIPC(
       case "forget_prompt_answers":
         sessionPrompts.delete(args.requestKey);
         return null;
+      case "exchange_shape":
+        return clone(exchanges.get(`${args.filePath}\0${args.name}`) ?? null);
       case "session_cookies":
         return [...sessionJar.values()].sort((a, b) => jarKey(a).localeCompare(jarKey(b)));
       case "delete_cookie":

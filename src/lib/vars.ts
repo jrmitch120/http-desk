@@ -4,7 +4,8 @@
 // variables are left as written: they're generated at send time.
 import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
 import { promptMasked, segments } from "./http";
-import type { EnvironmentSet, EnvSource, EnvVar, Prompt, Variable } from "./types";
+import type { EnvironmentSet, EnvSource, EnvVar, ExchangeShape, Prompt, Variable } from "./types";
+import { requestPathCompletion, type PathCompletion } from "./requestPaths";
 import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
 
 /**
@@ -103,6 +104,8 @@ export interface Scope {
   answers?: Record<string, string>;
   /** The `# @name`s of the file's requests (`requestNames`): what its Request variables can read. */
   requestNames?: string[];
+  /** The shape of a named request's latest exchange in the Session, null if unsent: what its paths complete from. */
+  exchange?: (name: string) => Promise<ExchangeShape | null>;
 }
 
 interface Entry {
@@ -115,7 +118,7 @@ interface Entry {
   definition?: Definition;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {}, requestNames = [] }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {}, requestNames = [], exchange }: Scope): VarProvider {
   // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
   const prompted = new Map<string, { value: string; masked: boolean } | null>();
   for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
@@ -208,6 +211,8 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
       if (i.state !== "ok") return { name, source };
       return { name, source, preview: shorten(i.value ?? "") };
     });
+    // A named request goes on with its path: `{{login.response…}}`.
+    const requests = [...new Set(requestNames)].map((name): VarCompletion => ({ name, source: "request" }));
     const dynamic = DYNAMIC_VARIABLES.map(({ name, args, description, required }): VarCompletion => ({
       name,
       source: "dynamic",
@@ -215,10 +220,17 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
       description,
       ...(required ? { required } : {}),
     }));
-    return [...named, ...dynamic];
+    return [...named, ...requests, ...dynamic];
   }
 
-  return { resolve, info, completions };
+  async function pathCompletions(typed: string): Promise<PathCompletion | null> {
+    const dot = typed.indexOf(".");
+    const name = dot > 0 ? typed.slice(0, dot) : "";
+    if (!name || !requestNames.includes(name)) return null;
+    return requestPathCompletion(typed, name, (await exchange?.(name)) ?? null);
+  }
+
+  return { resolve, info, completions, pathCompletions };
 }
 
 /**
