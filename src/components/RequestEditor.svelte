@@ -12,6 +12,7 @@
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
@@ -60,11 +61,15 @@
       edit: (d: Definition) => app.editDefinition(tab.id, d),
       findUsages: (name: string) => app.findUsages(name),
       extract: (value: string) => app.extractVariable(tab.id, value),
+      readRequestVariable: async (reference: string) => {
+        const reading = await app.requestVariable(tab.path, reference).catch(() => null);
+        return reading && readingCard(reading, workspaceFile(app.root, tab.path));
+      },
     };
   });
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path)) : []);
+  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests) : []);
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }

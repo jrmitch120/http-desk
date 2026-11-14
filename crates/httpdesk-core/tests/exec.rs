@@ -1305,8 +1305,13 @@ async fn clearing_the_session_forgets_its_cookies_prompt_answers_and_exchanges_a
     send_with_jar(&pool, session.cookies(), "POST {{base}}/login\n", &server.uri()).await;
     session.prompt_answers().answer("req-1", env(&[("otp", "123456")]));
     let message = || exchange::Message { headers: vec![], body: Vec::new().into(), content_type: None };
-    let login =
-        exchange::Exchange { request: message(), response: message(), status: 200, received: chrono::Utc::now() };
+    let login = exchange::Exchange {
+        request: message(),
+        response: message(),
+        status: 200,
+        received: chrono::Utc::now(),
+        shown: Default::default(),
+    };
     session.exchanges().record(Path::new("api.http"), "login", login);
 
     session.clear();

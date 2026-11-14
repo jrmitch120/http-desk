@@ -340,6 +340,29 @@ export interface StoredCookie {
   sameSite: "Strict" | "Lax" | "None" | null;
 }
 
+/**
+ * A named request with a latest exchange in the Session (core
+ * `exchange::NamedExchange`): the Session panel's Named exchanges. Its file and
+ * `# @name` identify it.
+ */
+export interface NamedExchange {
+  file: string;
+  name: string;
+  status: number;
+  /** When its response arrived: RFC 3339, UTC. */
+  received: string;
+}
+
+/**
+ * What a Request variable reads now (core `exchange::Reading`), for its hover: its
+ * request not sent in this Session, the value a send would insert (shortened when
+ * long), or why its path matches nothing. The last two name the exchange they read.
+ */
+export type RequestVariableReading =
+  | { state: "unsent"; request: string }
+  | { state: "value"; request: string; status: number; received: string; value: string }
+  | { state: "unmatched"; request: string; status: number; received: string; reason: string };
+
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
 export type BodyKind = "json" | "xml";
 

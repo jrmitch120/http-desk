@@ -58,11 +58,16 @@ if (preScriptParam) {
   files[`${ROOT}/api/pets.http`] = withScript;
 }
 // `?chain=1`: Create pet is `# @name createPet`, and Get pet image reads the new pet's id
-// from its latest exchange (`{{createPet.response.body.$.id}}`), a Request variable.
-if (new URLSearchParams(location.search).get("chain") === "1") {
+// from its latest exchange (`{{createPet.response.body.$.id}}`, a Request variable; the
+// canned response has no `id`, so it matches nothing), and its first item's name in an
+// X-Pet-Name header. `?chain=dup` also names Get pet image `createPet`, a duplicate.
+const chainMode = new URLSearchParams(location.search).get("chain");
+if (chainMode === "1" || chainMode === "dup") {
   const chained = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
   (chained.requests[1] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
   chained.requests[2].url = "{{baseUrl}}/png/{{createPet.response.body.$.id}}";
+  (chained.requests[2].headers.items as unknown[]).push({ enabled: true, name: "X-Pet-Name", value: "{{createPet.response.body.$.items[0].name}}" });
+  if (chainMode === "dup") (chained.requests[2] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
   files[`${ROOT}/api/pets.http`] = chained;
 }
 // `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
@@ -713,6 +718,60 @@ function messageShape(headers: [string, string][], body: string | null): Message
   }
   return { headers: names, body: json };
 }
+/** A named request's latest exchange in the mock's Session, as the Session panel and a Request variable's hover read it. */
+interface MockExchange {
+  entry: { file: string; name: string; status: number; received: string };
+  response: { id: string; status: number; headers: unknown };
+  /** Its body, kept apart from the response's id (which the tab may release). */
+  text?: { body: string; kind: ResponseKind };
+  bytes?: Uint8Array;
+}
+/** The named requests' latest exchanges in the mock's Session, by `path\0name` (beside their shapes in `exchanges`). */
+const exchangeResponses = new Map<string, MockExchange>();
+/** Records `response` as the latest exchange of `name` in `file` (its body as stored under its id), and returns it. */
+function recordExchange<T extends MockExchange["response"]>(file: string | null, name: string | undefined, response: T): T {
+  if (file && name) {
+    const entry = { file, name, status: response.status, received: new Date().toISOString() };
+    exchangeResponses.set(`${file}\0${name}`, { entry, response, text: textBodies.get(response.id), bytes: binaryBodies.get(response.id) });
+  }
+  return response;
+}
+/** Forgets one named request's latest exchange (or, without a key, every one), like `Exchanges::remove` and `clear`. */
+function forgetExchanges(key?: string): boolean {
+  if (key === undefined) {
+    exchanges.clear();
+    exchangeResponses.clear();
+    return true;
+  }
+  const had = exchangeResponses.delete(key);
+  exchanges.delete(key);
+  return had;
+}
+/** Like the core's `Exchanges::read`: what Request variable `reference` of a request in `file` reads now. */
+function readRequestVariable(file: string, reference: string) {
+  const ref = requestVariable(reference);
+  if (!ref) return null;
+  const exchange = exchangeResponses.get(`${file}\0${ref.name}`);
+  if (!exchange) return { state: "unsent", request: ref.name };
+  const { status, received } = exchange.entry;
+  const [side, part, ...rest] = ref.path.split(".");
+  const path = rest.join(".");
+  const read = (): { value: string } | { reason: string } => {
+    if (side !== "response") return { reason: "the mock reads only the response" };
+    if (part === "headers") {
+      const values = (exchange.response.headers as [string, string][]).filter(([n]) => n.toLowerCase() === path.toLowerCase()).map(([, v]) => v);
+      return values.length ? { value: values.join(", ") } : { reason: `there is no \`${path}\` header` };
+    }
+    const text = exchange.text?.body ?? "";
+    if (path === "*") return { value: text };
+    let at: unknown = JSON.parse(text);
+    for (const key of path.replace(/^\$/, "").match(/[^.[\]]+/g) ?? []) at = (at as Record<string, unknown> | null)?.[key];
+    if (at === undefined) return { reason: `\`${path}\` matches nothing` };
+    return { value: typeof at === "string" ? at : JSON.stringify(at) };
+  };
+  const r = read();
+  return "value" in r ? { state: "value", request: ref.name, status, received, value: r.value } : { state: "unmatched", request: ref.name, status, received, reason: r.reason };
+}
 /**
  * Like the core's send: the named requests (of `requestNames`) whose Request variables
  * the request reads but which haven't been sent in this Session, sorted.
@@ -1145,23 +1204,25 @@ async function mockSend(args: any) {
     exchanges.set(`${args.filePath}\0${named}`, { received: new Date().toISOString(), status, response: messageShape(headers, body), request });
   };
   record(200, [], null);
-  if (perf) return perfResponse(r.url, r.method);
-  if (responseKind === "asReceived") return asReceivedResponse(r.method);
+  // Like the shell: the response as shown, and its body, are the exchange's too.
+  const done = <T extends MockExchange["response"]>(response: T) => recordExchange(args.filePath, named, response);
+  if (perf) return done(perfResponse(r.url, r.method));
+  if (responseKind === "asReceived") return done(asReceivedResponse(r.method));
   if (r.url.includes("png") && bigBinary) {
-    return storeBinary({
+    return done(storeBinary({
       id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
       headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
       bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
       truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-    }, new Uint8Array(BIG_BINARY_BYTES)); // 2 MB of zero bytes
+    }, new Uint8Array(BIG_BINARY_BYTES))); // 2 MB of zero bytes
   }
   if (r.url.includes("png")) {
-    return storeBinary({
+    return done(storeBinary({
       id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
       headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
       contentType: "image/png", bodyKind: "image", contentEncoding: null,
       truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-    }, PNG_BYTES);
+    }, PNG_BYTES));
   }
   const body =
     responseKind === "bigint"
@@ -1192,7 +1253,7 @@ async function mockSend(args: any) {
   const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
   const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
   record(status, headers, body);
-  return {
+  return done({
     id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
     url: "http://127.0.0.1:8765/pets?limit=20",
     headers,
@@ -1207,7 +1268,7 @@ async function mockSend(args: any) {
     cookies,
     tests: runScripts ? handlerTests(r.responseHandler ?? "", args.filePath, status) : [],
     logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
-  };
+  });
 }
 
 mockWindows("main");
@@ -1270,7 +1331,7 @@ mockIPC(
         settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
         sessionPrompts = new Map();
         sessionJar = new Map();
-        exchanges.clear();
+        forgetExchanges();
         return { root: ROOT, tree, gitignoreUpdated: false };
       case "set_menu":
         menuBar = clone(args.layout);
@@ -1372,8 +1433,26 @@ mockIPC(
       case "clear_session":
         sessionPrompts = new Map();
         sessionJar = new Map();
-        exchanges.clear();
+        forgetExchanges();
         return null;
+      case "named_exchanges":
+        return [...exchangeResponses.values()].map((e) => e.entry).sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
+      case "remove_named_exchange":
+        return forgetExchanges(`${args.filePath}\0${args.name}`);
+      case "clear_named_exchanges":
+        forgetExchanges();
+        return null;
+      case "open_exchange": {
+        // Like the shell: the response under a new id, with the exchange's own body.
+        const exchange = exchangeResponses.get(`${args.filePath}\0${args.name}`);
+        if (!exchange) throw `\`${args.name}\` has no exchange in this Session`;
+        const id = `x-${++responseCount}`;
+        if (exchange.text) textBodies.set(id, exchange.text);
+        if (exchange.bytes) binaryBodies.set(id, exchange.bytes);
+        return { ...exchange.response, id };
+      }
+      case "request_variable":
+        return readRequestVariable(args.filePath, args.reference);
       case "cancel_request":
         cancelledRuns.add(args.runId);
         return null;

@@ -15,8 +15,10 @@ import type {
   HttpFile,
   Usage,
   HttpResponse,
+  NamedExchange,
   Request,
   RequestPreview,
+  RequestVariableReading,
   SearchHit,
   SpecSummary,
   StoredCookie,
@@ -110,6 +112,19 @@ export const api = {
   clearCookies: () => invoke<void>("clear_cookies"),
   /** Empties the whole Session: cookies, prompt answers and every other section. */
   clearSession: () => invoke<void>("clear_session"),
+  /** Each named request with a latest exchange in the Session, by file, then name. */
+  namedExchanges: () => invoke<NamedExchange[]>("named_exchanges"),
+  /** Forgets one named request's latest exchange, so its Request variables read as unsent. False if there was none. */
+  removeNamedExchange: (filePath: string, name: string) => invoke<boolean>("remove_named_exchange", { filePath, name }),
+  /** Forgets every named request's latest exchange. */
+  clearNamedExchanges: () => invoke<void>("clear_named_exchanges"),
+  /**
+   * A named request's latest exchange as a response to show again: a new id whose
+   * body is kept until released, like any response's. Rejects when there is none.
+   */
+  openExchange: (filePath: string, name: string) => invoke<HttpResponse>("open_exchange", { filePath, name }),
+  /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */
+  requestVariable: (filePath: string, reference: string) => invoke<RequestVariableReading | null>("request_variable", { filePath, reference }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no

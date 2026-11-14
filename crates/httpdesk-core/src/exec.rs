@@ -713,7 +713,7 @@ pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     RequestPreview { method, url: resolver.shown(&url), headers: shown(&headers), auth: shown(&auth), warnings, error }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SentRequest {
     pub method: String,
@@ -723,7 +723,7 @@ pub struct SentRequest {
     pub body_size: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponse {
     pub id: String,

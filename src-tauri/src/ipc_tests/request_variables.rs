@@ -89,3 +89,86 @@ fn opening_another_workspace_forgets_every_exchange() {
 
     assert_eq!(h.ok("preview_request", me)["error"]["kind"], "unsentRequest");
 }
+
+#[test]
+fn named_exchanges_lists_each_latest_exchange_and_removing_one_makes_it_unsent_again() {
+    let h = Harness::new();
+    let (login_url, _) = json_server(r#"{"token":"abc123"}"#);
+    let (_ws, login, me) = chained_workspace(&h, &login_url, "http://127.0.0.1:9");
+    assert_eq!(h.ok("named_exchanges", json!({})), json!([]));
+    h.ok("send_request", login.clone());
+
+    let list = h.ok("named_exchanges", json!({}));
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    assert_eq!(list[0]["file"], login["filePath"]);
+    assert_eq!(list[0]["name"], "login");
+    assert_eq!(list[0]["status"], 200);
+    assert!(list[0]["received"].as_str().unwrap().ends_with('Z'), "{list}");
+
+    let entry = json!({ "filePath": login["filePath"], "name": "login" });
+    assert_eq!(h.ok("remove_named_exchange", entry.clone()), json!(true));
+    assert_eq!(h.ok("named_exchanges", json!({})), json!([]));
+    assert_eq!(h.ok("preview_request", me)["error"]["kind"], "unsentRequest");
+    assert_eq!(h.ok("remove_named_exchange", entry), json!(false));
+}
+
+#[test]
+fn clearing_named_exchanges_forgets_them_all_but_keeps_the_rest_of_the_session() {
+    let h = Harness::new();
+    let (login_url, _) = json_server(r#"{"token":"abc123"}"#);
+    let (_ws, login, me) = chained_workspace(&h, &login_url, "http://127.0.0.1:9");
+    h.ok("answer_prompts", json!({ "requestKey": "k1", "answers": { "otp": "123456" } }));
+    h.ok("send_request", login);
+
+    h.ok("clear_named_exchanges", json!({}));
+
+    assert_eq!(h.ok("named_exchanges", json!({})), json!([]));
+    assert_eq!(h.ok("preview_request", me)["error"]["kind"], "unsentRequest");
+    assert_eq!(h.ok("prompt_answers", json!({ "requestKey": "k1" })), json!({ "otp": "123456" }));
+}
+
+#[test]
+fn an_opened_exchange_is_a_response_of_its_own_whose_body_outlives_the_tabs() {
+    let h = Harness::new();
+    let (login_url, _) = json_server(r#"{"token":"abc123"}"#);
+    let (_ws, login, _) = chained_workspace(&h, &login_url, "http://127.0.0.1:9");
+    let sent = h.ok("send_request", login.clone());
+    let entry = json!({ "filePath": login["filePath"], "name": "login" });
+
+    let opened = h.ok("open_exchange", entry.clone());
+
+    assert_ne!(opened["id"], sent["id"], "its own id, so releasing either leaves the other");
+    assert_eq!(opened["status"], 200);
+    assert_eq!(opened["url"], sent["url"]);
+    assert_eq!(opened["request"], sent["request"]);
+    h.ok("release_response", json!({ "responseId": sent["id"] }));
+    let body = super::fetch::fetch(&h, &opened["id"], "raw").unwrap();
+    assert_eq!(String::from_utf8(body).unwrap(), r#"{"token":"abc123"}"#);
+
+    h.ok("remove_named_exchange", entry.clone());
+    assert!(h.call("open_exchange", entry).is_err(), "nothing to open");
+}
+
+#[test]
+fn a_request_variable_reads_its_value_and_source_for_the_hover() {
+    let h = Harness::new();
+    let (login_url, _) = json_server(r#"{"token":"abc123"}"#);
+    let (_ws, login, _) = chained_workspace(&h, &login_url, "http://127.0.0.1:9");
+    let read =
+        |reference: &str| h.ok("request_variable", json!({ "filePath": login["filePath"], "reference": reference }));
+    assert_eq!(read("login.response.body.$.token"), json!({ "state": "unsent", "request": "login" }));
+    assert_eq!(read("baseUrl"), Value::Null, "not a Request variable");
+
+    h.ok("send_request", login.clone());
+    let received = h.ok("named_exchanges", json!({}))[0]["received"].clone();
+
+    let value = read("login.response.body.$.token");
+    assert_eq!(
+        value,
+        json!({ "state": "value", "request": "login", "status": 200, "received": received, "value": "abc123" })
+    );
+    let unmatched = read("login.response.body.$.tok");
+    assert_eq!(unmatched["state"], "unmatched");
+    assert_eq!(unmatched["reason"], "`$.tok` matches nothing");
+    assert_eq!(unmatched["received"], received);
+}

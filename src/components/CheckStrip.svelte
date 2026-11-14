@@ -1,7 +1,8 @@
 <script lang="ts">
   // The strip above a request's sections listing what the request would be sent
   // with (src/lib/checks.ts): each Undefined variable once, where it is used, and its
-  // quick fixes, and a selected environment the request's folder doesn't define. It
+  // quick fixes, a selected environment the request's folder doesn't define, and a
+  // `# @name` another request in the file also has. It
   // never blocks sending, and it isn't there when there's nothing to list. Each kind
   // of check renders in its own branch below.
   import { SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
@@ -25,6 +26,11 @@
             </span>
             <span class="fixes">
               <button class="btn small ghost" onclick={() => onfix(check, check.fixes[0])}>Choose environment</button>
+            </span>
+          {:else if check.kind === "duplicateName"}
+            <span class="message">
+              <code class="name"># @name {check.name}</code> is also the name of {check.others === 1 ? "another request" : `${check.others} other requests`} in this file, so
+              <code class="name">{`{{${check.name}.response…}}`}</code> reads whichever was sent last
             </span>
           {:else if check.kind === "undefined"}
             <span class="message">
@@ -97,10 +103,11 @@
     font-weight: 600;
     color: var(--text);
   }
-  .message code.folder {
+  .message code.folder,
+  .message code.name {
     color: var(--text);
   }
-  .message code:not(.folder) {
+  .message code:not(.folder, .name) {
     text-decoration: underline wavy;
     text-decoration-skip-ink: none;
     text-underline-offset: 2px;
