@@ -8,6 +8,7 @@ import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { responseRedirects } from "../lib/scripts";
+import { requestVariableReads } from "../lib/checks";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
@@ -805,9 +806,9 @@ function readRequestVariable(file: string, reference: string) {
  * the request reads but which haven't been sent in this Session, sorted.
  */
 function unsentRequests(r: Request, filePath: string | null, requestNames: string[]): string[] {
-  const texts = [r.url, ...r.headers.items.filter((h) => h.enabled).flatMap((h) => [h.name, h.value]), r.body.enabled ? r.body.text : ""];
-  const names = texts.flatMap((t) => segments(t).flatMap(({ ref }) => (ref === undefined ? [] : [requestVariable(ref)?.name ?? ""])));
-  return [...new Set(names.filter((n) => n && requestNames.includes(n) && !exchanges.has(`${filePath}\0${n}`)))].sort();
+  return requestVariableReads(r)
+    .filter((n) => requestNames.includes(n) && !exchanges.has(`${filePath}\0${n}`))
+    .sort();
 }
 // `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`),
 // except that `unresolvedVariable` fails only while no environment is selected.

@@ -10,6 +10,7 @@ import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
 import { toSendError } from "./sendError";
+import { requestVariableReads } from "./checks";
 import { dropDocs } from "./responseDocs";
 import { definesVariable, renameInEnvironments, renameInFile, renameScope } from "./rename";
 import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFolder, within, writeFolder } from "./envFolders";
@@ -1408,7 +1409,9 @@ class AppStore {
     }
     const env = this.sentEnvironment(tab.path);
     if (env && this.guardsMethod(env, req.method) && !(await this.confirmProductionSend(tabId, env, req.method))) return;
-    const scripts = hasScripts(req) ? await this.scriptsAllowed(tabId) : "none";
+    // A send blocked as unsent runs no script, so it needs no trust: the shell reports the block.
+    const asksTrust = hasScripts(req) && !(await this.blockedAsUnsent(tab.path, req, requestNames(doc.file)));
+    const scripts = asksTrust ? await this.scriptsAllowed(tabId) : "none";
     if (scripts === "cancel") return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
@@ -1538,6 +1541,35 @@ class AppStore {
     } finally {
       this.confirmingSend.delete(tabId);
     }
+  }
+
+  /**
+   * Whether a send of `req`, from the file at `path` whose `# @name`s are `names`, is
+   * blocked as unsent: a Request variable it writes reads a named request with no
+   * latest exchange in the Session, other than those in `sentFirst` (sent earlier in
+   * the same run). The shell blocks it before any script runs or trust is checked
+   * (`send::send`), so it needs no trust.
+   */
+  private async blockedAsUnsent(path: string, req: Request, names: string[], sentFirst: string[] = []): Promise<boolean> {
+    const reads = requestVariableReads(req).filter((n) => names.includes(n) && !sentFirst.includes(n));
+    const shapes = await Promise.all(reads.map((n) => this.exchangeShape(path, n)));
+    return shapes.some((shape) => shape === null);
+  }
+
+  /**
+   * Whether a run of `entries` would run a script: one of them has a script and isn't
+   * blocked as unsent, counting a named request earlier in the run (in the same file)
+   * as sent by the time it's read.
+   */
+  private async runRunsScripts(entries: RunEntry[]): Promise<boolean> {
+    const named = new Map<string, string[]>();
+    for (const { path, args } of entries) {
+      const sentFirst = named.get(path) ?? [];
+      if (hasScripts(args.request) && !(await this.blockedAsUnsent(path, args.request, args.requestNames ?? [], sentFirst))) return true;
+      const name = getDirective(args.request, "name")?.trim();
+      if (name) named.set(path, [...sentFirst, name]);
+    }
+    return false;
   }
 
   /** Stops trusting the workspace at `path` (Settings → Trusted workspaces). */
@@ -1801,7 +1833,7 @@ class AppStore {
     try {
       if (!(await this.askRunPrompts(entries))) return;
       if (!(await this.confirmProductionRun(entries))) return;
-      scripts = entries.some((e) => hasScripts(e.args.request)) ? await this.scriptsAllowed(RUN_ASKING, "run") : "none";
+      scripts = (await this.runRunsScripts(entries)) ? await this.scriptsAllowed(RUN_ASKING, "run") : "none";
       if (scripts === "cancel") return;
     } finally {
       this.confirmingSend.delete(RUN_ASKING);

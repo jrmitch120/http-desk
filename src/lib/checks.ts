@@ -4,8 +4,9 @@
 // (`makeVarProvider`), which gives the core's answers, so they follow every edit.
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
-import { getDirective, variableNameError } from "./http";
+import { getDirective, segments, variableNameError } from "./http";
 import type { Auth, Body, EnvironmentSet, Request } from "./types";
+import { requestVariable } from "./vars";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
 export type Section = "url" | "params" | "headers" | "auth" | "body";
@@ -110,6 +111,17 @@ export function undefinedVariables(req: Request, variables: VarProvider): Undefi
     }
   }
   return [...found].map(([name, sections]) => ({ name, sections }));
+}
+
+/**
+ * The named requests whose exchanges `req`'s Request variables read, each once, in the
+ * order first written: only references written in what is sent, as the core's
+ * `exec::check_request_variables` reads them before the pre-request script. Names the
+ * file has no `# @name` for are left in: they are Undefined variables, not reads.
+ */
+export function requestVariableReads(req: Request): string[] {
+  const names = sentTexts(req).flatMap(([, texts]) => texts.flatMap((text) => segments(text).flatMap(({ ref }) => requestVariable(ref ?? "")?.name ?? [])));
+  return [...new Set(names)];
 }
 
 /**
