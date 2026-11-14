@@ -17,12 +17,14 @@
   import AboutModal from "./components/AboutModal.svelte";
   import RenameVariable from "./components/RenameVariable.svelte";
   import ExtractVariable from "./components/ExtractVariable.svelte";
+  import ExchangeView from "./components/ExchangeView.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
+  import PanelArea from "./components/PanelArea.svelte";
   import { updates } from "./lib/updates.svelte";
   import { handleCommandKey, shortcutHint } from "./lib/commands";
   import { startNativeMenu } from "./lib/nativeMenu.svelte";
-  import { SIDEBAR } from "./lib/panes";
+  import { PANEL, SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
@@ -49,9 +51,22 @@
     untrack(() => {
       const focused = document.activeElement;
       if (!main?.contains(focused) || work?.contains(focused)) return;
-      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
+      focusRequests();
     });
   });
+
+  // Likewise hiding the panel area while it or its separator has focus.
+  $effect.pre(() => {
+    if (app.panel) return;
+    untrack(() => {
+      const focused = document.activeElement;
+      if (focused?.closest(".panel-area") || focused?.matches('[role="separator"][aria-label="Resize panel"]')) focusRequests();
+    });
+  });
+
+  function focusRequests() {
+    (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
+  }
 
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
@@ -88,27 +103,42 @@
         {/snippet}
         {#snippet second()}
           <section class="work" bind:this={work}>
-            <TabBar />
-            {#if app.activeTab}
-              {#key app.activeTab.id}
-                <RequestView tab={app.activeTab} />
-              {/key}
-            {:else}
-              <div class="empty-state">
-                <Icon name="send" size={34} stroke={1.3} />
-                <div>Open a request from the explorer, or create a new one.</div>
-                <div class="row">
-                  <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
-                  <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
-                </div>
-                <div class="hints muted">
-                  <span><kbd>{shortcutHint("send")}</kbd> send</span>
-                  <span><kbd>{shortcutHint("save")}</kbd> save</span>
-                  <span><kbd>{shortcutHint("search")}</kbd> search</span>
-                  <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
-                </div>
-              </div>
-            {/if}
+            <SplitPane
+              stacked
+              end
+              collapsed={!app.panel}
+              size={app.settings?.panelHeight ?? PANEL.initial}
+              limits={PANEL}
+              label="Resize panel"
+              onresize={(panelHeight) => app.updateSettings({ panelHeight })}
+            >
+              {#snippet first()}
+                <TabBar />
+                {#if app.activeTab}
+                  {#key app.activeTab.id}
+                    <RequestView tab={app.activeTab} />
+                  {/key}
+                {:else}
+                  <div class="empty-state">
+                    <Icon name="send" size={34} stroke={1.3} />
+                    <div>Open a request from the explorer, or create a new one.</div>
+                    <div class="row">
+                      <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
+                      <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
+                    </div>
+                    <div class="hints muted">
+                      <span><kbd>{shortcutHint("send")}</kbd> send</span>
+                      <span><kbd>{shortcutHint("save")}</kbd> save</span>
+                      <span><kbd>{shortcutHint("search")}</kbd> search</span>
+                      <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
+                    </div>
+                  </div>
+                {/if}
+              {/snippet}
+              {#snippet second()}
+                {#if app.panel}<PanelArea />{/if}
+              {/snippet}
+            </SplitPane>
           </section>
         {/snippet}
       </SplitPane>
@@ -124,6 +154,9 @@
 {#if app.modal === "about"}<AboutModal />{/if}
 {#if app.renaming}<RenameVariable />{/if}
 {#if app.extraction}<ExtractVariable />{/if}
+{#if app.shownExchange}
+  {#key app.shownExchange.tab.id}<ExchangeView shown={app.shownExchange} />{/key}
+{/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}
 {/if}

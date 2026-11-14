@@ -253,8 +253,56 @@ export interface HttpResponse {
   request: SentRequest;
   warnings: string[];
   timings: Timings;
-  /** Every Set-Cookie received, redirect hops first. Shown only; never sent back. */
+  /** Every Set-Cookie received, redirect hops first. The Session's jar keeps them and sends them back. */
   cookies: ResponseCookie[];
+  /** The response handler's `client.test`/`client.assert` results and its own
+   *  failure, if any. Empty when no handler ran (`httpdesk_core::script`). */
+  tests: TestResult[];
+  /** What the scripts logged with `client.log`, a line per call, in order. */
+  logs: string[];
+}
+
+/**
+ * A `run-progress` event (`RunProgress` in src-tauri/src/lib.rs): what happened to
+ * request `index` of run `runId`. Each request reports `sending`, then one of the
+ * others; a request the run never reached reports nothing. `failed` follows GLOSSARY
+ * "Run": a failed test or script error, not an error status alone. A `failed` state
+ * (blocked, or no response) is always a failure.
+ */
+export type RunProgress = { runId: string; index: number } & (
+  | { state: "sending" }
+  | { state: "sent"; response: HttpResponse; failed: boolean }
+  | { state: "failed"; error: unknown }
+  | { state: "cancelled" }
+);
+
+/**
+ * One request of a run as an export shows it (`run::RequestReport`), from the shell
+ * when the run ends: no response body, and each Secret value masked in its URL and
+ * messages. `url`, `status` and `timeMs` are null when it got no response.
+ */
+export interface RunRequestReport {
+  /** Its file from the workspace root, `/` between folders; null for a request in no file. */
+  file: string | null;
+  name: string;
+  method: string;
+  url: string | null;
+  status: number | null;
+  timeMs: number | null;
+  outcome: "passed" | "failed" | "cancelled" | "notRun";
+  /** Why it failed (GLOSSARY "Run"). */
+  failure: { reason: "network" | "script" | "test" | "blocked"; message: string } | null;
+  tests: TestResult[];
+}
+
+/** One `client.test`, top-level `client.assert`, or script error (`script::TestResult`). */
+export interface TestResult {
+  name: string;
+  passed: boolean;
+  /** Why it failed; null when it passed. */
+  message: string | null;
+  /** Set on a response handler's own error (a "Response handler" entry): a script failure, not a test. */
+  scriptError?: boolean;
 }
 
 /**
@@ -294,6 +342,54 @@ export interface ResponseCookie {
   parseError: string | null;
 }
 
+/** A Global variable in the Session: a value a script stored with `client.global.set`. */
+export interface GlobalVariable {
+  name: string;
+  value: string;
+}
+
+/**
+ * A cookie in the Session's jar (`httpdesk_core::cookies::StoredCookie`). Its
+ * domain, path and name identify it.
+ */
+export interface StoredCookie {
+  name: string;
+  value: string;
+  /** The host it is sent to, without a leading dot; its subdomains too unless `hostOnly`. */
+  domain: string;
+  /** Set without a Domain attribute, so sent to exactly `domain`. */
+  hostOnly: boolean;
+  path: string;
+  /** RFC 3339 UTC; absent for a cookie that lasts until the Session ends. */
+  expires?: string | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: "Strict" | "Lax" | "None" | null;
+}
+
+/**
+ * A named request with a latest exchange in the Session (core
+ * `exchange::NamedExchange`): the Session panel's Named exchanges. Its file and
+ * `# @name` identify it.
+ */
+export interface NamedExchange {
+  file: string;
+  name: string;
+  status: number;
+  /** When its response arrived: RFC 3339, UTC. */
+  received: string;
+}
+
+/**
+ * What a Request variable reads now (core `exchange::Reading`), for its hover: its
+ * request not sent in this Session, the value a send would insert (shortened when
+ * long), or why its path matches nothing. The last two name the exchange they read.
+ */
+export type RequestVariableReading =
+  | { state: "unsent"; request: string }
+  | { state: "value"; request: string; status: number; received: string; value: string }
+  | { state: "unmatched"; request: string; status: number; received: string; reason: string };
+
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
 export type BodyKind = "json" | "xml";
 
@@ -320,6 +416,27 @@ export interface JsonShape {
   items?: JsonShape;
 }
 
+/**
+ * A named request's latest exchange in the Session as completion (and its hover)
+ * sees it (core `exchange::ExchangeShape`): when it arrived, its status, and each
+ * side's header names and JSON body shape.
+ */
+export interface ExchangeShape {
+  /** RFC 3339, UTC. */
+  received: string;
+  status: number;
+  response: MessageShape;
+  request: MessageShape;
+}
+
+/** One side of an exchange (core `exchange::MessageShape`). */
+export interface MessageShape {
+  /** Header names in order, each once. */
+  headers: string[];
+  /** Null when the body isn't JSON (or there's none). */
+  body: JsonShape | null;
+}
+
 /** Why a send failed; mirrors the core's `ExecError` kinds. */
 export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
 
@@ -338,8 +455,27 @@ export type SendError = { message: string } & (
   /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
   | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
+  /** The request has a script and the workspace isn't a Trusted workspace. */
+  | { kind: "untrustedWorkspace"; details: null }
+  /** The pre-request script failed, so nothing was sent. `line` counts from its first `<` line. */
+  | { kind: "preRequestScript"; details: { line: number | null } }
+  /** Request variables read the latest exchange of these named requests, which haven't been sent in this Session. */
+  | { kind: "unsentRequest"; details: { names: string[] } }
+  /** Request variables whose path reads nothing from their request's latest exchange. */
+  | { kind: "unmatchedPath"; details: { paths: UnmatchedPath[] } }
   | { kind: "other"; details: null }
 );
+
+/** A Request variable whose path read nothing (the core's `exchange::UnmatchedPath`). */
+export interface UnmatchedPath {
+  /** As written between the braces, trimmed: `login.response.body.$.tok`. */
+  reference: string;
+  /** The `# @name` of the request whose latest exchange it looked in. */
+  request: string;
+  /** When that exchange's response arrived (RFC 3339). */
+  received: string;
+  reason: string;
+}
 
 export type SendErrorKind = SendError["kind"];
 
@@ -388,6 +524,8 @@ export interface AppSettings {
   sidebarWidth: number;
   /** The sidebar is hidden (View → Show Sidebar, ⌘B / Ctrl+B). */
   sidebarHidden: boolean;
+  /** Height in px of the panel area below the requests (View → Show Session). */
+  panelHeight: number;
   /** The zoom of the whole interface, `1` being 100% (View → Zoom In / Zoom Out / Actual Size, ⌘= / ⌘- / ⌘0). */
   zoom: number;
   /** Request pane's share (0..1) of the request/response split, per layout. */
@@ -398,6 +536,19 @@ export interface AppSettings {
   envView: "matrix" | "list";
   /** Per workspace root: the Environments matrix's column widths, as resized. */
   envMatrixWidths: Record<string, MatrixWidths>;
+  /** Trusted workspaces (canonical roots): the only ones whose scripts run. Only the
+   *  shell changes it (`api.trustWorkspace`/`api.revokeWorkspaceTrust`); a save keeps the shell's. */
+  trustedWorkspaces: string[];
+  /** Per workspace root: the Runner's options, as last set in its panel. */
+  runnerOptions: Record<string, RunnerOptions>;
+}
+
+/** The Runner's options in one workspace (`RunnerOptions` in src-tauri/src/lib.rs). */
+export interface RunnerOptions {
+  /** Wait between requests, ms. */
+  delayMs: number;
+  /** End a run at its first failure (GLOSSARY "Run"); the rest don't run. */
+  stopOnFailure: boolean;
 }
 
 /** Column widths of the Environments matrix in one workspace, px. A column not listed keeps its default width. */

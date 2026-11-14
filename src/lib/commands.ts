@@ -28,10 +28,15 @@ export type CommandId =
   | "check-updates"
   | "send"
   | "cancel"
+  | "run-file"
+  | "stop-run"
   | "duplicate-request"
   | "rename-request"
   | "show-source"
   | "toggle-sidebar"
+  | "toggle-session"
+  | "toggle-runner"
+  | "clear-session"
   | "zoom-in"
   | "zoom-out"
   | "zoom-reset"
@@ -214,6 +219,14 @@ const COMMANDS: Command[] = [
     run: () => app.activeTabId && void app.cancel(app.activeTabId),
   },
   {
+    // The active request's file, every request in order (GLOSSARY "Run").
+    id: "run-file",
+    label: "Run File",
+    enabled: () => withTab() && !app.running,
+    run: () => app.activeTab && void app.runFile(app.activeTab.path),
+  },
+  { id: "stop-run", label: "Stop Run", enabled: () => app.running, run: () => void app.stopRun() },
+  {
     id: "duplicate-request",
     label: "Duplicate",
     enabled: withRequest,
@@ -241,6 +254,22 @@ const COMMANDS: Command[] = [
     checked: () => app.sidebarShown,
     run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
   },
+  {
+    id: "toggle-session",
+    label: "Show Session",
+    shortcut: { mod: true, key: "j" },
+    enabled: inWorkspace,
+    checked: () => app.panel === "session",
+    run: () => app.togglePanel("session"),
+  },
+  {
+    id: "toggle-runner",
+    label: "Show Runner",
+    enabled: inWorkspace,
+    checked: () => app.panel === "runner",
+    run: () => app.togglePanel("runner"),
+  },
+  { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {
     shortcut: { mod: true, key: "=" },
     // ⌘+ on a US keyboard is ⇧=; other layouts need Shift for = or have a + of their own, as the keypad does.

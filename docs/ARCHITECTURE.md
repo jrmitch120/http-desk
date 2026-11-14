@@ -14,7 +14,7 @@ and this document disagree, fix one of them. Terms in **bold** (**File variable*
 |---|---|
 | **Tauri 2** | Good fit. Single binary per OS, uses the OS webview (WebView2 / WKWebView / WebKitGTK), so bundles are ~10 MB instead of Electron's ~150 MB. Async commands run on a Tokio runtime; synchronous commands run on the main thread. Anything that can be slow (sending a request, the resolved preview, opening a workspace, listing the tree, search, delete, OpenAPI loading and generation, fetching, copying or saving a response body, formatting a body, a hex dump) is therefore an async command or runs on the blocking pool, so the window stays responsive. Response bodies reach the webview as raw IPC responses (an `ArrayBuffer`), never inside a JSON reply ([ADR-0006](adr/0006-response-bodies-fetched-by-id.md)). Single-file reads and saves are quick synchronous commands. The capability system limits what the webview can do. |
 | **Rust core** | `.http` parsing, serialization, variable resolution, execution and OpenAPI generation all live in a plain library crate (`crates/httpdesk-core`) with **no Tauri dependency**. It can be tested with `cargo test` and no window, and could later be reused by a CLI. |
-| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. TLS and redirect settings can differ per request or environment, so a client is built for its settings, and the shell keeps idle ones in an `exec::ClientPool` keyed by everything a client is built from (redirects, timeouts, TLS verification, CA and client certificate files by path, size and modification time, and the proxy environment variables). Each send checks out a client no other send is using, or a new one when none is idle (at most 8 are kept idle), so a later send can go over a connection an earlier one left open and the Timing tab can say "reused". Each client carries timing hooks (a DNS resolver wrapper, a connector layer and a redirect-policy wrapper) that measure the final request's DNS, connect + TLS, waiting and download phases, and a cookie recorder; both are cleared at the start of each send. |
+| **reqwest** | Chosen. Mature, async, supports rustls (no OpenSSL dependency, so cross-compiling is easy), custom methods, redirect policies, timeouts, custom root CAs, client identities (mTLS), and accepting invalid certificates. TLS and redirect settings can differ per request or environment, so a client is built for its settings, and the shell keeps idle ones in an `exec::ClientPool` keyed by everything a client is built from (redirects, timeouts, TLS verification, CA and client certificate files by path, size and modification time, and the proxy environment variables). Each send checks out a client no other send is using, or a new one when none is idle (at most 8 are kept idle), so a later send can go over a connection an earlier one left open and the Timing tab can say "reused". Each client carries timing hooks (a DNS resolver wrapper, a connector layer and a redirect-policy wrapper) that measure the final request's DNS, connect + TLS, waiting and download phases, and a cookie store; both are cleared at the start of each send. A client belongs to no workspace: each send hands its client the cookie jar of the Session it started in (none with `# @no-cookie-jar`), and the client lets go of it when the send ends, however it ends. |
 | **Svelte 5** | Runes (`$state`, `$derived`) handle the deeply nested request model without a separate store library. It compiles to small, fast bundles. Plain Vite SPA, without SvelteKit (no routing or SSR needed). |
 | **CodeMirror 6** | Used for the body editor, the response viewer (syntax highlighting, folding, **search**, virtualized rendering of large responses) the single-line URL editor and the variable-aware value fields (`VarField`, [controls.md](controls.md#varfield)), which share `{{variable}}` highlighting, hover cards and autocompletion. |
 | **Webview differences** | The main cross-platform risk. WebKitGTK on Linux lags Chromium. We stick to well-supported CSS (flex/grid, custom properties) and avoid bleeding-edge APIs. The UI uses HttpDesk's own controls and bundled fonts instead of native form widgets and system fonts, so it renders the same in every webview ([ADR-0002](adr/0002-owned-controls-over-native-widgets.md)); the controls are described in [controls.md](controls.md). |
@@ -35,7 +35,9 @@ crates/httpdesk-core/   pure Rust library — all domain logic + tests
   exec.rs               request preparation (shared by send and the resolved preview), execution via reqwest, send error classification
   exec/body.rs          response body: raw-byte count, Content-Encoding decoding, size limit
   exec/timing.rs        phase timing hooks (DNS, connect + TLS, redirects) for the Timing tab
-  cookies.rs            Set-Cookie parsing, and the display-only cookie recorder plugged into reqwest
+  exchange.rs           named requests' latest exchanges (a Session section) and the Request variable paths read from them
+  cookies.rs            Set-Cookie parsing, the Session's cookie jar, and the per-client store plugged into reqwest
+  session.rs            the workspace Session: prompt answers, the cookie jar and latest exchanges, in memory only
   body_format.rs        lossless JSON Beautify/Minify/Pretty: re-indents tokens, never re-parses numbers
   body_format/          xml.rs (XML formatter, same approach), hex.rs (Hex view dump)
   json_filter.rs        RFC 9535 JSONPath filter bar: matches copied from the body's own text; shape summary for key completion
@@ -76,13 +78,14 @@ block         := preamble request-line query-cont* header-line* [ blank body ] [
 preamble      := ( blank | comment | directive | file-variable | pre-script )*
 comment       := ("#" | "//") text
 directive     := ("#" | "//") [ " " ] "@" key [ value ] e.g. # @name, # @no-redirect, # @timeout 30
-file-variable := "@" name "=" value                     (VS Code; JetBrains in-place vars)
-pre-script    := "<" "{%" … "%}" | "<" path             (JetBrains; preserved verbatim, not executed)
+file-variable := "@" name "=" value                     (VS Code; JetBrains calls these "in-place variables")
+pre-script    := "<" "{%" … "%}" | "<" path             (JetBrains; preserved verbatim; runs before the request is built)
 request-line  := [ METHOD ] URL [ HTTP/version ]        (METHOD defaults to GET; custom methods allowed)
 query-cont    := indented line starting with "?" or "&"
 header-line   := Name ":" value | comment | disabled item (§5)
 body          := everything up to a response handler or end of block
-handler       := "> {% … %}" | "> path.js" | ">> file" | ">>! file"   (at column 0; preserved verbatim)
+handler       := "> {% … %}" | "> path.js" | ">> file" | ">>! file"   (at column 0; preserved verbatim;
+                 "> {% %}" runs after the send in a Trusted workspace, §8 Scripts)
 ```
 
 A directive's `@` comes right after the comment prefix or one space. A comment indented
@@ -112,6 +115,9 @@ Only requests the user actually edited are re-emitted in canonical form. Effects
   ending. Blank lines that are the only content before the first `###` are kept.
 * Hand-written formatting, alignment and comments in requests you didn't touch survive a
   GUI edit elsewhere in the file.
+* An edit that changes only a request's scripts (Settings → Scripts) is written into the
+  original text: the pre-request script and response handler are spliced in place, so the
+  rest of that request keeps its formatting too (`scripts_in_place` in the serializer).
 * Diffs in source control stay small.
 
 **Line endings.** The parser counts CRLF and bare LF line breaks. The file is CRLF only
@@ -191,7 +197,7 @@ Request {
     auth: Auth,                 // { enabled, kind: None | Basic | Bearer | ApiKey, …, raw }
     body: Body,                 // { enabled, mode, text }
     extra_lines: Vec<ExtraLine>,// unrecognized header-area lines: { text, before }
-    response_handler: Option<String>, // verbatim "> {% … %}" / ">> file"
+    response_handler: Option<String>, // verbatim "> {% … %}" / ">> file"; response_handler_parts() is the form that runs
     leading: String,            // verbatim non-request blocks preceding this request
     raw: Option<String>,        // original text, enables lossless round-trip
 }
@@ -233,7 +239,7 @@ is held in that text as `#~` lines, in place (§5).
 | Auth: Bearer | `Authorization: Bearer {{token}}` |
 | Auth: API key | A header or query param plus `# @httpdesk-auth apikey header X-API-Key` |
 | Body | Text after the blank line. `< ./file.json` file references (the space after `<` is optional) and multipart bodies use standard syntax. |
-| Settings | `# @no-redirect`, `# @timeout 30`, `# @connection-timeout 5` (standard JetBrains directives; see §10). `# @no-auto-encoding` is kept and honoured at send. |
+| Settings | `# @no-redirect`, `# @timeout 30`, `# @connection-timeout 5` (standard JetBrains directives; see §10). `# @no-auto-encoding` and `# @no-cookie-jar` are kept and honoured at send. |
 | File variables | `@baseUrl = https://api.example.com`, anywhere in the file; the GUI's file variables are written at the top of the file. |
 | Environments | `http-client.env.json` + `http-client.private.env.json` (JetBrains convention) |
 
@@ -487,12 +493,13 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 
 | Risk / limitation | Mitigation |
 |---|---|
-| Dialect differences (JetBrains vs VS Code) | Parse the union, emit the common subset. JetBrains-only features (scripts, `> {% %}` handlers) are preserved verbatim, never executed (scripting is out of scope). |
+| Dialect differences (JetBrains vs VS Code) | Parse the union, emit the common subset. JetBrains scripts are preserved verbatim; pre-request scripts and response handlers run (see Scripts below). |
+| Scripts from files other people wrote | JetBrains `> {% %}` response handlers run after the send in embedded QuickJS (`httpdesk_core::script`, [ADR-0008](adr/0008-scripts-run-in-embedded-quickjs.md)): a fresh runtime per script, no filesystem, network or process APIs, fixed limits of 5 s and 64 MB (the response body included), no setting. Only `script/prelude.js`'s API exists: `response.status`, `response.headers.valueOf/valuesOf`, `response.body` (parsed JSON for a JSON content type, else text), `response.contentType`, `client.test`, `client.assert`, `client.log` (its arguments joined by spaces, text as it is, objects as JSON; at most 64 KB per script, then one line says the log stopped: the log travels in the send's reply and in each Run event, and the Tests tab shows every line), `client.global.set/get/clear/isEmpty` (the Session's Global variables, in both kinds of script), and in a pre-request script `request.variables.set/get` and `request.environment.get`; every other JetBrains API (`client.global.clearAll`, other `request.*`, `crypto`, `$random`, `jsonPath`, `xpath`…) throws "`<api>` isn't supported in HttpDesk". A handler that throws, times out or runs out of memory still shows the response, with the error as a failed test (its handler line and message), flagged `scriptError` so a Run reports it as a script failure whatever the user's own tests are called. The runtime's allocator enforces the memory limit and records a refusal, which is how running out of memory is told from anything a script throws (`null` included). A thrown value reads the same in a `client.test` as at the top level. Cancel and a Run's Stop end a running script at once (the engine checks a stop signal with the time limit); Global variables it set before stand. Script files (`< sign.js`, `> check.js`) run like inline scripts: `script::ScriptFiles` reads them relative to the `.http` file's folder, following symlinks, and only from inside the workspace; a missing file, a folder, or one that is (or a symlink points) outside the workspace is a script error, naming the file, as is an error in the file itself (`(check.js line 3)`). The Scripts editor (Settings) shows a file reference's path, read-only, with "Open in default editor" (`open_script_file`), or why it can't run (`check_script_file`). The shell opens the file itself after the same check, and only a `.js` file (on Windows with Notepad, since Windows Script Host would run it); the webview has no permission to open paths (`src-tauri/tests/capabilities.rs`). JetBrains `>> file` / `>>! file` response redirects are kept but never run, and nothing is written: the send and the preview carry a warning saying so (`exec::redirect_not_run`), and the Scripts editor lists each one with that note. JetBrains `< {% %}` pre-request scripts run in `send_request` before variables are substituted, but after the Request variables the request writes are read: a send they block (unsent or unmatched) runs no script and asks for no trust (`script::run_pre_request_script`, off the async workers): `request.environment.get` reads the selected environment, private values included, and `request.variables.set` values become `{{name}}` for that request only, over every other variable but an answered Prompt variable (see Variable precedence). `client.global.set` writes the Session's Global variables (`session::GlobalVariables`) as the script runs, so a handler or pre-request script that throws keeps what it set before the throw, and a value a pre-request script sets is used by its own request. A pre-request script that throws, times out, runs out of memory or is a file that can't be read blocks the send: nothing is sent, and the send fails with `preRequestScript`, its message and its line (counted from the first `<` line). Its tests and logs come before the handler's on the response. The resolved preview never runs scripts and says so. The API that is implemented is listed in `script/api.json` (name, signature, description); a core test checks that list against what the prelude implements, and the Scripts editor completes from it, so it never offers an unsupported API. Results reach the webview as the response's `tests` and `logs`, shown in the viewer's Tests tab (its Log section lists that response's `client.log` lines). After a send whose scripts ran tests, the request's tab and tree row show a marker: green if every test passed, red if any failed (a handler error included). The page keeps markers by request key (`app.testMark`), so they outlast the tab; a send with no tests or a failed send drops that request's marker, and `app.clearTestMarks()` drops them all when the Session is cleared (opening a workspace). Scripts run only in a **Trusted workspace**: the first send that would run one in an untrusted workspace asks Trust and run / Send without scripts / Cancel. Trust is stored in `settings.json` as `trustedWorkspaces` (canonical roots), never in the workspace; only the shell changes it (`trust_workspace`, `revoke_workspace_trust`, Settings → Trusted workspaces), and `save_settings` keeps the shell's list, so a page saving an older copy can't undo it. `send_request` refuses (`untrustedWorkspace`, nothing sent) a request with a script in an untrusted workspace unless told `skipScripts`; then the response warns which scripts didn't run. "Send without scripts" is remembered by the page until the workspace is opened again. |
 | `#~` items render as comments in other editors | Intended; documented above. |
 | Disabled query params and multipart parts reorder after the enabled ones | Documented; deterministic. |
 | `@httpdesk-*` directives might trigger an "unknown tag" hint in JetBrains | They are plain comments to both parsers, and only written when needed (section off, API key auth). |
 | Environment file conventions differ (VS Code uses `settings.json`) | Use the JetBrains env files, which are plain JSON in the repo. VS Code users can use the `vscode-restclient` env-file setting or keep both. |
-| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. The limit counts decoded bytes, after `Content-Encoding` is undone. The reply to `send_request` carries metadata only (status, headers, sizes, content type, body kind, truncated flag, timings, cookies, warnings, the request as sent), never a body, at any size ([ADR-0006](adr/0006-response-bodies-fetched-by-id.md)). The shell keeps each body by response id (`bodies.rs`) until the webview releases it (`release_response`): when its tab closes, gets a newer response (or a send error replaces it), or closes with the workspace; a cancelled send releases nothing, and every page load drops them all. There is no count or byte limit, so an open tab never loses its response. Releasing a body also drops its parsed JSON and key-completion shape. The viewer fetches what the current view needs with `response_body(responseId, view)`, on the blocking pool, as raw bytes (an `ArrayBuffer`, not a JSON string): `raw` is the text decoded from its charset and sent as UTF-8, `pretty` the lossless JSON or XML formatting of it, `bytes` the body exactly as stored. Each is fetched once per response, when its view is first shown, with a loading state meanwhile; Raw never fetches Pretty. Pretty is offered only for JSON and XML (for HTML or text it would show the raw text, so those get Raw, plus Preview for HTML); there is no inline cutoff, so even a small body's Pretty text is fetched. If the body doesn't parse, the fetch reports "isn't JSON or XML", as for any other kind, and Pretty shows the raw text; if it has been released, the editor says "(Response is no longer available)". Whether a body is text or binary is its body kind: images, PDF, audio and video, and `binary` are binary, and so is a body kept as received because its `Content-Encoding` couldn't be undone, whatever its content type says. A binary body offers Hex (and Preview for its kind); the Hex view is the core's dump of the first 64 KB of the stored body (`hexdump` by response id), so it works at any size, and `response_body` refuses `raw` and `pretty` for it. Preview (HTML, images, PDF, audio and video) loads a `blob:` URL made in the webview from the `bytes` view, typed with the response's content type; HTML stays in an iframe with an empty `sandbox`. The URL is kept per tab, so switching tabs and back shows the preview again without fetching it; it is revoked when the tab's preview is replaced (a re-sent response's preview keeps the previous one until its own URL exists) or the tab releases its response. The CSP allows `blob:` for frame, image, media and object sources only, and no `data:` URLs (`src-tauri/tests/csp.rs`). Copy body goes through the shell too (`copy_response_body`, on the blocking pool, through the clipboard plugin): text as text, a binary kind as base64; the webview asks first when the base64 would come from a body over 1 MB, sizing it from `bodySize`. Copying the filter's matches stays in the webview. "Save to file" writes the stored bytes. The JSONPath filter bar (whole JSON bodies only, not truncated ones) runs `filter_response` by response id on the blocking pool; the shell keeps the last 3 bodies parsed as JSON, so typing doesn't re-parse, and drops a parsed body when its response is released. Key completion comes from `response_shape`: the keys reachable at each place (array items merged, at most 1000 keys per place), built once per parsed document and kept with it; the webview fetches it once per response and completes locally on every keystroke. serde_json's `arbitrary_precision` isn't enabled: it would still rewrite `1e3` as `1e+3`, and would switch on for Tauri too. Instead the parsed value only decides what matches, and each match is copied from the body's text by its location. Filter comparisons (`==`, `<`, ...) compare numbers exactly: integers as integers (19-digit ids, values past 2^53), and an integer against a decimal or exponent by value (`10.50 == 10.5`, `1e3 == 1000`); serde_json_path compares through f64, so `vendor/serde_json_path_core` patches that. A decimal with more digits than an f64 holds compares as its nearest f64. A body nested deeper than serde_json's 128 levels says "This body is nested too deeply to filter" (the formatter allows 1000). |
+| Large responses over IPC | A response is read up to the maximum body size (Settings, default 100 MB) and truncated beyond it. The limit counts decoded bytes, after `Content-Encoding` is undone. The reply to `send_request` carries metadata only (status, headers, sizes, content type, body kind, truncated flag, timings, cookies, warnings, the request as sent, and the scripts' `tests` and `logs`), never a body, at any size ([ADR-0006](adr/0006-response-bodies-fetched-by-id.md)). The shell keeps each body by response id (`bodies.rs`) until the webview releases it (`release_response`): when its tab closes, gets a newer response (or a send error replaces it), or closes with the workspace; a cancelled send releases nothing, and every page load drops them all. There is no count or byte limit, so an open tab never loses its response. Releasing a body also drops its parsed JSON and key-completion shape. The viewer fetches what the current view needs with `response_body(responseId, view)`, on the blocking pool, as raw bytes (an `ArrayBuffer`, not a JSON string): `raw` is the text decoded from its charset and sent as UTF-8, `pretty` the lossless JSON or XML formatting of it, `bytes` the body exactly as stored. Each is fetched once per response, when its view is first shown, with a loading state meanwhile; Raw never fetches Pretty. Pretty is offered only for JSON and XML (for HTML or text it would show the raw text, so those get Raw, plus Preview for HTML); there is no inline cutoff, so even a small body's Pretty text is fetched. If the body doesn't parse, the fetch reports "isn't JSON or XML", as for any other kind, and Pretty shows the raw text; if it has been released, the editor says "(Response is no longer available)". Whether a body is text or binary is its body kind: images, PDF, audio and video, and `binary` are binary, and so is a body kept as received because its `Content-Encoding` couldn't be undone, whatever its content type says. A binary body offers Hex (and Preview for its kind); the Hex view is the core's dump of the first 64 KB of the stored body (`hexdump` by response id), so it works at any size, and `response_body` refuses `raw` and `pretty` for it. Preview (HTML, images, PDF, audio and video) loads a `blob:` URL made in the webview from the `bytes` view, typed with the response's content type; HTML stays in an iframe with an empty `sandbox`. The URL is kept per tab, so switching tabs and back shows the preview again without fetching it; it is revoked when the tab's preview is replaced (a re-sent response's preview keeps the previous one until its own URL exists) or the tab releases its response. The CSP allows `blob:` for frame, image, media and object sources only, and no `data:` URLs (`src-tauri/tests/csp.rs`). Copy body goes through the shell too (`copy_response_body`, on the blocking pool, through the clipboard plugin): text as text, a binary kind as base64; the webview asks first when the base64 would come from a body over 1 MB, sizing it from `bodySize`. Copying the filter's matches stays in the webview. "Save to file" writes the stored bytes. The JSONPath filter bar (whole JSON bodies only, not truncated ones) runs `filter_response` by response id on the blocking pool; the shell keeps the last 3 bodies parsed as JSON, so typing doesn't re-parse, and drops a parsed body when its response is released. Key completion comes from `response_shape`: the keys reachable at each place (array items merged, at most 1000 keys per place), built once per parsed document and kept with it; the webview fetches it once per response and completes locally on every keystroke. serde_json's `arbitrary_precision` isn't enabled: it would still rewrite `1e3` as `1e+3`, and would switch on for Tauri too. Instead the parsed value only decides what matches, and each match is copied from the body's text by its location. Filter comparisons (`==`, `<`, ...) compare numbers exactly: integers as integers (19-digit ids, values past 2^53), and an integer against a decimal or exponent by value (`10.50 == 10.5`, `1e3 == 1000`); serde_json_path compares through f64, so `vendor/serde_json_path_core` patches that. A decimal with more digits than an f64 holds compares as its nearest f64. A body nested deeper than serde_json's 128 levels says "This body is nested too deeply to filter" (the formatter allows 1000). |
 | Huge OpenAPI specs (thousands of operations) | Generation is linear. The operation picker groups operations under collapsible headings and has a filter; it is not virtualized. |
 | External `$ref` to remote URLs | Not fetched (warning); relative-file refs are resolved for specs loaded from a file. |
 | Linux WebKitGTK rendering differences | Conservative CSS. CI builds and runs the Rust and frontend tests on Linux, macOS and Windows, but runs the Playwright UI tests in Chromium only; rendering in the three OS webviews is checked by hand with the [manual OS rendering check](os-checklist.md). |
@@ -515,7 +522,8 @@ The output is ordinary `.http` text produced by the same serializer the editor u
    bundles for Windows, macOS and Linux.
 
 Deferred (out of scope): scripting, chaining, assertions, cookies UI, collaboration,
-sync, WebSocket, GraphQL, mocks.
+sync, WebSocket, GraphQL, mocks. (#107 has since brought chaining, scripts, assertions and
+cookies in: [ADR-0007](adr/0007-chaining-in-both-editors-syntaxes.md).)
 
 ---
 
@@ -533,7 +541,7 @@ Decisions made during implementation, beyond the plan above:
   into a nearer one (`env::load_for(root, dir)`; `env::load(dir)` is one folder's own
   pair). `SSLConfiguration` comes from the same files, with paths relative to the file's
   folder. Send and the resolved preview load the request's folder's environments from
-  disk (`request_resolver`); the frontend gets the root's own set (`load_environments`)
+  disk (`send::scope`); the frontend gets the root's own set (`load_environments`)
   and one effective set per folder below the root that has env files
   (`load_folder_environments` → `env::load_folders`, the explorer's folders), and a
   request takes the nearest one at or above its folder (`src/lib/envFolders.ts`,
@@ -634,16 +642,25 @@ Decisions made during implementation, beyond the plan above:
   Delete environment… (its actions button, shown on hover or focus, or a right-click;
   the same actions as the List view's buttons, so Delete confirms the same way); the
   Shared header has none. Use, production and colour stay in the list.
-* **Variable precedence:** File variables > selected environment > `$shared`. Within an
-  environment, a value in the private file overrides one in the shared file. Among File
-  variables, the request's own declaration wins over a same-named one elsewhere in the
-  file. Values are resolved recursively in that same scope, so an environment's
-  `baseUrl = {{host}}/api` picks up a File variable `host`. Two resolvers apply these
-  rules: the core's `vars::Resolver` at send, and the frontend's `makeVarProvider`
-  (`src/lib/vars.ts`) for highlighting, hover and autocomplete. They are kept in step by
-  one set of cases, `crates/httpdesk-core/tests/fixtures/resolution-cases.json`, which
-  `tests/resolution_parity.rs` and `src/lib/vars.test.ts` both run. The frontend leaves
-  dynamic variables as written. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
+* **Variable precedence**, highest first: an answered Prompt variable > a pre-request
+  script's `request.variables.set` > File variables > Global variables > selected
+  environment > `$shared`. Prompt variables are HttpDesk's (GLOSSARY); the rest is Rider's
+  order as measured with `ijhttp` (#129, [research](research/http-comment-compat.md) Q6),
+  not the JetBrains docs' reverse order. Within an environment, a value in the private
+  file overrides one in the shared file. Among File variables, the request's own
+  declaration wins over a same-named one elsewhere in the file (JetBrains instead ignores
+  a name declared twice; HttpDesk keeps its rule). Values are resolved recursively in
+  that same scope, so an environment's `baseUrl = {{host}}/api` picks up a File variable
+  `host`. A Secret counts only where the environment's value is the one used. Two
+  resolvers apply these rules, each in one place: the core's `vars::Resolver` at send
+  (`Scopes::lookup`), and the frontend's `makeVarProvider` (`src/lib/vars.ts`) for
+  highlighting, hover, autocomplete and the Undefined-variable checks, which reads the
+  Session's Global variables (`session_globals`, again on every `app.sessionVersion`) so a
+  set one is defined. They are kept in step by one set of cases,
+  `crates/httpdesk-core/tests/fixtures/resolution-cases.json` (a case for each pair of
+  places #129 measured), which `tests/resolution_parity.rs` and `src/lib/vars.test.ts`
+  both run. The frontend leaves dynamic variables and Request variables as written (only
+  the core reads exchanges), and the editor never knows a pre-request script's values. Dynamic variables (`$uuid`/`$guid`, `$timestamp`, `$isoTimestamp`, `$randomInt`,
   `$random.*`, `$datetime`, `$localDatetime`, `$processEnv`, `$env.X`, `$dotenv`) are
   resolved at send time. A dynamic variable with invalid or out-of-range arguments stops
   the send with an error naming it. The core generates only the names in
@@ -657,6 +674,61 @@ Decisions made during implementation, beyond the plan above:
   Anywhere else, Undefined variables are sent as written (in the query they are
   percent-encoded like any other text) and reported as a warning on the response
   ("Undefined variables: a, b", from `Resolver::undefined`).
+* **Request variables** (VS Code REST Client) read the latest exchange of a request
+  named `# @name x` in the same file: `{{x.response.body.*}}` (the whole body),
+  `{{x.response.body.$.path}}` (JSONPath; the first match, a string inserted raw and
+  anything else as its JSON text exactly as in the body), `{{x.response.body.//path}}`
+  (XPath 1.0 into an XML body, via `sxd-xpath` in `exchange/xpath.rs`; of a node-set the
+  first node in document order: an element's content as XML, the root `/` as the root
+  element's XML, an attribute's or text node's value; a string, number or boolean
+  result as itself), `{{x.response.headers.Name}}`
+  (case-insensitive; repeated headers joined with `, `), and the same under
+  `{{x.request…}}` for the request as sent (its headers, default ones included, and its
+  full body, not the Request tab's 64 KB preview). A reference is one when its first
+  dot is followed by `response` or `request` (`exchange::split_reference`, and
+  `requestVariable` in `src/lib/vars.ts`); it never falls back to a variable called
+  `x`, and a plain `{{x}}` is always a File variable. Only `# @name` names count, never
+  `###` text: a reference with no `# @name x` in the file is an Undefined variable. The
+  webview sends the file's `# @name`s (`requestNames`, unsaved edits included) with
+  `send_request` and `preview_request`; the core's `send::scope` gives the
+  Resolver each with its latest exchange from the Session (`Exchanges::for_file`,
+  `Resolver::with_request_variables`), so the preview and the send agree. Every
+  successful send of a named request records its exchange (`exchange::begin` before
+  sending, `PendingExchange::finish` after) as the latest for (file, name), with its own
+  reference to the received body (independent of the viewer's kept body, ADR-0006) and
+  the time received; of two requests sharing a name, the one sent last supplies it.
+  `Exchange::value` reads a path; body paths go through one function
+  (`body_value`), which picks JSONPath or XPath as REST Client does, by the body's
+  kind (`body_format::response_kind`: its content type, else its first character).
+  A body that is neither reads by the path's shape (`$…` JSONPath, else XPath), and
+  REST Client's `asJson.` / `asXml.` before the path force a kind. A JSONPath into an
+  XML body, or a path not starting with `$` into a JSON one, reads nothing and says
+  which the body takes. A Request variable whose request
+  hasn't been sent in this Session (`Resolver::unsent`), or whose path reads nothing
+  (`Resolver::unmatched`: a missing header, a body that isn't JSON or XML, a path of
+  the other kind, no match), blocks
+  the send before anything goes out (`unsentRequest` / `unmatchedPath`, below), and the
+  resolved preview shows the same error. Nothing is ever sent on its own: "Send `x`
+  first" (`app.sendFirst`) opens `x` and sends it the normal way, prompts and the
+  production confirmation included. The editors mark a Request variable of a named
+  request `cm-var-request`. Completion after `{{` offers the file's `# @name`s; inside
+  a Request variable it offers the next path segment (`src/lib/requestPaths.ts`):
+  `response`/`request`, `body`/`headers`, then header names, or `$`/`*` and the JSON
+  keys (`keyCompletion`, as the filter bar). Those come from `exchange_shape(filePath,
+  name)`: the latest exchange's status, time received, and each side's header names
+  and JSON body shape (`Exchange::shape`), or null when unsent, which still offers the
+  structure with a hint that it hasn't been sent. The store (`app.exchangeShape`) reads
+  it once per (file, name) until `sessionVersion` changes.
+  A Request variable's hover card asks the Session what it reads now
+  (`request_variable` → `Exchanges::read`, a `Reading`: unsent, the value as a send
+  would insert it, shortened past `READING_LIMIT` characters, or why the path matches
+  nothing) and shows it with the exchange it reads (the request, its file, the time
+  received and the status; `readingCard` in `src/lib/exchanges.ts`). Every Request
+  variable's card also carries a quiet note that Rider refuses to send it (ADR-0007),
+  and so does the request's check strip, for as long as the request sends one
+  (`riderRefuses`, a note in the info tone after any problems, not a warning).
+  A `# @name` two requests in a file share is flagged in the request's check strip
+  (`duplicateName` in `src/lib/checks.ts`); it never blocks the send.
 * **Undefined-variable checks** catch them before sending, without blocking it.
   `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
   the enabled auth's fields, an API key's name only as a query param; the enabled body
@@ -744,16 +816,71 @@ Decisions made during implementation, beyond the plan above:
   cancels the send), then the production confirmation if any. Names `password`,
   `passwd` and `pass` (any case) are typed masked; every field has a reveal button.
   Values are remembered per request (by its frontend key, so reopening the tab doesn't
-  ask) in the store's memory only: never in settings, env files or the `.http` file,
-  and gone when the app quits. They travel as `promptValues` with `send_request` and
-  `preview_request`, and `Resolver::with_prompts` puts them over every other variable
-  of the same name, used as typed, and also inside File variables and environment
+  ask) in the workspace's Session (`httpdesk_core::session`, owned by the shell's
+  `AppState`), in memory only: never in settings, env files or the `.http` file, and
+  gone when another workspace opens or the app quits. The webview holds none of them:
+  it sets and forgets them with `answer_prompts` / `forget_prompt_answers`, reads them
+  with `prompt_answers` for the editor's marks and the preview, and sends only the
+  request's key (`requestKey`) with `send_request` and `preview_request`, which take
+  the answers from the Session. `Resolver::with_prompts` puts them over every other
+  variable of the same name, used as typed, and also inside File variables and environment
   values that reference them (unlike REST Client). An unanswered prompt is left as
   written and reported apart (`Resolver::unanswered`): it's never an Undefined variable.
   The editors mark it `cm-var-prompt` (hover "Asked when sent"); the resolved preview
   shows it as written (a placeholder, so a prompted host isn't a URL error), shows a
   masked value as `••••••••`, and offers "Forget prompted values", after which the
   next send asks again.
+* **Cookies** set by a response are kept in the Session's cookie jar
+  (`cookies::CookieJar`, `Session::cookies`) and sent on later requests they match, as
+  JetBrains and REST Client do. Matching is RFC 6265's (domain, path, expiry), using the
+  `cookie_store` crate; a `Secure` cookie goes over https only, `localhost` included
+  (cookie_store would send it to `http://localhost`, as browsers do; neither editor
+  does). Cookies set on redirect hops are kept and sent on the next hop. The jar isn't
+  scoped by environment: domain matching keeps hosts apart. The pooled clients outlive
+  workspaces, so a client has no jar of its own: `execute_on` takes the jar of the
+  Session the send started in, and the client's store (`cookies::Recorder`) uses it for
+  that send only, while still recording what each response set for the Cookies tab.
+  `# @no-cookie-jar` (REST Client's and JetBrains' tag) sends none of the jar's cookies
+  and keeps none it receives; the Cookies tab still lists them. A `Cookie` header the
+  user wrote is sent instead of the jar's (reqwest asks the store only when there is
+  none). The Request tab shows the `Cookie` header the jar gave the final hop. The jar
+  lists its cookies (`list`, by domain, path and name, each with the Cookies tab's
+  attributes and an absolute expiry) and deletes one (by domain, path and name) or
+  all, for the Session panel.
+* **The Session panel** shows what the workspace's Session holds. It lives in the
+  panel area below the tabs and requests (`PanelArea.svelte`, docked by App.svelte in a
+  stacked `SplitPane` whose sized pane is the second (`end`), its height kept in
+  settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). The
+  area shows one panel at a time with a switcher, so the Runner panel joins it as another
+  `PanelId` and line in `PANELS`. The panel is one section per part of the Session
+  (`SessionGlobals.svelte`, `SessionCookies.svelte` and `SessionNamedExchanges.svelte`), each a component that reads its part through
+  `sessionView`, which reads again whenever `app.sessionVersion` goes up (a send
+  whose response set cookies, a named request's send, a send whose scripts ran, a delete
+  or clear, another workspace), wrapped in `SessionSection` for
+  its heading, count and Clear button. The page's side of the Session (that version, the
+  exchange shapes completion reads, an opened exchange, the test markers, and the
+  panel's deletes and clears) is `src/lib/session.svelte.ts`; workspace trust is
+  `trust.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
+  a small host interface, and `app.*` hands over to them. The Global variables section lists each one's
+  name and value, with a Delete button each and Clear Global variables
+  (`session_globals`, `delete_global`, `clear_globals`); nothing is edited by hand. The Cookies section uses the Cookies tab's table
+  (`CookieTable.svelte`) with a Delete button per cookie (`session_cookies`,
+  `delete_cookie`, `clear_cookies`); nothing is edited or added by hand. The Named
+  exchanges section lists each named request's latest exchange with its file, status
+  and time received (`named_exchanges` → `Exchanges::list`). Forgetting one
+  (`remove_named_exchange`) or all (`clear_named_exchanges`) makes their Request
+  variables read as unsent, and drops the test marker of the request whose send
+  recorded each (the store remembers that request's key per exchange). Opening one
+  (`open_exchange`) shows it in the normal response viewer in a modal
+  (`ExchangeView.svelte`), never in the request's tab: the exchange keeps the response
+  as shown (`Exchange::shown`), and the shell keeps the exchange's own body under a new
+  response id (`Exchange::reopened`), so it's fetched by id like any body (ADR-0006),
+  shares the exchange's bytes rather than copying them, and is released when the modal
+  closes without touching the tab's response. Clear session
+  (the panel's button and Request → Clear Session…) asks first, then empties every
+  section with one call (`clear_session` → `Session::clear`, which destructures the
+  Session so a new section can't compile without being cleared too: prompt answers,
+  cookies and named exchanges today), and drops the tabs' and tree rows' test markers.
 * **Extract to variable** writes no new syntax. A File variable is a standard
   `@name = value` line at the top of the file (or a new value for the same-named File
   variable the request uses), an in-memory edit like any other, so it shows as unsaved
@@ -804,13 +931,16 @@ Decisions made during implementation, beyond the plan above:
   Kinds: `dns` (host), `refused` and `reset` (host, port), `tls` (reason: `selfSigned`,
   `expired`, `wrongHost`, `unknownIssuer`, `other`), `timeoutIdle` and `timeoutConnect`
   (timeoutMs), `invalidUrl` (url, reason), `unresolvedVariable` (names), `circularVariable` (chains, each
-  a list of names), `file` (path,
+  a list of names), `unsentRequest` (names: the named requests Request variables read
+  that haven't been sent in this Session), `unmatchedPath` (paths: each reference,
+  request, received time and reason), `file` (path,
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
   turns verification off), the timeouts open the request's Settings, and
-  `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does). They ask through one-shot store
+  `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
+  `unsentRequest` offers "Send `x` first" for the first request named. They ask through one-shot store
   fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
   component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
@@ -826,7 +956,7 @@ Decisions made during implementation, beyond the plan above:
   the auth fields, with the active environment and File variables applied. The webview
   asks `preview_request` 150 ms after the last edit, with the same arguments as
   `send_request` (`requestArgs` in the store); the shell builds the resolver through the
-  same helper as send (`request_resolver`) on the blocking pool, and the core's
+  same helper as send (`send::scope`) on the blocking pool, and the core's
   `exec::preview` runs `prepare`'s method/URL/header steps. Two deliberate
   differences: dynamic variables that generate a new value on every send (`$uuid`,
   `$timestamp`, `$random…`, `$datetime`, …) aren't generated but shown as written
@@ -837,7 +967,7 @@ Decisions made during implementation, beyond the plan above:
   from the body mode (`implied_content_type`). A request that couldn't be sent (an
   undefined or circular host, a relative URL without Host) is still shown, with the classified
   error a send would give. `$processEnv`, `$dotenv` and `$env.X` read existing values,
-  so they are resolved. Secrets are masked as in hover cards: `request_resolver` tells
+  so they are resolved. Secrets are masked as in hover cards: `send::scope` tells
   the resolver which names are Secrets (`env::secret_names`, less any a File variable
   replaces; `Resolver::with_secrets`), and in the preview every reference whose value a
   Secret went into, directly or through other variables (`Authorization: {{auth}}` with
@@ -864,6 +994,77 @@ Decisions made during implementation, beyond the plan above:
   `binary` (`exec::body_kind`). The viewer's views, highlighting, Save extension, Hex
   and filter availability follow it; the shell decodes text only for text kinds
   (`exec::body_text`), and its Pretty text uses the same rule.
+* **One send flow.** Every send goes through `httpdesk_core::send::send`, whether the
+  user sent the request (`send_request`) or a Run did (`run_requests`): resolve (the
+  same `send::scope` the preview uses, blocking on unsent or unmatched Request
+  variables), run the pre-request script, prepare, execute with the Session's cookie
+  jar, run the response handler (scripts only with `Scripts::Run`; `Skip` adds the
+  "Sent without scripts" warning, `Untrusted` refuses a request with a script), and
+  record a named request's exchange. Its input is an `Outgoing`
+  (the webview's `RequestArgs` without the environment) and a `SendContext` (root,
+  environment, exec settings, scripts, the Session's `Arc`, the client pool); the core
+  has no Tauri dependency, so a CLI runner can call it. The shell keeps only the body
+  store, cancellation and events.
+* **Runs** (GLOSSARY "Run", #143). Run file (the tree's file menu, Request → Run File)
+  sends every request of a file in order with the selected environment, carrying the
+  Session from each to the next (`httpdesk_core::run::run`, through the one send flow).
+  The webview builds the run's request list, so the shell sends exactly what the user
+  confirmed: each request from its open tab's edits when it's open (marked "unsaved" in
+  the panel when it has unsaved edits), otherwise its file's saved snapshot (the file
+  on disk); a request never saved and not open isn't sent. Before anything is sent the
+  webview asks, once each: every Prompt variable no request of the run has an answer
+  for (one form, a name asked once, the answer remembered under each request's key in
+  the Session); with a Production environment, one confirmation listing each request
+  that isn't GET, HEAD or OPTIONS; and, in a workspace that isn't trusted, the trust
+  question (Run without scripts runs with `skipScripts`). `run_requests(runId,
+  selection {requests, environment}, options {skipScripts, delayMs, stopOnFailure})`
+  waits `delayMs` between requests (Stop cuts the wait short) and reports each request as a
+  `run-progress` event `{runId, index, state}`: `sending`, then `sent` (with the
+  response, whose body is kept by id like a send's, and `failed`), `failed` (an
+  `ExecError`: blocked or no response) or `cancelled`. A request **fails** on a failed
+  test or assert, a script error, a blocked send or a network error; an error status
+  alone isn't a failure, and a failure doesn't stop the run unless `stopOnFailure`
+  (Stop on first failure) ends it there. The delay and Stop on first failure are set in
+  the Runner panel and remembered per workspace (`runnerOptions` in `settings.json`).
+  Re-run failed starts a new run of the last run's failed requests, in order, each read
+  again from its open tab or file as any run reads it (so a fix made since is sent), with
+  the Session as it is now; nothing is rolled back. `cancel_request(runId)`
+  stops it, the request in flight included (`run::Cancel`); requests it never reached
+  report nothing and the panel shows them as "Didn't run". A run never replaces what a
+  tab shows, but it updates the Session (exchanges, cookies) and the requests' test
+  markers. The Runner panel (`RunnerPanel.svelte`) is a panel of the panel area beside
+  the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner toggles it),
+  lists each request's state, status, time and tests grouped by file, and opens a
+  selected result in the response viewer beside the list (`ResponseViewer` given the
+  result, no tab). The last run's bodies are released when the next run starts or
+  another workspace opens.
+* **Run folder and Run selection** (#144) use the same list-building and runner. Run
+  folder (the tree's folder menu) runs every `.http` file under the folder, subfolders
+  included, in the order the tree shows them (folders first, then by name), each file's
+  requests in file order; files not open are loaded as Run file loads them. Run
+  selection (the context menu of a selected request) runs the requests selected in the
+  tree, in tree order whatever order they were picked in. The tree is multi-select
+  (`app.treeSelection`, `aria-multiselectable`): ⌘-click (Ctrl-click off macOS)
+  toggles a request and Shift-click selects the request rows shown between the last
+  one clicked and this one, neither opening it; from the keyboard Space toggles,
+  Shift+Up/Down extend and Escape clears. With nothing picked, the selection is the
+  active request. A plain click or Enter opens the request and makes it the selection.
+  Global variables and cookies carry from file to file, being the Session's; Request
+  variables don't, because exchanges are keyed by (file, `# @name`).
+* **Run export:** when a run ends (finished or stopped), `run_requests` resolves with
+  `{cancelled, requests}`: `run::run`'s report of every request, those it never reached
+  included (`run::RequestReport`: file from the root, name, method, URL as sent, status,
+  time, outcome, failure `{reason: network | script | test | blocked, message}`, tests).
+  The core builds it as the run goes and masks each Secret value of the request's
+  environment (`send::secret_values`) in the URL and every message, percent-encoded or
+  not; it never holds a response body. The Runner panel's Export (JUnit XML… / JSON…)
+  asks for a path with the dialog plugin's save (`dialog:default` allows it) and passes
+  the reports back to `export_run(requests, format, path)`, which renders them with the
+  pure `run::export::junit` / `run::export::json` and writes the file, unconfined like a
+  saved body. JUnit: a `<testsuite>` per file, a `<testcase>` per request, a
+  `<failure type=reason>` per failed `client.test` (or for the error), `<skipped>` for a
+  request that didn't run, and the passed and failed tests listed in `<system-out>`
+  (the schema has no nested test cases).
 * **Download progress:** while a body downloads, the shell emits `send-progress`
   events (`{runId, received}`, raw bytes on the wire so far) for the in-flight send. The
   core reports at most once per 100 ms (`exec::PROGRESS_INTERVAL`) however small the
@@ -1009,27 +1210,32 @@ Decisions made during implementation, beyond the plan above:
 
 | Layer | Tests |
 |---|---|
-| Format | `crates/httpdesk-core/tests/format.rs`: JetBrains and VS Code fixtures, byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
-| Execution | `tests/preview.rs`: the resolved preview gives the same method, URL, headers and warnings as `prepare` (query encoding with and without `# @no-auto-encoding`, every auth kind, bodies), dynamic variables stay placeholders, a body file is never read but its implied Content-Type is shown, a request that can't be sent is shown with the reason, and prompted values are shown (masked ones masked) with unanswered prompts as written. `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses (by the outcome's body bytes and kind; a text kind with no text is binary), content encodings (gzip, br, deflate, zstd, unsupported and undecodable bodies being binary), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (recorded, never sent back), and a reused client listing only each request's own cookies. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
+| Format | `crates/httpdesk-core/tests/format.rs`: JetBrains, VS Code and response handler (`fixtures/handlers.http`: inline, multi-line, file, redirect) fixtures (the JetBrains one with the pre-request examples from JetBrains' docs), handler and pre-request parts, scripts added, edited and removed in place (the rest of the request kept as written), byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
+| Execution | `tests/preview.rs`: the resolved preview gives the same method, URL, headers and warnings as `prepare` (query encoding with and without `# @no-auto-encoding`, every auth kind, bodies), dynamic variables stay placeholders, a body file is never read but its implied Content-Type is shown, a request that can't be sent is shown with the reason, prompted values are shown (masked ones masked) with unanswered prompts as written, and a pre-request script is never run (the preview says so). `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses (by the outcome's body bytes and kind; a text kind with no text is binary), content encodings (gzip, br, deflate, zstd, unsupported and undecodable bodies being binary), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (listed, and sent on the next hop), a reused client listing only each request's own cookies, and the Session's cookie jar: a login cookie sent on the next request to the same host and under its path only, not to another host, after it expires or once the server deletes it; a `Secure` cookie kept but not sent over plain http; `# @no-cookie-jar` neither sending nor keeping cookies; no cookie sent back without a jar; a written `Cookie` header sent instead of the jar's; concurrent sends on different pooled clients sharing one jar; and the jar listing its cookies and deleting one or all. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
+| Scripts | `crates/httpdesk-core/tests/scripts.rs`, against a wiremock server: passing and failing `client.test`s and `client.assert`s with names and messages, a thrown value (`null`, `undefined`, a number, text, an object, an `Error` and a `TypeError`) reading the same in a test and at the top level, the `response` API (status, headers in any case, JSON and text bodies, content type), a throwing or unparseable handler keeping earlier tests and reporting its handler line, every unimplemented JetBrains API failing by name, attempts to read files, open sockets and spawn processes all failing (nothing leaks to the server, no process runs), an endless loop stopped at the 5 s limit (even when it catches) and unbounded allocation at 64 MB, both keeping the response, a handler file next to the `.http` file running and reporting its tests and errors by file and line, a missing handler file, a folder, one outside the workspace (by `..` or through a symlink, even when it doesn't exist) and no open workspace each becoming a failed test, a redirect running nothing, writing no file and warning on the send and the preview, a fresh context per handler, and `client.log` lines kept in order as text (objects as JSON, values JSON can't write as text), kept when the handler later fails, and stopped at 64 KB with one line saying so, and `script/api.json` naming exactly the API the prelude implements. `tests/pre_request_scripts.rs`, against a wiremock server, runs pre-request scripts as the shell does: `request.variables.set` values reaching the URL, a header and the body, `request.variables.get`, `request.environment.get` reading private environment values, `request.variables.set` winning over the environment, File variables and the request's own variables (Rider's order, #129), a thrown error, a syntax error, the time and memory limits, an unsupported `request.*` API each sending nothing and reporting the line counted from the first `<` line, a script file next to the `.http` file running before the request is built, and one that throws (named by file and line), is missing or is outside the workspace sending nothing, and tests and asserts in a pre-request script coming back as results; through `send::send`, a send blocked by an unsent or unmatched Request variable running no pre-request script (no `client.global.set`) and reporting the block, in an untrusted workspace too, a script still defining a name the URL uses, and cancelling a send stopping its running pre-request script, what it set before standing |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |
 | Body formatting | `tests/body_format.rs`: tokens kept byte for byte (64-bit integers, `10.50`, `1e3`, `-0`, escapes, duplicate keys), nesting limit, invalid JSON, and a proptest that minify strips only insignificant whitespace and undoes pretty. `tests/xml_format.rs`: declaration, DOCTYPE, comments, CDATA, self-closing elements, mixed text kept as written, attributes containing `>`, minify, invalid XML. `tests/hexdump.rs`: line layout and the 64 KB preview limit. `tests/pretty_response.rs`: which responses get Pretty text (by content type, else the first character) |
 | JSONPath filter | `tests/json_filter.rs`: filter selectors pick exactly the expected nodes; matched numbers, strings and escaped keys come back byte for byte; duplicate keys; exact number comparisons (19-digit ids, around 2^53, decimals and exponents); invalid expressions, bodies and too-deep bodies; the shape summary (keys merged across items, the key cap, computed once per document) |
-| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk, including folders below the root) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
-| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/` (`app_info.rs`, `bodies.rs`, `confinement.rs`, `copying.rs`, `deleting.rs`, `fetch.rs`, `folder_envs.rs`, `paths.rs`, `preview.rs`, `renaming.rs`, `reply.rs`, `usages.rs`, `watcher.rs`, `window_state.rs`): the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host, prompted values that reach both and are never written to disk), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, the send reply carrying no body for text or binary responses and a body kept as received being binary in every view (`reply.rs`), fetching a body by response id as raw bytes: Raw decoded from its charset, Pretty with exact numbers, a binary body's bytes, and refusals for non-JSON, unparseable and unknown ids (`fetch.rs`), bodies kept until released: the first of 25 responses still saved, filtered and opened in Pretty, and a released response or a page load dropping the body and its parsed JSON (`bodies.rs`), Copy body as text or base64, released, and with no or a failing clipboard (`copying.rs`), environments (matrix edits keeping Secrets only in the private file, and the List | Matrix choice, List by default, surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning; saving a nested folder's environments leaving the root's files untouched, keeping Secrets in that folder's git-ignored private file, and not being reported by the watcher), environment settings (production, colour) surviving a restart without touching the env files, the sidebar shown by default and hidden surviving a restart (a missing or non-bool `sidebarHidden` shows it), the zoom at 100% by default and surviving a restart (a missing, non-numeric or out-of-range `zoom` is 100%), Find usages (`usages.rs`: references read from disk, from open documents with unsaved edits, and in env values), Rename variable (`renaming.rs`: the env and `.http` writes keep Secrets in the private file and untouched requests byte-for-byte, and aren't reported by the watcher), the preview marking every value a Secret went into (`preview.rs`), OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression, env file saves and an OpenAPI import's env writes not being reported even when writing outlasts the debounce, and reading workspace files not being reported), `send-progress` events for a trickled body, a second send reusing the connection the first left open (the client pool), `app_info` (`app_info.rs`: the version, OS and architecture, and the opener's scope letting through the Documentation, Release Notes and Report an Issue links and nothing outside the project's GitHub pages) and the window state saved at quit (`window_state.rs`: size, position, maximised and fullscreen, but not visibility or decorations) |
+| Session | `tests/session.rs`: a new Session remembers no prompt answers and has no cookies; answers are kept per request, added to by later answers, and forgotten per request. `tests/exec.rs`: clearing the Session forgets its cookies, prompt answers and exchanges, and keeps cookies set afterwards. `tests/request_variables.rs`, against a wiremock server: a token from a named login response sent in a later header and body (JSONPath and a case-insensitive header), the request as sent read with its full body and headers, a string match inserted raw and anything else as JSON from the first match, an unsent request and an unmatched path (missing header, non-JSON body, an XPath matching nothing) each blocking the send with its own report and nothing sent, a token from an XML login response sent by XPath, an XPath inserting an element's content as XML and any other node's value (attribute, text, a function's result, the document), `asJson.` / `asXml.` reading a body whose content type says otherwise, a JSONPath into XML or an XPath into JSON saying which the body takes, exchanges kept per file, the last sent of two same-named requests supplying the exchange, a dotted reference never falling back to a File variable while a plain one is the File variable, a `###`-only name being Undefined, the preview showing the value or the blocking error, and REST Client's documented chain in `fixtures/vscode.http` running through File variables; the Named exchanges list (by file, then name, with status and time received), removing one making its references unsent while another file's stays, and what a reference reads for its hover (unsent, its value, why it matches nothing, a long value shortened) |
+| Runs | `tests/runner.rs`, against a wiremock server: a file's login (`# @name`) then a call using its token, run in order with the call authorized and the Session updated; a 404 with no tests not a failure, a failing `client.test` and a blocked send failures, and the run going on after them; Stop cancelling the request in flight with nothing sent after it, Stop ending a response handler that is running, and Stop during the delay between requests stopping at once; a send blocked by an unsent request counting as blocked, its pre-request script never run; Stop on first failure ending the run at a failing test or a blocked send; across two files, a cookie set by the first sent by the second, a Global variable set by the first file's handler used by the second, and a `{{login.response…}}` in the second blocked as unsent rather than reading the first file's `login` |
+| Global variables | `tests/global_variables.rs`, through `send::send` against a wiremock server: a token login's handler stores with `client.global.set` sent as `{{token}}` by later requests in the same file and another; a set one no longer an Undefined variable; `get`, `clear` and `isEmpty` across sends, objects stored as JSON; a handler that throws keeping what it set before the throw; a pre-request script reading and setting one that its own request uses; a new Session and Clear session having none; every pair of the six places #129 measured (public and private environment, Global, a File variable, `request.variables.set`, an answered prompt) and all at once sending Rider's value (a prompt winning in HttpDesk); a request's own `@name` beating the file's and a Global; and a Global replacing a Secret not masked in the preview |
+| Run export | `tests/run_export.rs`: a run across two files exported as JSON with every request's file, name, method, URL as sent, status, time, tests and failure reason (test, network, blocked); a Secret in a header, the URL path and query, a network error and a test name and message masked in both exports, with no response body; the JUnit export valid against Jenkins' `junit-10.xsd` (vendored in `tests/fixtures`, checked by a small validator for the subset of XML Schema it uses, which also rejects what the schema does), with a suite per file, a case per request, each failure with its reason and skipped requests that didn't run; a user's own test named "Response handler" failing as a test, a handler error as a script failure |
+| Env, vars, workspace | Unit tests in each module. `tests/resolution_parity.rs` runs the resolver (with env files loaded from disk, including folders below the root, and named requests with their exchanges for Request variables) through the cases in `tests/fixtures/resolution-cases.json`, which `src/lib/vars.test.ts` runs the frontend resolver through too |
+| IPC | `src-tauri/src/ipc_tests.rs` and `ipc_tests/` (`app_info.rs`, `bodies.rs`, `confinement.rs`, `copying.rs`, `deleting.rs`, `fetch.rs`, `folder_envs.rs`, `global_variables.rs`, `paths.rs`, `pre_request.rs`, `preview.rs`, `renaming.rs`, `reply.rs`, `request_variables.rs`, `runner.rs`, `script_files.rs`, `scripts.rs`, `session.rs`, `usages.rs`, `watcher.rs`, `window_state.rs`): the real command handlers invoked with frontend-shaped JSON through Tauri's mock runtime. Covers the full open → edit → toggle → send → save → reopen slice, `preview_request` agreeing with what `send_request` sends (environment, Secret, File variables, implied Content-Type, a missing body file, an undefined host), the Session's prompt answers (`session.rs`: answers given with `answer_prompts` reach the preview and the send of that request only and are never written to disk, `forget_prompt_answers` forgets them, and opening another workspace forgets every one; a cookie set by one send is sent on the next, is never written to disk, and is gone once another workspace opens; `session_cookies` lists the jar with each cookie's attributes, a cookie deleted with `delete_cookie` isn't sent on the next request, `clear_cookies` stops all of them and keeps prompt answers, and `clear_session` forgets cookies and prompt answers; `global_variables.rs`: a token a trusted handler stores sent from another file and listed by `session_globals`, `delete_global` making it undefined again, `clear_globals`, `clear_session` and another workspace leaving none, and none ever written to disk), runs (`runner.rs`: `run_requests` reporting each request as `run-progress` events in order with each response's body kept for the viewer, and `cancel_request` stopping a run during a request that never answers, with nothing sent after it and every request reported; a finished run exported with `export_run` as JUnit and JSON holding no Secret value; with `delayMs` the requests arriving at least that far apart; with `stopOnFailure` nothing sent after a network error; the runner options surviving a restart), Request variables (`request_variables.rs`: a send reading an unsent request blocked as `unsentRequest` with nothing sent, the preview saying so, the named request's exchange then read by the preview and the send, and opening another workspace forgetting every exchange; `named_exchanges`, `remove_named_exchange` and `clear_named_exchanges` (keeping prompt answers), `open_exchange` returning the response under its own id whose body outlives the tab's release, and `request_variable` reading unsent, a value and an unmatched path), Beautify saving exact numbers through `format_body`, XML through `format_body`, `hexdump` of a stored body by response id, filtering a sent response through `filter_response` and its shape summary through `response_shape`, the send reply carrying no body for text or binary responses and a body kept as received being binary in every view (`reply.rs`), fetching a body by response id as raw bytes: Raw decoded from its charset, Pretty with exact numbers, a binary body's bytes, and refusals for non-JSON, unparseable and unknown ids (`fetch.rs`), bodies kept until released: the first of 25 responses still saved, filtered and opened in Pretty, and a released response or a page load dropping the body and its parsed JSON (`bodies.rs`), Copy body as text or base64, released, and with no or a failing clipboard (`copying.rs`), environments (matrix edits keeping Secrets only in the private file, and the List | Matrix choice, List by default, surviving a restart), per-directory environments (requests in sibling folders sending with their own folder's values; an environment the folder doesn't define sending with none and warning; saving a nested folder's environments leaving the root's files untouched, keeping Secrets in that folder's git-ignored private file, and not being reported by the watcher), environment settings (production, colour) surviving a restart without touching the env files, the sidebar shown by default and hidden surviving a restart (a missing or non-bool `sidebarHidden` shows it), the zoom at 100% by default and surviving a restart (a missing, non-numeric or out-of-range `zoom` is 100%), response handlers and workspace trust (`scripts.rs`: a handler in an untrusted workspace refused before anything is sent, but a send blocked by an unsent request reporting that block instead, Send without scripts, a trusted workspace returning tests with the body still kept, trust surviving a restart and revoked, a page saving older settings keeping the trust, nothing written into the workspace, the response carrying what its handler logged), script files (`script_files.rs`: a handler file next to the `.http` file returning its tests, one outside the workspace a failed test with the response still sent, a missing pre-request script file blocking the send, a `>>` redirect sending, writing nothing and warning, `check_script_file` and `open_script_file` refusing a missing file or one outside the workspace and opening only a `.js` file inside it), pre-request scripts (`pre_request.rs`: refused unsent in an untrusted workspace, a trusted send carrying the header the script built from a private environment value, a failing script sending nothing and rejecting with `preRequestScript` and its line, Send without scripts naming the skipped pre-request script, and the preview never running it), Find usages (`usages.rs`: references read from disk, from open documents with unsaved edits, and in env values), Rename variable (`renaming.rs`: the env and `.http` writes keep Secrets in the private file and untouched requests byte-for-byte, and aren't reported by the watcher), the preview marking every value a Secret went into (`preview.rs`), OpenAPI generation, confinement, deleting, Windows paths, the file watcher (including self-write suppression, env file saves and an OpenAPI import's env writes not being reported even when writing outlasts the debounce, and reading workspace files not being reported), `send-progress` events for a trickled body, a second send reusing the connection the first left open (the client pool), `app_info` (`app_info.rs`: the version, OS and architecture, and the opener's scope letting through the Documentation, Release Notes and Report an Issue links and nothing outside the project's GitHub pages) and the window state saved at quit (`window_state.rs`: size, position, maximised and fullscreen, but not visibility or decorations) |
 | Native menu | `src-tauri/tests/native_menu.rs`: `set_menu` builds the menu bar from the layout the page sends (checkbox items, greyed-out empty Open Recent, the Window and Help menus macOS treats specially), a click sends a `menu` event with the item's id only for the layout's own items, and `set_menu_state` greys out and ticks items by id. Its own test binary with `harness = false`: macOS builds menus on the main thread only and libtest runs tests on other threads, so it runs its tests one after another on the main thread (through `httpdesk_lib::test_support`) |
 | CSP | `src-tauri/tests/csp.rs`: `tauri.conf.json`'s policy allows `blob:` for preview frames, images, media and objects and nowhere else, and no `data:` URLs |
-| Frontend | `src/lib/platform.test.ts` (OS detection, shortcut formatting and matching per OS including ⌥ dead keys and AltGr, dialog button order, wording), `src/lib/commands.test.ts` (which command a key runs on each OS, aliases (Zoom In's `+` keys), Linux-only keys, and the modal rule in `canRun`), `src/lib/menuLayout.test.ts` (each OS's menu bar, the shortcuts the shell gets per ADR-0005, Open Recent, item ids sent back, and the predefined items agreeing with the shell's `Predefined` enum), `src/lib/about.test.ts` (About's version line and the Report an Issue URL), `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference or a Prompt variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway, and the same paths from text read in pieces), `src/lib/codemirror/docBuilder.test.ts` (a document built from bytes in pieces is the one CodeMirror makes from the whole text, whatever the pieces split: multi-byte characters, `\r\n`, long lines; its longest line), `src/lib/codemirror/longLines.test.ts` (which bodies have lines CodeMirror draws only in part when wrapped, and which may be shown unwrapped: none of their lines over the limit), `src/lib/codemirror/findInPieces.test.ts` (Find next and previous, Mod-d and Mod-Shift-l in pieces choose what CodeMirror's commands choose, matches across pieces, regular expressions' line anchors), `src/lib/codemirror/parseSlices.test.ts` (idle deadlines capped, and the `requestIdleCallback` stand-in), `src/lib/timeSlices.test.ts` (the shared yield and slice budget), `src/dev/perfFixtures.test.ts` (the perf test's bodies: minified JSON of the size asked for, with 19-digit ids and a term only the last item has, its Pretty text as the core formats it, and the BMP image), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, unsetting a cell, stable row order, sorting by name, adding to all environments, the row filter), `src/lib/envFolders.test.ts` (per-directory environments: a file's folder, the nearest folder's set, every environment name, which folder's files a write goes to), `src/lib/usages.test.ts` (Find usages rows: one per field, how each field, File variable and environment value is named, nested folders), `src/lib/rename.test.ts` (Rename variable: rewriting references in every field and in env values, the name check, the preview rows, and which usages a rename in a folder covers under ADR-0004), `src/lib/extract.test.ts` (Extract to variable: the name rule, conflicts, and the destinations offered), `src/lib/cookies.test.ts` (the Cookies tab's expiry wording), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/zoom.test.ts` (the zoom levels, stepping up and down from a level or from between two, how a saved zoom is read, and the range agreeing with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
+| Capabilities | `src-tauri/tests/capabilities.rs`: the webview has no opener permission to open paths (script files are opened by the shell, after confining them) |
+| Frontend | `src/lib/platform.test.ts` (OS detection, shortcut formatting and matching per OS including ⌥ dead keys and AltGr, dialog button order, wording), `src/lib/commands.test.ts` (which command a key runs on each OS, aliases (Zoom In's `+` keys), Linux-only keys, and the modal rule in `canRun`), `src/lib/menuLayout.test.ts` (each OS's menu bar, the shortcuts the shell gets per ADR-0005, Open Recent, item ids sent back, and the predefined items agreeing with the shell's `Predefined` enum), `src/lib/about.test.ts` (About's version line and the Report an Issue URL), `src/lib/http.test.ts` (URL ⇄ params sync, form and multipart editors, body mode / Content-Type sync, directives, field checks), `src/lib/store.test.ts` (the store against a mocked backend), `src/lib/suggest.test.ts` (header-name suggestion matching), `src/lib/vars.test.ts` (what hovering a reference, a Prompt variable or a Global variable shows, where its Edit goes, what autocomplete offers, and a VarField's static rendering marking `{{variables}}` by state), `src/lib/checks.test.ts` (which Undefined variables a request would be sent with, in which sections, and their quick fixes; a `# @name` another request in the file shares), `src/lib/exchanges.test.ts` (what a Request variable's hover says it reads and from which exchange, and files named relative to the workspace), `src/lib/sendError.test.ts` (send error headings, hints and fix-it buttons by kind), `src/lib/headers.test.ts` (response header filter, Copy all text, well-known header explanations), `src/lib/status.test.ts` (status code explanations for the status pill's tooltip), `src/lib/jsonpath.test.ts` (filter key completion from a shape, and Copy path: the path at a caret, quoting keys for both RFC 9535 and Jayway, and the same paths from text read in pieces), `src/lib/codemirror/docBuilder.test.ts` (a document built from bytes in pieces is the one CodeMirror makes from the whole text, whatever the pieces split: multi-byte characters, `\r\n`, long lines; its longest line), `src/lib/codemirror/longLines.test.ts` (which bodies have lines CodeMirror draws only in part when wrapped, and which may be shown unwrapped: none of their lines over the limit), `src/lib/codemirror/findInPieces.test.ts` (Find next and previous, Mod-d and Mod-Shift-l in pieces choose what CodeMirror's commands choose, matches across pieces, regular expressions' line anchors), `src/lib/codemirror/parseSlices.test.ts` (idle deadlines capped, and the `requestIdleCallback` stand-in), `src/lib/timeSlices.test.ts` (the shared yield and slice budget), `src/dev/perfFixtures.test.ts` (the perf test's bodies: minified JSON of the size asked for, with 19-digit ids and a term only the last item has, its Pretty text as the core formats it, and the BMP image), `src/lib/envMatrix.test.ts` (the Environments matrix: gaps, cell edits, Secret per cell, unsetting a cell, stable row order, sorting by name, adding to all environments, the row filter), `src/lib/envFolders.test.ts` (per-directory environments: a file's folder, the nearest folder's set, every environment name, which folder's files a write goes to), `src/lib/usages.test.ts` (Find usages rows: one per field, how each field, File variable and environment value is named, nested folders), `src/lib/rename.test.ts` (Rename variable: rewriting references in every field and in env values, the name check, the preview rows, and which usages a rename in a folder covers under ADR-0004), `src/lib/extract.test.ts` (Extract to variable: the name rule, conflicts, and the destinations offered), `src/lib/cookies.test.ts` (the expiry wording of the Cookies tab and the Session panel), `src/lib/panes.test.ts` (pane defaults agree with the Rust shell's), `src/lib/zoom.test.ts` (the zoom levels, stepping up and down from a level or from between two, how a saved zoom is read, and the range agreeing with the Rust shell's), `src/lib/envColors.test.ts` (each environment colour's light and dark shade keeps 3:1 contrast against the top bar), `src/lib/scripts.test.ts` (a request's scripts listed from its verbatim text, and adding, editing and removing one changing only its own text), `src/lib/scriptApi.test.ts` (script completion offering the implemented `client` (`client.global` included) and `response` API, no `response` in a pre-request script, nothing unsupported, and nothing in strings or comments), `src/lib/popup/place.test.ts` (popup placement: flipping and clamping to the viewport) and `src/lib/popup/tooltip.test.ts` (a tooltip's `aria-describedby` link). `src/guardrail/native-widgets.test.ts` fails on any native form widget or `title=` tooltip in the app's sources ([controls.md](controls.md)) |
 | Browser | `e2e/*.spec.ts`: Playwright drives the real UI in Chromium, served by Vite with the mocked backend (`src/dev/mock.ts`). `e2e/perf/` is its own project (`pnpm test:perf`, its own CI job): a 50 MB JSON body and a 25 MB image, where each step of the scenario fails if the main thread ran any task over 50 ms. `PERF_CPU_THROTTLE=2` slows the page's CPU to about CI's speed |
 | Release | `scripts/check-release-version.test.ts` |
 | Visual | `pnpm dev` in a browser with the mocked backend (`src/dev/mock.ts`); in the three OS webviews, the [manual OS rendering check](os-checklist.md) |
 
 ### Known gaps / next steps
 
-* No cookie jar; responses' `Set-Cookie` is not replayed. The response viewer's Cookies
-  tab lists them (redirect hops included), but a recording store that never returns a
-  cookie is all reqwest gets.
-* Scripts (`< {% %}`, `> {% %}`) are preserved but not executed (out of scope).
-* Request-to-request variables (`{{login.response.body.token}}`) are not supported.
+* Cookies can't be edited or added by hand in the Session panel (out of scope for #107).
+* Scripts implement only
+  `response.*`, `client.test`, `client.assert`, `client.log`, `client.global.set/get/clear/isEmpty`,
+  `request.variables.set/get` and `request.environment.get` (#107).
 * A Basic auth username containing `:` can't be represented (RFC 7617), so saving one is
   refused with an error, and the auth editor flags it inline.
 * A description line typed as `@word` comes back as `@ word` after a save (§2).

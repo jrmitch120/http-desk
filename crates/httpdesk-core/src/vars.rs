@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Local, Utc};
 
+use crate::exchange::{self, NamedExchanges, UnmatchedPath};
 use crate::model::{Prompt, Variable};
 
 /// Every dynamic variable the resolver generates, without the `$`; `env.` takes a
@@ -111,10 +112,47 @@ fn percent_encoded(c: char) -> String {
     c.encode_utf8(&mut [0; 4]).bytes().map(|b| format!("%{b:02X}")).collect()
 }
 
-/// Resolves `{{name}}` references against a flat variable map.
+/// Where a `{{name}}` can be defined, apart from Prompt variables (which override
+/// all of these) and Request variables (whose names can't clash with them).
+#[derive(Debug, Default)]
+struct Scopes {
+    /// What the request's pre-request script set with `request.variables.set`.
+    pre_request: HashMap<String, String>,
+    /// File variables (`@name = value`), the request's own declaration winning.
+    file_variables: HashMap<String, String>,
+    /// Global variables (`client.global.set`), from the Session.
+    globals: HashMap<String, String>,
+    /// The selected environment: private over public, over the shared variables.
+    environment: HashMap<String, String>,
+}
+
+impl Scopes {
+    /// The value of `name`, and whether it's the environment's.
+    ///
+    /// The precedence of every variable, highest first. This is the one place it's decided:
+    /// 1. an answered Prompt variable (checked before this, in [`Resolver::resolve`]);
+    /// 2. `request.variables.set` in the request's pre-request script;
+    /// 3. a File variable (the request's own `@name` over the rest of the file's);
+    /// 4. a Global variable;
+    /// 5. the environment (private over public, see [`crate::env::variables`]).
+    ///
+    /// 2 to 5 are the order `ijhttp` was measured to follow (`docs/research/http-comment-compat.md`,
+    /// Q6), which is Rider's, not the order the JetBrains docs give. 1 and the request's own
+    /// `@name` winning are HttpDesk's (GLOSSARY: Prompt variable, File variable).
+    fn lookup(&self, name: &str) -> Option<(&String, bool)> {
+        let defined =
+            [&self.pre_request, &self.file_variables, &self.globals].into_iter().find_map(|scope| scope.get(name));
+        match defined {
+            Some(value) => Some((value, false)),
+            None => self.environment.get(name).map(|value| (value, true)),
+        }
+    }
+}
+
+/// Resolves `{{name}}` references against the variables in scope (see `Scopes::lookup`).
 #[derive(Debug, Default)]
 pub struct Resolver {
-    vars: HashMap<String, String>,
+    scopes: Scopes,
     base_dir: Option<PathBuf>,
     undefined: std::cell::RefCell<BTreeSet<String>>,
     circular: std::cell::RefCell<Vec<Vec<String>>>,
@@ -129,25 +167,45 @@ pub struct Resolver {
     secrets: HashSet<String>,
     /// Whether a Secret went into the reference being resolved.
     secret_seen: std::cell::Cell<bool>,
+    /// The file's named requests and their latest exchanges (see [`Resolver::with_request_variables`]).
+    exchanges: NamedExchanges,
+    unsent: std::cell::RefCell<BTreeSet<String>>,
+    unmatched: std::cell::RefCell<Vec<UnmatchedPath>>,
 }
 
 impl Resolver {
+    /// Resolves against `vars` alone, as the environment.
     pub fn new(vars: HashMap<String, String>) -> Self {
-        Resolver { vars, ..Default::default() }
+        Resolver { scopes: Scopes { environment: vars, ..Default::default() }, ..Default::default() }
     }
 
-    /// Builds the scope with precedence: request vars > file vars > environment.
+    /// Resolves against the environment `env`, the file's variables `file_vars` (in file
+    /// order) and the request's own `request_vars`, which win over the rest of the file's.
+    /// Precedence is `Scopes::lookup`'s.
     pub fn for_request(
         env: &HashMap<String, String>,
         file_vars: &[Variable],
         request_vars: &[Variable],
         base_dir: Option<&Path>,
     ) -> Self {
-        let mut vars = env.clone();
-        for v in file_vars.iter().chain(request_vars) {
-            vars.insert(v.name.clone(), v.value.clone());
-        }
-        Resolver { vars, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
+        let file_variables = file_vars.iter().chain(request_vars).map(|v| (v.name.clone(), v.value.clone())).collect();
+        let scopes = Scopes { file_variables, environment: env.clone(), ..Default::default() };
+        Resolver { scopes, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
+    }
+
+    /// Adds the values the request's pre-request script set with
+    /// `request.variables.set`, for this request only. They win over every other
+    /// variable but an answered Prompt variable (see `Scopes::lookup`).
+    pub fn with_pre_request_variables(mut self, variables: &HashMap<String, String>) -> Self {
+        self.scopes.pre_request = variables.clone();
+        self
+    }
+
+    /// Adds the Session's Global variables (replacing any added before). They win over
+    /// the environment and lose to File variables (see `Scopes::lookup`).
+    pub fn with_globals(mut self, globals: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.scopes.globals = globals.into_iter().collect();
+        self
     }
 
     /// Adds the request's Prompt variables. An answered one (its value in `answers`)
@@ -162,13 +220,32 @@ impl Resolver {
         self
     }
 
-    /// The names whose value is a Secret: the environment's, unless a File or request
-    /// variable of the same name replaces it. In the preview ([`Self::previewing`])
+    /// The names whose value is a Secret: the environment's. One counts only where the
+    /// environment's value is the one used, not where another variable of the same
+    /// name replaces it. In the preview ([`Self::previewing`])
     /// each reference whose value a Secret went into (directly or through other
     /// variables) resolves to its value between [`SECRET_MARKS`].
     pub fn with_secrets(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.secrets = names.into_iter().collect();
         self
+    }
+
+    /// Adds Request variables: `{{x.response…}}` and `{{x.request…}}` read the latest
+    /// exchange of the request named `x` (`# @name x`) in `exchanges`, the file's named
+    /// requests. A name the file has no `# @name` for is an Undefined variable, and a
+    /// dotted reference never falls back to a variable called `x`. One whose request
+    /// hasn't been sent is reported by [`Self::unsent`], and one whose path reads
+    /// nothing by [`Self::unmatched`]; both are left as written.
+    pub fn with_request_variables(mut self, exchanges: NamedExchanges) -> Self {
+        self.exchanges = exchanges;
+        self
+    }
+
+    /// A Resolver with only this one's Request variables: every other reference is
+    /// left as written, and dynamic variables aren't generated. What reading the
+    /// Request variables a request writes, and nothing else, takes.
+    pub(crate) fn request_variables_only(&self) -> Resolver {
+        Resolver { exchanges: self.exchanges.clone(), ..Default::default() }.previewing()
     }
 
     /// For the resolved preview: dynamic variables that would generate a new value
@@ -267,6 +344,18 @@ impl Resolver {
         self.circular.borrow().clone()
     }
 
+    /// Named requests that Request variables met so far read, but that haven't been
+    /// sent in this Session (sorted).
+    pub fn unsent(&self) -> Vec<String> {
+        self.unsent.borrow().iter().cloned().collect()
+    }
+
+    /// Request variables met so far whose path reads nothing from their request's
+    /// latest exchange, in the order found.
+    pub fn unmatched(&self) -> Vec<UnmatchedPath> {
+        self.unmatched.borrow().clone()
+    }
+
     /// Dynamic variables that failed (bad or out-of-range arguments), as messages.
     pub fn errors(&self) -> Vec<String> {
         self.errors.borrow().clone()
@@ -304,6 +393,10 @@ impl Resolver {
                         continue;
                     }
                 }
+            } else if let Some((name, path)) = exchange::split_reference(inner) {
+                // Inserted as read, never resolved further.
+                out.push_str(&self.request_variable(inner, name, path).unwrap_or_else(|| whole.to_string()));
+                continue;
             } else if let Some(prompt) = self.prompts.get(inner) {
                 // In the preview a masked value is shown masked, and an unanswered
                 // prompt as written (a placeholder, so it passes the URL check).
@@ -329,8 +422,10 @@ impl Resolver {
                 continue;
             } else {
                 // Whether a Secret goes into this reference's value, kept apart from the text around it.
-                let outer = self.secret_seen.replace(self.secrets.contains(inner));
-                let value = self.vars.get(inner).map(|v| {
+                let found = self.scopes.lookup(inner);
+                let from_secret = matches!(found, Some((_, true))) && self.secrets.contains(inner);
+                let outer = self.secret_seen.replace(from_secret);
+                let value = found.map(|(v, _)| {
                     chain.push(inner.to_string());
                     let resolved = self.resolve_chain(v, chain);
                     chain.pop();
@@ -351,6 +446,34 @@ impl Resolver {
             }
         }
         out
+    }
+
+    /// The value of Request variable `reference` (`name.path`), or `None` when it has
+    /// none, recorded as undefined, unsent or unmatched.
+    fn request_variable(&self, reference: &str, name: &str, path: &str) -> Option<String> {
+        let Some(latest) = self.exchanges.get(name) else {
+            self.undefined.borrow_mut().insert(reference.to_string());
+            return None;
+        };
+        let Some(exchange) = latest else {
+            self.unsent.borrow_mut().insert(name.to_string());
+            return None;
+        };
+        exchange
+            .value(path)
+            .map_err(|reason| {
+                let miss = UnmatchedPath {
+                    reference: reference.to_string(),
+                    request: name.to_string(),
+                    received: exchange.received,
+                    reason,
+                };
+                let mut unmatched = self.unmatched.borrow_mut();
+                if !unmatched.contains(&miss) {
+                    unmatched.push(miss);
+                }
+            })
+            .ok()
     }
 
     /// `Ok(None)` when the variable is unknown or unset; `Err` when its arguments are bad.

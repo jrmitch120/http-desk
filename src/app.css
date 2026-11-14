@@ -501,7 +501,9 @@ kbd {
   text-decoration-skip-ink: none;
   text-underline-offset: 2px;
 }
-.cm-var-dyn {
+/* Generated (a dynamic variable) or read from an exchange (a Request variable) when sent. */
+.cm-var-dyn,
+.cm-var-request {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
 }
@@ -551,6 +553,23 @@ kbd {
 .var-card-source {
   color: var(--muted);
   margin-top: 3px;
+}
+/* A Request variable's value can be a whole body: it scrolls past a few lines. */
+.var-card-long {
+  max-height: 9em;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+/* It reads nothing: not sent yet, or its path matches nothing. */
+.var-card-bad {
+  color: var(--var-bad);
+}
+/* A quiet portability note (ADR-0007). */
+.var-card-note {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  margin-top: 4px;
 }
 .var-card-actions {
   display: flex;

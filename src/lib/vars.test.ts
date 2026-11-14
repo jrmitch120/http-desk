@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
-import type { EnvironmentSet, EnvVar, Variable } from "./types";
+import type { EnvironmentSet, EnvVar, ExchangeShape, Variable } from "./types";
 import { DYNAMIC_VARIABLES, envVariables, makeVarProvider, varSegments } from "./vars";
 import { environmentsFor } from "./envFolders";
 
@@ -15,6 +15,10 @@ interface Case {
   environment?: string | null;
   file?: Variable[];
   request?: Variable[];
+  /** The Session's Global variables. */
+  globals?: Record<string, string>;
+  /** What the request's pre-request script set with `request.variables.set`. */
+  preRequest?: Record<string, string>;
   text: string;
   value: string;
   undefined?: string[];
@@ -22,6 +26,8 @@ interface Case {
   /** The request's Prompt variables; one with a `value` has been answered. */
   prompts?: { name: string; value?: string }[];
   asked?: string[];
+  /** The file's `# @name`s; their exchanges, the core's value and its unsent/unmatched reports are the core's alone. */
+  named?: string[];
 }
 
 /**
@@ -106,6 +112,14 @@ describe("what hovering a reference shows", () => {
     expect(provider().info("nope")).toEqual({ state: "bad", source: undefined });
     expect(provider([], [], null).info("nope")).toEqual({ state: "bad", source: "no environment selected" });
     expect(provider().info("$uuid")).toEqual({ state: "dyn" });
+  });
+
+  it("marks a Request variable of a request named in the file, and only those", () => {
+    const named = makeVarProvider({ env: envVariables(set, "dev"), fileVars: [{ name: "login", value: "x" }], requestVars: [], envName: "dev", requestNames: ["login"] });
+    expect(named.info("login.response.body.$.token")).toEqual({ state: "request", source: "the latest exchange of login" });
+    expect(named.info("other.response.body.$.token")).toEqual({ state: "bad" });
+    expect(named.info("login")).toMatchObject({ state: "ok", value: "x" });
+    expect(provider([], [{ name: "login", value: "x" }]).info("login.response.body.$.token")).toEqual({ state: "bad" });
   });
 
   it("says where to edit the definition in use, when it has a row in the app", () => {
@@ -236,7 +250,7 @@ describe("what hovering a Prompt variable shows", () => {
   });
 
   it("shows a remembered value, masked for password prompts", () => {
-    expect(provider.info("user")).toEqual({ state: "ok", value: "ann", secret: false, source: "a prompt, remembered until the app quits" });
+    expect(provider.info("user")).toEqual({ state: "ok", value: "ann", secret: false, source: "a prompt, remembered in the Session" });
     expect(provider.info("password")).toMatchObject({ state: "ok", secret: true });
     expect(varSegments("{{otp}}", provider)[0].cls).toBe("cm-var cm-var-prompt");
   });
@@ -270,6 +284,22 @@ function requestEnvironments(c: Case): EnvironmentSet | null {
   return environmentsFor(loaded(c), folders, c.dir ?? "");
 }
 
+describe("what a Global variable shows", () => {
+  const env = { token: { value: "env", secret: true, source: "dev" }, host: { value: "dev.example", secret: false, source: "dev" } };
+  const provider = makeVarProvider({ env, fileVars: [], requestVars: [], globals: { token: "abc123", id: "7" }, envName: "dev" });
+
+  it("is defined, with its value and where it's from, over the environment's Secret", () => {
+    expect(provider.info("token")).toEqual({ state: "ok", value: "abc123", secret: false, source: "a Global variable, set by a script" });
+    expect(provider.resolve("{{host}}/{{id}}")).toMatchObject({ value: "dev.example/7", undefined: [], secret: false });
+  });
+
+  it("is completed as a Global variable", () => {
+    const completions = provider.completions();
+    expect(completions.find((c) => c.name === "id")).toEqual({ name: "id", source: "global", preview: "7" });
+    expect(completions.find((c) => c.name === "token")).toMatchObject({ source: "global" });
+  });
+});
+
 describe("the frontend resolver agrees with the core on the shared cases", () => {
   it.each((shared.cases as Case[]).map((c) => [c.case, c] as const))("%s", (_, c) => {
     const environment = c.environment ?? null;
@@ -277,9 +307,12 @@ describe("the frontend resolver agrees with the core on the shared cases", () =>
       env: envVariables(requestEnvironments(c), environment),
       fileVars: c.file ?? [],
       requestVars: c.request ?? [],
+      globals: c.globals,
+      preRequestVars: c.preRequest,
       envName: environment,
       prompts: (c.prompts ?? []).map((p) => ({ name: p.name, description: "" })),
       answers: Object.fromEntries((c.prompts ?? []).flatMap((p) => (p.value === undefined ? [] : [[p.name, p.value]]))),
+      requestNames: c.named ?? [],
     });
     const r = provider.resolve(c.text);
     expect({ value: r.value, undefined: r.undefined, circular: r.circular, asked: r.asked }).toEqual({
@@ -323,5 +356,91 @@ describe("varSegments (the static rendering of a variable-aware field)", () => {
 
   it("leaves references plain when there is no provider", () => {
     expect(varSegments("a {{token}}", null)).toEqual([{ text: "a {{token}}" }]);
+  });
+});
+
+describe("what autocomplete offers in a Request variable's path", () => {
+  const login: ExchangeShape = {
+    received: "2026-11-13T10:02:03.000Z",
+    status: 200,
+    response: {
+      headers: ["Content-Type", "X-Token"],
+      body: { keys: [["token", {}], ["user", { keys: [["id", {}], ["roles", { items: { keys: [["name", {}]] } }]] }]] },
+    },
+    request: { headers: ["X-Client"], body: { keys: [["user", {}]] } },
+  };
+  const provider = (exchange: ExchangeShape | null) =>
+    makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: null, requestNames: ["login"], exchange: async (name) => (name === "login" ? exchange : null) });
+  /** What's offered with `typed` (the reference so far) before the caret: labels, and where they replace from. */
+  async function offered(p: ReturnType<typeof provider>, typed: string) {
+    const c = await p.pathCompletions!(typed);
+    return c && { from: c.from, labels: c.options.map((o) => o.label) };
+  }
+
+  it("offers the JSON body's keys, nested as you go", async () => {
+    const p = provider(login);
+    expect(await offered(p, "login.response.body.$.")).toEqual({ from: 21, labels: ["token", "user"] });
+    expect(await offered(p, "login.response.body.$.user.")).toEqual({ from: 26, labels: ["id", "roles"] });
+    expect(await offered(p, "login.response.body.$.user.roles[0].")).toEqual({ from: 35, labels: ["name"] });
+    expect(await offered(p, "login.response.body.$.us")).toEqual({ from: 21, labels: ["user"] });
+    expect(await offered(p, "login.request.body.$.")).toEqual({ from: 20, labels: ["user"] });
+  });
+
+  it("keeps the caret in the braces after a key that has keys below it, itself or in its items", async () => {
+    const c = await provider(login).pathCompletions!("login.response.body.$.");
+    expect(c!.options).toEqual([
+      { label: "token", insert: ".token" },
+      { label: "user", insert: ".user", more: true },
+    ]);
+    const roles = await provider(login).pathCompletions!("login.response.body.$.user.r");
+    expect(roles!.options).toEqual([{ label: "roles", insert: ".roles", more: true }]);
+  });
+
+  it("offers each side's header names", async () => {
+    const p = provider(login);
+    expect(await offered(p, "login.response.headers.")).toEqual({ from: 23, labels: ["Content-Type", "X-Token"] });
+    expect(await offered(p, "login.response.headers.tok")).toEqual({ from: 23, labels: ["X-Token"] });
+    expect(await offered(p, "login.request.headers.")).toEqual({ from: 22, labels: ["X-Client"] });
+  });
+
+  it("offers response or request after the name, then body or headers, each going on to the next segment", async () => {
+    const p = provider(login);
+    expect(await offered(p, "login.")).toEqual({ from: 6, labels: ["response", "request"] });
+    expect(await offered(p, "login.req")).toEqual({ from: 6, labels: ["request"] });
+    expect(await offered(p, "login.response.")).toEqual({ from: 15, labels: ["body", "headers"] });
+    const body = await p.pathCompletions!("login.response.body.");
+    expect(body!.options.map((o) => [o.label, o.insert, !!o.more])).toEqual([
+      ["$", "$.", true],
+      ["*", "*", false],
+    ]);
+    expect((await p.pathCompletions!("login."))!.options[0]).toMatchObject({ insert: "response.", more: true });
+  });
+
+  it("without an exchange offers the structure but no paths, with a hint that it hasn't been sent", async () => {
+    const p = provider(null);
+    const hint = "login hasn't been sent in this Session";
+    expect(await p.pathCompletions!("login.")).toMatchObject({ hint, options: [{ label: "response", detail: hint }, { label: "request", detail: hint }] });
+    expect(await offered(p, "login.response.")).toEqual({ from: 15, labels: ["body", "headers"] });
+    expect(await offered(p, "login.response.body.")).toEqual({ from: 20, labels: ["$", "*"] });
+    expect(await p.pathCompletions!("login.response.body.$.")).toEqual({ from: 20, options: [], hint });
+    expect(await p.pathCompletions!("login.response.headers.")).toEqual({ from: 23, options: [], hint });
+  });
+
+  it("says when a body has no JSON keys to offer", async () => {
+    const p = provider({ ...login, response: { headers: [], body: null } });
+    expect(await p.pathCompletions!("login.response.body.$.")).toMatchObject({ options: [], hint: "login's latest response body isn't JSON" });
+  });
+
+  it("leaves anything that isn't a named request's path to the names in scope", async () => {
+    const p = provider(login);
+    expect(await p.pathCompletions!("log")).toBeNull();
+    expect(await p.pathCompletions!("other.response.")).toBeNull();
+    expect(await p.pathCompletions!("login.resp.x")).toBeNull();
+    expect(await p.pathCompletions!("login.response.cookies.")).toBeNull();
+  });
+
+  it("offers the file's named requests after {{, as requests", () => {
+    const names = provider(login).completions().filter((c) => c.source === "request");
+    expect(names).toEqual([{ name: "login", source: "request" }]);
   });
 });

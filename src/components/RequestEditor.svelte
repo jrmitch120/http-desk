@@ -7,10 +7,13 @@
   import { onDestroy, tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import type { KeyValue } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
+  import type { GlobalVariable, KeyValue } from "../lib/types";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
+  import { promptAnswersOf } from "../lib/promptAnswers.svelte";
+  import { sessionView } from "../lib/sessionView.svelte";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
@@ -40,6 +43,9 @@
   // The request's own environments: its folder's (ADR-0004). An environment the folder
   // doesn't define gives none, like the send.
   const envSet = $derived(app.envSetFor(tab.path));
+  const answers = promptAnswersOf(() => tab);
+  // The Session's Global variables, which every request can use: read again whenever the Session changes.
+  const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = {
@@ -47,20 +53,27 @@
       fileVars: fileVariables(doc.file),
       headerVars: doc.file.header.variables,
       requestVars: req?.variables ?? [],
+      globals: Object.fromEntries((globals.current ?? []).map((g) => [g.name, g.value])),
       envName: app.envName,
       prompts: req ? requestPrompts(req) : [],
-      answers: app.promptAnswers(tab),
+      answers: answers.current,
+      requestNames: requestNames(doc.file),
+      exchange: (name: string) => app.exchangeShape(tab.path, name),
     };
     return {
       ...makeVarProvider(scope),
       edit: (d: Definition) => app.editDefinition(tab.id, d),
       findUsages: (name: string) => app.findUsages(name),
       extract: (value: string) => app.extractVariable(tab.id, value),
+      readRequestVariable: async (reference: string) => {
+        const reading = await api.requestVariable(tab.path, reference).catch(() => null);
+        return reading && readingCard(reading, workspaceFile(app.root, tab.path));
+      },
     };
   });
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path)) : []);
+  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests) : []);
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
@@ -304,7 +317,7 @@
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} bind:file={doc.file} {variables} />
+          <RequestSettings {req} bind:file={doc.file} filePath={tab.path} {variables} />
         {/if}
       </div>
     {/if}

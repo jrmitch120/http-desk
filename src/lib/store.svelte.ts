@@ -3,8 +3,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, joinAnd, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
+import { api, errorMessage, type RequestArgs, type RunExportFormat } from "./api";
+import { basename, dirname, displayName, fileVariables, getDirective, hasScripts, joinAnd, joinPath, nameError, newRequest, promptMasked, requestNames, requestPrompts, uid, verbOf } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
@@ -16,19 +16,30 @@ import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractT
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
 import { SHARED } from "./vars";
-import { wording, type ButtonRole } from "./platform";
+import { wording } from "./platform";
+import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
+import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
+import { Trust, type TrustHost } from "./trust";
+import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
+import { treeFiles } from "./tree";
 import type {
   AppSettings,
   EnvironmentSet,
+  ExchangeShape,
   EnvironmentSettings,
   MatrixWidths,
+  RunnerOptions,
   FolderEnvironments,
   HttpFile,
   HttpResponse,
+  NamedExchange,
   Request,
   RequestPreview,
+  RunProgress,
   SearchHit,
   SendError,
+  StoredCookie,
+  TestResult,
   TreeNode,
   Usage,
   UsageField,
@@ -67,6 +78,9 @@ export interface RunState {
   received?: number;
 }
 
+export type { Runner, RunItem, RunItemState } from "./runner.svelte";
+
+
 export interface Toast {
   id: string;
   kind: "info" | "success" | "error";
@@ -75,43 +89,10 @@ export interface Toast {
   held?: boolean;
 }
 
-export interface DialogButton {
-  label: string;
-  value: string;
-  /** Decides where the button sits on each OS (`arrangeDialogButtons`), and
-   *  which one Enter (primary) and Escape (cancel) stand for. */
-  role?: ButtonRole;
-  /** Drawn in the danger colour: a primary that destroys something, or a destructive alternative. */
-  danger?: boolean;
-  /** Focused when the dialog opens, instead of the primary button. Set it on
-   *  Cancel for irreversible confirmations, so a stray Enter destroys nothing. */
-  focus?: boolean;
-}
-
-/** A dialog's Cancel button, which Escape stands for (answers "cancel"). */
-export const CANCEL: DialogButton = { label: "Cancel", value: "cancel", role: "cancel" };
+export { CANCEL, type DialogButton, type DialogField, type DialogState } from "./dialog";
 
 /** A definition's row to open; with `add`, one with an empty value is added if there's none. */
 export type WantedDefinition = Definition & { add?: boolean };
-
-/** One field of a dialog form: a labelled text input, masked (with a reveal button) if asked. */
-export interface DialogField {
-  label: string;
-  /** Shown under the label; empty for none. */
-  help: string;
-  masked: boolean;
-  value: string;
-}
-
-export interface DialogState {
-  title: string;
-  message?: string;
-  input?: { value: string; placeholder?: string; selectStem?: boolean };
-  /** A form of several fields; their values come back in `values`, in order. */
-  fields?: DialogField[];
-  buttons: DialogButton[];
-  resolve: (r: { button: string; value: string; values: string[] }) => void;
-}
 
 /** The user's answer to the Rename variable form: the new name, and the usages
  *  whose references to update (null: rename it in the environments only). */
@@ -165,13 +146,13 @@ class PendingForm<S, C> {
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
+/** A panel in the panel area below the requests (`PanelArea.svelte`). */
+export type PanelId = "session" | "runner";
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-/** The method as sent: upper-cased, GET when blank. */
-const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
 
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
@@ -184,6 +165,12 @@ const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
   return r._key;
 };
+
+/** A request in the explorer: its file and its key (`_key`). */
+export interface RequestRef {
+  path: string;
+  key: string;
+}
 
 class AppStore {
   root = $state<string | null>(null);
@@ -220,7 +207,14 @@ class AppStore {
   private windowTheme: "light" | "dark" | null | undefined = undefined;
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
+  /** The requests picked in the explorer with ⌘/Ctrl- or Shift-click, Space or
+   *  Shift+arrows; none means the explorer's selection is the active request. */
+  treeSelection = $state<RequestRef[]>([]);
+  /** Where a Shift-click range starts: the request last clicked or toggled. */
+  private selectionAnchor: RequestRef | null = null;
   modal = $state<ModalKind>(null);
+  /** The panel shown below the requests, if any. */
+  panel = $state<PanelId | null>(null);
   dialog = $state<DialogState | null>(null);
   private extractForm = new PendingForm<Extraction, ExtractChoice>();
   /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
@@ -313,6 +307,7 @@ class AppStore {
     await listen<{ runId: string; received: number }>("send-progress", (e) =>
       this.onSendProgress(e.payload.runId, e.payload.received),
     );
+    await listen<RunProgress>("run-progress", (e) => this.onRunProgress(e.payload));
     // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
     // turns those into a close request; see quit.rs). With nothing unsaved the
     // window closes at once, which quits the app.
@@ -470,16 +465,22 @@ class AppStore {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {
       const info = await api.openWorkspace(path);
+      // The shell started a new Session for it, so nothing from the last one shows.
+      this.session.reset();
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
+      this.trust.reset();
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
       for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
       this.runs = {};
+      this.runnerStore.reset();
+      if (this.panel === "runner") this.panel = null;
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
+      this.clearTreeSelection();
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
@@ -755,9 +756,7 @@ class AppStore {
       });
     }
     // Explorer order, as the backend returns them; files not in the tree go last.
-    const order = new Map<string, number>();
-    const walk = (n: TreeNode) => (n.kind === "file" ? order.set(n.path, order.size) : n.children?.forEach(walk));
-    if (this.tree) walk(this.tree);
+    const order = new Map((this.tree ? treeFiles(this.tree) : []).map((path, i) => [path, i]));
     const rank = (h: SearchHit) => order.get(h.path) ?? order.size;
     return hits.sort((a, b) => rank(a) - rank(b) || (a.path === b.path ? a.index - b.index : 0));
   }
@@ -1066,34 +1065,35 @@ class AppStore {
       filePath: tab.path,
       fileVariables: $state.snapshot(fileVariables(doc.file)),
       environment: this.envName,
-      promptValues: this.promptAnswers(tab),
+      requestKey: tab.key,
+      requestNames: requestNames(doc.file),
     };
   }
 
-  /** Values typed for Prompt variables, per request key: for this app session only, never saved. */
-  private promptValues = $state<Record<string, Record<string, string>>>({});
-
-  /** The values remembered for the tab's request's Prompt variables, by name. */
-  promptAnswers(tab: Tab): Record<string, string> {
-    return { ...this.promptValues[tab.key] };
+  /**
+   * The values the Session remembers for the tab's request's Prompt variables, by
+   * name. The Session (in the shell) holds them, never the webview.
+   */
+  promptAnswers(tab: Tab): Promise<Record<string, string>> {
+    return api.promptAnswers(tab.key);
   }
 
-  /** Forgets the tab's request's prompted values, so its next send asks again. */
-  forgetPrompts(tab: Tab) {
-    delete this.promptValues[tab.key];
+  /** Shows `panel` below the requests, or hides it if it's the one shown. */
+  togglePanel(panel: PanelId) {
+    this.panel = this.panel === panel ? null : panel;
   }
 
   /**
-   * Asks for the request's Prompt variables that have no remembered value, all in
-   * one form, and remembers the answers. False if the user cancelled.
+   * Asks for the request's Prompt variables that the Session has no value for, all in
+   * one form, and has the Session remember the answers. False if the user cancelled.
    */
   private async askPrompts(tab: Tab, req: Request): Promise<boolean> {
-    const remembered = this.promptAnswers(tab);
+    const remembered = await this.promptAnswers(tab);
     const asked = requestPrompts(req).filter((p) => !Object.hasOwn(remembered, p.name));
     if (!asked.length) return true;
     const r = await this.openDialog({
       title: asked.length === 1 ? `Value for "${asked[0].name}"` : "Values for this request",
-      message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
+      message: "Asked once, then remembered for this request until you open another workspace or quit. Never saved.",
       fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
       buttons: [
         CANCEL,
@@ -1101,7 +1101,8 @@ class AppStore {
       ],
     });
     if (r.button !== "send") return false;
-    this.promptValues[tab.key] = { ...remembered, ...Object.fromEntries(asked.map((p, i) => [p.name, r.values[i] ?? ""])) };
+    await api.answerPrompts(tab.key, Object.fromEntries(asked.map((p, i) => [p.name, r.values[i] ?? ""])));
+    this.sessionVersion++;
     return true;
   }
 
@@ -1119,22 +1120,27 @@ class AppStore {
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
-    // Only awaited when it asks, so an ordinary send starts loading at once.
-    if (requestPrompts(req).some((p) => !Object.hasOwn(this.promptAnswers(tab), p.name))) {
-      this.confirmingSend.add(tabId);
-      try {
-        if (!(await this.askPrompts(tab, req))) return;
-      } finally {
-        this.confirmingSend.delete(tabId);
-      }
-    }
-    const env = this.sentEnvironment(tab.path);
-    if (env && this.guardsMethod(env, req.method) && !(await this.confirmProductionSend(tabId, env, req.method))) return;
+    // Only awaited for a request with prompts, so an ordinary send starts loading at once.
+    if (requestPrompts(req).length && !(await this.confirming(tabId, () => this.askPrompts(tab, req)))) return;
+    const env = this.guardedEnvironment(tab.path, req.method);
+    if (env && !(await this.confirming(tabId, () => this.confirmProductionSend(env, req.method)))) return;
+    // A send blocked as unsent runs no script, so it needs no trust: the shell reports the
+    // block. Only awaited for a request with scripts, like the prompts.
+    const runsScripts = hasScripts(req) && (await this.trust.sendRunsScripts(tab.path, req, requestNames(doc.file)));
+    const scripts = runsScripts ? await this.confirming(tabId, () => this.trust.scriptsAllowed()) : "none";
+    if (scripts === "cancel") return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
-      const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc) });
+      const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc), skipScripts: scripts === "skip" });
+      // The Session changed if the jar kept cookies the response set, if the request is
+      // named (its exchange is now the latest, which Request variables read), or if its
+      // scripts ran (they may have set Global variables): views showing the Session read
+      // it again, even if the tab has closed.
+      const named = getDirective(req, "name")?.trim();
+      if (response.cookies?.length || named || scripts === "run") this.sessionVersion++;
+      this.session.noteExchange(tab.path, tab.key, req);
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
         this.releaseResponse(response);
@@ -1142,21 +1148,53 @@ class AppStore {
       }
       this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
       if (previous?.id !== response.id) this.releaseResponse(previous);
+      this.markTests(tab.key, response.tests);
     } catch (e) {
+      // A pre-request script that failed may have set Global variables first.
+      if (scripts === "run") this.sessionVersion++;
       if (this.runs[tabId]?.runId !== runId) return;
       if (this.cancelled.delete(runId)) {
         this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous };
       } else {
-        this.runs[tabId] = { runId, loading: false, startedAt: 0, error: toSendError(e) };
+        const error = toSendError(e);
+        this.runs[tabId] = { runId, loading: false, startedAt: 0, error };
         this.releaseResponse(previous);
+        this.clearTestMark(tab.key);
+        // The shell knows best: trust revoked elsewhere asks again on the next send.
+        if (error.kind === "untrustedWorkspace") this.trust.refusedByShell();
       }
     } finally {
       this.cancelled.delete(runId);
     }
   }
 
-  /** Tabs whose send is waiting on the prompt form or the production confirmation. */
+  /**
+   * "Send `name` first": opens the request named `name` (`# @name`) in the file of tab
+   * `tabId`, whose Request variables read its latest exchange, and sends it the
+   * normal way (prompts, the production confirmation and the trust question included). Never resends
+   * the request that asked: the user does that.
+   */
+  async sendFirst(tabId: string, name: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const doc = tab && this.docs[tab.path];
+    const req = doc?.file.requests.find((r) => getDirective(r, "name")?.trim() === name);
+    if (!tab || !req) return;
+    await this.openRequest(tab.path, { key: req._key });
+    if (this.activeTabId) await this.send(this.activeTabId);
+  }
+
+  /** Tabs whose send is waiting on the prompt form, the production confirmation or the trust question. */
   private confirmingSend = new Set<string>();
+
+  /** Asks `ask` for the send of tab `tabId`, which doesn't start again meanwhile. */
+  private async confirming<T>(tabId: string, ask: () => Promise<T>): Promise<T> {
+    this.confirmingSend.add(tabId);
+    try {
+      return await ask();
+    } finally {
+      this.confirmingSend.delete(tabId);
+    }
+  }
 
   /** The environment a request in the file at `path` is sent with: the selected one if
    *  the request's folders define it, else none (ADR-0004; the send warns about it). */
@@ -1165,25 +1203,22 @@ class AppStore {
     return name && this.envSetFor(path)?.environments.some((e) => e.name === name) ? name : null;
   }
 
-  /** Whether sending `method` with environment `env` needs confirming: `env` is a
-   *  production environment and the method isn't GET, HEAD or OPTIONS. */
-  private guardsMethod(env: string, method: string): boolean {
-    return !!this.environmentSettings(env).production && !SAFE_METHODS.has(verbOf(method));
+  /** The environment a send of `method` from the file at `path` needs confirming for:
+   *  the one it's sent with, if that's a production environment and the method isn't
+   *  GET, HEAD or OPTIONS. */
+  private guardedEnvironment(path: string, method: string): string | null {
+    const env = this.sentEnvironment(path);
+    return env && this.environmentSettings(env).production && !SAFE_METHODS.has(verbOf(method)) ? env : null;
   }
 
   /** Asks before sending with production environment `env`. True to go ahead. */
-  private async confirmProductionSend(tabId: string, env: string, method: string): Promise<boolean> {
+  private async confirmProductionSend(env: string, method: string): Promise<boolean> {
     const verb = verbOf(method);
-    this.confirmingSend.add(tabId);
-    try {
-      const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
-        { ...CANCEL, focus: true },
-        { label: `Send ${verb}`, value: "send", role: "primary", danger: true },
-      ]);
-      return r.button === "send";
-    } finally {
-      this.confirmingSend.delete(tabId);
-    }
+    const r = await this.choose("Send to production?", `"${env}" is a production environment. Send this ${verb} request anyway?`, [
+      { ...CANCEL, focus: true },
+      { label: `Send ${verb}`, value: "send", role: "primary", danger: true },
+    ]);
+    return r.button === "send";
   }
 
   /** Records the bytes received so far for a send that is still loading; a
@@ -1211,6 +1246,244 @@ class AppStore {
     if (!run?.loading) return;
     this.cancelled.add(run.runId);
     await api.cancelRequest(run.runId);
+  }
+
+  // ---------------------------------------------------------------- explorer selection
+
+  /** The requests selected in the explorer: those picked, else the active request. */
+  get selectedRequests(): RequestRef[] {
+    if (this.treeSelection.length) return this.treeSelection;
+    const tab = this.activeTab;
+    return tab ? [{ path: tab.path, key: tab.key }] : [];
+  }
+
+  /** Whether the explorer shows the request as selected. */
+  isTreeSelected(path: string, key: string): boolean {
+    return this.selectedRequests.some((r) => r.path === path && r.key === key);
+  }
+
+  /**
+   * Selects a request in the explorer. `only`: a plain click, which goes back to
+   * selecting just the active request. `toggle` (⌘/Ctrl-click, Space): adds or removes
+   * it, keeping what's selected, the active request included. `range` (Shift-click,
+   * Shift+arrows): selects the requests the explorer shows from the last one clicked
+   * or toggled (else `start`, else the active request) to this one.
+   */
+  selectRequest(path: string, key: string, how: "only" | "toggle" | "range", start?: RequestRef) {
+    const ref = { path, key };
+    if (how === "only") {
+      this.treeSelection = [];
+    } else if (how === "range") {
+      const anchor = this.selectionAnchor ?? start ?? this.selectedRequests[0] ?? ref;
+      const rows = this.shownRequests();
+      const at = (r: RequestRef) => rows.findIndex((x) => x.path === r.path && x.key === r.key);
+      const [from, to] = [at(anchor), at(ref)];
+      this.treeSelection = from < 0 || to < 0 ? [ref] : rows.slice(Math.min(from, to), Math.max(from, to) + 1);
+      this.selectionAnchor = from < 0 ? ref : anchor;
+      return;
+    } else {
+      const picked = this.selectedRequests;
+      this.treeSelection = this.isTreeSelected(path, key) ? picked.filter((r) => r.path !== path || r.key !== key) : [...picked, ref];
+    }
+    this.selectionAnchor = ref;
+  }
+
+  /** The request rows the explorer shows, top to bottom: those of expanded files in expanded folders. */
+  private shownRequests(): RequestRef[] {
+    const walk = (n: TreeNode): RequestRef[] => {
+      if (!this.expanded[n.path]) return [];
+      if (n.kind === "dir") return (n.children ?? []).flatMap(walk);
+      return (this.docs[n.path]?.file.requests ?? []).map((r) => ({ path: n.path, key: r._key! }));
+    };
+    return (this.tree?.children ?? []).flatMap(walk);
+  }
+
+  /** Goes back to the explorer selecting just the active request. */
+  clearTreeSelection() {
+    this.treeSelection = [];
+    this.selectionAnchor = null;
+  }
+
+  // ---------------------------------------------------------------- Session, trust and runs
+
+  /** The workspace's Session as the page sees it: its version, exchange shapes, test markers (session.svelte.ts). */
+  readonly session: SessionStore = new SessionStore(this.sessionHost());
+  /** Whether the workspace's scripts may run (trust.ts). */
+  readonly trust: Trust = new Trust(this.trustHost());
+  /** Runs and the Runner panel (runner.svelte.ts). */
+  readonly runnerStore: RunnerStore = new RunnerStore(this.runnerHost());
+
+  private sessionHost(): SessionHost {
+    const store = this;
+    return {
+      get runs() {
+        return store.runs;
+      },
+      releaseResponse: (response) => store.releaseResponse(response),
+      toast: (kind, message) => store.toast(kind, message),
+      choose: (title, message, buttons) => store.choose(title, message, buttons),
+    };
+  }
+
+  private trustHost(): TrustHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get settings() {
+        return store.settings;
+      },
+      toast: (kind, message) => store.toast(kind, message),
+      choose: (title, message, buttons) => store.choose(title, message, buttons),
+      exchangeShape: (path, name) => store.session.exchangeShape(path, name),
+    };
+  }
+
+  private runnerHost(): RunnerHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get settings() {
+        return store.settings;
+      },
+      get envName() {
+        return store.envName;
+      },
+      get tree() {
+        return store.tree;
+      },
+      get tabs() {
+        return store.tabs;
+      },
+      get docs() {
+        return store.docs;
+      },
+      get selectedRequests() {
+        return store.selectedRequests;
+      },
+      get session() {
+        return store.session;
+      },
+      get trust() {
+        return store.trust;
+      },
+      showRunner: () => (store.panel = "runner"),
+      loadDoc: (path) => store.loadDoc(path),
+      isRequestDirty: (path, key) => store.isRequestDirty(path, key),
+      updateSettings: (patch) => store.updateSettings(patch),
+      guardedEnvironment: (path, method) => store.guardedEnvironment(path, method),
+      releaseResponse: (response) => store.releaseResponse(response),
+      toast: (kind, message) => store.toast(kind, message),
+      openDialog: (d) => store.openDialog(d),
+      choose: (title, message, buttons) => store.choose(title, message, buttons),
+    };
+  }
+
+  // The members below hand over to those modules, so `app.*` keeps working where it's used.
+
+  get sessionVersion(): number {
+    return this.session.version;
+  }
+  set sessionVersion(version: number) {
+    this.session.version = version;
+  }
+  exchangeShape(path: string, name: string): Promise<ExchangeShape | null> {
+    return this.session.exchangeShape(path, name);
+  }
+  forgetPrompts(tab: Tab): Promise<void> {
+    return this.session.forgetPrompts(tab.key);
+  }
+  deleteGlobal(name: string): Promise<void> {
+    return this.session.deleteGlobal(name);
+  }
+  clearGlobals(): Promise<void> {
+    return this.session.clearGlobals();
+  }
+  deleteCookie(c: Pick<StoredCookie, "domain" | "path" | "name">): Promise<void> {
+    return this.session.deleteCookie(c);
+  }
+  clearCookies(): Promise<void> {
+    return this.session.clearCookies();
+  }
+  removeNamedExchange(entry: Pick<NamedExchange, "file" | "name">): Promise<void> {
+    return this.session.removeNamedExchange(entry);
+  }
+  clearNamedExchanges(): Promise<void> {
+    return this.session.clearNamedExchanges();
+  }
+  get shownExchange() {
+    return this.session.shownExchange;
+  }
+  openExchange(entry: NamedExchange): Promise<void> {
+    return this.session.openExchange(entry);
+  }
+  closeExchange() {
+    this.session.closeExchange();
+  }
+  clearSession(): Promise<void> {
+    return this.session.clear();
+  }
+  testMark(key: string): TestMark | undefined {
+    return this.session.testMark(key);
+  }
+  markTests(key: string, tests: TestResult[] | undefined) {
+    this.session.markTests(key, tests);
+  }
+  clearTestMark(key: string) {
+    this.session.clearTestMark(key);
+  }
+  clearTestMarks() {
+    this.session.clearTestMarks();
+  }
+
+  get trusted(): boolean {
+    return this.trust.trusted;
+  }
+  revokeTrust(path: string): Promise<void> {
+    return this.trust.revoke(path);
+  }
+
+  get runner(): Runner | null {
+    return this.runnerStore.current;
+  }
+  set runner(runner: Runner | null) {
+    this.runnerStore.current = runner;
+  }
+  get running(): boolean {
+    return this.runnerStore.running;
+  }
+  runFile(path: string): Promise<void> {
+    return this.runnerStore.runFile(path);
+  }
+  runFolder(path: string): Promise<void> {
+    return this.runnerStore.runFolder(path);
+  }
+  runSelection(): Promise<void> {
+    return this.runnerStore.runSelection();
+  }
+  stopRun(): Promise<void> {
+    return this.runnerStore.stop();
+  }
+  get runnerOptions(): RunnerOptions {
+    return this.runnerStore.options;
+  }
+  setRunnerOptions(patch: Partial<RunnerOptions>): Promise<boolean> {
+    return this.runnerStore.setOptions(patch);
+  }
+  get canRerunFailed(): boolean {
+    return this.runnerStore.canRerunFailed;
+  }
+  rerunFailed(): Promise<void> {
+    return this.runnerStore.rerunFailed();
+  }
+  exportRun(format: RunExportFormat): Promise<void> {
+    return this.runnerStore.export(format);
+  }
+  onRunProgress(p: RunProgress) {
+    this.runnerStore.onProgress(p);
   }
 
   // ---------------------------------------------------------------- environments
@@ -1533,7 +1806,7 @@ class AppStore {
   private dialogQueue: DialogState[] = [];
 
   /** Shows the dialog, or queues it behind the one on screen. */
-  private openDialog(d: Omit<DialogState, "resolve">): Promise<{ button: string; value: string; values: string[] }> {
+  private openDialog(d: Omit<DialogState, "resolve">): Promise<DialogAnswer> {
     return new Promise((resolve) => {
       const next = { ...d, resolve };
       if (this.dialog) this.dialogQueue.push(next);

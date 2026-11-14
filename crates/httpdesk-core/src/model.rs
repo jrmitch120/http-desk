@@ -26,6 +26,20 @@ pub struct HttpFile {
     pub bom: bool,
 }
 
+impl HttpFile {
+    /// The `# @name`s of the file's requests, in order, each once: what its Request
+    /// variables can refer to (`###` text never counts).
+    pub fn request_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.requests.iter().filter_map(Request::request_name) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+        names
+    }
+}
+
 /// Content before the first request: `@var = value` lines plus other lines
 /// (comments) kept verbatim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -229,6 +243,38 @@ impl ExtraLine {
     }
 }
 
+/// A script as a request writes it after `<` (pre-request) or `>` (response handler).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptSource {
+    /// `{% … %}`: the script text between the markers, and the line of the
+    /// pre-request script or handler (1-based) that text starts on, so errors can
+    /// name its lines.
+    Inline { source: String, line: usize },
+    /// `path.js`: a script file, relative to the `.http` file.
+    File { path: String },
+}
+
+/// One part of a request's response handler (JetBrains `>` / `>>` lines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandlerPart {
+    /// `> {% … %}` or `> path.js`.
+    Script(ScriptSource),
+    /// `>> path` or `>>! path` (`overwrite`): saves the response to a file.
+    /// Preserved, never run.
+    Redirect { path: String, overwrite: bool },
+}
+
+impl HandlerPart {
+    /// A script (inline or a file), as opposed to an output redirect.
+    pub fn is_script(&self) -> bool {
+        matches!(self, HandlerPart::Script(_))
+    }
+}
+
+/// One part of a request's pre-request script (JetBrains `<` lines above the
+/// request line): every part is a script.
+pub type PreRequestPart = ScriptSource;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Request {
@@ -239,7 +285,8 @@ pub struct Request {
     pub directives: Vec<Directive>,
     /// `@var = value` lines inside this request block.
     pub variables: Vec<Variable>,
-    /// Verbatim JetBrains pre-request script (`< {% … %}`); preserved, not executed.
+    /// Verbatim JetBrains pre-request script (`< {% … %}`, `< file.js`), as written
+    /// back. [`Request::pre_request_parts`] is the form that runs.
     pub pre_script: Option<String>,
     pub method: String,
     /// URL without the query string.
@@ -251,7 +298,8 @@ pub struct Request {
     pub body: Body,
     /// Unrecognized lines in the header area (comments etc.), emitted verbatim.
     pub extra_lines: Vec<ExtraLine>,
-    /// Verbatim response handler / output redirect (`> {% … %}`, `>> file`).
+    /// Verbatim response handler / output redirect (`> {% … %}`, `>> file`), as
+    /// written back. [`Request::response_handler_parts`] is the form that runs.
     pub response_handler: Option<String>,
     /// Verbatim non-request blocks that precede this request in the file.
     pub leading: String,
@@ -299,6 +347,23 @@ impl Request {
             }
         }
         out
+    }
+
+    /// The request's `# @name`, which Request variables refer to it by. Its `###` text never is.
+    pub fn request_name(&self) -> Option<&str> {
+        self.directive("name").map(str::trim).filter(|n| !n.is_empty())
+    }
+
+    /// The response handler as structured parts, read from the verbatim
+    /// [`Request::response_handler`] (which stays what is written back).
+    pub fn response_handler_parts(&self) -> Vec<HandlerPart> {
+        self.response_handler.as_deref().map(crate::parser::handler_parts).unwrap_or_default()
+    }
+
+    /// The pre-request script as structured parts, read from the verbatim
+    /// [`Request::pre_script`] (which stays what is written back).
+    pub fn pre_request_parts(&self) -> Vec<PreRequestPart> {
+        self.pre_script.as_deref().map(crate::parser::pre_request_parts).unwrap_or_default()
     }
 
     /// Human-friendly label: `### name`, then `@name`, then `METHOD url`.

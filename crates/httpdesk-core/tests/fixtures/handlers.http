@@ -1,0 +1,36 @@
+### One-line handler
+GET https://example.com/status
+
+> {% client.test("ok", () => client.assert(response.status === 200, "status")); %}
+
+### Multi-line handler, as the JetBrains docs write it
+POST https://example.com/login
+Content-Type: application/json
+
+{"user": "ada"}
+
+> {%
+    client.test("Request executed successfully", function () {
+        client.assert(response.status === 200, "Response status is not 200");
+    });
+    client.test("Response content-type is json", function () {
+        const type = response.contentType.mimeType;
+        client.assert(type === "application/json", `Expected 'application/json' but received '${type}'`);
+    });
+%}
+
+### Handler then an output redirect
+GET https://example.com/report
+
+> {% client.assert(response.body.length > 0, "not empty"); %}
+>>! ./report.json
+
+### Script file
+GET https://example.com/file
+
+> ./check-status.js
+
+### Redirect only
+GET https://example.com/save
+
+>> ./saved.json

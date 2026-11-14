@@ -5,9 +5,15 @@
   import { getDirective, lastNamed, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
   import KeyValueGrid from "./KeyValueGrid.svelte";
+  import ScriptsEditor from "./ScriptsEditor.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
 
-  let { req, file = $bindable(), variables = null }: { req: Request; file: HttpFile; variables?: VarProvider | null } = $props();
+  let {
+    req,
+    file = $bindable(),
+    filePath,
+    variables = null,
+  }: { req: Request; file: HttpFile; filePath: string | null; variables?: VarProvider | null } = $props();
 
   const followRedirects = $derived(getDirective(req, "no-redirect") === undefined);
   // JetBrains semantics: `@timeout` is the idle time between received data, `@connection-timeout` limits only connecting.
@@ -36,12 +42,9 @@
     if (row) tick().then(() => grid?.focusValue(row));
   });
 
+  // Scripts and JetBrains `>>` redirects have their own section (ScriptsEditor).
   const preserved = $derived(
-    [
-      req.preScript && "a pre-request script",
-      req.responseHandler && "a response handler",
-      req.extraLines.length && `${req.extraLines.length} other line${req.extraLines.length > 1 ? "s" : ""} in the header area`,
-    ].filter(Boolean) as string[],
+    [req.extraLines.length && `${req.extraLines.length} other line${req.extraLines.length > 1 ? "s" : ""} in the header area`].filter(Boolean) as string[],
   );
 </script>
 
@@ -88,6 +91,8 @@
     </label>
   </section>
 
+  <ScriptsEditor {req} {filePath} />
+
   <section>
     <h3>File variables</h3>
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
@@ -116,7 +121,7 @@
         </ul>
       {/if}
       {#if preserved.length}
-        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact but does not run scripts.</p>
+        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact.</p>
       {/if}
     </section>
   {/if}

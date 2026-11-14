@@ -5,6 +5,7 @@
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { BodyFetchView } from "../src/lib/api";
+import type { RunRequestReport } from "../src/lib/types";
 
 /**
  * Loads the app and waits for the mocked workspace tree to appear.
@@ -84,6 +85,12 @@ export interface MockState {
   sent: { method: string; url: string }[];
   /** The Prompt variable values each send got, in order. */
   sentPrompts: Record<string, string>[];
+  /** Each send's `skipScripts` ("Send without scripts"). */
+  sentSkipScripts: boolean[];
+  /** The Cookie header the Session's jar gave each send, in order ("" for none). */
+  sentCookies: string[];
+  /** The options each run got, in order. */
+  runOptions: { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean }[];
   /** The settings it last saved. */
   settings: {
     theme: string;
@@ -94,11 +101,15 @@ export interface MockState {
     envView: "matrix" | "list";
     envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
+    trustedWorkspaces: string[];
+    runnerOptions: Record<string, { delayMs: number; stopOnFailure: boolean }>;
   };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
   /** What "Save body to file" wrote, by path. */
   savedBodies: Record<string, string>;
+  /** What the Runner panel's Export wrote (`export_run`), in order. */
+  runExports: { format: "junit" | "json"; path: string; requests: RunRequestReport[] }[];
   /** The response ids `response_shape` was asked for, in order. */
   shapeRequests: string[];
   /** The two env files as last written. */
@@ -127,6 +138,8 @@ export interface MockState {
   menuStateChanges: MenuStateChange[][];
   /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
   openedUrls: string[];
+  /** The script files "Open in default editor" opened, in order. */
+  openedPaths: string[];
   /** The OS clipboard the clipboard plugin reads and writes. */
   clipboard: string;
   /** The texts the clipboard plugin wrote, in order. */

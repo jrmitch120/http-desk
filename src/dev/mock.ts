@@ -6,13 +6,16 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { promptMasked, requestPrompts, segments } from "../lib/http";
+import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
+import { responseRedirects } from "../lib/scripts";
+import { requestVariableReads } from "../lib/checks";
+import { environmentMissing, redirectNotRun, scriptFileMissing, scriptFileOutside, sentWithoutScripts, UNTRUSTED_MESSAGE, unsentMessage } from "./coreMessages";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
-import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
+import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -43,6 +46,99 @@ if (new URLSearchParams(location.search).get("requestVars") === "1") {
   (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
   files[`${ROOT}/api/pets.http`] = withVars;
 }
+// `?preScript=sign|fail` gives List pets a pre-request script: one that sets
+// `signature`, or one that throws at its line 3 (the send then fails, see `send_request`).
+const preScriptParam = new URLSearchParams(location.search).get("preScript");
+if (preScriptParam) {
+  const withScript = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const body =
+    preScriptParam === "fail"
+      ? '  request.variables.set("signature", "x");\n  throw new Error("no token");'
+      : '  request.variables.set("signature", request.environment.get("token"));';
+  (withScript.requests[0] as { preScript: string | null }).preScript = `< {%\n${body}\n%}`;
+  (withScript.requests[0] as { raw: string | null }).raw = null;
+  files[`${ROOT}/api/pets.http`] = withScript;
+}
+// `?chain=1`: Create pet is `# @name createPet`, and Get pet image reads the new pet's id
+// from its latest exchange (`{{createPet.response.body.$.id}}`, a Request variable; the
+// canned response has no `id`, so it matches nothing), and its first item's name in an
+// X-Pet-Name header. `?chain=dup` also names Get pet image `createPet`, a duplicate.
+const chainMode = new URLSearchParams(location.search).get("chain");
+if (chainMode === "1" || chainMode === "dup") {
+  const chained = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  (chained.requests[1] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
+  chained.requests[2].url = "{{baseUrl}}/png/{{createPet.response.body.$.id}}";
+  (chained.requests[2].headers.items as unknown[]).push({ enabled: true, name: "X-Pet-Name", value: "{{createPet.response.body.$.items[0].name}}" });
+  if (chainMode === "dup") (chained.requests[2] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
+  files[`${ROOT}/api/pets.http`] = chained;
+}
+// `?globals=1`: List pets' response handler stores the Global variable `loginToken`
+// (`client.global.set("loginToken", "abc123")`), and samples/jetbrains.http's "Get request
+// with a header", in another file, sends it as `{{loginToken}}` in its URL.
+if (new URLSearchParams(location.search).get("globals") === "1") {
+  const withHandler = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const list = withHandler.requests[0] as { responseHandler: string | null; raw: unknown };
+  list.responseHandler = '> {%\n    client.global.set("loginToken", "abc123");\n%}';
+  list.raw = null;
+  files[`${ROOT}/api/pets.http`] = withHandler;
+  const withToken = structuredClone(jetbrains);
+  const get = withToken.requests[0] as { url: string; raw: unknown };
+  get.url = "{{host}}/get/{{loginToken}}";
+  get.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withToken;
+}
+// `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
+// log "Checking the status" before its test and "Done" after it.
+if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
+  const withLogs = structuredClone(jetbrains);
+  const req = withLogs.requests.find((r) => r.responseHandler?.startsWith("> {%")) as { responseHandler: string; raw: unknown };
+  req.responseHandler = req.responseHandler
+    .replace("> {%\n", '> {%\n    client.log("Checking the status");\n')
+    .replace(/\n%\}$/, '\n    client.log("Done");\n%}');
+  req.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withLogs;
+}
+// `?scriptFiles=1`: List pets runs the handler file `./check-status.js` (in `scriptFiles`
+// below), and Create pet references a pre-request script file that doesn't exist and a
+// handler file outside the workspace.
+if (new URLSearchParams(location.search).get("scriptFiles") === "1") {
+  const withFiles = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const [list, create] = withFiles.requests as { preScript: string | null; responseHandler: string | null; raw: unknown }[];
+  list.responseHandler = "> ./check-status.js";
+  create.preScript = "< ./missing.js";
+  create.responseHandler = "> ../../outside.js";
+  list.raw = create.raw = null;
+  files[`${ROOT}/api/pets.http`] = withFiles;
+}
+/** The workspace's script files (`> check.js`), by path. */
+const scriptFiles: Record<string, string> = {
+  [`${ROOT}/api/check-status.js`]: 'client.test("Status is 200", function () {\n  client.assert(response.status === 200, "Response status is not 200");\n});\n',
+};
+/** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
+ *  `.http` file at `filePath`, or (thrown) why it can't be used. */
+function locateScriptFile(filePath: string | null, path: string): string {
+  const parts = (filePath ? filePath.slice(0, filePath.lastIndexOf("/")) : ROOT).split("/");
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "." && part !== "") parts.push(part);
+  }
+  const resolved = path.startsWith("/") ? path : parts.join("/");
+  if (!resolved.startsWith(`${ROOT}/`)) throw scriptFileOutside(path);
+  if (!Object.hasOwn(scriptFiles, resolved)) throw scriptFileMissing(path);
+  return resolved;
+}
+/** The file references (`< path` / `> path`) in a pre-request script or handler. */
+const fileReferences = (text: string | null, sigil: "<" | ">") =>
+  (text ?? "").split("\n").flatMap((line) => {
+    const rest = line.trim().startsWith(sigil) && !line.startsWith(">>") ? line.trim().slice(1).trim() : "";
+    return rest && !rest.startsWith("{%") ? [rest] : [];
+  });
+/** The core's note on a request with `>> file` redirects (`exec::redirect_not_run`). */
+const redirectNotes = (r: Request) =>
+  responseRedirects(r).map((line) => {
+    const [, bang, path] = /^>>(!?)\s*(.*)$/.exec(line)!;
+    return redirectNotRun(bang, path.trim());
+  });
 const tree = {
   name: "demo",
   path: ROOT,
@@ -52,6 +148,14 @@ const tree = {
     { name: "samples", path: `${ROOT}/samples`, kind: "dir", children: [{ name: "jetbrains.http", path: `${ROOT}/samples/jetbrains.http`, kind: "file" }] },
   ],
 };
+// `?subfolder=1` adds api/v2/orders.http (List orders, Create order: pets.http's first
+// two requests renamed), which the tree shows above api/pets.http, as folders go first.
+if (new URLSearchParams(location.search).get("subfolder") === "1") {
+  const orders = structuredClone(pets);
+  const requests = orders.requests.slice(0, 2).map((r, i) => ({ ...r, name: ["List orders", "Create order"][i], url: "{{baseUrl}}/orders", raw: null }));
+  files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
+  tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
+}
 let envSet = {
   shared: [{ name: "version", value: "v1", secret: false }],
   environments: [
@@ -138,7 +242,8 @@ type PreviewArgs = {
   filePath: string | null;
   fileVariables: { name: string; value: string }[];
   environment: string | null;
-  promptValues?: Record<string, string>;
+  requestKey?: string;
+  requestNames?: string[];
 };
 /**
  * A rough stand-in for the core's `exec::preview` (tested for real in Rust), resolving
@@ -147,10 +252,12 @@ type PreviewArgs = {
  * marks; a masked prompted value masked, unanswered ones kept as written; query values
  * percent-encoded; the Content-Type the body implies; the default headers.
  */
-function previewRequest({ request: r, filePath, fileVariables, environment, promptValues = {} }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs) {
+  const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
-  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues });
+  const globals = Object.fromEntries(sessionGlobals);
+  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, globals, envName: environment, prompts, answers: promptValues, requestNames });
   const undefinedNames = new Set<string>();
   const circular: string[][] = [];
   // Reference by reference, as the core marks each one a Secret went into.
@@ -206,8 +313,9 @@ function previewRequest({ request: r, filePath, fileVariables, environment, prom
   for (const chain of new Set(circular.map((c) => c.join(" → ")))) warnings.push(`Circular variable reference: ${chain}`);
   if (environment && !own.environments.some((e) => e.name === environment)) {
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
-    warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
+    warnings.unshift(environmentMissing(environment, dir || "the workspace root"));
   }
+  warnings.push(...redirectNotes(r));
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
 }
 /**
@@ -292,12 +400,16 @@ let settings = {
   showDescriptions: true,
   sidebarWidth: 280,
   sidebarHidden: false,
+  panelHeight: 260,
   zoom: 1,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
+  // `?trusted=1`: the demo workspace is already a Trusted workspace.
+  trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
+  runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -308,10 +420,83 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-/** The `promptValues` each `send_request` got, in order. */
+/** Like the shell's Session: Prompt variable answers by request key. Opening a workspace forgets them. */
+let sessionPrompts = new Map<string, Record<string, string>>();
+const promptAnswers = (requestKey?: string) => ({ ...(requestKey ? sessionPrompts.get(requestKey) : undefined) });
+/** The prompt answers the Session held for each `send_request`'s request, in order. */
 const sentPrompts: Record<string, string>[] = [];
+/** Each send's `skipScripts` ("Send without scripts"). */
+const sentSkipScripts: boolean[] = [];
+/** The options each `run_requests` got, in order. */
+const runOptions: Record<string, unknown>[] = [];
+/** Like the Session's Global variables: what scripts stored with `client.global.set`, by name. Opening a workspace empties them. */
+let sessionGlobals = new Map<string, string>();
+/** Like the core's script engine, roughly: each `client.global.set("name", "value")` in
+ *  `script`, with a string literal value, in order. */
+function setGlobals(script: string | null) {
+  for (const m of (script ?? "").matchAll(/client\.global\.set\("([^"]*)",\s*"([^"]*)"\)/g)) sessionGlobals.set(m[1], m[2]);
+}
+/** Like the Session's cookie jar: the cookies responses set, by domain, path and name. Opening a workspace empties it. */
+let sessionJar = new Map<string, StoredCookie>();
+const jarKey = (c: Pick<StoredCookie, "domain" | "path" | "name">) => `${c.domain}\t${c.path}\t${c.name}`;
+/** The Cookie header the jar gave each `send_request`, in order ("" for none). Unlike the shell's
+ *  jar it sends every cookie it holds, whatever the URL. */
+const sentCookies: string[] = [];
+/** Keeps the cookies a mock response set, as the shell's jar would. */
+function keepCookies(cookies: ResponseCookie[]) {
+  for (const c of cookies) {
+    if (c.parseError !== null) continue;
+    const expires = c.maxAge !== null ? new Date(Date.now() + c.maxAge * 1000).toISOString().replace(/\.\d+Z$/, "Z") : c.expires;
+    const kept: StoredCookie = {
+      name: c.name, value: c.value, domain: c.domain ?? new URL(c.url).hostname, hostOnly: c.domain === null,
+      path: c.path ?? "/", expires, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite,
+    };
+    sessionJar.set(jarKey(kept), kept);
+  }
+}
+
+/** The shell's warning on a send whose scripts were skipped, naming them. */
+function scriptsSkipped(r: Request): string {
+  const pre = hasScripts({ ...r, responseHandler: null });
+  const handler = hasScripts({ ...r, preScript: null });
+  const skipped = pre && handler ? "the pre-request script and the response handler" : pre ? "the pre-request script" : "the response handler";
+  return sentWithoutScripts(skipped);
+}
+
+/** What the shell's script engine would report for `handler`, roughly: each
+ *  `client.test("name", …)` passes unless it asserts `response.status === N`
+ *  and the status isn't N; then it fails with the assertion's message. */
+function mockTests(handler: string, status: number) {
+  return handler
+    .split("client.test(")
+    .slice(1)
+    .map((chunk) => {
+      const name = /^\s*"([^"]*)"/.exec(chunk)?.[1] ?? "";
+      const assert = /response\.status === (\d+), "([^"]*)"/.exec(chunk);
+      const passed = !assert || Number(assert[1]) === status;
+      return { name, passed, message: passed ? null : assert![2] };
+    });
+}
+/** `mockTests` for a handler, then its script files' tests (or a failed "Response
+ *  handler" entry for a file that can't be read, like the core). */
+function handlerTests(handler: string, filePath: string | null, status: number) {
+  const fromFiles = fileReferences(handler, ">").flatMap((path) => {
+    try {
+      return mockTests(scriptFiles[locateScriptFile(filePath, path)], status);
+    } catch (message) {
+      return [{ name: "Response handler", passed: false, message: String(message), scriptError: true }];
+    }
+  });
+  return [...mockTests(handler, status), ...fromFiles];
+}
+/** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
+function mockLogs(handler: string) {
+  return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
+}
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
+/** What Export wrote (`export_run`), in order. */
+const runExports: { format: "junit" | "json"; path: string; requests: RunRequestReport[] }[] = [];
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
 const shapeRequests: string[] = [];
 /** The response ids `release_response` was called with, in order. */
@@ -331,6 +516,8 @@ let webviewZoom: number | null = null;
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
 const openedUrls: string[] = [];
+/** The script files "Open in default editor" opened, in order. */
+const openedPaths: string[] = [];
 /** The OS clipboard, as the clipboard plugin reads and writes it. */
 let clipboardText = "";
 /** The texts the clipboard plugin wrote, in order. */
@@ -387,6 +574,9 @@ window.addEventListener(
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
   sentPrompts,
+  sentSkipScripts,
+  sentCookies,
+  runOptions,
   get savedPaths() {
     return [...savedPaths];
   },
@@ -403,6 +593,10 @@ window.addEventListener(
   /** The URLs the opener opened in the browser, in order. */
   get openedUrls() {
     return [...openedUrls];
+  },
+  /** The script files opened in the default editor, in order. */
+  get openedPaths() {
+    return [...openedPaths];
   },
   /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
   get clipboard() {
@@ -469,6 +663,9 @@ window.addEventListener(
   get savedBodies() {
     return clone(savedBodies);
   },
+  get runExports() {
+    return clone(runExports);
+  },
   get shapeRequests() {
     return [...shapeRequests];
   },
@@ -529,6 +726,90 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
+/** The core's report for Request variables of named requests not sent in this Session. */
+function unsentError(names: string[]): Omit<SendError & { kind: "unsentRequest" }, "kind"> {
+  return {
+    message: unsentMessage(names),
+    details: { names },
+  };
+}
+/** The named requests with a latest exchange in the mock's Session, by `path\0name`: its shape (`exchange_shape`). */
+const exchanges = new Map<string, ExchangeShape>();
+/** Stand-in for the core's `Message::shape`: header names once each, and a JSON body's shape. */
+function messageShape(headers: [string, string][], body: string | null): MessageShape {
+  const names: string[] = [];
+  for (const [name] of headers) if (!names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  let json: JsonShape | null = null;
+  try {
+    if (body) json = mockShape(JSON.parse(body));
+  } catch {
+    json = null;
+  }
+  return { headers: names, body: json };
+}
+/** A named request's latest exchange in the mock's Session, as the Session panel and a Request variable's hover read it. */
+interface MockExchange {
+  entry: { file: string; name: string; status: number; received: string };
+  response: { id: string; status: number; headers: unknown };
+  /** Its body, kept apart from the response's id (which the tab may release). */
+  text?: { body: string; kind: ResponseKind };
+  bytes?: Uint8Array;
+}
+/** The named requests' latest exchanges in the mock's Session, by `path\0name` (beside their shapes in `exchanges`). */
+const exchangeResponses = new Map<string, MockExchange>();
+/** Records `response` as the latest exchange of `name` in `file` (its body as stored under its id), and returns it. */
+function recordExchange<T extends MockExchange["response"]>(file: string | null, name: string | undefined, response: T): T {
+  if (file && name) {
+    const entry = { file, name, status: response.status, received: new Date().toISOString() };
+    exchangeResponses.set(`${file}\0${name}`, { entry, response, text: textBodies.get(response.id), bytes: binaryBodies.get(response.id) });
+  }
+  return response;
+}
+/** Forgets one named request's latest exchange (or, without a key, every one), like `Exchanges::remove` and `clear`. */
+function forgetExchanges(key?: string): boolean {
+  if (key === undefined) {
+    exchanges.clear();
+    exchangeResponses.clear();
+    return true;
+  }
+  const had = exchangeResponses.delete(key);
+  exchanges.delete(key);
+  return had;
+}
+/** Like the core's `Exchanges::read`: what Request variable `reference` of a request in `file` reads now. */
+function readRequestVariable(file: string, reference: string) {
+  const ref = requestVariable(reference);
+  if (!ref) return null;
+  const exchange = exchangeResponses.get(`${file}\0${ref.name}`);
+  if (!exchange) return { state: "unsent", request: ref.name };
+  const { status, received } = exchange.entry;
+  const [side, part, ...rest] = ref.path.split(".");
+  const path = rest.join(".");
+  const read = (): { value: string } | { reason: string } => {
+    if (side !== "response") return { reason: "the mock reads only the response" };
+    if (part === "headers") {
+      const values = (exchange.response.headers as [string, string][]).filter(([n]) => n.toLowerCase() === path.toLowerCase()).map(([, v]) => v);
+      return values.length ? { value: values.join(", ") } : { reason: `there is no \`${path}\` header` };
+    }
+    const text = exchange.text?.body ?? "";
+    if (path === "*") return { value: text };
+    let at: unknown = JSON.parse(text);
+    for (const key of path.replace(/^\$/, "").match(/[^.[\]]+/g) ?? []) at = (at as Record<string, unknown> | null)?.[key];
+    if (at === undefined) return { reason: `\`${path}\` matches nothing` };
+    return { value: typeof at === "string" ? at : JSON.stringify(at) };
+  };
+  const r = read();
+  return "value" in r ? { state: "value", request: ref.name, status, received, value: r.value } : { state: "unmatched", request: ref.name, status, received, reason: r.reason };
+}
+/**
+ * Like the core's send: the named requests (of `requestNames`) whose Request variables
+ * the request reads but which haven't been sent in this Session, sorted.
+ */
+function unsentRequests(r: Request, filePath: string | null, requestNames: string[]): string[] {
+  return requestVariableReads(r)
+    .filter((n) => requestNames.includes(n) && !exchanges.has(`${filePath}\0${n}`))
+    .sort();
+}
 // `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`),
 // except that `unresolvedVariable` fails only while no environment is selected.
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
@@ -561,6 +842,15 @@ const sendErrors: SendErrorFixtures = {
   },
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
+  untrustedWorkspace: { message: UNTRUSTED_MESSAGE, details: null },
+  preRequestScript: { message: "no token (line 3)", details: { line: 3 } },
+  unsentRequest: unsentError(["createPet"]),
+  unmatchedPath: {
+    message: "{{createPet.response.body.$.idd}}: `$.idd` matches nothing, in the latest exchange of `createPet` (received at 09:05:07)",
+    details: {
+      paths: [{ reference: "createPet.response.body.$.idd", request: "createPet", received: "2026-11-13T09:05:07.000Z", reason: "`$.idd` matches nothing" }],
+    },
+  },
   other: { message: "Something unexpected went wrong", details: null },
 };
 const sendError: SendError | null =
@@ -893,6 +1183,124 @@ function hexdump(body: Uint8Array): string {
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Like the shell's `send_request` (and each request of a run): the canned response for `args`. */
+async function mockSend(args: any) {
+  // Like the core: blocked before anything is sent, and never sent on its own.
+  const unsent = unsentRequests(args.request, args.filePath, args.requestNames ?? []);
+  if (unsent.length) throw { kind: "unsentRequest", ...unsentError(unsent) };
+  sent.push(clone(args.request));
+  sentPrompts.push(promptAnswers(args.requestKey));
+  sentSkipScripts.push(!!args.skipScripts);
+  sentCookies.push([...sessionJar.values()].map((c) => `${c.name}=${c.value}`).join("; "));
+  // Like the shell: a script in a workspace that isn't trusted is refused, unsent.
+  const runScripts = hasScripts(args.request) && !args.skipScripts;
+  if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
+    throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
+  }
+  // Like the core: Global variables a pre-request script sets stand even if it then throws.
+  if (runScripts) setGlobals(args.request.preScript);
+  // Like the shell: a pre-request script that throws stops the send.
+  if (runScripts && args.request.preScript?.includes("throw ")) {
+    throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
+  }
+  // Like the core: a pre-request script file that can't be read stops the send.
+  for (const path of runScripts ? fileReferences(args.request.preScript, "<") : []) {
+    try {
+      locateScriptFile(args.filePath, path);
+    } catch (message) {
+      throw { kind: "preRequestScript", message, details: { line: null } };
+    }
+  }
+  if (slowDownload) {
+    for (let i = 1; i <= 20; i++) {
+      await delay(100);
+      // Like the shell: a cancelled send fails (the app shows it as Cancelled).
+      if (cancelledRuns.delete(args.runId)) throw "cancelled";
+      await emit("send-progress", { runId: args.runId, received: i * 6_000 });
+    }
+  } else {
+    await delay(450);
+  }
+  // An environment defines the missing variable, so picking one fixes it.
+  if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
+  const r = args.request;
+  if (runScripts) setGlobals(r.responseHandler);
+  const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
+  // Like the core: a named request's exchange becomes its latest (its response side once known).
+  const sentHeaders: [string, string][] = r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]);
+  const record = (status: number, headers: [string, string][], body: string | null) => {
+    if (!named) return;
+    const request = messageShape(sentHeaders, r.body.enabled ? r.body.text : null);
+    exchanges.set(`${args.filePath}\0${named}`, { received: new Date().toISOString(), status, response: messageShape(headers, body), request });
+  };
+  record(200, [], null);
+  // Like the shell: the response as shown, and its body, are the exchange's too.
+  const done = <T extends MockExchange["response"]>(response: T) => recordExchange(args.filePath, named, response);
+  if (perf) return done(perfResponse(r.url, r.method));
+  if (responseKind === "asReceived") return done(asReceivedResponse(r.method));
+  if (r.url.includes("png") && bigBinary) {
+    return done(storeBinary({
+      id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+      headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
+      bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
+      truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
+    }, new Uint8Array(BIG_BINARY_BYTES))); // 2 MB of zero bytes
+  }
+  if (r.url.includes("png")) {
+    return done(storeBinary({
+      id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+      headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
+      contentType: "image/png", bodyKind: "image", contentEncoding: null,
+      truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
+    }, PNG_BYTES));
+  }
+  const body =
+    responseKind === "bigint"
+      ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
+      : responseKind === "invalidJson"
+        ? `{"id": 9007199254740993, oops}`
+        : responseKind === "store"
+          ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
+          : responseKind === "html"
+            ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
+            : responseKind === "longHtml"
+              ? `<!doctype html>\n<html><body>\n${Array.from({ length: 200 }, (_, i) => `<div class="row" data-index="${i}"><span class="label">Pet number ${i}</span> <a href="/pets/${i}" title="Open pet ${i}">open</a> <em class="tag">${"good dog ".repeat(20)}</em></div>`).join("\n")}\n</body></html>`
+            : responseKind === "text"
+              ? "pets: 2\nRex, Tom\n"
+            : responseKind === "truncated"
+              ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
+              : responseKind === "nested"
+                ? `{"a":{"odd key":[{"b":1}]}}`
+                : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+  const gzip = responseKind === "gzip";
+  const transferredSize = gzip ? 112 : body.length;
+  const status = statusParam ?? (r.method === "POST" ? 201 : 200);
+  const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
+  const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
+  textBodies.set(id, { body, kind: bodyKind });
+  const cookies = responseKind === "cookies" ? mockCookies : [];
+  keepCookies(cookies);
+  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
+  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
+  record(status, headers, body);
+  return done({
+    id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
+    url: "http://127.0.0.1:8765/pets?limit=20",
+    headers,
+    timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
+    truncated: responseKind === "truncated",
+    request: {
+      method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
+      headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
+    },
+    warnings: [...(hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : []), ...redirectNotes(r)],
+    timings: jsonTimings,
+    cookies,
+    tests: runScripts ? handlerTests(r.responseHandler ?? "", args.filePath, status) : [],
+    logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
+  });
+}
+
 mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
@@ -933,15 +1341,28 @@ mockIPC(
         settingsServed = true;
         return clone(settings);
       case "save_settings":
-        settings = args.settings;
+        // Like the shell: trust is only changed by its own commands.
+        settings = { ...args.settings, trustedWorkspaces: settings.trustedWorkspaces };
         sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
         return null;
+      case "trust_workspace":
+        if (!settings.trustedWorkspaces.includes(ROOT)) settings.trustedWorkspaces = [...settings.trustedWorkspaces, ROOT];
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
+        return clone(settings.trustedWorkspaces);
+      case "revoke_workspace_trust":
+        settings.trustedWorkspaces = settings.trustedWorkspaces.filter((p: string) => p !== args.path);
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
+        return clone(settings.trustedWorkspaces);
       case "path_exists":
         return true;
       case "open_workspace":
         // Like the shell, the opened folder goes to the top of the recent workspaces
         // (the mock always opens the demo workspace, though).
         settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
+        sessionPrompts = new Map();
+        sessionJar = new Map();
+        sessionGlobals = new Map();
+        forgetExchanges();
         return { root: ROOT, tree, gitignoreUpdated: false };
       case "set_menu":
         menuBar = clone(args.layout);
@@ -1023,83 +1444,121 @@ mockIPC(
       }
       case "find_usages":
         return findUsages(String(args.name), args.open ?? []);
+      case "prompt_answers":
+        return promptAnswers(args.requestKey);
+      case "answer_prompts":
+        sessionPrompts.set(args.requestKey, { ...sessionPrompts.get(args.requestKey), ...args.answers });
+        return null;
+      case "forget_prompt_answers":
+        sessionPrompts.delete(args.requestKey);
+        return null;
+      case "exchange_shape":
+        return clone(exchanges.get(`${args.filePath}\0${args.name}`) ?? null);
+      case "session_cookies":
+        return [...sessionJar.values()].sort((a, b) => jarKey(a).localeCompare(jarKey(b)));
+      case "delete_cookie":
+        return sessionJar.delete(jarKey(args as StoredCookie));
+      case "clear_cookies":
+        sessionJar.clear();
+        return null;
+      case "session_globals":
+        return [...sessionGlobals].sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => ({ name, value }));
+      case "delete_global":
+        return sessionGlobals.delete(args.name);
+      case "clear_globals":
+        sessionGlobals.clear();
+        return null;
+      case "clear_session":
+        sessionPrompts = new Map();
+        sessionJar = new Map();
+        sessionGlobals = new Map();
+        forgetExchanges();
+        return null;
+      case "named_exchanges":
+        return [...exchangeResponses.values()].map((e) => e.entry).sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
+      case "remove_named_exchange":
+        return forgetExchanges(`${args.filePath}\0${args.name}`);
+      case "clear_named_exchanges":
+        forgetExchanges();
+        return null;
+      case "open_exchange": {
+        // Like the shell: the response under a new id, with the exchange's own body.
+        const exchange = exchangeResponses.get(`${args.filePath}\0${args.name}`);
+        if (!exchange) throw `\`${args.name}\` has no exchange in this Session`;
+        const id = `x-${++responseCount}`;
+        if (exchange.text) textBodies.set(id, exchange.text);
+        if (exchange.bytes) binaryBodies.set(id, exchange.bytes);
+        return { ...exchange.response, id };
+      }
+      case "request_variable":
+        return readRequestVariable(args.filePath, args.reference);
       case "cancel_request":
         cancelledRuns.add(args.runId);
         return null;
-      case "send_request": {
-        sent.push(clone(args.request));
-        sentPrompts.push(clone(args.promptValues ?? {}));
-        if (slowDownload) {
-          for (let i = 1; i <= 20; i++) {
-            await delay(100);
-            // Like the shell: a cancelled send fails (the app shows it as Cancelled).
-            if (cancelledRuns.delete(args.runId)) throw "cancelled";
-            await emit("send-progress", { runId: args.runId, received: i * 6_000 });
+      case "check_script_file":
+        locateScriptFile(args.filePath, args.path);
+        return null;
+      case "open_script_file":
+        openedPaths.push(locateScriptFile(args.filePath, args.path));
+        return null;
+      case "send_request":
+        return mockSend(args);
+      case "run_requests": {
+        // Like the shell: each request through the send flow, reported as `run-progress`.
+        const { runId, selection, options } = args;
+        // What it returns: each request as an export shows it (`run::RequestReport`).
+        const requests: RunRequestReport[] = selection.requests.map((r: { request: Request; filePath: string | null }) => ({
+          file: r.filePath?.startsWith(`${ROOT}/`) ? r.filePath.slice(ROOT.length + 1) : r.filePath,
+          name: displayName(r.request),
+          method: r.request.method.toUpperCase(),
+          url: null,
+          status: null,
+          timeMs: null,
+          outcome: "notRun",
+          failure: null,
+          tests: [],
+        }));
+        runOptions.push(clone(options ?? {}));
+        for (let index = 0; index < selection.requests.length; index++) {
+          // Like the core: the delay between requests, which Stop cuts short.
+          for (let waited = 0; index > 0 && waited < (options?.delayMs ?? 0) && !cancelledRuns.has(runId); waited += 10) await delay(10);
+          if (cancelledRuns.delete(runId)) return { cancelled: true, requests };
+          await emit("run-progress", { runId, index, state: "sending" });
+          let failed: boolean;
+          try {
+            const request = { ...selection.requests[index], environment: selection.environment, skipScripts: options?.skipScripts, runId };
+            const response = (await mockSend(request)) as HttpResponse;
+            const tests = response.tests ?? [];
+            failed = tests.some((t) => !t.passed);
+            const failing = tests.filter((t) => !t.passed).map((t) => `"${t.name}": ${t.message}`);
+            Object.assign(requests[index], {
+              url: response.request?.url ?? null,
+              status: response.status,
+              timeMs: response.timeMs,
+              tests,
+              outcome: failed ? "failed" : "passed",
+              failure: failed ? { reason: "test", message: failing.join("\n") } : null,
+            });
+            await emit("run-progress", { runId, index, state: "sent", response, failed });
+          } catch (e) {
+            if (e === "cancelled") {
+              requests[index].outcome = "cancelled";
+              await emit("run-progress", { runId, index, state: "cancelled" });
+              return { cancelled: true, requests };
+            }
+            const error = e as { kind?: string; message?: string };
+            const reason = error.kind === "preRequestScript" ? "script" : ["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"].includes(error.kind ?? "") ? "network" : "blocked";
+            Object.assign(requests[index], { outcome: "failed", failure: { reason, message: error.message ?? String(e) } });
+            failed = true;
+            await emit("run-progress", { runId, index, state: "failed", error: e });
           }
-        } else {
-          await delay(450);
+          if (failed && options?.stopOnFailure) break;
         }
-        // An environment defines the missing variable, so picking one fixes it.
-        if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
-        const r = args.request;
-        if (perf) return perfResponse(r.url, r.method);
-        if (responseKind === "asReceived") return asReceivedResponse(r.method);
-        if (r.url.includes("png") && bigBinary) {
-          return storeBinary({
-            id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
-            headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
-            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
-            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          }, new Uint8Array(BIG_BINARY_BYTES)); // 2 MB of zero bytes
-        }
-        if (r.url.includes("png")) {
-          return storeBinary({
-            id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
-            headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
-            contentType: "image/png", bodyKind: "image", contentEncoding: null,
-            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          }, PNG_BYTES);
-        }
-        const body =
-          responseKind === "bigint"
-            ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
-            : responseKind === "invalidJson"
-              ? `{"id": 9007199254740993, oops}`
-              : responseKind === "store"
-                ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
-                : responseKind === "html"
-                  ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
-                  : responseKind === "longHtml"
-                    ? `<!doctype html>\n<html><body>\n${Array.from({ length: 200 }, (_, i) => `<div class="row" data-index="${i}"><span class="label">Pet number ${i}</span> <a href="/pets/${i}" title="Open pet ${i}">open</a> <em class="tag">${"good dog ".repeat(20)}</em></div>`).join("\n")}\n</body></html>`
-                  : responseKind === "text"
-                    ? "pets: 2\nRex, Tom\n"
-                  : responseKind === "truncated"
-                    ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
-                    : responseKind === "nested"
-                      ? `{"a":{"odd key":[{"b":1}]}}`
-                      : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
-        const gzip = responseKind === "gzip";
-        const transferredSize = gzip ? 112 : body.length;
-        const status = statusParam ?? (r.method === "POST" ? 201 : 200);
-        const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
-        textBodies.set(id, { body, kind: bodyKind });
-        const cookies = responseKind === "cookies" ? mockCookies : [];
-        const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
-        return {
-          id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
-          url: "http://127.0.0.1:8765/pets?limit=20",
-          headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
-          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
-          truncated: responseKind === "truncated",
-          request: {
-            method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
-            headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
-          },
-          warnings: [],
-          timings: jsonTimings,
-          cookies,
-        };
+        return { cancelled: cancelledRuns.delete(runId), requests };
+      }
+      case "export_run": {
+        runExports.push({ format: args.format, path: args.path, requests: args.requests });
+        return null;
       }
       case "format_body":
         if (args.kind === "xml") return formatXml(args.text, args.mode);

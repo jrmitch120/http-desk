@@ -4,7 +4,8 @@
 // variables are left as written: they're generated at send time.
 import type { Definition, Resolution, VarCompletion, VarInfo, VarProvider } from "./codemirror/setup";
 import { promptMasked, segments } from "./http";
-import type { EnvironmentSet, EnvSource, EnvVar, Prompt, Variable } from "./types";
+import type { EnvironmentSet, EnvSource, EnvVar, ExchangeShape, Prompt, Variable } from "./types";
+import { requestPathCompletion, type PathCompletion } from "./requestPaths";
 import catalogue from "../../crates/httpdesk-core/dynamic-variables.json";
 
 /**
@@ -72,6 +73,20 @@ export function envVariables(set: EnvironmentSet | null, envName: string | null)
   return out;
 }
 
+/**
+ * For a `{{…}}` reference (trimmed): the request name and the path after it when it
+ * is a Request variable (`name.response…` or `name.request…`), as the core's
+ * `exchange::split_reference` reads it. It never falls back to a variable of that name.
+ */
+export function requestVariable(reference: string): { name: string; path: string } | null {
+  const dot = reference.indexOf(".");
+  if (dot <= 0) return null;
+  const [name, path] = [reference.slice(0, dot), reference.slice(dot + 1)];
+  const side = path.split(".", 1)[0];
+  if (name.startsWith("$") || /\s/.test(name) || (side !== "response" && side !== "request")) return null;
+  return { name, path };
+}
+
 /** What a request's `{{references}}` can see, as the core's `Resolver::for_request` takes it. */
 export interface Scope {
   /** The selected environment over the shared variables (`envVariables`). */
@@ -80,6 +95,11 @@ export interface Scope {
   fileVars: Variable[];
   /** The request's own `@name` lines, which win over the rest of the file. */
   requestVars: Variable[];
+  /** The Session's Global variables (`client.global.set`), by name. */
+  globals?: Record<string, string>;
+  /** What the request's pre-request script set with `request.variables.set`. Known only
+   *  when the core sends it, so the editor has none; the shared resolution cases do. */
+  preRequestVars?: Record<string, string>;
   /** The `@name` lines at the top of the file (some of `fileVars`): the ones the request's Settings edit. */
   headerVars?: Variable[];
   envName: string | null;
@@ -87,6 +107,10 @@ export interface Scope {
   prompts?: Prompt[];
   /** Values remembered for them; a prompt without one is asked when sent. */
   answers?: Record<string, string>;
+  /** The `# @name`s of the file's requests (`requestNames`): what its Request variables can read. */
+  requestNames?: string[];
+  /** The shape of a named request's latest exchange in the Session, null if unsent: what its paths complete from. */
+  exchange?: (name: string) => Promise<ExchangeShape | null>;
 }
 
 interface Entry {
@@ -99,12 +123,16 @@ interface Entry {
   definition?: Definition;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {} }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, globals = {}, preRequestVars = {}, headerVars = [], envName, prompts = [], answers = {}, requestNames = [], exchange }: Scope): VarProvider {
   // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
   const prompted = new Map<string, { value: string; masked: boolean } | null>();
   for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
 
-  // Later wins: environment, then the file, then the request's own declarations.
+  // The precedence of every variable, as the core's `Scopes::lookup` decides it: later
+  // wins. The environment (private over public, over the shared variables), then Global
+  // variables, then the file, then the request's own declarations, then what its
+  // pre-request script set: Rider's order, measured with ijhttp (#129). An answered
+  // prompt wins over all of them (`prompted`, checked first).
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
     const source = e.source === SHARED ? "shared variables" : `environment "${e.source}"`;
@@ -112,11 +140,13 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
     const definition: Definition = { kind: "env", env: e.source, name, ...(e.dir !== undefined ? { dir: e.dir } : {}) };
     scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
+  for (const [name, value] of Object.entries(globals)) scope.set(name, { value, secret: false, source: "a Global variable, set by a script", origin: "global" });
   for (const v of fileVars) {
     const definition: Definition = { kind: headerVars.includes(v) ? "file" : "request", name: v.name };
     scope.set(v.name, { value: v.value, secret: false, source: "this file", origin: "file", definition });
   }
   for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file", definition: { kind: "request", name: v.name } });
+  for (const [name, value] of Object.entries(preRequestVars)) scope.set(name, { value, secret: false, source: "this request's pre-request script", origin: "file" });
 
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();
@@ -131,6 +161,12 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
           if (isDynamic(name)) return whole;
           if (name.startsWith("$")) {
             undefinedNames.add(name);
+            return whole;
+          }
+          // Read from the Session's exchange by the core when sent; undefined without a `# @name`.
+          const requestVar = requestVariable(name);
+          if (requestVar) {
+            if (!requestNames.includes(requestVar.name)) undefinedNames.add(name);
             return whole;
           }
           const prompt = prompted.get(name);
@@ -163,9 +199,12 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   function info(name: string): VarInfo {
     if (isDynamic(name)) return { state: "dyn" };
     if (name.startsWith("$")) return { state: "bad" };
+    const requestVar = requestVariable(name);
+    if (requestVar)
+      return requestNames.includes(requestVar.name) ? { state: "request", source: `the latest exchange of ${requestVar.name}` } : { state: "bad" };
     const prompt = prompted.get(name);
     if (prompt === null) return { state: "prompt", source: "a prompt: asked when sent" };
-    if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered until the app quits" };
+    if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered in the Session" };
     const entry = scope.get(name);
     if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
     const r = resolve(`{{${name}}}`);
@@ -183,6 +222,8 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
       if (i.state !== "ok") return { name, source };
       return { name, source, preview: shorten(i.value ?? "") };
     });
+    // A named request goes on with its path: `{{login.response…}}`.
+    const requests = [...new Set(requestNames)].map((name): VarCompletion => ({ name, source: "request" }));
     const dynamic = DYNAMIC_VARIABLES.map(({ name, args, description, required }): VarCompletion => ({
       name,
       source: "dynamic",
@@ -190,10 +231,17 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
       description,
       ...(required ? { required } : {}),
     }));
-    return [...named, ...dynamic];
+    return [...named, ...requests, ...dynamic];
   }
 
-  return { resolve, info, completions };
+  async function pathCompletions(typed: string): Promise<PathCompletion | null> {
+    const dot = typed.indexOf(".");
+    const name = dot > 0 ? typed.slice(0, dot) : "";
+    if (!name || !requestNames.includes(name)) return null;
+    return requestPathCompletion(typed, name, (await exchange?.(name)) ?? null);
+  }
+
+  return { resolve, info, completions, pathCompletions };
 }
 
 /**

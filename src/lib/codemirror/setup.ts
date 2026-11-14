@@ -1,15 +1,17 @@
 // Shared CodeMirror configuration: theme (driven by CSS variables so it follows
 // the app theme), syntax highlighting, languages, and {{variable}} support.
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, pickedCompletion, type Completion, type CompletionContext } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
 import { xml } from "@codemirror/lang-xml";
+import { javascript } from "@codemirror/lang-javascript";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, segments } from "../http";
-import { MASK, varClass } from "../vars";
+import { MASK, requestVariable, varClass } from "../vars";
+import type { PathCompletion } from "../requestPaths";
 import {
   Decoration,
   drawSelection,
@@ -32,8 +34,9 @@ import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
+import type { ReadingCard } from "../exchanges";
 
-export type Language = "json" | "xml" | "html" | "text";
+export type Language = "json" | "xml" | "html" | "javascript" | "text";
 
 export const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--text)", height: "100%", fontSize: "12.5px" },
@@ -98,6 +101,8 @@ export const theme = EditorView.theme({
   },
   ".cm-completionDescription": { fontFamily: "var(--font)" },
   ".cm-completionSecret": { color: "var(--var-secret)", fontStyle: "italic", fontFamily: "var(--font)" },
+  // A row that only explains why a Request variable's path has nothing to offer.
+  ".cm-completionHint": { color: "var(--muted)", fontStyle: "italic", fontFamily: "var(--font)" },
   ".cm-placeholder": { color: "var(--faint)" },
 });
 
@@ -121,6 +126,8 @@ export function languageExtension(lang: Language): Extension {
       return xml();
     case "html":
       return html();
+    case "javascript":
+      return javascript();
     default:
       return [];
   }
@@ -132,11 +139,12 @@ export function languageExtension(lang: Language): Extension {
  * A `{{name}}` as it resolves: `ok` (with its fully resolved `value`), `bad` (an
  * Undefined variable), `dyn` (generated at send time), `circular` (it leads back to
  * a name already being resolved; `chain` is the names followed, e.g. `a → b → a`)
- * or `prompt` (an unanswered Prompt variable, asked when sent).
+ * `prompt` (an unanswered Prompt variable, asked when sent) or `request` (a Request
+ * variable of a request named in the file, read from its latest exchange when sent).
  * `secret` when a Secret (or a masked prompted value) went into the value.
  */
 export interface VarInfo {
-  state: "ok" | "bad" | "dyn" | "circular" | "prompt";
+  state: "ok" | "bad" | "dyn" | "circular" | "prompt" | "request";
   value?: string;
   source?: string;
   secret?: boolean;
@@ -180,7 +188,7 @@ export interface Resolution {
  */
 export interface VarCompletion {
   name: string;
-  source: "file" | "environment" | "shared" | "prompt" | "dynamic";
+  source: "file" | "global" | "environment" | "shared" | "prompt" | "request" | "dynamic";
   preview?: string;
   secret?: boolean;
   /** Dynamic variables: the argument hint (empty without arguments). */
@@ -195,6 +203,12 @@ export interface VarProvider {
   resolve: (text: string) => Resolution;
   /** What `{{` offers: the names in scope (one entry each), then the dynamic variables. */
   completions: () => VarCompletion[];
+  /**
+   * Inside a Request variable (`typed` is the reference from after `{{` up to the
+   * caret, `login.response.body.$.`): its path's next segment. Null when `typed`
+   * isn't a path of a named request, and `completions` applies.
+   */
+  pathCompletions?: (typed: string) => Promise<PathCompletion | null>;
   /** Opens a definition's row (the hover card's Edit); without it the card has no Edit. */
   edit?: (definition: Definition) => void;
   /** Lists where a variable is used (the hover card's Find usages); without it the card has none. */
@@ -205,6 +219,12 @@ export interface VarProvider {
    * place of the selection. Without it fields don't offer Extract to variable.
    */
   extract?: (value: string) => Promise<string | null>;
+  /**
+   * What a Request variable (`login.response.body.$.token`) reads now and from which
+   * exchange, for its hover card (null if it can't tell). Without it the card says
+   * only that it's read when sent.
+   */
+  readRequestVariable?: (reference: string) => Promise<ReadingCard | null>;
 }
 
 /** The `{{…}}` references on the visible lines, as `segments` reads them (like the resolver): document range and name. */
@@ -246,7 +266,8 @@ function varTooltip(provider: VarProvider) {
       const [from, to, name] = [line.from + s.from, line.from + s.from + s.text.length, s.ref];
       if (pos < from || pos > to) continue;
       const close = () => view.dispatch({ effects: closeHoverTooltips });
-      return { pos: from, end: to, create: () => ({ dom: varCard(name, provider.info(name), { edit: provider.edit, findUsages: provider.findUsages, close }) }) };
+      const actions = { edit: provider.edit, findUsages: provider.findUsages, readRequestVariable: provider.readRequestVariable, close };
+      return { pos: from, end: to, create: () => ({ dom: varCard(name, provider.info(name), actions) }) };
     }
     return null;
   });
@@ -257,13 +278,20 @@ function varTooltip(provider: VarProvider) {
  * Secret (or a value a Secret went into) is masked until Reveal, in this card
  * only. With `edit` and a definition that has a row in the app, Edit closes the
  * card (`close`) and opens that row; with `findUsages`, Find usages closes it and
- * lists the references to a named (not `$`) variable. Shared by editors' hover
+ * lists the references to a named (not `$`) variable. A Request variable's card
+ * fills in what it reads now and from which exchange (`readRequestVariable`), and
+ * always notes that Rider won't send it (ADR-0007). Shared by editors' hover
  * tooltips and VarField's static rendering, so both show the same card.
  */
 export function varCard(
   name: string,
   info: VarInfo,
-  actions: { edit?: (d: Definition) => void; findUsages?: (name: string) => void; close?: () => void } = {},
+  actions: {
+    edit?: (d: Definition) => void;
+    findUsages?: (name: string) => void;
+    readRequestVariable?: VarProvider["readRequestVariable"];
+    close?: () => void;
+  } = {},
 ): HTMLElement {
   const div = (cls: string, text = "") => {
     const el = document.createElement("div");
@@ -278,12 +306,29 @@ export function varCard(
   const showValue = () => (body.textContent = masked && !revealed ? `${MASK} (secret)` : info.value || "(empty)");
   if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
   else if (info.state === "bad")
-    body.textContent = name.startsWith("$") ? "Undefined — not a dynamic variable" : "Undefined — not defined in the request, the file or the environment";
+    body.textContent = name.startsWith("$")
+      ? "Undefined — not a dynamic variable"
+      : requestVariable(name)
+        ? `Undefined — no request in this file has # @name ${requestVariable(name)!.name}`
+        : "Undefined — not defined in the request, the file or the environment";
   else if (info.state === "circular") body.textContent = `Circular: ${info.chain!.join(" → ")}`;
   else if (info.state === "prompt") body.textContent = "Asked when sent";
+  else if (info.state === "request") body.textContent = "Request variable (read when sent)";
   else showValue();
   dom.append(div("var-card-name", name), body);
-  if (info.source) dom.append(div("var-card-source", `from ${info.source}`));
+  const source = info.source ? div("var-card-source", `from ${info.source}`) : null;
+  if (source) dom.append(source);
+  if (info.state === "request" && actions.readRequestVariable) {
+    body.classList.add("var-card-long");
+    void actions.readRequestVariable(name).then((read) => {
+      if (!read) return;
+      body.textContent = read.value;
+      body.classList.toggle("var-card-bad", read.bad);
+      if (source) source.textContent = read.source;
+    });
+  }
+  // The note on portability (ADR-0007): quiet, and on every Request variable.
+  if (requestVariable(name)) dom.append(div("var-card-note", "Rider refuses to send a request containing this"));
 
   const buttons: HTMLButtonElement[] = [];
   const button = (label: string, onclick: (b: HTMLButtonElement) => void) => {
@@ -325,15 +370,24 @@ export function varCard(
 }
 
 function varCompletion(provider: VarProvider) {
-  return (ctx: CompletionContext) => {
-    const m = ctx.matchBefore(/\{\{\s*[\w.$-]*/);
+  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
+    // Paths can hold brackets and quotes: `{{login.response.body.$.items[0]['odd key']`.
+    const m = ctx.matchBefore(/\{\{\s*[^{}\s][^{}]*|\{\{\s*/);
     if (!m) return null;
     const start = m.from + /\{\{\s*/.exec(m.text)![0].length;
     const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
     const close = after === "}}" ? "" : "}}";
+    const typed = ctx.state.sliceDoc(start, ctx.pos);
+    const path = await provider.pathCompletions?.(typed);
+    if (ctx.aborted) return null;
+    if (path) return pathResult(start, path, close);
+    // Names in scope are plain words: anything else isn't a reference being typed.
+    if (!/^[\w.$-]*$/.test(typed)) return null;
     return {
       from: start,
       options: provider.completions().map((c): VarOption => {
+        // A named request goes on with its path (`{{login.|}}`), completed next.
+        if (c.source === "request") return { label: c.name, detail: "request", type: "variable", apply: applyWithCaret(c.name + ".", close), entry: c, reopen: true };
         // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
         const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
         return {
@@ -350,7 +404,24 @@ function varCompletion(provider: VarProvider) {
   };
 }
 
-type VarOption = Completion & { entry: VarCompletion };
+/** A Request variable's next path segment, already matched against what's typed (so CodeMirror doesn't filter). */
+function pathResult(start: number, path: PathCompletion, close: string): CompletionResult {
+  const options = path.options.map(
+    (o): VarOption => ({
+      label: o.label,
+      type: "property",
+      apply: o.more ? applyWithCaret(o.insert, close) : o.insert + close,
+      entry: { name: o.label, source: "request", ...(o.detail ? { description: o.detail } : {}) },
+      reopen: o.insert.endsWith("."),
+    }),
+  );
+  // Nothing to offer, and why: a row that changes nothing when picked.
+  if (!options.length && path.hint) options.push({ label: path.hint, type: "text", apply: (view) => closeCompletion(view), entry: { name: path.hint, source: "request" }, hint: true });
+  return { from: start + path.from, options, filter: false };
+}
+
+/** `reopen`: completion opens again after it's picked, for the next path segment. `hint`: a row that only explains. */
+type VarOption = Completion & { entry: VarCompletion; reopen?: boolean; hint?: boolean };
 
 function applyWithCaret(text: string, close: string) {
   return (view: EditorView, completion: Completion, from: number, to: number) =>
@@ -404,7 +475,14 @@ export function variableExtensions(provider: VarProvider, { marks = true }: { ma
   return [
     layerTooltips(),
     marks ? [varDecorations(provider), varTooltip(provider), extractExtension(provider)] : [],
-    autocompletion({ override: [varCompletion(provider)], icons: false, addToOptions: completionColumns }),
+    autocompletion({
+      override: [varCompletion(provider)],
+      icons: false,
+      addToOptions: completionColumns,
+      // A named request or a path segment ending in `.` goes on with the next segment.
+      activateOnCompletion: (c) => !!(c as VarOption).reopen,
+      optionClass: (c) => ((c as VarOption).hint ? "cm-completionHint" : ""),
+    }),
   ];
 }
 

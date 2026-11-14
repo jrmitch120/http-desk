@@ -53,3 +53,33 @@ Content-Type: application/json
 --WebAppBoundary--
 
 >> response.json
+
+### Per-request variable from a pre-request script
+< {% request.variables.set("firstname", "John") %}
+GET http://example.org/{{firstname}}
+
+### Signed with a pre-request script
+< {%
+const signature = crypto.hmac.sha256()
+  .withTextSecret(request.environment.get("secret")) // get variable from http-client.private.env.json
+  .updateWithText(request.body.tryGetSubstituted())
+  .digest().toHex();
+request.variables.set("signature", signature)
+
+const hash = crypto.sha256()
+  .updateWithText(request.body.tryGetSubstituted())
+  .digest().toHex();
+request.variables.set("hash", hash)
+%}
+POST https://httpbin.org/post
+X-My-Signature: {{signature}}
+X-My-Hash: {{hash}}
+Content-Type: application/json
+
+{
+  "prop": "value"
+}
+
+### Pre-request script file
+< scripts/my-script.js
+GET https://example.org/pets

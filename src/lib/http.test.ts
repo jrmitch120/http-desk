@@ -4,6 +4,7 @@ import {
   buildForm,
   buildMultipart,
   composeUrl,
+  hasScripts,
   newRequest,
   parseFileRef,
   parseForm,
@@ -22,9 +23,11 @@ import {
   customMethod,
   requestPrompts,
   promptMasked,
+  requestNames,
   type BulkRow,
   type MultipartPart,
 } from "./http";
+import type { HttpFile } from "./types";
 
 describe("URL ⇄ query params", () => {
   it("composes only active params", () => {
@@ -432,5 +435,39 @@ describe("custom methods", () => {
 
   it("rejects text the .http parser wouldn't read back as a method", () => {
     for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
+  });
+});
+
+describe("requestNames", () => {
+  it("lists each # @name once, in order, and never ### text", () => {
+    const req = (title: string, name?: string) => ({ ...newRequest(), name: title, directives: name === undefined ? [] : [{ name: "name", value: name }] });
+    const file: HttpFile = { header: { comments: [], variables: [], raw: null }, requests: [req("", "login"), req("only hashes"), req("", " me "), req("", "login"), req("", "")], trailing: "", lineEnding: "lf", bom: false };
+    expect(requestNames(file)).toEqual(["login", "me"]);
+  });
+});
+
+describe("hasScripts (the core's script::has_scripts)", () => {
+  const withHandler = (responseHandler: string | null) => ({ ...newRequest("r"), responseHandler });
+
+  it.each([
+    ["> {% client.test('a', () => {}); %}", true],
+    ["> {%\n  client.assert(true);\n%}", true],
+    ["> ./check.js", true],
+    ["> {% client.assert(true); %}\n>> ./out.json", true],
+    [">> ./out.json", false],
+    [">>! ./out.json", false],
+    [null, false],
+  ])("%s → %s", (handler, expected) => {
+    expect(hasScripts(withHandler(handler))).toBe(expected);
+  });
+
+  it.each([
+    ['< {% request.variables.set("a", "1") %}', true],
+    ["< {%\n  request.variables.set('a', '1');\n%}", true],
+    ["< ./sign.js", true],
+    ["<", false],
+    [null, false],
+  ])("pre-request %s → %s", (preScript, expected) => {
+    expect(hasScripts({ ...newRequest("r"), preScript })).toBe(expected);
   });
 });

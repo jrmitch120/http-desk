@@ -1,10 +1,13 @@
 <script lang="ts">
   // The strip above a request's sections listing what the request would be sent
   // with (src/lib/checks.ts): each Undefined variable once, where it is used, and its
-  // quick fixes, and a selected environment the request's folder doesn't define. It
-  // never blocks sending, and it isn't there when there's nothing to list. Each kind
-  // of check renders in its own branch below.
-  import { SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
+  // quick fixes, a selected environment the request's folder doesn't define, and a
+  // `# @name` another request in the file also has. Notes (`isNote`) come last, in
+  // the info tone rather than the warning one: a Request variable, which Rider refuses
+  // to send (ADR-0007), is noted for as long as the request has one. It never blocks
+  // sending, and it isn't there when there's nothing to list. Each kind of check
+  // renders in its own branch below.
+  import { isNote, SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
   import { folderLabel } from "../lib/envFolders";
   import { joinAnd } from "../lib/http";
   import Icon from "./Icon.svelte";
@@ -13,18 +16,27 @@
 </script>
 
 {#if checks.length}
-  <section class="checks" aria-label="Pre-send checks">
+  <section class="checks" class:notes-only={checks.every(isNote)} aria-label="Pre-send checks">
     <ul>
       {#each checks as check (check.kind === "undefined" ? `undefined:${check.name}` : check.kind)}
-        <li>
-          <span class="icon"><Icon name="alert" size={13} /></span>
-          {#if check.kind === "envMissing"}
+        <li class:note={isNote(check)}>
+          <span class="icon"><Icon name={isNote(check) ? "info" : "alert"} size={13} /></span>
+          {#if check.kind === "riderRefuses"}
+            <span class="message" role="note">
+              Rider refuses to send a request containing <code class="name">{`{{${check.name}.response…}}`}</code>
+            </span>
+          {:else if check.kind === "envMissing"}
             <span class="message">
               <strong>{check.env}</strong> isn't defined for {#if check.dir}<code class="folder">{folderLabel(check.dir)}</code>{:else}the workspace root{/if}, so this
               request is sent with no environment
             </span>
             <span class="fixes">
               <button class="btn small ghost" onclick={() => onfix(check, check.fixes[0])}>Choose environment</button>
+            </span>
+          {:else if check.kind === "duplicateName"}
+            <span class="message">
+              <code class="name"># @name {check.name}</code> is also the name of {check.others === 1 ? "another request" : `${check.others} other requests`} in this file, so
+              <code class="name">{`{{${check.name}.response…}}`}</code> reads whichever was sent last
             </span>
           {:else if check.kind === "undefined"}
             <span class="message">
@@ -79,6 +91,14 @@
   li + li {
     border-top: 1px solid color-mix(in srgb, var(--tone) 20%, transparent);
   }
+  /* Notes are informational: the info tone, and quieter text. */
+  .checks.notes-only,
+  li.note .icon {
+    --tone: var(--info);
+  }
+  li.note .message {
+    color: var(--muted);
+  }
   .icon {
     display: flex;
     color: var(--tone);
@@ -97,10 +117,11 @@
     font-weight: 600;
     color: var(--text);
   }
-  .message code.folder {
+  .message code.folder,
+  .message code.name {
     color: var(--text);
   }
-  .message code:not(.folder) {
+  .message code:not(.folder, .name) {
     text-decoration: underline wavy;
     text-decoration-skip-ink: none;
     text-underline-offset: 2px;
