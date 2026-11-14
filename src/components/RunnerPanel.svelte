@@ -1,13 +1,14 @@
 <!--
   The Runner panel (in the panel area, PanelArea.svelte): the last run (`app.runner`)
   live, one row per request with its state, status, time and tests, Stop while it
-  runs, and Re-run failed once it's done. Selecting a row opens its result in the
+  runs, and Re-run failed and Export once it's done. Selecting a row opens its result in the
   response viewer beside the list; a run never touches what the tabs show. Its
   options (a delay, stop on first failure) are the workspace's, for the next run.
 -->
 <script lang="ts">
   import { app, type RunItem } from "../lib/store.svelte";
   import { formatDuration, relativePath } from "../lib/http";
+  import { menu } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
@@ -58,6 +59,20 @@
     notRun: "Didn't run",
   };
 
+  // Export, once the run has ended: its results as JUnit XML or JSON.
+  let exportButton = $state<HTMLButtonElement>();
+  function exportMenu(e: MouseEvent) {
+    if (menu.isOpenFrom(exportButton)) return menu.close(false);
+    menu.show(
+      e,
+      [
+        { label: "JUnit XML…", action: () => app.exportRun("junit") },
+        { label: "JSON…", action: () => app.exportRun("json") },
+      ],
+      { anchor: exportButton, align: "end", label: "Export" },
+    );
+  }
+
   function tests(i: RunItem): string {
     const all = i.response?.tests ?? [];
     if (!all.length) return "";
@@ -77,8 +92,20 @@
     <span class="spacer"></span>
     {#if runner?.running}
       <button class="btn small" onclick={() => app.stopRun()}><Icon name="stop" />Stop</button>
-    {:else if app.canRerunFailed}
-      <button class="btn small" onclick={() => app.rerunFailed()}><Icon name="refresh" />Re-run failed</button>
+    {:else}
+      {#if app.canRerunFailed}
+        <button class="btn small" onclick={() => app.rerunFailed()}><Icon name="refresh" />Re-run failed</button>
+      {/if}
+      {#if runner?.results}
+        <button
+          bind:this={exportButton}
+          class="btn small ghost"
+          aria-haspopup="menu"
+          aria-expanded={menu.isOpenFrom(exportButton)}
+          use:tooltip={"Save the results as JUnit XML or JSON"}
+          onclick={exportMenu}><Icon name="download" />Export</button
+        >
+      {/if}
     {/if}
     <div class="options" role="group" aria-label="Runner options">
       <span class="option">

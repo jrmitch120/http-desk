@@ -19,6 +19,7 @@ import type {
   Request,
   RequestPreview,
   RequestVariableReading,
+  RunRequestReport,
   SearchHit,
   SpecSummary,
   StoredCookie,
@@ -51,6 +52,13 @@ export type RunSelection = {
 /** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"),
  *  with `delayMs` between requests, ending at its first failure with `stopOnFailure`. */
 export type RunOptions = { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean };
+
+/** What `run_requests` resolves with (`RunSummary`): whether it was stopped, and each
+ *  request as an export shows it, those it never reached included. */
+export type RunSummary = { cancelled: boolean; requests: RunRequestReport[] };
+
+/** The formats a run's results export as. */
+export type RunExportFormat = "junit" | "json";
 
 /** Which form of a stored response body `api.responseBody` fetches. */
 export type BodyFetchView = "raw" | "pretty" | "bytes";
@@ -95,7 +103,9 @@ export const api = {
   /** Sends the selection's requests in order, the way `sendRequest` sends each, reporting
    *  them as `run-progress` events (`RunProgress`). Resolves when the run ends. */
   runRequests: (args: { runId: string; selection: RunSelection; options: RunOptions }) =>
-    invoke<{ cancelled: boolean }>("run_requests", args),
+    invoke<RunSummary>("run_requests", args),
+  /** Writes a run's results (`RunSummary.requests`) to `path`, picked in the save dialog, as JUnit XML or JSON. */
+  exportRun: (requests: RunRequestReport[], format: RunExportFormat, path: string) => invoke<void>("export_run", { requests, format, path }),
   /** The answers the workspace's Session holds for a request's Prompt variables, by name. */
   promptAnswers: (requestKey: string) => invoke<Record<string, string>>("prompt_answers", { requestKey }),
   /** Has the Session remember answers to a request's Prompt variables (in memory only). */

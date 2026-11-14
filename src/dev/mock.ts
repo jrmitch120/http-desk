@@ -6,14 +6,14 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
+import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { responseRedirects } from "../lib/scripts";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -470,6 +470,8 @@ function mockLogs(handler: string) {
 }
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
+/** What Export wrote (`export_run`), in order. */
+const runExports: { format: "junit" | "json"; path: string; requests: RunRequestReport[] }[] = [];
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
 const shapeRequests: string[] = [];
 /** The response ids `release_response` was called with, in order. */
@@ -635,6 +637,9 @@ window.addEventListener(
   },
   get savedBodies() {
     return clone(savedBodies);
+  },
+  get runExports() {
+    return clone(runExports);
   },
   get shapeRequests() {
     return [...shapeRequests];
@@ -1467,29 +1472,59 @@ mockIPC(
       case "run_requests": {
         // Like the shell: each request through the send flow, reported as `run-progress`.
         const { runId, selection, options } = args;
+        // What it returns: each request as an export shows it (`run::RequestReport`).
+        const requests: RunRequestReport[] = selection.requests.map((r: { request: Request; filePath: string | null }) => ({
+          file: r.filePath?.startsWith(`${ROOT}/`) ? r.filePath.slice(ROOT.length + 1) : r.filePath,
+          name: displayName(r.request),
+          method: r.request.method.toUpperCase(),
+          url: null,
+          status: null,
+          timeMs: null,
+          outcome: "notRun",
+          failure: null,
+          tests: [],
+        }));
         runOptions.push(clone(options ?? {}));
         for (let index = 0; index < selection.requests.length; index++) {
           // Like the core: the delay between requests, which Stop cuts short.
           for (let waited = 0; index > 0 && waited < (options?.delayMs ?? 0) && !cancelledRuns.has(runId); waited += 10) await delay(10);
-          if (cancelledRuns.delete(runId)) return { cancelled: true };
+          if (cancelledRuns.delete(runId)) return { cancelled: true, requests };
           await emit("run-progress", { runId, index, state: "sending" });
           let failed: boolean;
           try {
             const request = { ...selection.requests[index], environment: selection.environment, skipScripts: options?.skipScripts, runId };
-            const response = (await mockSend(request)) as Partial<HttpResponse>;
-            failed = (response.tests ?? []).some((t) => !t.passed);
+            const response = (await mockSend(request)) as HttpResponse;
+            const tests = response.tests ?? [];
+            failed = tests.some((t) => !t.passed);
+            const failing = tests.filter((t) => !t.passed).map((t) => `"${t.name}": ${t.message}`);
+            Object.assign(requests[index], {
+              url: response.request?.url ?? null,
+              status: response.status,
+              timeMs: response.timeMs,
+              tests,
+              outcome: failed ? "failed" : "passed",
+              failure: failed ? { reason: "test", message: failing.join("\n") } : null,
+            });
             await emit("run-progress", { runId, index, state: "sent", response, failed });
           } catch (e) {
             if (e === "cancelled") {
+              requests[index].outcome = "cancelled";
               await emit("run-progress", { runId, index, state: "cancelled" });
-              return { cancelled: true };
+              return { cancelled: true, requests };
             }
+            const error = e as { kind?: string; message?: string };
+            const reason = error.kind === "preRequestScript" ? "script" : ["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"].includes(error.kind ?? "") ? "network" : "blocked";
+            Object.assign(requests[index], { outcome: "failed", failure: { reason, message: error.message ?? String(e) } });
             failed = true;
             await emit("run-progress", { runId, index, state: "failed", error: e });
           }
           if (failed && options?.stopOnFailure) break;
         }
-        return { cancelled: cancelledRuns.delete(runId) };
+        return { cancelled: cancelledRuns.delete(runId), requests };
+      }
+      case "export_run": {
+        runExports.push({ format: args.format, path: args.path, requests: args.requests });
+        return null;
       }
       case "format_body":
         if (args.kind === "xml") return formatXml(args.text, args.mode);

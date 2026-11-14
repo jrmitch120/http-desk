@@ -5,6 +5,7 @@
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { BodyFetchView } from "../src/lib/api";
+import type { RunRequestReport } from "../src/lib/types";
 
 /**
  * Loads the app and waits for the mocked workspace tree to appear.
@@ -107,6 +108,8 @@ export interface MockState {
   files: Record<string, SavedFile>;
   /** What "Save body to file" wrote, by path. */
   savedBodies: Record<string, string>;
+  /** What the Runner panel's Export wrote (`export_run`), in order. */
+  runExports: { format: "junit" | "json"; path: string; requests: RunRequestReport[] }[];
   /** The response ids `response_shape` was asked for, in order. */
   shapeRequests: string[];
   /** The two env files as last written. */

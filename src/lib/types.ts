@@ -276,6 +276,25 @@ export type RunProgress = { runId: string; index: number } & (
   | { state: "cancelled" }
 );
 
+/**
+ * One request of a run as an export shows it (`run::RequestReport`), from the shell
+ * when the run ends: no response body, and each Secret value masked in its URL and
+ * messages. `url`, `status` and `timeMs` are null when it got no response.
+ */
+export interface RunRequestReport {
+  /** Its file from the workspace root, `/` between folders; null for a request in no file. */
+  file: string | null;
+  name: string;
+  method: string;
+  url: string | null;
+  status: number | null;
+  timeMs: number | null;
+  outcome: "passed" | "failed" | "cancelled" | "notRun";
+  /** Why it failed (GLOSSARY "Run"). */
+  failure: { reason: "network" | "script" | "test" | "blocked"; message: string } | null;
+  tests: TestResult[];
+}
+
 /** One `client.test`, top-level `client.assert`, or script error (`script::TestResult`). */
 export interface TestResult {
   name: string;
