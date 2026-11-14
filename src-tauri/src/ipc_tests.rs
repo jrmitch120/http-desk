@@ -622,6 +622,7 @@ fn settings_without_pane_sizes_load_with_defaults() {
     assert_eq!(json["checkUpdates"], false);
     assert_eq!(json["sidebarWidth"], 280.0);
     assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.5 }));
+    assert_eq!(json["panelHeight"], 260.0);
 
     // One layout's ratio saved on its own keeps the default for the other.
     let partial: super::AppSettings = serde_json::from_str(r#"{"splitRatio":{"vertical":0.3}}"#).unwrap();

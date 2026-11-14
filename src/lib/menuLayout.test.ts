@@ -33,8 +33,8 @@ describe("the menu layout", () => {
       "HttpDesk: about, -, settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "View: toggle-sidebar, toggle-session, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
       "Window: (minimize), (zoom), -, (bringAllToFront)",
       "Help: documentation, release-notes, -, report-issue",
     ]);
@@ -44,8 +44,8 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("windows"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "View: toggle-sidebar, toggle-session, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });
@@ -54,8 +54,8 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("linux"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, close-window, -, quit",
       "Edit: undo, redo, -, cut, copy, paste, select-all",
-      "View: toggle-sidebar, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source",
+      "View: toggle-sidebar, toggle-session, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "Request: send, cancel, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });

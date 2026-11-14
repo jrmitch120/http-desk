@@ -116,6 +116,11 @@ impl Exchanges {
         self.lock().insert((file.to_path_buf(), name.to_string()), Arc::new(exchange));
     }
 
+    /// Forgets every exchange, so every Request variable reads as unsent.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(PathBuf, String), Arc<Exchange>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -1,8 +1,9 @@
 //! The workspace Session over IPC: prompt answers are remembered per request key in
 //! the shell, reach the preview and the send, and are forgotten on demand and when
 //! another workspace opens. Cookies set by one send are sent on the next, and
-//! another workspace starts with an empty jar. Nothing in the Session is ever
-//! written to disk.
+//! another workspace starts with an empty jar. The Session panel lists the jar,
+//! deletes one cookie or clears them all, and Clear session empties everything.
+//! Nothing in the Session is ever written to disk.
 
 use std::path::{Path, PathBuf};
 
@@ -105,9 +106,9 @@ fn opening_another_workspace_forgets_every_prompt_answer() {
     assert_eq!(h.ok("preview_request", args)["url"], "http://127.0.0.1:9/login?otp={{otp}}");
 }
 
-/// A one-shot server answering 200 with `set_cookie` (if any) as its Set-Cookie;
+/// A one-shot server answering 200 with a Set-Cookie for each of `set_cookies`;
 /// the receiver gets the raw request it received.
-fn cookie_server(set_cookie: Option<&'static str>) -> (String, std::sync::mpsc::Receiver<String>) {
+fn cookie_server(set_cookies: &'static [&'static str]) -> (String, std::sync::mpsc::Receiver<String>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -122,7 +123,7 @@ fn cookie_server(set_cookie: Option<&'static str>) -> (String, std::sync::mpsc::
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
             }
         }
-        let cookie = set_cookie.map(|c| format!("set-cookie: {c}\r\n")).unwrap_or_default();
+        let cookie: String = set_cookies.iter().map(|c| format!("set-cookie: {c}\r\n")).collect();
         let _ = write!(stream, "HTTP/1.1 200 OK\r\n{cookie}content-length: 0\r\n\r\n");
         tx.send(String::from_utf8_lossy(&buf).into_owned()).unwrap();
     });
@@ -147,15 +148,15 @@ fn cookies_are_sent_back_within_a_workspace_never_written_and_forgotten_when_ano
     let root = crate::paths::canonicalize(first.path()).unwrap();
     h.ok("open_workspace", json!({ "path": root }));
 
-    send_to(&h, &root, cookie_server(Some("sid=s3cret-sid; Path=/")));
+    send_to(&h, &root, cookie_server(&["sid=s3cret-sid; Path=/"]));
     // Another port on the same host: cookies don't tell ports apart.
-    let raw = send_to(&h, &root, cookie_server(None));
+    let raw = send_to(&h, &root, cookie_server(&[]));
     assert!(raw.contains("cookie: sid=s3cret-sid"), "{raw}");
 
     let second = tempfile::tempdir().unwrap();
     let other = crate::paths::canonicalize(second.path()).unwrap();
     h.ok("open_workspace", json!({ "path": other }));
-    let raw = send_to(&h, &other, cookie_server(None));
+    let raw = send_to(&h, &other, cookie_server(&[]));
     assert!(!raw.contains("cookie:"), "the new workspace's Session started with the old jar: {raw}");
 
     for dir in [first.path(), second.path(), h.config_dir().as_path()] {
@@ -164,6 +165,92 @@ fn cookies_are_sent_back_within_a_workspace_never_written_and_forgotten_when_ano
             assert!(!content.contains("s3cret-sid"), "{} holds a cookie", entry.display());
         }
     }
+}
+
+/// A workspace in a temporary folder, open.
+fn open_workspace(h: &Harness) -> (tempfile::TempDir, PathBuf) {
+    let ws = tempfile::tempdir().unwrap();
+    let root = crate::paths::canonicalize(ws.path()).unwrap();
+    h.ok("open_workspace", json!({ "path": root }));
+    (ws, root)
+}
+
+/// The (name, value) of each cookie the Session panel lists.
+fn listed(h: &Harness) -> Vec<(String, String)> {
+    let list = h.ok("session_cookies", json!({}));
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap().into(), c["value"].as_str().unwrap().into()))
+        .collect()
+}
+
+#[test]
+fn the_session_lists_the_cookies_sends_set_with_their_attributes() {
+    let h = Harness::new();
+    let (_ws, root) = open_workspace(&h);
+    send_to(&h, &root, cookie_server(&["sid=abc; HttpOnly; SameSite=Lax", "pref=dark; Path=/app; Max-Age=3600"]));
+
+    let list = h.ok("session_cookies", json!({}));
+    let sid = &list[0];
+    assert_eq!(
+        (&sid["name"], &sid["value"], &sid["domain"], &sid["path"]),
+        (&json!("sid"), &json!("abc"), &json!("127.0.0.1"), &json!("/"))
+    );
+    assert_eq!(
+        (&sid["hostOnly"], &sid["httpOnly"], &sid["secure"], &sid["sameSite"]),
+        (&json!(true), &json!(true), &json!(false), &json!("Lax"))
+    );
+    assert!(sid.get("expires").is_none_or(Value::is_null), "lasts the Session: {sid}");
+    assert_eq!((&list[1]["name"], &list[1]["path"]), (&json!("pref"), &json!("/app")));
+    assert!(list[1]["expires"].as_str().is_some_and(|e| e.ends_with('Z')), "{}", list[1]);
+}
+
+#[test]
+fn a_deleted_cookie_is_not_sent_on_the_next_request() {
+    let h = Harness::new();
+    let (_ws, root) = open_workspace(&h);
+    send_to(&h, &root, cookie_server(&["sid=abc; Path=/", "theme=dark; Path=/"]));
+
+    let deleted = h.ok("delete_cookie", json!({ "domain": "127.0.0.1", "path": "/", "name": "sid" }));
+
+    assert_eq!(deleted, json!(true));
+    assert_eq!(listed(&h), [("theme".into(), "dark".into())]);
+    let raw = send_to(&h, &root, cookie_server(&[]));
+    assert!(raw.contains("cookie: theme=dark") && !raw.contains("sid="), "{raw}");
+    assert_eq!(h.ok("delete_cookie", json!({ "domain": "127.0.0.1", "path": "/", "name": "sid" })), json!(false));
+}
+
+#[test]
+fn clearing_cookies_stops_all_of_them_being_sent_and_keeps_prompt_answers() {
+    let h = Harness::new();
+    let (_ws, root) = open_workspace(&h);
+    send_to(&h, &root, cookie_server(&["sid=abc; Path=/", "theme=dark; Path=/"]));
+    h.ok("answer_prompts", json!({ "requestKey": "k1", "answers": { "otp": "123456" } }));
+
+    h.ok("clear_cookies", json!({}));
+
+    assert_eq!(listed(&h), []);
+    let raw = send_to(&h, &root, cookie_server(&[]));
+    assert!(!raw.contains("cookie:"), "{raw}");
+    assert_eq!(h.ok("prompt_answers", json!({ "requestKey": "k1" })), json!({ "otp": "123456" }));
+}
+
+#[test]
+fn clearing_the_session_forgets_cookies_and_prompt_answers() {
+    let h = Harness::new();
+    let (_ws, root) = open_workspace(&h);
+    send_to(&h, &root, cookie_server(&["sid=abc; Path=/"]));
+    h.ok("answer_prompts", json!({ "requestKey": "k1", "answers": { "otp": "123456" } }));
+
+    h.ok("clear_session", json!({}));
+
+    assert_eq!(listed(&h), []);
+    assert_eq!(h.ok("prompt_answers", json!({ "requestKey": "k1" })), json!({}));
+    let raw = send_to(&h, &root, cookie_server(&[]));
+    assert!(!raw.contains("cookie:"), "{raw}");
+    send_to(&h, &root, cookie_server(&["again=1; Path=/"]));
+    assert_eq!(listed(&h), [("again".into(), "1".into())], "the cleared Session keeps what later sends set");
 }
 
 /// Every file under `dir`.

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
+use httpdesk_core::cookies::StoredCookie;
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exchange;
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
@@ -81,6 +82,9 @@ struct AppSettings {
     zoom: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
+    /// Height in px of the panel area below the requests (the Session panel).
+    #[serde(deserialize_with = "or_default")]
+    panel_height: f64,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
     /// How the Environments modal shows variables.
@@ -146,7 +150,7 @@ struct EnvironmentSettings {
     color: Option<String>,
 }
 
-/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
+/// Defaults must match `SIDEBAR`/`SPLIT`/`PANEL` in src/lib/panes.ts (src/lib/panes.test.ts checks).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct SplitRatio {
@@ -175,6 +179,7 @@ impl Default for AppSettings {
             sidebar_hidden: false,
             zoom: 1.0,
             split_ratio: SplitRatio::default(),
+            panel_height: 260.0,
             show_resolved: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
@@ -734,6 +739,33 @@ fn forget_prompt_answers(state: State<'_, AppState>, request_key: String) {
     state.session().prompt_answers().forget(&request_key);
 }
 
+/// The cookies in the Session's jar, for the Session panel: unexpired ones, by
+/// domain, then path, then name.
+#[tauri::command]
+fn session_cookies(state: State<'_, AppState>) -> Vec<StoredCookie> {
+    state.session().cookies().list()
+}
+
+/// Deletes one cookie from the Session's jar, so later sends don't carry it.
+/// False if there was no such cookie.
+#[tauri::command]
+fn delete_cookie(state: State<'_, AppState>, domain: String, path: String, name: String) -> bool {
+    state.session().cookies().remove(&domain, &path, &name)
+}
+
+/// Deletes every cookie in the Session's jar.
+#[tauri::command]
+fn clear_cookies(state: State<'_, AppState>) {
+    state.session().cookies().clear();
+}
+
+/// Empties the whole Session (Clear session): every section, cookies and prompt
+/// answers included.
+#[tauri::command]
+fn clear_session(state: State<'_, AppState>) {
+    state.session().clear();
+}
+
 #[tauri::command]
 fn cancel_request(state: State<'_, AppState>, run_id: String) {
     if let Some(handle) = state.running.lock().unwrap().remove(&run_id) {
@@ -1147,6 +1179,10 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             prompt_answers,
             answer_prompts,
             forget_prompt_answers,
+            session_cookies,
+            delete_cookie,
+            clear_cookies,
+            clear_session,
             save_response_body,
             copy_response_body,
             release_response,
