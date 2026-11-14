@@ -23,6 +23,7 @@ import type {
   ExchangeShape,
   EnvironmentSettings,
   MatrixWidths,
+  RunnerOptions,
   FolderEnvironments,
   HttpFile,
   HttpResponse,
@@ -114,6 +115,12 @@ interface RunEntry {
 
 /** Stands in for a tab id in `confirmingSend` while a run asks its questions. */
 const RUN_ASKING = "\u0000run";
+
+/** A workspace's Runner options until they're changed: no delay, and failures don't stop a run. */
+const DEFAULT_RUNNER_OPTIONS: RunnerOptions = { delayMs: 0, stopOnFailure: false };
+
+/** Ends the title of a run of the last run's failed requests (Re-run failed). */
+const FAILED_SUFFIX = " (failed)";
 
 
 export interface Toast {
@@ -1493,6 +1500,40 @@ class AppStore {
     if (this.runner?.running) await api.cancelRequest(this.runner.runId);
   }
 
+  /** The open workspace's Runner options (the delay, stop on first failure). */
+  get runnerOptions(): RunnerOptions {
+    return { ...DEFAULT_RUNNER_OPTIONS, ...(this.root ? this.settings?.runnerOptions?.[this.root] : undefined) };
+  }
+
+  /** Changes the open workspace's Runner options, remembered for its next runs. */
+  async setRunnerOptions(patch: Partial<RunnerOptions>): Promise<boolean> {
+    if (!this.root || !this.settings) return false;
+    return this.updateSettings({ runnerOptions: { ...this.settings.runnerOptions, [this.root]: { ...this.runnerOptions, ...patch } } });
+  }
+
+  /** Whether the last run has finished with failed requests to re-run. */
+  get canRerunFailed(): boolean {
+    return !!this.runner && !this.runner.running && this.runner.items.some((i) => i.state === "failed");
+  }
+
+  /**
+   * Re-runs the last run's failed requests, in order, as a new run with the Session as
+   * it is now (nothing is rolled back). Each is read again, from its open tab or its
+   * file, as any run reads it, so a fix made since is what's sent.
+   */
+  async rerunFailed() {
+    const runner = this.runner;
+    if (!runner || !this.canRerunFailed) return;
+    const failed = runner.items.filter((i) => i.state === "failed");
+    const entries: RunEntry[] = [];
+    for (const item of failed) {
+      const doc = await this.loadDoc(item.path);
+      const entry = doc && this.runEntries(item.path, doc).find((e) => e.key === item.key);
+      if (entry) entries.push(entry);
+    }
+    await this.run(runner.title.endsWith(FAILED_SUFFIX) ? runner.title : `${runner.title}${FAILED_SUFFIX}`, entries);
+  }
+
   /**
    * The requests of `doc` a run sends, in order: from the open tab's edits when the
    * request is open, otherwise as in the file on disk (its saved snapshot). A request
@@ -1548,7 +1589,7 @@ class AppStore {
       await api.runRequests({
         runId,
         selection: { requests: entries.map((e) => e.args), environment: this.envName },
-        options: { skipScripts: scripts === "skip" },
+        options: { skipScripts: scripts === "skip", ...this.runnerOptions },
       });
     } catch (e) {
       this.toast("error", errorMessage(e));

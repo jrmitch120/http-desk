@@ -46,8 +46,9 @@ export type RunSelection = {
   environment: string | null;
 };
 
-/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"). */
-export type RunOptions = { skipScripts?: boolean };
+/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"),
+ *  with `delayMs` between requests, ending at its first failure with `stopOnFailure`. */
+export type RunOptions = { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean };
 
 /** Which form of a stored response body `api.responseBody` fetches. */
 export type BodyFetchView = "raw" | "pretty" | "bytes";
