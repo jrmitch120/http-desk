@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
   import { app, type RunItem } from "../lib/store.svelte";
-  import { formatDuration } from "../lib/http";
+  import { formatDuration, relativePath } from "../lib/http";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
@@ -28,6 +28,17 @@
   });
   const item = $derived(selected === null ? undefined : runner?.items[selected]);
   const opened = $derived(item && (item.response || item.error) ? item : undefined);
+
+  /** The run's items by file, in run order (a run sends each file's requests together). */
+  const groups = $derived.by(() => {
+    const out: { path: string; file: string; items: { item: RunItem; index: number }[] }[] = [];
+    runner?.items.forEach((item, index) => {
+      const last = out.at(-1);
+      if (last?.path === item.path) last.items.push({ item, index });
+      else out.push({ path: item.path, file: app.root ? relativePath(app.root, item.path).replace(/^\.\//, "") : item.path, items: [{ item, index }] });
+    });
+    return out;
+  });
 
   const count = (state: RunItem["state"]) => runner?.items.filter((i) => i.state === state).length ?? 0;
   const summary = $derived.by(() => {
@@ -61,7 +72,7 @@
       <span class="title selectable">{runner.title}</span>
       <span class="muted" aria-live="polite">{runner.running ? "Running…" : summary}</span>
     {:else}
-      <span class="muted">Run a file from its menu in the explorer, or Request → Run File.</span>
+      <span class="muted">Run a file or folder from its menu in the explorer, or select requests there and run the selection from their menu.</span>
     {/if}
     <span class="spacer"></span>
     {#if runner?.running}
@@ -84,40 +95,47 @@
   </div>
   {#if runner}
     <div class="body">
-      <ol class="items" aria-label="Run results">
-        {#each runner.items as i, index (index)}
-          <li>
-            <button
-              class="row {i.state}"
-              class:selected={selected === index}
-              aria-current={selected === index}
-              disabled={!i.response && !i.error}
-              onclick={() => (selected = index)}
-            >
-              <span class="state" data-state={i.state} role="img" aria-label={STATE_LABEL[i.state]}>
-                {#if i.state === "sending"}<span class="spinner"></span>
-                {:else if i.state === "passed"}<Icon name="check" size={12} />
-                {:else if i.state === "failed"}<Icon name="x" size={12} />
-                {:else if i.state === "cancelled" || i.state === "notRun"}<Icon name="minus" size={12} />
-                {/if}
-              </span>
-              <Badge method={i.method} />
-              <span class="name">{i.name}</span>
-              {#if i.unsaved}<span class="unsaved" use:tooltip={"Sent from its open tab's unsaved edits"}>unsaved</span>{/if}
-              <span class="spacer"></span>
-              {#if i.response}
-                <span class="tests muted">{tests(i)}</span>
-                <Badge status={i.response.status}>{i.response.status}</Badge>
-                <span class="time muted">{formatDuration(i.response.timeMs)}</span>
-              {:else if i.error}
-                <Badge tone="danger">Error</Badge>
-              {:else}
-                <span class="muted">{STATE_LABEL[i.state]}</span>
-              {/if}
-            </button>
-          </li>
+      <div class="items">
+        {#each groups as g, gi (gi)}
+          <div class="group" role="group" aria-label={g.file}>
+            <div class="file selectable" aria-hidden="true"><Icon name="file" size={12} /><span class="name">{g.file}</span></div>
+            <ol>
+              {#each g.items as { item: i, index } (index)}
+                <li>
+                  <button
+                    class="row {i.state}"
+                    class:selected={selected === index}
+                    aria-current={selected === index}
+                    disabled={!i.response && !i.error}
+                    onclick={() => (selected = index)}
+                  >
+                    <span class="state" data-state={i.state} role="img" aria-label={STATE_LABEL[i.state]}>
+                      {#if i.state === "sending"}<span class="spinner"></span>
+                      {:else if i.state === "passed"}<Icon name="check" size={12} />
+                      {:else if i.state === "failed"}<Icon name="x" size={12} />
+                      {:else if i.state === "cancelled" || i.state === "notRun"}<Icon name="minus" size={12} />
+                      {/if}
+                    </span>
+                    <Badge method={i.method} />
+                    <span class="name">{i.name}</span>
+                    {#if i.unsaved}<span class="unsaved" use:tooltip={"Sent from its open tab's unsaved edits"}>unsaved</span>{/if}
+                    <span class="spacer"></span>
+                    {#if i.response}
+                      <span class="tests muted">{tests(i)}</span>
+                      <Badge status={i.response.status}>{i.response.status}</Badge>
+                      <span class="time muted">{formatDuration(i.response.timeMs)}</span>
+                    {:else if i.error}
+                      <Badge tone="danger">Error</Badge>
+                    {:else}
+                      <span class="muted">{STATE_LABEL[i.state]}</span>
+                    {/if}
+                  </button>
+                </li>
+              {/each}
+            </ol>
+          </div>
         {/each}
-      </ol>
+      </div>
       <div class="result">
         {#if opened && selected !== null}
           {#key `${runner.runId}:${selected}`}
@@ -180,6 +198,22 @@
     min-width: 280px;
     overflow: auto;
     border-right: 1px solid var(--border);
+  }
+  .items ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .group + .group {
+    margin-top: 4px;
+  }
+  .file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px 2px;
+    font-size: 11.5px;
+    color: var(--muted);
   }
   .row {
     display: flex;
