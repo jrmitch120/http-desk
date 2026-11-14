@@ -33,6 +33,15 @@ describe("script completion", () => {
     expect(offered("response.|", "pre-request")).toBeNull();
   });
 
+  it("offers request.variables and request.environment in a pre-request script only", () => {
+    expect(offered("req|", "pre-request")?.labels).toContain("request");
+    expect(offered("request.|", "pre-request")?.labels).toEqual(["variables", "environment"]);
+    expect(offered("request.variables.|", "pre-request")?.labels).toEqual(["set", "get"]);
+    expect(offered("request.environment.|", "pre-request")?.labels).toEqual(["get"]);
+    expect(offered("req|")?.labels ?? []).not.toContain("request");
+    expect(offered("request.|")).toBeNull();
+  });
+
   it("stays out of strings and comments, and of members of other objects", () => {
     expect(offered('client.test("client.|')).toBeNull();
     expect(offered("// client.|")).toBeNull();

@@ -20,8 +20,10 @@ export interface ScriptApi {
 
 export const SCRIPT_API: readonly ScriptApi[] = api;
 
-/** The API a script of `kind` can use: a pre-request script has no response yet. */
-const available = (kind: ScriptKind) => SCRIPT_API.filter((a) => kind === "handler" || !a.name.startsWith("response."));
+/** The API a script of `kind` can use: a pre-request script has no response yet,
+ * and only a pre-request script has `request` (a handler's isn't implemented). */
+const available = (kind: ScriptKind) =>
+  SCRIPT_API.filter((a) => !a.name.startsWith(kind === "handler" ? "request." : "response."));
 
 /** Syntax the API isn't completed in. */
 const QUIET = new Set(["String", "TemplateString", "LineComment", "BlockComment"]);
@@ -44,7 +46,7 @@ function members(apis: readonly ScriptApi[], path: string): Completion[] {
   return [...seen.values()];
 }
 
-/** Completes `client.`, `response.` and their members, as far as HttpDesk implements them. */
+/** Completes `client.`, `response.`, `request.` and their members, as far as HttpDesk implements them. */
 export function scriptCompletion(kind: ScriptKind): CompletionSource {
   const apis = available(kind);
   return (ctx: CompletionContext): CompletionResult | null => {
