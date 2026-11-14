@@ -12,7 +12,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, HttpResponse, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -1012,6 +1012,102 @@ function hexdump(body: Uint8Array): string {
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Like the shell's `send_request` (and each request of a run): the canned response for `args`. */
+async function mockSend(args: any) {
+  // Like the core: blocked before anything is sent, and never sent on its own.
+  const unsent = unsentRequests(args.request, args.filePath, args.requestNames ?? []);
+  if (unsent.length) throw { kind: "unsentRequest", ...unsentError(unsent) };
+  sent.push(clone(args.request));
+  sentPrompts.push(promptAnswers(args.requestKey));
+  sentSkipScripts.push(!!args.skipScripts);
+  sentCookies.push([...sessionJar.values()].map((c) => `${c.name}=${c.value}`).join("; "));
+  // Like the shell: a script in a workspace that isn't trusted is refused, unsent.
+  const runScripts = hasScripts(args.request) && !args.skipScripts;
+  if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
+    throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
+  }
+  // Like the shell: a pre-request script that throws stops the send.
+  if (runScripts && args.request.preScript?.includes("throw ")) {
+    throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
+  }
+  if (slowDownload) {
+    for (let i = 1; i <= 20; i++) {
+      await delay(100);
+      // Like the shell: a cancelled send fails (the app shows it as Cancelled).
+      if (cancelledRuns.delete(args.runId)) throw "cancelled";
+      await emit("send-progress", { runId: args.runId, received: i * 6_000 });
+    }
+  } else {
+    await delay(450);
+  }
+  // An environment defines the missing variable, so picking one fixes it.
+  if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
+  const r = args.request;
+  const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
+  if (named) exchanges.add(`${args.filePath}\0${named}`);
+  if (perf) return perfResponse(r.url, r.method);
+  if (responseKind === "asReceived") return asReceivedResponse(r.method);
+  if (r.url.includes("png") && bigBinary) {
+    return storeBinary({
+      id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+      headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
+      bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
+      truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
+    }, new Uint8Array(BIG_BINARY_BYTES)); // 2 MB of zero bytes
+  }
+  if (r.url.includes("png")) {
+    return storeBinary({
+      id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
+      headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
+      contentType: "image/png", bodyKind: "image", contentEncoding: null,
+      truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
+    }, PNG_BYTES);
+  }
+  const body =
+    responseKind === "bigint"
+      ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
+      : responseKind === "invalidJson"
+        ? `{"id": 9007199254740993, oops}`
+        : responseKind === "store"
+          ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
+          : responseKind === "html"
+            ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
+            : responseKind === "longHtml"
+              ? `<!doctype html>\n<html><body>\n${Array.from({ length: 200 }, (_, i) => `<div class="row" data-index="${i}"><span class="label">Pet number ${i}</span> <a href="/pets/${i}" title="Open pet ${i}">open</a> <em class="tag">${"good dog ".repeat(20)}</em></div>`).join("\n")}\n</body></html>`
+            : responseKind === "text"
+              ? "pets: 2\nRex, Tom\n"
+            : responseKind === "truncated"
+              ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
+              : responseKind === "nested"
+                ? `{"a":{"odd key":[{"b":1}]}}`
+                : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
+  const gzip = responseKind === "gzip";
+  const transferredSize = gzip ? 112 : body.length;
+  const status = statusParam ?? (r.method === "POST" ? 201 : 200);
+  const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
+  const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
+  textBodies.set(id, { body, kind: bodyKind });
+  const cookies = responseKind === "cookies" ? mockCookies : [];
+  keepCookies(cookies);
+  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
+  return {
+    id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
+    url: "http://127.0.0.1:8765/pets?limit=20",
+    headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
+    timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
+    truncated: responseKind === "truncated",
+    request: {
+      method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
+      headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
+    },
+    warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
+    timings: jsonTimings,
+    cookies,
+    tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
+    logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
+  };
+}
+
 mockWindows("main");
 mockIPC(
   async (cmd, args: any) => {
@@ -1177,99 +1273,28 @@ mockIPC(
       case "cancel_request":
         cancelledRuns.add(args.runId);
         return null;
-      case "send_request": {
-        // Like the core: blocked before anything is sent, and never sent on its own.
-        const unsent = unsentRequests(args.request, args.filePath, args.requestNames ?? []);
-        if (unsent.length) throw { kind: "unsentRequest", ...unsentError(unsent) };
-        sent.push(clone(args.request));
-        sentPrompts.push(promptAnswers(args.requestKey));
-        sentSkipScripts.push(!!args.skipScripts);
-        sentCookies.push([...sessionJar.values()].map((c) => `${c.name}=${c.value}`).join("; "));
-        // Like the shell: a script in a workspace that isn't trusted is refused, unsent.
-        const runScripts = hasScripts(args.request) && !args.skipScripts;
-        if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
-          throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
-        }
-        // Like the shell: a pre-request script that throws stops the send.
-        if (runScripts && args.request.preScript?.includes("throw ")) {
-          throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
-        }
-        if (slowDownload) {
-          for (let i = 1; i <= 20; i++) {
-            await delay(100);
-            // Like the shell: a cancelled send fails (the app shows it as Cancelled).
-            if (cancelledRuns.delete(args.runId)) throw "cancelled";
-            await emit("send-progress", { runId: args.runId, received: i * 6_000 });
+      case "send_request":
+        return mockSend(args);
+      case "run_requests": {
+        // Like the shell: each request through the send flow, reported as `run-progress`.
+        const { runId, selection, options } = args;
+        for (let index = 0; index < selection.requests.length; index++) {
+          if (cancelledRuns.delete(runId)) return { cancelled: true };
+          await emit("run-progress", { runId, index, state: "sending" });
+          try {
+            const request = { ...selection.requests[index], environment: selection.environment, skipScripts: options?.skipScripts, runId };
+            const response = (await mockSend(request)) as Partial<HttpResponse>;
+            const failed = (response.tests ?? []).some((t) => !t.passed);
+            await emit("run-progress", { runId, index, state: "sent", response, failed });
+          } catch (e) {
+            if (e === "cancelled") {
+              await emit("run-progress", { runId, index, state: "cancelled" });
+              return { cancelled: true };
+            }
+            await emit("run-progress", { runId, index, state: "failed", error: e });
           }
-        } else {
-          await delay(450);
         }
-        // An environment defines the missing variable, so picking one fixes it.
-        if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
-        const r = args.request;
-        const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
-        if (named) exchanges.add(`${args.filePath}\0${named}`);
-        if (perf) return perfResponse(r.url, r.method);
-        if (responseKind === "asReceived") return asReceivedResponse(r.method);
-        if (r.url.includes("png") && bigBinary) {
-          return storeBinary({
-            id: `r3-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
-            headers: [["content-type", "application/octet-stream"], ["content-length", String(BIG_BINARY_BYTES)]], timeMs: 52.3, ttfbMs: 10.1,
-            bodySize: BIG_BINARY_BYTES, transferredSize: BIG_BINARY_BYTES, headersSize: 60, contentType: "application/octet-stream", bodyKind: "binary", contentEncoding: null,
-            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          }, new Uint8Array(BIG_BINARY_BYTES)); // 2 MB of zero bytes
-        }
-        if (r.url.includes("png")) {
-          return storeBinary({
-            id: `r2-${++responseCount}`, status: 200, statusText: "OK", httpVersion: "HTTP/1.1", url: "http://127.0.0.1:8765/png/1",
-            headers: [["content-type", "image/png"], ["content-length", "2749"]], timeMs: 12.3, ttfbMs: 10.1, bodySize: 2749, transferredSize: 2749, headersSize: 60,
-            contentType: "image/png", bodyKind: "image", contentEncoding: null,
-            truncated: false, request: { method: "GET", url: "http://127.0.0.1:8765/png/1", headers: [], bodyPreview: null, bodySize: 0 }, warnings: [], timings: imageTimings, cookies: [],
-          }, PNG_BYTES);
-        }
-        const body =
-          responseKind === "bigint"
-            ? `{"items":[{"id":9007199254740993,"price":10.50,"name":"Rex"}],"method":"${r.method}"}`
-            : responseKind === "invalidJson"
-              ? `{"id": 9007199254740993, oops}`
-              : responseKind === "store"
-                ? `{"items":[{"id":1234567890123456789,"status":"sold","price":10.50},{"id":2,"status":"${sent.length > 1 ? "sold" : "available"}","price":1e3},{"id":9007199254740993,"status":"sold"}]}`
-                : responseKind === "html"
-                  ? "<!doctype html><html><body><h1>Pets</h1></body></html>"
-                  : responseKind === "longHtml"
-                    ? `<!doctype html>\n<html><body>\n${Array.from({ length: 200 }, (_, i) => `<div class="row" data-index="${i}"><span class="label">Pet number ${i}</span> <a href="/pets/${i}" title="Open pet ${i}">open</a> <em class="tag">${"good dog ".repeat(20)}</em></div>`).join("\n")}\n</body></html>`
-                  : responseKind === "text"
-                    ? "pets: 2\nRex, Tom\n"
-                  : responseKind === "truncated"
-                    ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
-                    : responseKind === "nested"
-                      ? `{"a":{"odd key":[{"b":1}]}}`
-                      : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
-        const gzip = responseKind === "gzip";
-        const transferredSize = gzip ? 112 : body.length;
-        const status = statusParam ?? (r.method === "POST" ? 201 : 200);
-        const id = `r1-${++responseCount}`; // a fresh id per response, like the shell's
-        const { contentType, bodyKind } = TEXT_RESPONSE_TYPES[responseKind ?? ""] ?? TEXT_RESPONSE_TYPES.json;
-        textBodies.set(id, { body, kind: bodyKind });
-        const cookies = responseKind === "cookies" ? mockCookies : [];
-        keepCookies(cookies);
-        const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
-        return {
-          id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
-          url: "http://127.0.0.1:8765/pets?limit=20",
-          headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
-          timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
-          truncated: responseKind === "truncated",
-          request: {
-            method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
-            headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
-          },
-          warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
-          timings: jsonTimings,
-          cookies,
-          tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
-          logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
-        };
+        return { cancelled: cancelledRuns.delete(runId) };
       }
       case "format_body":
         if (args.kind === "xml") return formatXml(args.text, args.mode);
