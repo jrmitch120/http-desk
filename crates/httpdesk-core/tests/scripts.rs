@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecOutcome, ExecSettings};
-use httpdesk_core::script::{run_pre_request_script, run_response_handler, ScriptFiles, TestResult};
+use httpdesk_core::script::{run_pre_request_script, run_response_handler, ScriptContext, ScriptFiles, TestResult};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::path;
@@ -49,7 +49,12 @@ async fn run_in(
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    let results = run_response_handler(&req, &outcome.response, &outcome.body, files, &Default::default());
+    let results = run_response_handler(
+        &req,
+        &outcome.response,
+        &outcome.body,
+        &ScriptContext { files: files.clone(), ..Default::default() },
+    );
     (req, outcome, results.tests)
 }
 
@@ -86,6 +91,25 @@ async fn passing_and_failing_tests_and_asserts_are_reported_with_names_and_messa
             fail("never true", "never true"),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_thrown_value_reads_the_same_in_a_test_and_at_the_top_level() {
+    let server = server().await;
+    for (thrown, message) in [
+        ("null", "null"),
+        ("undefined", "undefined"),
+        ("42", "42"),
+        ("\"plain words\"", "plain words"),
+        ("{ code: 1 }", r#"{"code":1}"#),
+        ("new Error(\"broken\")", "broken"),
+        ("new TypeError(\"wrong\")", "TypeError: wrong"),
+    ] {
+        let handler = format!("> {{%\nclient.test(\"t\", () => {{ throw {thrown}; }});\nthrow {thrown};\n%}}");
+        let (_, _, tests) = run(&server, "user", &handler).await;
+        let at_top = if thrown.starts_with("new ") { format!("{message} (line 3)") } else { message.to_string() };
+        assert_eq!(tests, [fail("t", message), fail("Response handler", &at_top)], "throw {thrown}");
+    }
 }
 
 #[tokio::test]
@@ -444,7 +468,7 @@ async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
     assert_eq!(in_handler, listed_without("request."));
 
     let req = parse(&format!("< {{%{IMPLEMENTED}%}}\nGET {}/text\n", server.uri())).requests.remove(0);
-    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptFiles::default(), &Default::default()).unwrap();
+    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptContext::default()).unwrap();
     let in_pre_request: Vec<String> = serde_json::from_str(&pre.results.tests.last().unwrap().name).unwrap();
     assert_eq!(in_pre_request, listed_without("response."));
 }
@@ -456,7 +480,7 @@ async fn results(server: &MockServer, route: &str, handler: &str) -> script::Scr
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptFiles::default(), &Default::default())
+    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptContext::default())
 }
 
 #[tokio::test]
@@ -501,7 +525,7 @@ async fn logging_without_bound_stops_at_the_log_limit_and_says_so() {
     let results = results(&server, "user", handler).await;
     let kept: usize = results.logs.iter().map(String::len).sum();
     assert!(kept <= script::LOG_LIMIT + 100, "{kept}");
-    assert_eq!(results.logs.last().unwrap(), "Log stopped at 1 MB, the log limit for a script");
+    assert_eq!(results.logs.last().unwrap(), "Log stopped at 64 KB, the log limit for a script");
     assert_eq!(results.logs.iter().filter(|l| l.starts_with("Log stopped")).count(), 1);
     assert_eq!(results.tests, [pass("ran on")]);
 }

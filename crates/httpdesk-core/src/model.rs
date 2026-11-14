@@ -243,14 +243,22 @@ impl ExtraLine {
     }
 }
 
+/// A script as a request writes it after `<` (pre-request) or `>` (response handler).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptSource {
+    /// `{% … %}`: the script text between the markers, and the line of the
+    /// pre-request script or handler (1-based) that text starts on, so errors can
+    /// name its lines.
+    Inline { source: String, line: usize },
+    /// `path.js`: a script file, relative to the `.http` file.
+    File { path: String },
+}
+
 /// One part of a request's response handler (JetBrains `>` / `>>` lines).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandlerPart {
-    /// `> {% … %}`: the script text between the markers, and the line of the
-    /// handler (1-based) that text starts on, so errors can name handler lines.
-    Inline { source: String, line: usize },
-    /// `> path.js`: a script file, relative to the `.http` file.
-    File { path: String },
+    /// `> {% … %}` or `> path.js`.
+    Script(ScriptSource),
     /// `>> path` or `>>! path` (`overwrite`): saves the response to a file.
     /// Preserved, never run.
     Redirect { path: String, overwrite: bool },
@@ -259,20 +267,13 @@ pub enum HandlerPart {
 impl HandlerPart {
     /// A script (inline or a file), as opposed to an output redirect.
     pub fn is_script(&self) -> bool {
-        matches!(self, HandlerPart::Inline { .. } | HandlerPart::File { .. })
+        matches!(self, HandlerPart::Script(_))
     }
 }
 
 /// One part of a request's pre-request script (JetBrains `<` lines above the
-/// request line).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PreRequestPart {
-    /// `< {% … %}`: the script text between the markers, and the line of the
-    /// pre-request script (1-based) that text starts on, so errors can name its lines.
-    Inline { source: String, line: usize },
-    /// `< path.js`: a script file, relative to the `.http` file.
-    File { path: String },
-}
+/// request line): every part is a script.
+pub type PreRequestPart = ScriptSource;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

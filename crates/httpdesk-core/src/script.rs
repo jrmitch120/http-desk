@@ -6,10 +6,10 @@
 //! `script/prelude.js` is. The prelude builds the JetBrains `client`/`response`/
 //! `request` objects from two things `install` hands it: `data`, the exchange
 //! as JSON, and `host`, the Rust functions it calls (`host.test`, `host.log`,
-//! `host.setVariable`, `host.global*`). A response handler's `data` is the
+//! `host.testFailed`, `host.setVariable`, `host.global*`). A response handler's `data` is the
 //! response; a pre-request script's is the environment and the variables set so far.
 //! Both read and write the Session's Global variables ([`GlobalVariables`]) as
-//! they run, so a value set before a script throws stays set.
+//! they run, so a value set before a script throws or is stopped stays set.
 //!
 //! To implement a JetBrains API: add a Rust function to
 //! `host` in `install` (state it needs goes on `Recorded` or alongside it,
@@ -25,27 +25,38 @@
 //! A response handler never fails the send: its errors, including running out of
 //! time or memory, become failed [`TestResult`]s. A pre-request script's error
 //! does: it is [`ExecError::PreRequestScript`], and nothing is sent.
+//!
+//! The runtime's allocator ([`LimitedAllocator`]) enforces [`MEMORY_LIMIT`] and
+//! records when it refuses an allocation: that, not what the script throws (QuickJS
+//! throws `null` when it can't even allocate its out-of-memory error), is how
+//! running out of memory is told apart.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use rquickjs::allocator::{Allocator, RustAllocator};
 use rquickjs::context::EvalOptions;
-use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Function, Object, Runtime, Value};
+use rquickjs::{CatchResultExt, CaughtError, Coerced, Context, Ctx, FromJs, Function, Object, Runtime, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::exec::{decode_text, ExecError, HttpResponse};
-use crate::model::{HandlerPart, PreRequestPart, Request};
+use crate::exec::{text_lossy, ExecError, HttpResponse};
+use crate::model::{HandlerPart, Request, ScriptSource};
 use crate::session::GlobalVariables;
 
 /// How long a script may run. Fixed: there is no setting.
 pub const TIME_LIMIT: Duration = Duration::from_secs(5);
 /// How much memory a script's runtime may hold, the response body included. Fixed: there is no setting.
 pub const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
-/// How much `client.log` text a script may keep. Fixed: there is no setting.
-pub const LOG_LIMIT: usize = 1024 * 1024;
+/// How much `client.log` text a script may keep. Fixed: there is no setting. The
+/// log goes to the webview in the send's reply (and in each `run-progress` event of
+/// a Run), and the Tests tab shows every line, so this is enough to debug with
+/// (about a thousand lines), not enough to slow either down.
+pub const LOG_LIMIT: usize = 64 * 1024;
 
 const PRELUDE: &str = include_str!("script/prelude.js");
 /// The file name scripts are evaluated as, which error stacks quote.
@@ -105,30 +116,49 @@ pub struct PreRequestResults {
     pub results: ScriptResults,
 }
 
+/// What a request's scripts run with: where its script files are read from, the
+/// Session's Global variables `client.global` reads and writes, and what stops them.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptContext {
+    pub files: ScriptFiles,
+    pub globals: GlobalVariables,
+    pub stop: Stop,
+}
+
+/// Stops a send's scripts when the send is cancelled, wherever they've got to: the
+/// engine checks it as a script runs, as it checks the time limit. What a script
+/// set before it stopped (Global variables) stands. Clones share it.
+#[derive(Debug, Clone, Default)]
+pub struct Stop(Arc<AtomicBool>);
+
+impl Stop {
+    pub fn stop(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// Runs `request`'s pre-request script, before its variables are substituted.
 /// `environment` is what `request.environment.get` reads: the selected
-/// environment's variables, private ones included. `client.global` reads and
-/// writes `globals`. A script that throws, runs out of time or memory, or can't
-/// run is an error, and the request mustn't be sent.
+/// environment's variables, private ones included. A script that throws, runs out
+/// of time or memory, is stopped, or can't run is an error, and the request mustn't
+/// be sent.
 pub fn run_pre_request_script(
     request: &Request,
     environment: &HashMap<String, String>,
-    files: &ScriptFiles,
-    globals: &GlobalVariables,
+    ctx: &ScriptContext,
 ) -> Result<PreRequestResults, ExecError> {
     let mut out = PreRequestResults::default();
     for part in request.pre_request_parts() {
-        let script = match part {
-            PreRequestPart::Inline { source, line } => Script { source, origin: Origin::Inline(line) },
-            PreRequestPart::File { path } => match files.read(&path) {
-                Ok(source) => Script { source, origin: Origin::File(path) },
-                Err(message) => return Err(ExecError::PreRequestScript { message, line: None }),
-            },
-        };
+        let script =
+            Script::load(part, &ctx.files).map_err(|message| ExecError::PreRequestScript { message, line: None })?;
         let data = serde_json::json!({
             "request": { "environment": environment, "variables": out.variables },
         });
-        let mut run = Sandbox::run(&script.source, &data, globals);
+        let mut run = Sandbox::run(&script.source, &data, ctx);
         out.results.tests.append(&mut run.results.tests);
         out.results.logs.append(&mut run.results.logs);
         out.variables.extend(run.variables);
@@ -145,14 +175,13 @@ pub fn run_pre_request_script(
     Ok(out)
 }
 
-/// Runs `request`'s response handler against the response it got. `client.global`
-/// reads and writes `globals`. `>>` output redirects are not run.
+/// Runs `request`'s response handler against the response it got. `>>` output
+/// redirects are not run.
 pub fn run_response_handler(
     request: &Request,
     response: &HttpResponse,
     body: &[u8],
-    files: &ScriptFiles,
-    globals: &GlobalVariables,
+    ctx: &ScriptContext,
 ) -> ScriptResults {
     let parts = request.response_handler_parts();
     let mut results = ScriptResults::default();
@@ -162,18 +191,15 @@ pub fn run_response_handler(
     let data = serde_json::json!({ "response": response_data(response, body) });
     let failed = |message| TestResult { name: HANDLER_TEST_NAME.into(), passed: false, message: Some(message) };
     for part in parts {
-        let script = match part {
-            HandlerPart::Inline { source, line } => Script { source, origin: Origin::Inline(line) },
-            HandlerPart::File { path } => match files.read(&path) {
-                Ok(source) => Script { source, origin: Origin::File(path) },
-                Err(message) => {
-                    results.tests.push(failed(message));
-                    continue;
-                }
-            },
-            HandlerPart::Redirect { .. } => continue,
+        let HandlerPart::Script(source) = part else { continue };
+        let script = match Script::load(source, &ctx.files) {
+            Ok(script) => script,
+            Err(message) => {
+                results.tests.push(failed(message));
+                continue;
+            }
         };
-        let mut run = Sandbox::run(&script.source, &data, globals);
+        let mut run = Sandbox::run(&script.source, &data, ctx);
         if let Some(e) = run.error {
             run.results.tests.push(failed(script.origin.describe(e)));
         }
@@ -257,6 +283,17 @@ struct Script {
     origin: Origin,
 }
 
+impl Script {
+    /// The script `source` names: its text as written, or its file's (read with
+    /// `files`), or why that file can't be read.
+    fn load(source: ScriptSource, files: &ScriptFiles) -> Result<Script, String> {
+        Ok(match source {
+            ScriptSource::Inline { source, line } => Script { source, origin: Origin::Inline(line) },
+            ScriptSource::File { path } => Script { source: files.read(&path)?, origin: Origin::File(path) },
+        })
+    }
+}
+
 /// Where a script's text is: in the `.http` file, from this line (1-based) of the
 /// pre-request script or handler on, or in a script file, as referenced.
 enum Origin {
@@ -279,14 +316,13 @@ impl Origin {
 /// The response as the prelude reads it.
 fn response_data(response: &HttpResponse, body: &[u8]) -> serde_json::Value {
     let ct = response.content_type.as_deref();
-    let text = decode_text(body, ct).unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
     let mut params = ct.unwrap_or("").split(';').map(str::trim);
     let mime_type = params.next().unwrap_or("").to_string();
     let charset = params.find_map(|p| p.strip_prefix("charset=")).map(|c| c.trim_matches('"').to_string());
     serde_json::json!({
         "status": response.status,
         "headers": response.headers,
-        "body": text,
+        "body": text_lossy(body, ct),
         "json": response.body_kind == crate::body_format::ResponseKind::Json,
         "mimeType": mime_type,
         "charset": charset,
@@ -310,15 +346,25 @@ struct Run {
 type Recorded = Rc<RefCell<ScriptResults>>;
 /// What a pre-request script's `request.variables.set` calls set.
 type SetVariables = Rc<RefCell<HashMap<String, String>>>;
+/// Set when the runtime's allocator refused an allocation (see [`LimitedAllocator`]),
+/// until a failure is reported as running out of memory.
+type Exhausted = Rc<Cell<bool>>;
+
+/// Why the engine interrupted a script.
+#[derive(Debug, Clone, Copy)]
+enum Interrupted {
+    TimedOut,
+    Stopped,
+}
 
 /// One script in a fresh QuickJS runtime and context.
 struct Sandbox;
 
 impl Sandbox {
-    fn run(source: &str, data: &serde_json::Value, globals: &GlobalVariables) -> Run {
+    fn run(source: &str, data: &serde_json::Value, ctx: &ScriptContext) -> Run {
         let recorded = Recorded::default();
         let variables = SetVariables::default();
-        let error = Self::try_run(source, data, &recorded, &variables, globals).err();
+        let error = Self::try_run(source, data, &recorded, &variables, ctx).err();
         let results = recorded.take();
         Run { results, variables: variables.take(), error }
     }
@@ -328,83 +374,169 @@ impl Sandbox {
         data: &serde_json::Value,
         recorded: &Recorded,
         variables: &SetVariables,
-        globals: &GlobalVariables,
+        ctx: &ScriptContext,
     ) -> Result<(), ScriptError> {
         let engine = |e: rquickjs::Error| ScriptError { message: format!("Script engine error: {e}"), line: None };
-        let rt = Runtime::new().map_err(engine)?;
-        rt.set_memory_limit(MEMORY_LIMIT);
+        let exhausted = Exhausted::default();
+        let rt = Runtime::new_with_alloc(LimitedAllocator { used: 0, exhausted: exhausted.clone() }).map_err(engine)?;
         rt.set_max_stack_size(1024 * 1024);
         let started = Instant::now();
-        let timed_out = Rc::new(Cell::new(false));
-        let flag = timed_out.clone();
+        let interrupted = Rc::new(Cell::new(None));
+        let (why, stop) = (interrupted.clone(), ctx.stop.clone());
         rt.set_interrupt_handler(Some(Box::new(move || {
-            let over = started.elapsed() > TIME_LIMIT;
-            if over {
-                flag.set(true);
-            }
-            over
+            let reason = match () {
+                _ if stop.is_stopped() => Some(Interrupted::Stopped),
+                _ if started.elapsed() > TIME_LIMIT => Some(Interrupted::TimedOut),
+                _ => None,
+            };
+            why.set(reason.or(why.get()));
+            reason.is_some()
         })));
-        let ctx = Context::full(&rt).map_err(engine)?;
-        let outcome = ctx.with(|ctx| {
-            let result = install(&ctx, data, recorded, variables, globals).and_then(|()| {
-                ctx.eval_with_options::<(), _>(source, options(SCRIPT_FILE))?;
-                while ctx.execute_pending_job() {}
+        let context = Context::full(&rt).map_err(engine)?;
+        let host = Host { recorded, variables, globals: &ctx.globals, exhausted: &exhausted };
+        context.with(|js| {
+            let result = install(&js, data, &host).and_then(|()| {
+                js.eval_with_options::<(), _>(source, options(SCRIPT_FILE))?;
+                while js.execute_pending_job() {}
                 Ok(())
             });
-            result.catch(&ctx).map_err(|caught| describe(caught, timed_out.get()))
-        });
-        match outcome {
-            // QuickJS throws `null` when it can't even allocate the out-of-memory error.
-            Err(Failure::Null) if rt.memory_usage().malloc_size as usize > MEMORY_LIMIT / 4 * 3 => Err(memory_error()),
-            Err(Failure::Null) => Err(ScriptError { message: "null".into(), line: None }),
-            Err(Failure::Error(e)) => Err(e),
-            Ok(()) => Ok(()),
-        }
+            result.catch(&js).map_err(|caught| match interrupted.get() {
+                Some(Interrupted::TimedOut) => ScriptError {
+                    message: format!("Stopped after {}, the time limit for a script", human(TIME_LIMIT)),
+                    line: None,
+                },
+                Some(Interrupted::Stopped) => {
+                    ScriptError { message: "Stopped: the send was cancelled".into(), line: None }
+                }
+                None if exhausted.take() => ScriptError { message: memory_message(), line: None },
+                None => describe(caught),
+            })
+        })
     }
 }
 
-/// How a script failed, before telling a thrown `null` from running out of memory.
-enum Failure {
-    Error(ScriptError),
-    Null,
+/// The runtime's memory, from Rust's allocator, with [`MEMORY_LIMIT`] enforced here
+/// rather than by QuickJS: an allocation that would go past it is refused, and the
+/// refusal recorded in `exhausted`.
+struct LimitedAllocator {
+    /// Bytes held, as `RustAllocator::usable_size` counts them.
+    used: usize,
+    exhausted: Exhausted,
+}
+
+impl LimitedAllocator {
+    /// Whether `size` more bytes fit once `freed` are given back; records a refusal.
+    fn fits(&self, freed: usize, size: usize) -> bool {
+        let fits = (self.used - freed).checked_add(size).is_some_and(|total| total <= MEMORY_LIMIT);
+        if !fits {
+            self.exhausted.set(true);
+        }
+        fits
+    }
+
+    /// Counts the block `ptr` (if allocated) as held.
+    fn held(&mut self, ptr: *mut u8) -> *mut u8 {
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was just allocated by `RustAllocator`.
+            self.used += unsafe { RustAllocator::usable_size(ptr) };
+        }
+        ptr
+    }
+}
+
+// SAFETY: every block comes from `RustAllocator` and goes back to it; this only
+// refuses some requests (returning null, which the trait allows) and counts sizes.
+unsafe impl Allocator for LimitedAllocator {
+    fn alloc(&mut self, size: usize) -> *mut u8 {
+        if !self.fits(0, size) {
+            return std::ptr::null_mut();
+        }
+        let ptr = RustAllocator.alloc(size);
+        self.held(ptr)
+    }
+
+    fn calloc(&mut self, count: usize, size: usize) -> *mut u8 {
+        if !count.checked_mul(size).is_some_and(|total| self.fits(0, total)) {
+            self.exhausted.set(true);
+            return std::ptr::null_mut();
+        }
+        let ptr = RustAllocator.calloc(count, size);
+        self.held(ptr)
+    }
+
+    unsafe fn dealloc(&mut self, ptr: *mut u8) {
+        self.used -= RustAllocator::usable_size(ptr);
+        RustAllocator.dealloc(ptr);
+    }
+
+    unsafe fn realloc(&mut self, ptr: *mut u8, new_size: usize) -> *mut u8 {
+        if ptr.is_null() {
+            return self.alloc(new_size);
+        }
+        let old = RustAllocator::usable_size(ptr);
+        if !self.fits(old, new_size) {
+            return std::ptr::null_mut();
+        }
+        let moved = RustAllocator.realloc(ptr, new_size);
+        if moved.is_null() {
+            // The old block is still held.
+            return moved;
+        }
+        self.used -= old;
+        self.held(moved)
+    }
+
+    unsafe fn usable_size(ptr: *mut u8) -> usize {
+        RustAllocator::usable_size(ptr)
+    }
+}
+
+/// What a script's `host` functions read and record.
+struct Host<'a> {
+    recorded: &'a Recorded,
+    variables: &'a SetVariables,
+    globals: &'a GlobalVariables,
+    exhausted: &'a Exhausted,
 }
 
 /// Evaluates the prelude and calls it with `host` and the exchange's data.
-fn install<'js>(
-    ctx: &Ctx<'js>,
-    data: &serde_json::Value,
-    recorded: &Recorded,
-    variables: &SetVariables,
-    globals: &GlobalVariables,
-) -> rquickjs::Result<()> {
+fn install<'js>(ctx: &Ctx<'js>, data: &serde_json::Value, from: &Host) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
-    let tests = recorded.clone();
+    let tests = from.recorded.clone();
     host.set(
         "test",
         Function::new(ctx.clone(), move |name: String, passed: bool, message: Option<String>| {
             tests.borrow_mut().tests.push(TestResult { name, passed, message });
         })?,
     )?;
-    let set = variables.clone();
+    // A `client.test` whose function threw `thrown`, described as a script's own
+    // failure is, unless the runtime has run out of memory since the last report.
+    let (tests, exhausted) = (from.recorded.clone(), from.exhausted.clone());
+    host.set(
+        "testFailed",
+        Function::new(ctx.clone(), move |name: String, thrown: Value<'js>| {
+            let message = if exhausted.take() { memory_message() } else { thrown_message(&thrown) };
+            tests.borrow_mut().tests.push(TestResult { name, passed: false, message: Some(message) });
+        })?,
+    )?;
+    let set = from.variables.clone();
     host.set(
         "setVariable",
         Function::new(ctx.clone(), move |name: String, value: String| {
             set.borrow_mut().insert(name, value);
         })?,
     )?;
-    let global = globals.clone();
+    let global = from.globals.clone();
     host.set("globalGet", Function::new(ctx.clone(), move |name: String| global.get(&name))?)?;
-    let global = globals.clone();
+    let global = from.globals.clone();
     host.set("globalSet", Function::new(ctx.clone(), move |name: String, value: String| global.set(&name, &value))?)?;
-    let global = globals.clone();
+    let global = from.globals.clone();
     host.set("globalClear", Function::new(ctx.clone(), move |name: String| global.remove(&name))?)?;
-    let global = globals.clone();
+    let global = from.globals.clone();
     host.set("globalIsEmpty", Function::new(ctx.clone(), move || global.is_empty())?)?;
-    let logs = recorded.clone();
+    let logs = from.recorded.clone();
     let logged = Cell::new(0);
     host.set("log", Function::new(ctx.clone(), move |line: String| log(&mut logs.borrow_mut().logs, &logged, line))?)?;
-    let mut data = data.clone();
-    data["limits"] = serde_json::json!({ "time": human(TIME_LIMIT), "memory": format!("{} MB", MEMORY_LIMIT >> 20) });
     let data: Value = ctx.json_parse(data.to_string())?;
     let prelude: Function = ctx.eval_with_options(PRELUDE, options("<prelude>"))?;
     prelude.call::<_, ()>((host, data))
@@ -420,7 +552,7 @@ fn log(logs: &mut Vec<String>, logged: &Cell<usize>, line: String) {
     if logged.get() <= LOG_LIMIT {
         logs.push(line);
     } else if before <= LOG_LIMIT {
-        logs.push(format!("Log stopped at {} MB, the log limit for a script", LOG_LIMIT >> 20));
+        logs.push(format!("Log stopped at {} KB, the log limit for a script", LOG_LIMIT >> 10));
     }
 }
 
@@ -436,45 +568,47 @@ fn human(d: Duration) -> String {
     format!("{} s", d.as_secs())
 }
 
-/// The message and line a failed script reports.
-fn describe(caught: CaughtError<'_>, timed_out: bool) -> Failure {
-    if timed_out {
-        return Failure::Error(ScriptError {
-            message: format!("Stopped after {}, the time limit for a script", human(TIME_LIMIT)),
-            line: None,
-        });
-    }
-    let (message, stack) = match caught {
+fn memory_message() -> String {
+    format!("Stopped at {} MB, the memory limit for a script", MEMORY_LIMIT >> 20)
+}
+
+/// The message and line of a script that threw.
+fn describe(caught: CaughtError<'_>) -> ScriptError {
+    match caught {
         CaughtError::Exception(e) => {
-            let name: Option<String> = e.as_object().get("name").ok();
-            let message = e.message().unwrap_or_default();
-            let message = match name.as_deref() {
-                Some("InternalError") if message == "out of memory" => return Failure::Error(memory_error()),
-                Some("Error" | "UnsupportedApiError") | None => message,
-                Some(name) => format!("{name}: {message}"),
-            };
-            (message, e.stack())
+            ScriptError { message: thrown_message(e.as_value()), line: e.stack().as_deref().and_then(script_line) }
         }
-        CaughtError::Value(v) if v.is_null() => return Failure::Null,
-        CaughtError::Value(v) => (value_text(&v), None),
-        CaughtError::Error(e) => (e.to_string(), None),
-    };
-    Failure::Error(ScriptError { message, line: stack.as_deref().and_then(script_line) })
+        CaughtError::Value(v) => ScriptError { message: thrown_message(&v), line: None },
+        CaughtError::Error(e) => ScriptError { message: e.to_string(), line: None },
+    }
 }
 
-fn memory_error() -> ScriptError {
-    ScriptError { message: format!("Stopped at {} MB, the memory limit for a script", MEMORY_LIMIT >> 20), line: None }
+/// What a failure says about the value a script threw, in a test or not: an
+/// error's message, after its name unless it's a plain `Error`, a failed
+/// `client.assert` or an unsupported API; anything else as text.
+fn thrown_message(thrown: &Value<'_>) -> String {
+    if let Some(error) = thrown.as_object().filter(|_| thrown.is_error()) {
+        let name: Option<String> = error.get("name").ok();
+        let message: String = error.get::<_, Option<String>>("message").ok().flatten().unwrap_or_default();
+        return match name.as_deref() {
+            Some("Error" | "AssertionError" | "UnsupportedApiError") | None => message,
+            Some(name) => format!("{name}: {message}"),
+        };
+    }
+    value_text(thrown)
 }
 
+/// A thrown value that isn't an error, as text: a string as it is, an object as
+/// JSON where it can be, anything else as JavaScript writes it.
 fn value_text(v: &Value<'_>) -> String {
     if let Some(s) = v.as_string() {
         return s.to_string().unwrap_or_default();
     }
-    v.ctx()
-        .json_stringify(v.clone())
-        .ok()
+    let json = || v.ctx().json_stringify(v.clone()).ok().flatten().and_then(|s| s.to_string().ok());
+    v.is_object()
+        .then(json)
         .flatten()
-        .and_then(|s| s.to_string().ok())
+        .or_else(|| Coerced::<String>::from_js(v.ctx(), v.clone()).ok().map(|s| s.0))
         .unwrap_or_else(|| "Script threw".into())
 }
 

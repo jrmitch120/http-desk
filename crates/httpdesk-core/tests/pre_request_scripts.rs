@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ClientPool, ExecError, ExecSettings};
-use httpdesk_core::script::{run_pre_request_script, ScriptFiles};
+use httpdesk_core::script::{run_pre_request_script, ScriptContext, ScriptFiles};
 use httpdesk_core::send::{self, Outgoing, Scripts, SendContext};
 use httpdesk_core::session::Session;
 use httpdesk_core::vars::Resolver;
@@ -37,7 +37,7 @@ async fn send_in(
 ) -> Result<(), ExecError> {
     let file = parse(&file.replace("<server>", &server.uri()));
     let req = &file.requests[0];
-    let pre = run_pre_request_script(req, env, files, &Default::default())?;
+    let pre = run_pre_request_script(req, env, &ScriptContext { files: files.clone(), ..Default::default() })?;
     let resolver = Resolver::for_request(env, &file.header.variables, &req.variables, None)
         .with_pre_request_variables(&pre.variables);
     let settings = ExecSettings::default();
@@ -208,8 +208,7 @@ async fn tests_and_asserts_in_a_pre_request_script_are_results_and_do_not_block_
     send(&server, file, &env(&[])).await.unwrap();
     received(&server).await;
     let req = parse(file).requests.remove(0);
-    let tests =
-        run_pre_request_script(&req, &env(&[]), &ScriptFiles::default(), &Default::default()).unwrap().results.tests;
+    let tests = run_pre_request_script(&req, &env(&[]), &ScriptContext::default()).unwrap().results.tests;
     let summary: Vec<_> = tests.iter().map(|t| (t.name.as_str(), t.passed, t.message.as_deref())).collect();
     assert_eq!(summary, [("needs a token", false, Some("needs a token")), ("ok", true, None)]);
 }
@@ -308,7 +307,7 @@ async fn a_missing_pre_request_script_file_or_one_outside_the_workspace_sends_no
 #[tokio::test]
 async fn a_request_without_a_pre_request_script_sets_nothing() {
     let req = parse("GET https://example.com\n\n> {% client.test(\"t\", () => {}); %}\n").requests.remove(0);
-    let pre = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default(), &Default::default()).unwrap();
+    let pre = run_pre_request_script(&req, &env(&[]), &ScriptContext::default()).unwrap();
     assert!(pre.variables.is_empty());
     assert!(pre.results.tests.is_empty());
 }
@@ -402,4 +401,41 @@ async fn a_pre_request_script_still_defines_a_name_the_url_uses() {
     send_through(&context(&session, Scripts::Run), &text, 0).await.unwrap();
 
     assert_eq!(received(&server).await.url.path(), "/pets/7");
+}
+
+/// A script that sets `started`, then counts in the Global variable `tick` forever.
+const COUNTS_FOREVER: &str =
+    "client.global.set(\"started\", \"yes\"); let i = 0; for (;;) client.global.set(\"tick\", String(i++));";
+
+/// Waits until a script running in `session` has started counting (see [`COUNTS_FOREVER`]).
+async fn until_counting(session: &Session) {
+    while session.globals().get("tick").is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// Whether the script counting in `session` has stopped: `tick` stays the same.
+async fn stopped_counting(session: &Session) -> bool {
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let before = session.globals().get("tick");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    session.globals().get("tick") == before
+}
+
+#[tokio::test]
+async fn cancelling_a_send_stops_its_running_pre_request_script_and_keeps_what_it_set() {
+    let server = server().await;
+    let session = Arc::new(Session::default());
+    let ctx = context(&session, Scripts::Run);
+    let text = format!("< {{% {COUNTS_FOREVER} %}}\nGET {}/x\n", server.uri());
+
+    tokio::select! {
+        _ = send_through(&ctx, &text, 0) => panic!("the script never ends on its own"),
+        _ = until_counting(&session) => {}
+    }
+    // The send's future is dropped: it's cancelled.
+
+    assert!(stopped_counting(&session).await, "the script stops well before the time limit");
+    assert_eq!(session.globals().get("started").as_deref(), Some("yes"), "what it set before stands");
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

@@ -23,8 +23,8 @@ use crate::env::{self, EnvironmentSet};
 use crate::exchange;
 use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse};
 use crate::model::{HttpFile, Request, Variable};
-use crate::script::{self, RequestScripts};
-use crate::session::{GlobalVariables, Session};
+use crate::script::{self, RequestScripts, ScriptContext};
+use crate::session::Session;
 use crate::vars::Resolver;
 
 /// A request to send, with what its file gives it: the shape of the webview's
@@ -206,26 +206,36 @@ fn scripts_skipped(scripts: RequestScripts) -> String {
 async fn run_pre_request(
     request: &Request,
     environment: &HashMap<String, String>,
-    files: &script::ScriptFiles,
-    globals: &GlobalVariables,
+    scripts: &ScriptContext,
 ) -> Result<script::PreRequestResults, ExecError> {
     if request.pre_request_parts().is_empty() {
         return Ok(Default::default());
     }
-    let (request, environment, files, globals) = (request.clone(), environment.clone(), files.clone(), globals.clone());
-    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files, &globals))
+    let (request, environment, scripts) = (request.clone(), environment.clone(), scripts.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &scripts))
         .await
         .map_err(|e| ExecError::Other(e.to_string()))?
 }
 
+/// Stops a send's scripts when the send ends, however it ends: dropped (cancelled)
+/// included. A script runs on a blocking thread, which dropping its task doesn't stop.
+struct StopOnDrop(script::Stop);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
 /// Sends `out` in `ctx` (see the module docs). `on_progress` gets the body bytes
-/// received so far (see [`exec::execute_on`]). Dropping the future cancels the send;
-/// a cancelled send records nothing in the Session.
+/// received so far (see [`exec::execute_on`]). Dropping the future cancels the send,
+/// and stops a script it is running; a cancelled send records nothing in the Session.
 pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usize) + Send) -> Result<Sent, ExecError> {
     let scripts = RequestScripts::of(&out.request);
     let run_scripts = scripts.any() && ctx.scripts != Scripts::Skip;
+    let stop = StopOnDrop(script::Stop::default());
 
-    let (prepared, ssl, pre, files) = {
+    let (prepared, ssl, pre, script_context) = {
         let scope = scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, &out)?;
         // Blocked before anything runs: no script can define a Request variable, so
         // none can unblock it, and asking to trust the workspace wouldn't either.
@@ -233,17 +243,21 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         if run_scripts && ctx.scripts == Scripts::Untrusted {
             return Err(ExecError::UntrustedWorkspace);
         }
-        // Script files are read relative to the `.http` file, from inside the workspace.
-        let files = script::ScriptFiles::new(ctx.root.as_deref(), &scope.base_dir);
+        let script_context = ScriptContext {
+            // Script files are read relative to the `.http` file, from inside the workspace.
+            files: script::ScriptFiles::new(ctx.root.as_deref(), &scope.base_dir),
+            globals: ctx.session.globals().clone(),
+            stop: stop.0.clone(),
+        };
         // JetBrains order: the pre-request script runs before variables are substituted.
-        let globals = ctx.session.globals();
         let pre = if run_scripts {
-            run_pre_request(&out.request, &scope.environment, &files, globals).await?
+            run_pre_request(&out.request, &scope.environment, &script_context).await?
         } else {
             Default::default()
         };
         // The Global variables again: the script may have set some.
-        let resolver = scope.resolver.with_pre_request_variables(&pre.variables).with_globals(globals.list());
+        let resolver =
+            scope.resolver.with_pre_request_variables(&pre.variables).with_globals(ctx.session.globals().list());
         let mut prepared = exec::prepare(&out.request, &resolver, &scope.base_dir, &ctx.settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
         if scripts.any() && !run_scripts {
@@ -253,7 +267,7 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
-        (prepared, ssl, pre.results, files)
+        (prepared, ssl, pre.results, script_context)
     };
 
     // A `# @name` request's exchange becomes its latest, in the Session the send started in.
@@ -269,9 +283,8 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         // Up to the script time limit of CPU work: off the async workers.
         let request = out.request.clone();
         let handler_body = body.clone();
-        let globals = ctx.session.globals().clone();
         response = tokio::task::spawn_blocking(move || {
-            let results = script::run_response_handler(&request, &response, &handler_body, &files, &globals);
+            let results = script::run_response_handler(&request, &response, &handler_body, &script_context);
             // The pre-request script's tests and logs come first.
             response.tests = pre.tests.into_iter().chain(results.tests).collect();
             response.logs = pre.logs.into_iter().chain(results.logs).collect();

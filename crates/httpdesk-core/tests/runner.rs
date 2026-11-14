@@ -221,6 +221,37 @@ async fn stopping_a_run_cancels_the_request_in_flight_and_sends_nothing_after_it
 }
 
 #[tokio::test]
+async fn stopping_a_run_stops_the_response_handler_it_is_running() {
+    let server = MockServer::start().await;
+    Mock::given(path("/one")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    // The handler counts in a Global variable forever.
+    let text = format!(
+        "GET {}/one\n\n> {{% let i = 0; for (;;) client.global.set(\"tick\", String(i++)); %}}\n",
+        server.uri()
+    );
+    let session = Arc::new(Session::default());
+    let cancel = Cancel::default();
+    let tick = || session.globals().get("tick");
+
+    let running = run_file_cancelling(&session, &text, RunOptions::default(), &cancel, |_, _| {});
+    let stopping = async {
+        while tick().is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        cancel.cancel();
+    };
+    let (events, ()) = tokio::time::timeout(Duration::from_secs(3), async { tokio::join!(running, stopping) })
+        .await
+        .expect("the run stops without waiting for the handler's time limit");
+
+    assert_eq!(events.last(), Some(&(0, Reported::Cancelled)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let before = tick();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(tick(), before, "the handler has stopped");
+}
+
+#[tokio::test]
 async fn stopping_a_run_during_its_delay_stops_it_at_once() {
     let server = MockServer::start().await;
     Mock::given(path("/one")).respond_with(ResponseTemplate::new(200)).mount(&server).await;

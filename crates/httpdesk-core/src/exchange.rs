@@ -15,7 +15,7 @@ use chrono::{DateTime, Local, Utc};
 mod xpath;
 
 use crate::body_format::{response_kind, ResponseKind};
-use crate::exec::{decode_text, HttpResponse, PreparedRequest};
+use crate::exec::{text_lossy, HttpResponse, PreparedRequest};
 use serde::Serialize;
 
 use crate::json_filter::{JsonDocument, Shape};
@@ -40,8 +40,7 @@ impl Message {
 
     /// The body as text: in its charset, else UTF-8 (invalid bytes replaced).
     pub fn text(&self) -> String {
-        decode_text(&self.body, self.content_type.as_deref())
-            .unwrap_or_else(|| String::from_utf8_lossy(&self.body).into_owned())
+        text_lossy(&self.body, self.content_type.as_deref())
     }
 
     /// Its header names (each once) and its body's JSON shape: what its paths can read.

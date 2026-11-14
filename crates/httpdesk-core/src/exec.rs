@@ -1105,6 +1105,12 @@ pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     }
 }
 
+/// A body as text whatever it is: as [`decode_text`] decodes it, else as UTF-8 with
+/// invalid bytes replaced. What scripts and Request variables read.
+pub fn text_lossy(bytes: &[u8], content_type: Option<&str>) -> String {
+    decode_text(bytes, content_type).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
 /// What the viewer treats a received body as (see [`body_format::response_kind`]).
 /// Bytes kept `as_received`, because their Content-Encoding couldn't be undone,
 /// are binary whatever the content type says, as is a body with no text for a
