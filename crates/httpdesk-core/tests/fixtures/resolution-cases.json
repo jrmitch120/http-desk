@@ -285,27 +285,27 @@
       "value": "global"
     },
     {
-      "case": "precedence (#129): in-place beats public",
+      "case": "precedence (#129): a File variable beats public",
       "envFiles": { "public": { "dev": { "v": "env-public" } } },
-      "file": [{ "name": "v", "value": "in-place" }],
+      "file": [{ "name": "v", "value": "file" }],
       "environment": "dev",
       "text": "{{v}}",
-      "value": "in-place"
+      "value": "file"
     },
     {
-      "case": "precedence (#129): in-place beats private",
+      "case": "precedence (#129): a File variable beats private",
       "envFiles": { "private": { "dev": { "v": "env-private" } } },
-      "file": [{ "name": "v", "value": "in-place" }],
+      "file": [{ "name": "v", "value": "file" }],
       "environment": "dev",
       "text": "{{v}}",
-      "value": "in-place"
+      "value": "file"
     },
     {
-      "case": "precedence (#129): in-place beats global",
+      "case": "precedence (#129): a File variable beats global",
       "globals": { "v": "global" },
-      "file": [{ "name": "v", "value": "in-place" }],
+      "file": [{ "name": "v", "value": "file" }],
       "text": "{{v}}",
-      "value": "in-place"
+      "value": "file"
     },
     {
       "case": "precedence (#129): request.variables.set beats public",
@@ -331,8 +331,8 @@
       "value": "per-request"
     },
     {
-      "case": "precedence (#129): request.variables.set beats in-place",
-      "file": [{ "name": "v", "value": "in-place" }],
+      "case": "precedence (#129): request.variables.set beats a File variable",
+      "file": [{ "name": "v", "value": "file" }],
       "preRequest": { "v": "per-request" },
       "text": "{{v}}",
       "value": "per-request"
@@ -361,8 +361,8 @@
       "value": "prompt"
     },
     {
-      "case": "precedence (#129): an answered prompt beats in-place",
-      "file": [{ "name": "v", "value": "in-place" }],
+      "case": "precedence (#129): an answered prompt beats a File variable",
+      "file": [{ "name": "v", "value": "file" }],
       "prompts": [{ "name": "v", "value": "prompt" }],
       "text": "{{v}}",
       "value": "prompt"
@@ -379,7 +379,7 @@
       "envFiles": { "public": { "dev": { "v": "env-public" } }, "private": { "dev": { "v": "env-private" } } },
       "environment": "dev",
       "globals": { "v": "global" },
-      "file": [{ "name": "v", "value": "in-place" }],
+      "file": [{ "name": "v", "value": "file" }],
       "preRequest": { "v": "per-request" },
       "text": "{{v}}",
       "value": "per-request"
