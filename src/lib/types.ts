@@ -262,6 +262,20 @@ export interface HttpResponse {
   logs: string[];
 }
 
+/**
+ * A `run-progress` event (`RunProgress` in src-tauri/src/lib.rs): what happened to
+ * request `index` of run `runId`. Each request reports `sending`, then one of the
+ * others; a request the run never reached reports nothing. `failed` follows GLOSSARY
+ * "Run": a failed test or script error, not an error status alone. A `failed` state
+ * (blocked, or no response) is always a failure.
+ */
+export type RunProgress = { runId: string; index: number } & (
+  | { state: "sending" }
+  | { state: "sent"; response: HttpResponse; failed: boolean }
+  | { state: "failed"; error: unknown }
+  | { state: "cancelled" }
+);
+
 /** One `client.test`, top-level `client.assert`, or script error (`script::TestResult`). */
 export interface TestResult {
   name: string;
@@ -373,6 +387,27 @@ export interface FilterResult {
 export interface JsonShape {
   keys?: [string, JsonShape][];
   items?: JsonShape;
+}
+
+/**
+ * A named request's latest exchange in the Session as completion (and its hover)
+ * sees it (core `exchange::ExchangeShape`): when it arrived, its status, and each
+ * side's header names and JSON body shape.
+ */
+export interface ExchangeShape {
+  /** RFC 3339, UTC. */
+  received: string;
+  status: number;
+  response: MessageShape;
+  request: MessageShape;
+}
+
+/** One side of an exchange (core `exchange::MessageShape`). */
+export interface MessageShape {
+  /** Header names in order, each once. */
+  headers: string[];
+  /** Null when the body isn't JSON (or there's none). */
+  body: JsonShape | null;
 }
 
 /** Why a send failed; mirrors the core's `ExecError` kinds. */

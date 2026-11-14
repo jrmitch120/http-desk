@@ -12,10 +12,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Local, Utc};
 
+mod xpath;
+
+use crate::body_format::{response_kind, ResponseKind};
 use crate::exec::{decode_text, HttpResponse, PreparedRequest};
 use serde::Serialize;
 
-use crate::json_filter::JsonDocument;
+use crate::json_filter::{JsonDocument, Shape};
 use crate::model::Request;
 
 /// One side of an exchange: its headers and complete body.
@@ -40,6 +43,43 @@ impl Message {
         decode_text(&self.body, self.content_type.as_deref())
             .unwrap_or_else(|| String::from_utf8_lossy(&self.body).into_owned())
     }
+
+    /// Its header names (each once) and its body's JSON shape: what its paths can read.
+    pub fn shape(&self) -> MessageShape {
+        let mut headers: Vec<String> = Vec::new();
+        for (name, _) in &self.headers {
+            if !headers.iter().any(|h| h.eq_ignore_ascii_case(name)) {
+                headers.push(name.clone());
+            }
+        }
+        let body = if self.body.is_empty() { None } else { JsonDocument::parse(&self.text()).ok() };
+        MessageShape { headers, body: body.map(|doc| doc.shape().clone()) }
+    }
+}
+
+/// What a named request's latest exchange offers to complete its Request variables
+/// (and to describe it): when it arrived, its status, and each side's shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExchangeShape {
+    /// Serialized as RFC 3339 in UTC, with milliseconds.
+    #[serde(serialize_with = "rfc3339")]
+    pub received: DateTime<Utc>,
+    pub status: u16,
+    pub response: MessageShape,
+    pub request: MessageShape,
+}
+
+/// One side of an exchange as completion sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MessageShape {
+    /// Header names in the order sent or received, each once (its first spelling).
+    pub headers: Vec<String>,
+    /// The keys at each place in a JSON body; `None` for a body that isn't JSON, or none.
+    pub body: Option<Shape>,
+}
+
+fn rfc3339<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 /// A named request's send: the request as sent, the response, and when it arrived.
@@ -63,6 +103,16 @@ impl Exchange {
         HttpResponse { id: uuid::Uuid::new_v4().to_string(), ..self.shown.clone() }
     }
 
+    /// What completion offers for this exchange's paths, with its status and when it arrived.
+    pub fn shape(&self) -> ExchangeShape {
+        ExchangeShape {
+            received: self.received,
+            status: self.status,
+            response: self.response.shape(),
+            request: self.request.shape(),
+        }
+    }
+
     /// The value a Request variable's `path` (what follows `name.`, such as
     /// `response.body.$.token`) reads from this exchange, or why it reads nothing.
     pub fn value(&self, path: &str) -> Result<String, String> {
@@ -80,17 +130,43 @@ impl Exchange {
     }
 }
 
-/// What body path `path` reads from `message`: `*` the whole body, `$…` the first
-/// value that JSONPath matches. Every body path goes through here, so other kinds
-/// of body (by content type) plug in at one place.
+/// What body path `path` reads from `message`, as REST Client reads it: `*` the
+/// whole body; else the first match of JSONPath in a JSON body or XPath in an XML
+/// one, by its content type. `asJson.` or `asXml.` before the path reads the body
+/// as that kind whatever its type. A body that is neither (by type, or by its
+/// first character when untyped) reads by the path's own shape: `$…` JSONPath,
+/// anything else XPath.
 fn body_value(message: &Message, path: &str) -> Result<String, String> {
     if path == "*" {
         return Ok(message.text());
     }
-    if !path.starts_with('$') {
-        return Err(format!("`{path}` is neither `*` nor a JSONPath starting with `$`"));
+    let text = message.text();
+    if let Some(path) = path.strip_prefix("asJson.") {
+        return json_value(&text, path);
     }
-    let doc = JsonDocument::parse(&message.text()).map_err(|e| e.to_string())?;
+    if let Some(path) = path.strip_prefix("asXml.") {
+        return xpath::first(&text, path);
+    }
+    let jsonpath = path.starts_with('$');
+    let content_type = message.content_type.as_deref().map(|t| format!(" (`{t}`)")).unwrap_or_default();
+    match response_kind(message.content_type.as_deref(), Some(&text)) {
+        ResponseKind::Xml if jsonpath => {
+            Err(format!("the body is XML{content_type}, so it takes an XPath, not the JSONPath `{path}`"))
+        }
+        ResponseKind::Json if !jsonpath => {
+            Err(format!("the body is JSON{content_type}, so it takes a JSONPath starting with `$`, not `{path}`"))
+        }
+        _ if jsonpath => json_value(&text, path),
+        _ => xpath::first(&text, path),
+    }
+}
+
+/// The first value JSONPath `path` matches in `text`.
+fn json_value(text: &str, path: &str) -> Result<String, String> {
+    if !path.starts_with('$') {
+        return Err(format!("`{path}` isn't a JSONPath starting with `$`"));
+    }
+    let doc = JsonDocument::parse(text).map_err(|e| e.to_string())?;
     doc.first(path).map_err(|e| e.to_string())?.ok_or_else(|| format!("`{path}` matches nothing"))
 }
 
@@ -186,10 +262,6 @@ pub struct NamedExchange {
     /// Serialized as RFC 3339 in UTC, with milliseconds.
     #[serde(serialize_with = "rfc3339")]
     pub received: DateTime<Utc>,
-}
-
-fn rfc3339<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 /// How many characters of a Request variable's value its hover shows.

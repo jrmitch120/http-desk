@@ -20,6 +20,7 @@ import { wording, type ButtonRole } from "./platform";
 import type {
   AppSettings,
   EnvironmentSet,
+  ExchangeShape,
   EnvironmentSettings,
   MatrixWidths,
   FolderEnvironments,
@@ -29,6 +30,7 @@ import type {
   Request,
   RequestPreview,
   RequestVariableReading,
+  RunProgress,
   SearchHit,
   SendError,
   StoredCookie,
@@ -70,6 +72,51 @@ export interface RunState {
   /** Body bytes received on the wire so far, while loading (`send-progress` events). */
   received?: number;
 }
+
+/**
+ * Where one request of a run is: waiting its turn, being sent, done (`passed`, or
+ * `failed` per GLOSSARY "Run": a failed test, script error, blocked send or network
+ * error, never an error status alone), stopped while sending (`cancelled`), or never
+ * reached because the run stopped first (`notRun`).
+ */
+export type RunItemState = "queued" | "sending" | "passed" | "failed" | "cancelled" | "notRun";
+
+/** One request of a run, as the Runner panel lists it. */
+export interface RunItem {
+  path: string;
+  /** The request's key (`_key`), for its test marker and prompt answers. */
+  key: string;
+  name: string;
+  method: string;
+  /** Sent from its open tab's unsaved edits rather than the file on disk. */
+  unsaved: boolean;
+  state: RunItemState;
+  /** Its response, kept for the viewer until the run is replaced. */
+  response?: HttpResponse;
+  /** Why it got no response. */
+  error?: SendError;
+}
+
+/** A run (GLOSSARY "Run") and its results, shown in the Runner panel. */
+export interface Runner {
+  runId: string;
+  /** What was run: the file's name. */
+  title: string;
+  items: RunItem[];
+  running: boolean;
+}
+
+/** A request a run sends: where it's from, and what `run_requests` gets for it. */
+interface RunEntry {
+  path: string;
+  key: string;
+  unsaved: boolean;
+  args: Omit<RequestArgs, "environment">;
+}
+
+/** Stands in for a tab id in `confirmingSend` while a run asks its questions. */
+const RUN_ASKING = "\u0000run";
+
 
 export interface Toast {
   id: string;
@@ -170,7 +217,7 @@ class PendingForm<S, C> {
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
-export type PanelId = "session";
+export type PanelId = "session" | "runner";
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 
@@ -198,6 +245,8 @@ class AppStore {
   tabs = $state<Tab[]>([]);
   activeTabId = $state<string | null>(null);
   runs = $state<Record<string, RunState>>({});
+  /** The last run and its results (the Runner panel), until the next run or workspace. */
+  runner = $state<Runner | null>(null);
   /** The workspace root's own environments (what the Environments modal edits). */
   envSet = $state<EnvironmentSet | null>(null);
   /** The environments of each folder below the root with env files (ADR-0004); see `envSetFor`. */
@@ -321,6 +370,7 @@ class AppStore {
     await listen<{ runId: string; received: number }>("send-progress", (e) =>
       this.onSendProgress(e.payload.runId, e.payload.received),
     );
+    await listen<RunProgress>("run-progress", (e) => this.onRunProgress(e.payload));
     // The window's close button, and on macOS ⌘Q / Dock Quit (the shell always
     // turns those into a close request; see quit.rs). With nothing unsaved the
     // window closes at once, which quits the app.
@@ -492,6 +542,9 @@ class AppStore {
       this.tabs = [];
       for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
       this.runs = {};
+      this.releaseRunner();
+      this.runner = null;
+      if (this.panel === "runner") this.panel = null;
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
       this.settings = await api.getSettings();
@@ -1100,6 +1153,29 @@ class AppStore {
     return api.promptAnswers(tab.key);
   }
 
+  /** Exchange shapes read for `shapesVersion` of the Session, by `path\0name`. */
+  private exchangeShapes = new Map<string, Promise<ExchangeShape | null>>();
+  private shapesVersion = -1;
+
+  /**
+   * The shape of the latest exchange of the request named `name` in file `path`, in
+   * the Session (null if it hasn't been sent, or can't be read): what its Request
+   * variables' paths complete from. Read once, then again after the Session changes.
+   */
+  exchangeShape(path: string, name: string): Promise<ExchangeShape | null> {
+    if (this.shapesVersion !== this.sessionVersion) {
+      this.exchangeShapes.clear();
+      this.shapesVersion = this.sessionVersion;
+    }
+    const key = `${path}\0${name}`;
+    let shape = this.exchangeShapes.get(key);
+    if (!shape) {
+      shape = api.exchangeShape(path, name).catch(() => null);
+      this.exchangeShapes.set(key, shape);
+    }
+    return shape;
+  }
+
   /** Forgets the tab's request's prompted values, so its next send asks again. */
   async forgetPrompts(tab: Tab) {
     await api.forgetPromptAnswers(tab.key);
@@ -1137,6 +1213,12 @@ class AppStore {
    * requests sharing a name, the one sent last.
    */
   private exchangeKeys = new Map<string, string>();
+
+  /** After a send (or a run's) of `req`, key `key`, in file `path`: if it's named, its exchange is now that name's latest. */
+  private noteExchange(path: string, key: string, req: Request | undefined) {
+    const named = req && getDirective(req, "name")?.trim();
+    if (named) this.exchangeKeys.set(`${path}\0${named}`, key);
+  }
 
   /**
    * Forgets one named request's latest exchange, so its Request variables read as
@@ -1288,7 +1370,7 @@ class AppStore {
       // showing the Session read it again, even if the tab has closed.
       const named = getDirective(req, "name")?.trim();
       if (response.cookies?.length || named) this.sessionVersion++;
-      if (named) this.exchangeKeys.set(`${tab.path}\0${named}`, tab.key);
+      this.noteExchange(tab.path, tab.key, req);
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
         this.releaseResponse(response);
@@ -1373,17 +1455,17 @@ class AppStore {
    * ("skip"), or doesn't send ("cancel"). Asks the first time in a workspace
    * that isn't trusted; "Trust and run" is stored by the shell, in the app settings.
    */
-  private async scriptsAllowed(tabId: string): Promise<"run" | "skip" | "cancel"> {
+  private async scriptsAllowed(tabId: string, what: "send" | "run" = "send"): Promise<"run" | "skip" | "cancel"> {
     if (this.trusted) return "run";
     if (this.root && this.scriptsSkippedIn === this.root) return "skip";
     this.confirmingSend.add(tabId);
     try {
       const r = await this.choose(
         "Run this workspace's scripts?",
-        `This request has a script. Scripts in ${this.root} run only if you trust this workspace. Trust it only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
+        `${what === "run" ? "Requests in this run have scripts" : "This request has a script"}. Scripts in ${this.root} run only if you trust this workspace. Trust it only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
         [
           { ...CANCEL, focus: true },
-          { label: "Send without scripts", value: "skip" },
+          { label: what === "run" ? "Run without scripts" : "Send without scripts", value: "skip" },
           { label: "Trust and run", value: "trust", role: "primary" },
         ],
       );
@@ -1471,6 +1553,195 @@ class AppStore {
     if (!run?.loading) return;
     this.cancelled.add(run.runId);
     await api.cancelRequest(run.runId);
+  }
+
+  // ---------------------------------------------------------------- runs
+
+  /**
+   * Runs every request of the file at `path` in order (GLOSSARY "Run"), following it
+   * in the Runner panel. Asks first, once each: unanswered Prompt variables, the
+   * Production confirmation, and whether to run scripts in an untrusted workspace.
+   */
+  async runFile(path: string) {
+    const doc = await this.loadDoc(path);
+    if (!doc) return;
+    await this.run(basename(path), this.runEntries(path, doc));
+  }
+
+  /** Whether a run is under way. */
+  get running(): boolean {
+    return !!this.runner?.running;
+  }
+
+  /** Stops the run, its request in flight included. */
+  async stopRun() {
+    if (this.runner?.running) await api.cancelRequest(this.runner.runId);
+  }
+
+  /**
+   * The requests of `doc` a run sends, in order: from the open tab's edits when the
+   * request is open, otherwise as in the file on disk (its saved snapshot). A request
+   * that isn't open and was never saved isn't in the file, so it isn't sent.
+   */
+  private runEntries(path: string, doc: Doc): RunEntry[] {
+    const args = { filePath: path, fileVariables: $state.snapshot(fileVariables(doc.file)), requestNames: requestNames(doc.file) };
+    return doc.file.requests.flatMap((req) => {
+      const key = req._key!;
+      const open = this.tabs.some((t) => t.path === path && t.key === key);
+      const saved = doc.saved[key];
+      if (!open && saved === undefined) return [];
+      const request = open ? ($state.snapshot(req) as Request) : (JSON.parse(saved) as Request);
+      return [{ path, key, unsaved: open && this.isRequestDirty(path, key), args: { ...args, request, requestKey: key } }];
+    });
+  }
+
+  /** Asks what a run needs to know up front, then runs `entries` (see `runFile`). */
+  private async run(title: string, entries: RunEntry[]) {
+    if (this.runner?.running || this.confirmingSend.has(RUN_ASKING)) return;
+    if (!entries.length) {
+      this.toast("info", `${title} has no requests to run`);
+      return;
+    }
+    let scripts: "run" | "skip" | "cancel" | "none";
+    this.confirmingSend.add(RUN_ASKING);
+    try {
+      if (!(await this.askRunPrompts(entries))) return;
+      if (!(await this.confirmProductionRun(entries))) return;
+      scripts = entries.some((e) => hasScripts(e.args.request)) ? await this.scriptsAllowed(RUN_ASKING, "run") : "none";
+      if (scripts === "cancel") return;
+    } finally {
+      this.confirmingSend.delete(RUN_ASKING);
+    }
+
+    this.releaseRunner();
+    const runId = uid();
+    this.runner = {
+      runId,
+      title,
+      running: true,
+      items: entries.map((e) => ({
+        path: e.path,
+        key: e.key,
+        name: displayName(e.args.request),
+        method: verbOf(e.args.request.method),
+        unsaved: e.unsaved,
+        state: "queued",
+      })),
+    };
+    this.panel = "runner";
+    try {
+      await api.runRequests({
+        runId,
+        selection: { requests: entries.map((e) => e.args), environment: this.envName },
+        options: { skipScripts: scripts === "skip" },
+      });
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+    } finally {
+      const runner = this.runner;
+      if (runner?.runId === runId) {
+        runner.running = false;
+        for (const item of runner.items) {
+          if (item.state === "queued") item.state = "notRun";
+          else if (item.state === "sending") item.state = "cancelled";
+        }
+      }
+    }
+  }
+
+  /**
+   * Asks, in one form, for every Prompt variable of the run's requests that the Session
+   * has no answer for, each name once, and has the Session remember the answers for
+   * each request that asks for it. False if the user cancelled.
+   */
+  private async askRunPrompts(entries: RunEntry[]): Promise<boolean> {
+    const unanswered: { entry: RunEntry; names: string[] }[] = [];
+    const fields = new Map<string, DialogField>();
+    for (const entry of entries) {
+      const prompts = requestPrompts(entry.args.request);
+      if (!prompts.length) continue;
+      const remembered = await api.promptAnswers(entry.key);
+      const asked = prompts.filter((p) => !Object.hasOwn(remembered, p.name));
+      if (!asked.length) continue;
+      unanswered.push({ entry, names: asked.map((p) => p.name) });
+      for (const p of asked) {
+        const field = fields.get(p.name);
+        if (!field) fields.set(p.name, { label: p.name, help: p.description, masked: promptMasked(p.name), value: "" });
+        else if (!field.help) field.help = p.description;
+      }
+    }
+    if (!fields.size) return true;
+    const asked = [...fields.values()];
+    const r = await this.openDialog({
+      title: asked.length === 1 ? `Value for "${asked[0].label}"` : "Values for this run",
+      message: "Asked once for the whole run, then remembered for each request that asks for it until you open another workspace or quit. Never saved.",
+      fields: asked,
+      buttons: [CANCEL, { label: "Run", value: "run", role: "primary" }],
+    });
+    if (r.button !== "run") return false;
+    const values = Object.fromEntries(asked.map((f, i) => [f.label, r.values[i] ?? ""]));
+    for (const { entry, names } of unanswered) {
+      await api.answerPrompts(entry.key, Object.fromEntries(names.map((n) => [n, values[n]])));
+    }
+    this.sessionVersion++;
+    return true;
+  }
+
+  /**
+   * With a Production environment selected, asks once before a run that sends anything
+   * but GET, HEAD or OPTIONS with it, listing those requests. True to go ahead.
+   */
+  private async confirmProductionRun(entries: RunEntry[]): Promise<boolean> {
+    const guarded = entries.flatMap((e) => {
+      const env = this.sentEnvironment(e.path);
+      return env && this.guardsMethod(env, e.args.request.method) ? [{ env, line: `${verbOf(e.args.request.method)} ${displayName(e.args.request)}` }] : [];
+    });
+    if (!guarded.length) return true;
+    const envs = joinAnd([...new Set(guarded.map((g) => `"${g.env}"`))]);
+    const r = await this.choose(
+      "Run against production?",
+      `${envs} ${guarded.length > 1 && envs.includes(" and ") ? "are production environments" : "is a production environment"}. This run sends:\n${guarded.map((g) => `• ${g.line}`).join("\n")}`,
+      [
+        { ...CANCEL, focus: true },
+        { label: "Run", value: "run", role: "primary", danger: true },
+      ],
+    );
+    return r.button === "run";
+  }
+
+  /** Applies a `run-progress` event to the run it belongs to; one for a replaced run only lets go of its response. */
+  onRunProgress(p: RunProgress) {
+    const item = this.runner?.runId === p.runId ? this.runner.items[p.index] : undefined;
+    if (!item) {
+      if (p.state === "sent") this.releaseResponse(p.response);
+      return;
+    }
+    switch (p.state) {
+      case "sending":
+        item.state = "sending";
+        break;
+      case "sent":
+        item.state = p.failed ? "failed" : "passed";
+        item.response = p.response;
+        this.markTests(item.key, p.response.tests);
+        // Its exchange, Global variables and cookies are now the Session's latest.
+        this.sessionVersion++;
+        this.noteExchange(item.path, item.key, this.docs[item.path]?.file.requests.find((r) => r._key === item.key));
+        break;
+      case "failed":
+        item.state = "failed";
+        item.error = toSendError(p.error);
+        this.clearTestMark(item.key);
+        break;
+      case "cancelled":
+        item.state = "cancelled";
+        break;
+    }
+  }
+
+  /** Lets the shell drop the last run's responses (a new run, or another workspace). */
+  private releaseRunner() {
+    for (const item of this.runner?.items ?? []) this.releaseResponse(item.response);
   }
 
   // ---------------------------------------------------------------- environments

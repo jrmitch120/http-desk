@@ -4,11 +4,19 @@
 // note that Rider refuses to send it. The Session panel's Named exchanges lists
 // each named request's latest exchange, live; one can be forgotten, all cleared, or
 // opened in the response viewer. A `# @name` two requests in a file share is
-// flagged. `?chain=1`: Create pet is `# @name createPet` (its response is
-// `{"id":7,"name":"Rex"}`) and Get pet image reads `{{createPet.response.body.$.id}}`
-// in its URL and `$.name` in an X-Pet-Name header.
+// flagged. `?chain=1`: Create pet is `# @name createPet` (its canned response is
+// `{"items":[{"id":1,"name":"Rex",…},…],"method":"POST"}`) and Get pet image reads
+// `{{createPet.response.body.$.id}}` (which matches nothing) in its URL and
+// `$.items[0].name` in an X-Pet-Name header. `?chain=dup` names both `createPet`.
 import { expect, test, type Page } from "@playwright/test";
 import { activeTab, mockState, openApp, openRequest, sentRequests, tab, urlBar } from "./helpers";
+
+/** Retypes the URL bar's text. */
+async function setUrl(page: Page, text: string) {
+  await urlBar(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.insertText(text);
+}
 
 const card = (page: Page) => page.locator(".popup-layer .var-card");
 const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
@@ -48,10 +56,11 @@ test("once sent, the hover shows the value and the exchange: request, file and t
   await openApp(page, "?chain=1");
   await sendCreatePet(page);
   await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await setUrl(page, "{{baseUrl}}/png/{{createPet.response.body.$.method}}");
 
   await hoverReference(page);
 
-  await expect(card(page).locator(".var-card-value")).toHaveText("7");
+  await expect(card(page).locator(".var-card-value")).toHaveText("POST");
   await expect(card(page).locator(".var-card-source")).toHaveText(/^from the latest exchange of createPet in api\/pets\.http, received at .+ \(201\)$/);
   await expect(card(page).locator(".var-card-note")).toHaveText(RIDER);
 });
@@ -73,13 +82,10 @@ test("a path that matches nothing says so, and why", async ({ page }) => {
   await openApp(page, "?chain=1");
   await sendCreatePet(page);
   await openRequest(page, ["api", "pets.http"], "Get pet image");
-  await urlBar(page).click();
-  await page.keyboard.press("ControlOrMeta+A");
-  await page.keyboard.insertText("{{baseUrl}}/png/{{createPet.response.body.$.idd}}");
 
   await hoverReference(page);
 
-  await expect(card(page).locator(".var-card-value")).toHaveText("Path matches nothing — `$.idd` matches nothing");
+  await expect(card(page).locator(".var-card-value")).toHaveText("Path matches nothing — `$.id` matches nothing");
   await expect(card(page).locator(".var-card-source")).toContainText("from the latest exchange of createPet in api/pets.http");
 });
 

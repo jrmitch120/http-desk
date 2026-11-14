@@ -54,6 +54,7 @@
       prompts: req ? requestPrompts(req) : [],
       answers: answers.current,
       requestNames: requestNames(doc.file),
+      exchange: (name: string) => app.exchangeShape(tab.path, name),
     };
     return {
       ...makeVarProvider(scope),

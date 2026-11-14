@@ -450,3 +450,177 @@ async fn a_long_value_reads_shortened_for_the_hover() {
     assert_eq!(value.chars().count(), exchange::READING_LIMIT + 1);
     assert!(value.ends_with('…'), "{value}");
 }
+
+#[tokio::test]
+async fn the_latest_exchanges_shape_lists_each_sides_json_keys_and_header_names_for_completion() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_raw(r#"{"token":"t","user":{"id":1,"roles":[{"name":"admin"}]}}"#, "application/json")
+                .insert_header("X-Token", "a")
+                .append_header("x-token", "b"),
+        )
+        .mount(&server)
+        .await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = format!(
+        "# @name login\nPOST {uri}/login\nX-Client: cli\nContent-Type: application/json\n\n{{\"user\": \"ann\"}}\n",
+        uri = server.uri()
+    );
+    assert!(session.exchanges().latest(file, "login").is_none());
+    let before = chrono::Utc::now();
+    send(&session, file, &text, 0).await.unwrap();
+
+    let shape = session.exchanges().latest(file, "login").unwrap().shape();
+    assert_eq!(shape.status, 201);
+    assert!(shape.received >= before);
+    let json = serde_json::to_value(&shape).unwrap();
+    assert_eq!(
+        json["response"]["body"],
+        serde_json::json!({ "keys": [
+            ["token", {}],
+            ["user", { "keys": [["id", {}], ["roles", { "items": { "keys": [["name", {}]] } }]] }],
+        ] })
+    );
+    let response_headers = json["response"]["headers"].as_array().unwrap();
+    let tokens = response_headers.iter().filter(|h| h.as_str().unwrap().eq_ignore_ascii_case("x-token")).count();
+    assert_eq!(tokens, 1, "each name once: {response_headers:?}");
+    assert!(response_headers.contains(&serde_json::json!("content-type")), "{response_headers:?}");
+    assert_eq!(json["request"]["body"], serde_json::json!({ "keys": [["user", {}]] }));
+    assert!(json["request"]["headers"].as_array().unwrap().contains(&serde_json::json!("X-Client")), "{json}");
+    assert!(json["received"].as_str().unwrap().ends_with('Z'), "{json}");
+}
+
+#[tokio::test]
+async fn a_body_that_isnt_json_has_no_shape_but_its_headers_are_listed() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login")).respond_with(ResponseTemplate::new(200).set_body_string("ok")).mount(&server).await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    send(&session, file, &format!("# @name login\nGET {}/login\n", server.uri()), 0).await.unwrap();
+
+    let json = serde_json::to_value(session.exchanges().latest(file, "login").unwrap().shape()).unwrap();
+    assert_eq!(json["response"]["body"], serde_json::Value::Null);
+    assert!(!json["response"]["headers"].as_array().unwrap().is_empty());
+    assert_eq!(json["request"]["body"], serde_json::Value::Null, "nothing was sent in the body");
+}
+
+/// A server whose `/login` answers `body` with content type `content_type`, and whose `/me` answers 200.
+async fn raw_login_server(body: &str, content_type: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body.to_string(), content_type))
+        .mount(&server)
+        .await;
+    Mock::given(path("/me")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    server
+}
+
+#[tokio::test]
+async fn a_token_from_an_xml_login_response_is_sent_by_xpath() {
+    let server = raw_login_server("<login><token>abc123</token></login>", "application/xml").await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = chain(&server, "//token");
+
+    send(&session, file, &text, 0).await.unwrap();
+    send(&session, file, &text, 1).await.unwrap();
+
+    let me = received(&server, "/me").await.pop().unwrap();
+    assert_eq!(header(&me, "x-token"), Some("abc123"));
+}
+
+#[tokio::test]
+async fn an_xpath_that_matches_nothing_blocks_the_send_naming_the_exchange() {
+    let server = raw_login_server("<login><token>abc123</token></login>", "application/xml").await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = chain(&server, "//tok");
+    send(&session, file, &text, 0).await.unwrap();
+
+    let err = send(&session, file, &text, 1).await.unwrap_err();
+
+    let ExecError::UnmatchedPath(paths) = &err else { panic!("{err:?}") };
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0].reference, "login.response.body.//tok");
+    assert_eq!(paths[0].request, "login");
+    assert_eq!(paths[0].reason, "`//tok` matches nothing");
+    assert!(received(&server, "/me").await.is_empty(), "nothing is sent");
+}
+
+/// Why `{{login.response.body.<path>}}` reads nothing from a login answering `body` as `content_type`.
+async fn unmatched_reason(body: &str, content_type: &str, path: &str) -> String {
+    let server = raw_login_server(body, content_type).await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = chain(&server, path);
+    send(&session, file, &text, 0).await.unwrap();
+    match send(&session, file, &text, 1).await {
+        Err(ExecError::UnmatchedPath(paths)) => paths[0].reason.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_jsonpath_into_xml_or_an_xpath_into_json_says_which_the_body_wants() {
+    let xml = "<login><token>abc123</token></login>";
+    let json = r#"{"token": "abc123"}"#;
+
+    assert_eq!(
+        unmatched_reason(xml, "application/xml", "$.token").await,
+        "the body is XML (`application/xml`), so it takes an XPath, not the JSONPath `$.token`"
+    );
+    assert_eq!(
+        unmatched_reason(json, "application/json", "//token").await,
+        "the body is JSON (`application/json`), so it takes a JSONPath starting with `$`, not `//token`"
+    );
+    let reason = unmatched_reason("plain text", "text/plain", "//token").await;
+    assert!(reason.starts_with("the body isn't valid XML"), "{reason}");
+}
+
+#[tokio::test]
+async fn as_json_or_as_xml_reads_a_body_whose_content_type_says_otherwise() {
+    for (body, content_type, path) in [
+        (r#"{"token": "abc123"}"#, "application/xml", "asJson.$.token"),
+        ("<login><token>abc123</token></login>", "application/json", "asXml.//token"),
+    ] {
+        let server = raw_login_server(body, content_type).await;
+        let session = Session::default();
+        let file = Path::new("/ws/api.http");
+        let text = chain(&server, path);
+
+        send(&session, file, &text, 0).await.unwrap();
+        send(&session, file, &text, 1).await.unwrap_or_else(|e| panic!("{path}: {e}"));
+
+        let me = received(&server, "/me").await.pop().unwrap();
+        assert_eq!(header(&me, "x-token"), Some("abc123"), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn an_xpath_inserts_an_elements_content_as_xml_and_any_other_nodes_value() {
+    let xml = r#"<?xml version="1.0"?>
+<comments xmlns:x="urn:x"><comment id="7">Hi &amp; bye<b>!</b></comment><x:note x:by="ann">n</x:note><empty/></comments>"#;
+    let server = raw_login_server(xml, "text/xml; charset=utf-8").await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = format!(
+        "# @name login\nGET {uri}/login\n\n###\nPOST {uri}/me\n\n\
+         {{{{login.response.body.//comment/@id}}}}|{{{{login.response.body.//comment/text()}}}}|\
+         {{{{login.response.body.//comment}}}}|{{{{login.response.body.count(//comment/following-sibling::*)}}}}|\
+         {{{{login.response.body.string(//missing)}}}}|{{{{login.response.body.//empty}}}}|\
+         {{{{login.response.body./}}}}\n",
+        uri = server.uri()
+    );
+    send(&session, file, &text, 0).await.unwrap();
+    send(&session, file, &text, 1).await.unwrap();
+
+    let me = received(&server, "/me").await.pop().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&me.body),
+        "7|Hi & bye|Hi &amp; bye<b>!</b>|2||\
+         |<comments xmlns:x=\"urn:x\"><comment id=\"7\">Hi &amp; bye<b>!</b></comment><x:note x:by=\"ann\">n</x:note><empty/></comments>"
+    );
+}
