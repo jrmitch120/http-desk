@@ -160,3 +160,22 @@ test("a # @name another request in the file also has is flagged on the request",
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expect(page.getByRole("region", { name: "Pre-send checks" })).toHaveCount(0);
 });
+
+test("a request with a Request variable always notes, quietly, that Rider refuses to send it", async ({ page }) => {
+  await openApp(page, "?chain=1");
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+
+  const strip = page.getByRole("region", { name: "Pre-send checks" });
+  const note = strip.getByRole("note");
+  await expect(note).toHaveText("Rider refuses to send a request containing {{createPet.response…}}");
+  // Informational, not a warning: the strip takes the info tone when the note is all it lists.
+  await expect(strip).toHaveClass(/\bnotes-only\b/);
+  // Sending doesn't make it go away, and the hover keeps its own note.
+  await send(page);
+  await expect(note).toBeVisible();
+  await hoverReference(page);
+  await expect(card(page).locator(".var-card-note")).toHaveText(RIDER);
+
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await expect(page.getByRole("region", { name: "Pre-send checks" })).toHaveCount(0);
+});

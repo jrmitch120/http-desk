@@ -724,7 +724,9 @@ Decisions made during implementation, beyond the plan above:
   would insert it, shortened past `READING_LIMIT` characters, or why the path matches
   nothing) and shows it with the exchange it reads (the request, its file, the time
   received and the status; `readingCard` in `src/lib/exchanges.ts`). Every Request
-  variable's card also carries a quiet note that Rider refuses to send it (ADR-0007).
+  variable's card also carries a quiet note that Rider refuses to send it (ADR-0007),
+  and so does the request's check strip, for as long as the request sends one
+  (`riderRefuses`, a note in the info tone after any problems, not a warning).
   A `# @name` two requests in a file share is flagged in the request's check strip
   (`duplicateName` in `src/lib/checks.ts`); it never blocks the send.
 * **Undefined-variable checks** catch them before sending, without blocking it.
