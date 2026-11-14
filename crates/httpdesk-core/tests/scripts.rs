@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecOutcome, ExecSettings};
-use httpdesk_core::script::{run_pre_request_script, run_response_handler, ScriptFiles, TestResult};
+use httpdesk_core::script::{run_pre_request_script, run_response_handler, ScriptContext, ScriptFiles, TestResult};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::path;
@@ -49,16 +49,26 @@ async fn run_in(
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    let results = run_response_handler(&req, &outcome.response, &outcome.body, files, &Default::default());
+    let results = run_response_handler(
+        &req,
+        &outcome.response,
+        &outcome.body,
+        &ScriptContext { files: files.clone(), ..Default::default() },
+    );
     (req, outcome, results.tests)
 }
 
 fn pass(name: &str) -> TestResult {
-    TestResult { name: name.into(), passed: true, message: None }
+    TestResult { name: name.into(), passed: true, message: None, script_error: false }
 }
 
 fn fail(name: &str, message: &str) -> TestResult {
-    TestResult { name: name.into(), passed: false, message: Some(message.into()) }
+    TestResult { name: name.into(), passed: false, message: Some(message.into()), script_error: false }
+}
+
+/// The handler's own failure, reported as a failed "Response handler" entry.
+fn handler_error(message: &str) -> TestResult {
+    TestResult::handler_error(message.into())
 }
 
 #[tokio::test]
@@ -86,6 +96,25 @@ async fn passing_and_failing_tests_and_asserts_are_reported_with_names_and_messa
             fail("never true", "never true"),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_thrown_value_reads_the_same_in_a_test_and_at_the_top_level() {
+    let server = server().await;
+    for (thrown, message) in [
+        ("null", "null"),
+        ("undefined", "undefined"),
+        ("42", "42"),
+        ("\"plain words\"", "plain words"),
+        ("{ code: 1 }", r#"{"code":1}"#),
+        ("new Error(\"broken\")", "broken"),
+        ("new TypeError(\"wrong\")", "TypeError: wrong"),
+    ] {
+        let handler = format!("> {{%\nclient.test(\"t\", () => {{ throw {thrown}; }});\nthrow {thrown};\n%}}");
+        let (_, _, tests) = run(&server, "user", &handler).await;
+        let at_top = if thrown.starts_with("new ") { format!("{message} (line 3)") } else { message.to_string() };
+        assert_eq!(tests, [fail("t", message), handler_error(&at_top)], "throw {thrown}");
+    }
 }
 
 #[tokio::test]
@@ -122,7 +151,7 @@ async fn a_handler_that_throws_keeps_its_earlier_tests_and_reports_the_handler_l
     let handler =
         "> {%\n    client.test(\"first\", () => {});\n\n    missing.call();\n    client.test(\"never\", () => {});\n%}";
     let (_, outcome, tests) = run(&server, "user", handler).await;
-    assert_eq!(tests, [pass("first"), fail("Response handler", "ReferenceError: missing is not defined (line 4)")]);
+    assert_eq!(tests, [pass("first"), handler_error("ReferenceError: missing is not defined (line 4)")]);
     assert_eq!(outcome.response.status, 201, "the response is still there");
 }
 
@@ -130,7 +159,7 @@ async fn a_handler_that_throws_keeps_its_earlier_tests_and_reports_the_handler_l
 async fn a_syntax_error_is_reported_with_its_line() {
     let server = server().await;
     let (_, _, tests) = run(&server, "user", "> {%\n  let x = ;\n%}").await;
-    assert_eq!(tests, [fail("Response handler", "SyntaxError: unexpected token in expression: ';' (line 2)")]);
+    assert_eq!(tests, [handler_error("SyntaxError: unexpected token in expression: ';' (line 2)")]);
 }
 
 #[tokio::test]
@@ -150,7 +179,7 @@ async fn unimplemented_jetbrains_apis_fail_naming_the_api() {
         let (_, _, tests) = run(&server, "user", &format!("> {{% client.test(\"t\", () => {{ {call}; }}); %}}")).await;
         assert_eq!(tests, [fail("t", &format!("{api} isn't supported in HttpDesk"))], "{call}");
         let (_, _, tests) = run(&server, "user", &format!("> {{% {call}; %}}")).await;
-        assert_eq!(tests, [fail("Response handler", &format!("{api} isn't supported in HttpDesk (line 1)"))], "{call}");
+        assert_eq!(tests, [handler_error(&format!("{api} isn't supported in HttpDesk (line 1)"))], "{call}");
     }
 }
 
@@ -235,7 +264,7 @@ async fn a_handler_that_loops_forever_is_stopped_at_the_time_limit_and_the_respo
     let handler = "> {%\nclient.test(\"before\", () => {});\nclient.test(\"spins\", () => { while (true) {} });\n%}";
     let (_, outcome, tests) = run(&server, "user", handler).await;
     let took = started.elapsed();
-    assert_eq!(tests, [pass("before"), fail("Response handler", "Stopped after 5 s, the time limit for a script")]);
+    assert_eq!(tests, [pass("before"), handler_error("Stopped after 5 s, the time limit for a script")]);
     assert!(took >= script::TIME_LIMIT && took < script::TIME_LIMIT * 2, "{took:?}");
     assert_eq!(outcome.response.status, 201);
 }
@@ -245,7 +274,7 @@ async fn catching_the_time_limit_does_not_keep_a_script_running() {
     let server = server().await;
     let handler = "> {% for (;;) { try { while (true) {} } catch (e) {} } %}";
     let (_, _, tests) = run(&server, "user", handler).await;
-    assert_eq!(tests, [fail("Response handler", "Stopped after 5 s, the time limit for a script")]);
+    assert_eq!(tests, [handler_error("Stopped after 5 s, the time limit for a script")]);
 }
 
 #[tokio::test]
@@ -259,7 +288,7 @@ async fn a_handler_allocating_without_bound_is_stopped_at_the_memory_limit_and_t
     for grow in grows {
         let started = std::time::Instant::now();
         let (_, outcome, tests) = run(&server, "user", &format!("> {{% {grow} %}}")).await;
-        assert_eq!(tests, [fail("Response handler", "Stopped at 64 MB, the memory limit for a script")], "{grow}");
+        assert_eq!(tests, [handler_error("Stopped at 64 MB, the memory limit for a script")], "{grow}");
         assert!(started.elapsed() < script::TIME_LIMIT, "stopped by memory, not time");
         assert_eq!(outcome.response.status, 201);
     }
@@ -301,7 +330,7 @@ async fn a_handler_file_next_to_the_http_file_runs_and_its_tests_show() {
     let (_, _, tests) = run_in(&server, "user", "> ../scripts/fail.js", &files).await;
     assert_eq!(
         tests,
-        [pass("ok"), fail("Response handler", "ReferenceError: missing is not defined (../scripts/fail.js line 3)")]
+        [pass("ok"), handler_error("ReferenceError: missing is not defined (../scripts/fail.js line 3)")]
     );
 }
 
@@ -319,15 +348,15 @@ async fn a_missing_handler_file_or_one_outside_the_workspace_is_a_failed_test_an
     ];
     for (reference, message) in cases {
         let (_, _, tests) = run_in(&server, "user", &format!("> {reference}"), &files).await;
-        assert_eq!(tests, [fail("Response handler", message)], "{reference}");
+        assert_eq!(tests, [handler_error(message)], "{reference}");
     }
     // A later script still runs.
     let (_, _, tests) = run_in(&server, "user", "> ./missing.js\n> {% client.assert(true, 'after'); %}", &files).await;
-    assert_eq!(tests, [fail("Response handler", "Script file ./missing.js doesn't exist"), pass("after")]);
+    assert_eq!(tests, [handler_error("Script file ./missing.js doesn't exist"), pass("after")]);
 
     // Without a workspace there is nowhere to read it from.
     let (_, _, tests) = run(&server, "user", "> ./check.js").await;
-    assert_eq!(tests, [fail("Response handler", "Script file ./check.js can't be read: no workspace is open")]);
+    assert_eq!(tests, [handler_error("Script file ./check.js can't be read: no workspace is open")]);
 
     let (_, _, tests) = run_in(&server, "user", ">> ./saved.json", &files).await;
     assert_eq!(tests, []);
@@ -381,7 +410,7 @@ async fn a_handler_file_symlinked_to_outside_the_workspace_is_refused() {
     for reference in ["./link.js", "../up/outside.js"] {
         let (_, _, tests) = run_in(&server, "user", &format!("> {reference}"), &files).await;
         let message = format!("Script file {reference} is outside the workspace");
-        assert_eq!(tests, [fail("Response handler", &message)], "{reference}");
+        assert_eq!(tests, [handler_error(&message)], "{reference}");
     }
     // A link to a file inside the workspace is fine.
     std::fs::write(root.join("real.js"), "client.test(\"linked\", () => {});").unwrap();
@@ -444,7 +473,7 @@ async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
     assert_eq!(in_handler, listed_without("request."));
 
     let req = parse(&format!("< {{%{IMPLEMENTED}%}}\nGET {}/text\n", server.uri())).requests.remove(0);
-    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptFiles::default(), &Default::default()).unwrap();
+    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptContext::default()).unwrap();
     let in_pre_request: Vec<String> = serde_json::from_str(&pre.results.tests.last().unwrap().name).unwrap();
     assert_eq!(in_pre_request, listed_without("response."));
 }
@@ -456,7 +485,7 @@ async fn results(server: &MockServer, route: &str, handler: &str) -> script::Scr
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptFiles::default(), &Default::default())
+    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptContext::default())
 }
 
 #[tokio::test]
@@ -479,7 +508,7 @@ async fn lines_logged_before_a_handler_fails_are_kept() {
     let handler = "> {%\n  client.log(\"before\");\n  missing();\n  client.log(\"never\");\n%}";
     let results = results(&server, "user", handler).await;
     assert_eq!(results.logs, ["before"]);
-    assert_eq!(results.tests, [fail("Response handler", "ReferenceError: missing is not defined (line 3)")]);
+    assert_eq!(results.tests, [handler_error("ReferenceError: missing is not defined (line 3)")]);
 }
 
 #[tokio::test]
@@ -501,7 +530,7 @@ async fn logging_without_bound_stops_at_the_log_limit_and_says_so() {
     let results = results(&server, "user", handler).await;
     let kept: usize = results.logs.iter().map(String::len).sum();
     assert!(kept <= script::LOG_LIMIT + 100, "{kept}");
-    assert_eq!(results.logs.last().unwrap(), "Log stopped at 1 MB, the log limit for a script");
+    assert_eq!(results.logs.last().unwrap(), "Log stopped at 64 KB, the log limit for a script");
     assert_eq!(results.logs.iter().filter(|l| l.starts_with("Log stopped")).count(), 1);
     assert_eq!(results.tests, [pass("ran on")]);
 }

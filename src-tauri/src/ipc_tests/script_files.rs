@@ -56,7 +56,7 @@ fn a_handler_file_outside_the_workspace_is_a_failed_test_and_the_request_is_stil
     assert_eq!(
         response["tests"],
         json!([{ "name": "Response handler", "passed": false,
-                 "message": "Script file ../../outside.js is outside the workspace" }])
+                 "message": "Script file ../../outside.js is outside the workspace", "scriptError": true }])
     );
     assert!(received.recv_timeout(Duration::from_secs(2)).is_ok());
 }

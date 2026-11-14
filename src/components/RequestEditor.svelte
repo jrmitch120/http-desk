@@ -45,7 +45,7 @@
   const envSet = $derived(app.envSetFor(tab.path));
   const answers = promptAnswersOf(() => tab);
   // The Session's Global variables, which every request can use: read again whenever the Session changes.
-  const globals = sessionView<GlobalVariable[]>(() => app.globalVariables(), []);
+  const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = {
@@ -66,7 +66,7 @@
       findUsages: (name: string) => app.findUsages(name),
       extract: (value: string) => app.extractVariable(tab.id, value),
       readRequestVariable: async (reference: string) => {
-        const reading = await app.requestVariable(tab.path, reference).catch(() => null);
+        const reading = await api.requestVariable(tab.path, reference).catch(() => null);
         return reading && readingCard(reading, workspaceFile(app.root, tab.path));
       },
     };

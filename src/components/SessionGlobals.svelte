@@ -5,6 +5,7 @@
   changes, so a value a send's script sets shows up at once. No editing by hand.
 -->
 <script lang="ts">
+  import { api } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
   import type { GlobalVariable } from "../lib/types";
@@ -12,7 +13,7 @@
   import Icon from "./Icon.svelte";
   import SessionSection from "./SessionSection.svelte";
 
-  const globals = sessionView<GlobalVariable[]>(() => app.globalVariables(), []);
+  const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
   const list = $derived(globals.current ?? []);
 </script>
 

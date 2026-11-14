@@ -119,7 +119,7 @@ struct Scopes {
     /// What the request's pre-request script set with `request.variables.set`.
     pre_request: HashMap<String, String>,
     /// File variables (`@name = value`), the request's own declaration winning.
-    in_place: HashMap<String, String>,
+    file_variables: HashMap<String, String>,
     /// Global variables (`client.global.set`), from the Session.
     globals: HashMap<String, String>,
     /// The selected environment: private over public, over the shared variables.
@@ -140,7 +140,8 @@ impl Scopes {
     /// Q6), which is Rider's, not the order the JetBrains docs give. 1 and the request's own
     /// `@name` winning are HttpDesk's (GLOSSARY: Prompt variable, File variable).
     fn lookup(&self, name: &str) -> Option<(&String, bool)> {
-        let defined = [&self.pre_request, &self.in_place, &self.globals].into_iter().find_map(|scope| scope.get(name));
+        let defined =
+            [&self.pre_request, &self.file_variables, &self.globals].into_iter().find_map(|scope| scope.get(name));
         match defined {
             Some(value) => Some((value, false)),
             None => self.environment.get(name).map(|value| (value, true)),
@@ -187,8 +188,8 @@ impl Resolver {
         request_vars: &[Variable],
         base_dir: Option<&Path>,
     ) -> Self {
-        let in_place = file_vars.iter().chain(request_vars).map(|v| (v.name.clone(), v.value.clone())).collect();
-        let scopes = Scopes { in_place, environment: env.clone(), ..Default::default() };
+        let file_variables = file_vars.iter().chain(request_vars).map(|v| (v.name.clone(), v.value.clone())).collect();
+        let scopes = Scopes { file_variables, environment: env.clone(), ..Default::default() };
         Resolver { scopes, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
     }
 
@@ -238,6 +239,13 @@ impl Resolver {
     pub fn with_request_variables(mut self, exchanges: NamedExchanges) -> Self {
         self.exchanges = exchanges;
         self
+    }
+
+    /// A Resolver with only this one's Request variables: every other reference is
+    /// left as written, and dynamic variables aren't generated. What reading the
+    /// Request variables a request writes, and nothing else, takes.
+    pub(crate) fn request_variables_only(&self) -> Resolver {
+        Resolver { exchanges: self.exchanges.clone(), ..Default::default() }.previewing()
     }
 
     /// For the resolved preview: dynamic variables that would generate a new value

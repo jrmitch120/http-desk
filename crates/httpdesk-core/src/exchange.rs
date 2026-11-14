@@ -15,13 +15,13 @@ use chrono::{DateTime, Local, Utc};
 mod xpath;
 
 use crate::body_format::{response_kind, ResponseKind};
-use crate::exec::{decode_text, HttpResponse, PreparedRequest};
+use crate::exec::{text_lossy, HttpResponse, PreparedRequest};
 use serde::Serialize;
 
 use crate::json_filter::{JsonDocument, Shape};
 use crate::model::Request;
 
-/// One side of an exchange: its headers and complete body.
+/// The request side of an exchange: its headers and complete body.
 #[derive(Debug, Clone)]
 pub struct Message {
     pub headers: Vec<(String, String)>,
@@ -30,24 +30,37 @@ pub struct Message {
 }
 
 impl Message {
+    fn side(&self) -> Side<'_> {
+        Side { headers: &self.headers, body: &self.body, content_type: self.content_type.as_deref() }
+    }
+}
+
+/// Either side of an exchange, as its paths read it.
+#[derive(Clone, Copy)]
+struct Side<'a> {
+    headers: &'a [(String, String)],
+    body: &'a [u8],
+    content_type: Option<&'a str>,
+}
+
+impl Side<'_> {
     /// The values of header `name` (matched case-insensitively), joined with `, `.
     /// `None` when there is no such header.
-    pub fn header(&self, name: &str) -> Option<String> {
+    fn header(&self, name: &str) -> Option<String> {
         let values: Vec<&str> =
             self.headers.iter().filter(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str()).collect();
         (!values.is_empty()).then(|| values.join(", "))
     }
 
     /// The body as text: in its charset, else UTF-8 (invalid bytes replaced).
-    pub fn text(&self) -> String {
-        decode_text(&self.body, self.content_type.as_deref())
-            .unwrap_or_else(|| String::from_utf8_lossy(&self.body).into_owned())
+    fn text(&self) -> String {
+        text_lossy(self.body, self.content_type)
     }
 
     /// Its header names (each once) and its body's JSON shape: what its paths can read.
-    pub fn shape(&self) -> MessageShape {
+    fn shape(&self) -> MessageShape {
         let mut headers: Vec<String> = Vec::new();
-        for (name, _) in &self.headers {
+        for (name, _) in self.headers {
             if !headers.iter().any(|h| h.eq_ignore_ascii_case(name)) {
                 headers.push(name.clone());
             }
@@ -87,18 +100,31 @@ fn rfc3339<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, S::E
 pub struct Exchange {
     /// The request as prepared and sent: its headers (the default ones included) and full body.
     pub request: Message,
-    pub response: Message,
-    /// The response's status code.
-    pub status: u16,
-    pub received: DateTime<Utc>,
-    /// The response as the viewer showed it, without its body (ADR-0006): what
-    /// opening the exchange from the Session panel shows again, with `response.body`.
+    /// The response as the viewer showed it, without its body (ADR-0006): its
+    /// status, headers and content type, and what opening the exchange from the
+    /// Session panel shows again, with `response_body`.
     pub shown: HttpResponse,
+    /// The response's complete body.
+    pub response_body: Arc<[u8]>,
+    pub received: DateTime<Utc>,
 }
 
 impl Exchange {
+    /// The response's status code.
+    pub fn status(&self) -> u16 {
+        self.shown.status
+    }
+
+    fn response(&self) -> Side<'_> {
+        Side {
+            headers: &self.shown.headers,
+            body: &self.response_body,
+            content_type: self.shown.content_type.as_deref(),
+        }
+    }
+
     /// The response as the viewer showed it, under a new response id, for showing it
-    /// again with `response.body` kept under that id.
+    /// again with `response_body` kept under that id.
     pub fn reopened(&self) -> HttpResponse {
         HttpResponse { id: uuid::Uuid::new_v4().to_string(), ..self.shown.clone() }
     }
@@ -107,9 +133,9 @@ impl Exchange {
     pub fn shape(&self) -> ExchangeShape {
         ExchangeShape {
             received: self.received,
-            status: self.status,
-            response: self.response.shape(),
-            request: self.request.shape(),
+            status: self.status(),
+            response: self.response().shape(),
+            request: self.request.side().shape(),
         }
     }
 
@@ -118,8 +144,8 @@ impl Exchange {
     pub fn value(&self, path: &str) -> Result<String, String> {
         let (side, rest) = path.split_once('.').unwrap_or((path, ""));
         let message = match side {
-            "response" => &self.response,
-            "request" => &self.request,
+            "response" => self.response(),
+            "request" => self.request.side(),
             _ => return Err(format!("`{side}` is neither `response` nor `request`")),
         };
         match rest.split_once('.') {
@@ -136,7 +162,7 @@ impl Exchange {
 /// as that kind whatever its type. A body that is neither (by type, or by its
 /// first character when untyped) reads by the path's own shape: `$…` JSONPath,
 /// anything else XPath.
-fn body_value(message: &Message, path: &str) -> Result<String, String> {
+fn body_value(message: Side, path: &str) -> Result<String, String> {
     if path == "*" {
         return Ok(message.text());
     }
@@ -148,8 +174,8 @@ fn body_value(message: &Message, path: &str) -> Result<String, String> {
         return xpath::first(&text, path);
     }
     let jsonpath = path.starts_with('$');
-    let content_type = message.content_type.as_deref().map(|t| format!(" (`{t}`)")).unwrap_or_default();
-    match response_kind(message.content_type.as_deref(), Some(&text)) {
+    let content_type = message.content_type.map(|t| format!(" (`{t}`)")).unwrap_or_default();
+    match response_kind(message.content_type, Some(&text)) {
         ResponseKind::Xml if jsonpath => {
             Err(format!("the body is XML{content_type}, so it takes an XPath, not the JSONPath `{path}`"))
         }
@@ -213,7 +239,7 @@ impl Exchanges {
             .map(|((file, name), e)| NamedExchange {
                 file: file.clone(),
                 name: name.clone(),
-                status: e.status,
+                status: e.status(),
                 received: e.received,
             })
             .collect();
@@ -229,7 +255,7 @@ impl Exchanges {
         let (name, path) = split_reference(reference)?;
         let request = name.to_string();
         let Some(exchange) = self.latest(file, name) else { return Some(Reading::Unsent { request }) };
-        let (status, received) = (exchange.status, exchange.received);
+        let (status, received) = (exchange.status(), exchange.received);
         Some(match exchange.value(path) {
             Ok(value) => Reading::Value { request, status, received, value: shorten(value) },
             Err(reason) => Reading::Unmatched { request, status, received, reason },
@@ -325,9 +351,8 @@ impl PendingExchange {
     /// Records the exchange, with `response` and its `body`, as the latest of its
     /// request in `exchanges`, received now.
     pub fn finish(self, exchanges: &Exchanges, response: &HttpResponse, body: Arc<[u8]>) {
-        let (status, shown) = (response.status, response.clone());
-        let response = Message { headers: response.headers.clone(), body, content_type: response.content_type.clone() };
-        let exchange = Exchange { request: self.request, response, status, received: Utc::now(), shown };
+        let exchange =
+            Exchange { request: self.request, shown: response.clone(), response_body: body, received: Utc::now() };
         exchanges.record(&self.file, &self.name, exchange);
     }
 }

@@ -7,7 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::exec::{ErrorKind, ExecError, HttpResponse};
-use crate::script::{TestResult, HANDLER_TEST_NAME};
+use crate::script::TestResult;
 use crate::send::Outgoing;
 use crate::vars::MASK;
 
@@ -107,12 +107,13 @@ impl RequestReport {
                 name: secrets.mask(&t.name),
                 passed: t.passed,
                 message: t.message.as_deref().map(|m| secrets.mask(m)),
+                script_error: t.script_error,
             })
             .collect();
         self.outcome = if failed { Outcome::Failed } else { Outcome::Passed };
         self.failure = failed.then(|| {
             let failing: Vec<&TestResult> = self.tests.iter().filter(|t| !t.passed).collect();
-            let script = failing.iter().any(|t| t.name == HANDLER_TEST_NAME);
+            let script = failing.iter().any(|t| t.script_error);
             Failure {
                 reason: if script { Reason::Script } else { Reason::Test },
                 message: failing.iter().map(|t| test_failure(t)).collect::<Vec<_>>().join("\n"),

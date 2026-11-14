@@ -214,12 +214,12 @@ fn untouched_files_round_trip_byte_for_byte() {
 fn response_handlers_parse_into_parts_and_the_file_is_unchanged() {
     let f = parse(HANDLERS);
     let parts: Vec<_> = f.requests.iter().map(Request::response_handler_parts).collect();
-    let inline = |source: &str, line| HandlerPart::Inline { source: source.into(), line };
+    let inline = |source: &str, line| HandlerPart::Script(ScriptSource::Inline { source: source.into(), line });
     assert_eq!(
         parts[0],
         [inline(r#" client.test("ok", () => client.assert(response.status === 200, "status")); "#, 1)]
     );
-    let HandlerPart::Inline { source, line: 1 } = &parts[1][0] else { panic!("{:?}", parts[1]) };
+    let HandlerPart::Script(ScriptSource::Inline { source, line: 1 }) = &parts[1][0] else { panic!("{:?}", parts[1]) };
     assert!(source.starts_with("\n    client.test(\"Request executed successfully\""), "{source}");
     assert!(source.ends_with("received '${type}'`);\n    });\n"), "{source}");
     assert_eq!(
@@ -229,7 +229,7 @@ fn response_handlers_parse_into_parts_and_the_file_is_unchanged() {
             HandlerPart::Redirect { path: "./report.json".into(), overwrite: true },
         ]
     );
-    assert_eq!(parts[3], [HandlerPart::File { path: "./check-status.js".into() }]);
+    assert_eq!(parts[3], [HandlerPart::Script(ScriptSource::File { path: "./check-status.js".into() })]);
     assert_eq!(parts[4], [HandlerPart::Redirect { path: "./saved.json".into(), overwrite: false }]);
     let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
     assert_eq!(runs, [true, true, true, true, false]);
@@ -1153,7 +1153,10 @@ fn an_added_handler_goes_after_the_body_as_jetbrains_writes_it() {
     let out = try_serialize(&f).unwrap();
     let next = "GET https://example.com/next\n";
     assert_eq!(out, HAND_WRITTEN.replace(next, &format!("{next}\n{ADDED_HANDLER}\n")));
-    let inline = HandlerPart::Inline { source: "\n    client.test(\"ok\", function () {});\n".into(), line: 1 };
+    let inline = HandlerPart::Script(ScriptSource::Inline {
+        source: "\n    client.test(\"ok\", function () {});\n".into(),
+        line: 1,
+    });
     assert_eq!(parse(&out).requests[1].response_handler_parts(), [inline]);
 }
 

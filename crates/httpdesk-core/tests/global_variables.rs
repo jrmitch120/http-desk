@@ -177,7 +177,7 @@ enum DefinedIn {
     Public,
     Private,
     Global,
-    InPlace,
+    FileVariable,
     PreRequest,
     Prompt,
 }
@@ -201,8 +201,8 @@ async fn probe(places: &[DefinedIn]) -> String {
 
     let uri = server.uri();
     let mut text = String::new();
-    if places.contains(&InPlace) {
-        text += "@v = in-place\n\n";
+    if places.contains(&FileVariable) {
+        text += "@v = file\n\n";
     }
     text += &format!("### setup\nGET {uri}/setup\n\n");
     if places.contains(&Global) {
@@ -235,17 +235,17 @@ async fn each_pair_of_places_sends_the_value_rider_sends() {
         ([Public, Private], "env-private"),
         ([Public, Global], "global"),
         ([Private, Global], "global"),
-        ([Public, InPlace], "in-place"),
-        ([Private, InPlace], "in-place"),
-        ([Global, InPlace], "in-place"),
+        ([Public, FileVariable], "file"),
+        ([Private, FileVariable], "file"),
+        ([Global, FileVariable], "file"),
         ([Public, PreRequest], "per-request"),
         ([Private, PreRequest], "per-request"),
         ([Global, PreRequest], "per-request"),
-        ([InPlace, PreRequest], "per-request"),
+        ([FileVariable, PreRequest], "per-request"),
         ([Public, Prompt], "prompt"),
         ([Private, Prompt], "prompt"),
         ([Global, Prompt], "prompt"),
-        ([InPlace, Prompt], "prompt"),
+        ([FileVariable, Prompt], "prompt"),
         ([PreRequest, Prompt], "prompt"),
     ];
     for (places, expected) in pairs {
@@ -255,8 +255,8 @@ async fn each_pair_of_places_sends_the_value_rider_sends() {
 
 #[tokio::test]
 async fn with_every_place_at_once_the_pre_request_script_wins_and_an_answered_prompt_over_it() {
-    assert_eq!(probe(&[Public, Private, Global, InPlace, PreRequest]).await, "per-request");
-    assert_eq!(probe(&[Public, Private, Global, InPlace, PreRequest, Prompt]).await, "prompt");
+    assert_eq!(probe(&[Public, Private, Global, FileVariable, PreRequest]).await, "per-request");
+    assert_eq!(probe(&[Public, Private, Global, FileVariable, PreRequest, Prompt]).await, "prompt");
 }
 
 #[tokio::test]

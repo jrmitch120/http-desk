@@ -57,6 +57,24 @@ fn a_handler_in_an_untrusted_workspace_is_refused_before_anything_is_sent() {
 }
 
 #[test]
+fn a_send_blocked_by_an_unsent_request_reports_the_block_even_in_an_untrusted_workspace() {
+    let h = Harness::new();
+    let (url, received) = json_server(r#"{"ok":true}"#);
+    let (_ws, root, request) = workspace(&h, &url);
+    // The request with a handler, now reading `login`, which hasn't been sent.
+    let reader = to(&request, &format!("{url}/{{{{login.response.body.$.token}}}}"));
+    let e = h
+        .call(
+            "send_request",
+            json!({ "runId": "s1", "request": reader, "filePath": root.join("api.http"), "fileVariables": [],
+                    "environment": null, "requestNames": ["login"] }),
+        )
+        .unwrap_err();
+    assert_eq!(e["kind"], "unsentRequest", "{e}");
+    assert!(received.recv_timeout(Duration::from_millis(300)).is_err(), "nothing was sent");
+}
+
+#[test]
 fn sending_without_scripts_sends_and_skips_the_handler() {
     let h = Harness::new();
     let (url, received) = json_server(r#"{"ok":true}"#);

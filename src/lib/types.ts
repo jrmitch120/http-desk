@@ -301,6 +301,8 @@ export interface TestResult {
   passed: boolean;
   /** Why it failed; null when it passed. */
   message: string | null;
+  /** Set on a response handler's own error (a "Response handler" entry): a script failure, not a test. */
+  scriptError?: boolean;
 }
 
 /**

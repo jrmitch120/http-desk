@@ -7,6 +7,7 @@ use httpdesk_core::env;
 use std::collections::HashMap;
 
 use httpdesk_core::exchange::{Exchange, Message, NamedExchanges};
+use httpdesk_core::exec::HttpResponse;
 use httpdesk_core::model::{Prompt, Variable};
 use httpdesk_core::vars::Resolver;
 use serde::Deserialize;
@@ -92,6 +93,16 @@ impl MessageCase {
             content_type: self.content_type.clone(),
         }
     }
+
+    /// The case as a response, with status 200, without its body.
+    fn response(&self) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: self.headers.clone(),
+            content_type: self.content_type.clone(),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -155,9 +166,12 @@ fn the_core_resolver_gives_the_shared_answers() {
             .iter()
             .map(|name| {
                 let exchange = c.exchanges.get(name).map(|e| {
-                    let (request, response) = (e.request.message(), e.response.message());
-                    let (status, received, shown) = (200, chrono::Utc::now(), Default::default());
-                    std::sync::Arc::new(Exchange { request, response, status, received, shown })
+                    std::sync::Arc::new(Exchange {
+                        request: e.request.message(),
+                        shown: e.response.response(),
+                        response_body: e.response.body.as_bytes().into(),
+                        received: chrono::Utc::now(),
+                    })
                 });
                 (name.clone(), exchange)
             })

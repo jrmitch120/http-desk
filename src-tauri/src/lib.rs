@@ -817,14 +817,9 @@ fn open_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -
         .exchanges()
         .latest(&file_path, &name)
         .ok_or_else(|| format!("`{name}` has no exchange in this Session"))?;
-    let response = exchange.reopened();
-    let body = KeptBody {
-        bytes: exchange.response.body.clone(),
-        content_type: response.content_type.clone(),
-        kind: response.body_kind,
-    };
-    state.bodies.lock().unwrap().push(response.id.clone(), body);
-    Ok(response)
+    let reopened = Sent { response: exchange.reopened(), body: exchange.response_body.clone() };
+    keep_body(&state, &reopened);
+    Ok(reopened.response)
 }
 
 /// What Request variable `reference` (trimmed, without braces) of a request in

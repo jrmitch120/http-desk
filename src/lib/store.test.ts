@@ -1595,6 +1595,59 @@ describe("workspace trust", () => {
     expect(app.runs[tab.id].error?.kind).toBe("untrustedWorkspace");
     expect(app.settings!.trustedWorkspaces).toEqual([]);
   });
+
+  /** `chained()` with a handler on Me, which reads `login`. The Session has no exchange for `login`. */
+  function chainedWithHandler(order: "login first" | "reader first" = "login first"): HttpFile {
+    const f = chained();
+    f.requests[1].responseHandler = HANDLER;
+    if (order === "reader first") f.requests.reverse();
+    api.exchangeShape.mockResolvedValue(null);
+    app.sessionVersion++; // so no shape read before is used
+    app.runner = null;
+    return f;
+  }
+
+  it("never asks for a send blocked by an unsent request: the shell reports the block", async () => {
+    const [, me] = await openAll(chainedWithHandler());
+    const unsent = { kind: "unsentRequest", message: "Send `login` first", details: { names: ["login"] } };
+    api.sendRequest.mockRejectedValueOnce(unsent);
+
+    await app.send(me.id);
+
+    expect(app.dialog).toBeNull();
+    expect(api.exchangeShape).toHaveBeenCalledWith(PATH, "login");
+    expect(skipped(0)).toBe(false);
+    expect(app.runs[me.id].error?.kind).toBe("unsentRequest");
+  });
+
+  it("asks for a send whose Request variables read a request already sent", async () => {
+    const [, me] = await openAll(chainedWithHandler());
+    api.exchangeShape.mockResolvedValue({ received: "", status: 200, response: { headers: [], body: null }, request: { headers: [], body: null } });
+    app.sessionVersion++; // `login` was sent since
+    const sending = app.send(me.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("never asks for a run whose only scripts are in requests blocked as unsent", async () => {
+    await openAll(chainedWithHandler("reader first"));
+    api.runRequests.mockResolvedValue({ cancelled: false, requests: [] });
+
+    await app.runFile(PATH);
+
+    expect(app.dialog).toBeNull();
+    expect(api.runRequests.mock.calls[0][0].options.skipScripts).toBe(false);
+  });
+
+  it("asks for a run whose scripted request reads one sent earlier in the run", async () => {
+    await openAll(chainedWithHandler("login first"));
+    api.runRequests.mockResolvedValue({ cancelled: false, requests: [] });
+    const running = app.runFile(PATH);
+    await answer("cancel");
+    await running;
+    expect(api.runRequests).not.toHaveBeenCalled();
+  });
 });
 
 describe("test markers", () => {

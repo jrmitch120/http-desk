@@ -379,6 +379,18 @@ fn request_variable_errors(resolver: &Resolver) -> Result<(), ExecError> {
     Ok(())
 }
 
+/// Fails when a Request variable written in `req` blocks its send (see
+/// [`request_variable_errors`]): the check a send makes before its pre-request script
+/// runs. Only these count, because a script can't define them, so the script can't
+/// change the answer. Every other reference, Request variables inside other
+/// variables' values included, is checked by [`prepare`], after the script.
+pub fn check_request_variables(req: &Request, resolver: &Resolver) -> Result<(), ExecError> {
+    let only = resolver.request_variables_only();
+    let _ = head(req, &only);
+    let _ = build_body(&req.body, &only, &|_| Ok(Vec::new()));
+    request_variable_errors(&only)
+}
+
 fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
     let errors = resolver.errors();
     if errors.is_empty() {
@@ -755,13 +767,16 @@ pub struct HttpResponse {
     #[serde(default)]
     pub timings: Timings,
     /// Every `Set-Cookie` received, redirect hops first, each with the URL
-    /// that set it. Shown only; never sent back.
+    /// that set it: what the Cookies tab shows. The Session's cookie jar keeps
+    /// them apart from this (see [`crate::cookies::CookieJar`]).
     pub cookies: Vec<ResponseCookie>,
-    /// The response handler's `client.test`/`client.assert` results and its
-    /// own failure, if any (see [`crate::script`]). Empty when nothing ran.
+    /// The pre-request script's, then the response handler's, `client.test` and
+    /// `client.assert` results, and the handler's own failure, if any (see
+    /// [`crate::script`]). Empty when no script ran.
     #[serde(default)]
     pub tests: Vec<crate::script::TestResult>,
-    /// What the scripts logged. Empty until `client.log` is implemented.
+    /// What the pre-request script, then the response handler, logged with
+    /// `client.log`, at most [`crate::script::LOG_LIMIT`] per script.
     #[serde(default)]
     pub logs: Vec<String>,
 }
@@ -1091,6 +1106,12 @@ pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
         (Some(ct), Err(_)) if is_textual(ct) => Some(String::from_utf8_lossy(bytes).into_owned()),
         _ => None,
     }
+}
+
+/// A body as text whatever it is: as [`decode_text`] decodes it, else as UTF-8 with
+/// invalid bytes replaced. What scripts and Request variables read.
+pub fn text_lossy(bytes: &[u8], content_type: Option<&str>) -> String {
+    decode_text(bytes, content_type).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// What the viewer treats a received body as (see [`body_format::response_kind`]).

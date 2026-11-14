@@ -232,15 +232,7 @@ pub(crate) fn handler_parts(text: &str) -> Vec<HandlerPart> {
             };
             parts.push(HandlerPart::Redirect { path: path.trim().to_string(), overwrite });
         } else if let Some(rest) = line.strip_prefix('>') {
-            let rest = rest.trim_start();
-            let Some(script) = rest.strip_prefix("{%") else {
-                if !rest.trim().is_empty() {
-                    parts.push(HandlerPart::File { path: rest.trim().to_string() });
-                }
-                continue;
-            };
-            let source = inline_script(script, &mut lines);
-            parts.push(HandlerPart::Inline { source, line: i + 1 });
+            parts.extend(script_source(rest, i, &mut lines).map(HandlerPart::Script));
         }
     }
     parts
@@ -253,17 +245,25 @@ pub(crate) fn pre_request_parts(text: &str) -> Vec<PreRequestPart> {
     let mut lines = text.split('\n').enumerate();
     while let Some((i, line)) = lines.next() {
         let Some(rest) = line.trim_start().strip_prefix('<') else { continue };
-        let rest = rest.trim_start();
-        match rest.strip_prefix("{%") {
-            Some(script) => {
-                let source = inline_script(script, &mut lines);
-                parts.push(PreRequestPart::Inline { source, line: i + 1 });
-            }
-            None if !rest.trim().is_empty() => parts.push(PreRequestPart::File { path: rest.trim().to_string() }),
-            None => {}
-        }
+        parts.extend(script_source(rest, i, &mut lines));
     }
     parts
+}
+
+/// The script written after a `<` or `>` on line `i` (0-based): `rest` is the rest
+/// of that line. `{%` starts an inline script, up to the next `%}` (from `lines` as
+/// needed); anything else names a script file. `None` when nothing is written.
+fn script_source<'a>(
+    rest: &'a str,
+    i: usize,
+    lines: &mut impl Iterator<Item = (usize, &'a str)>,
+) -> Option<ScriptSource> {
+    let rest = rest.trim_start();
+    match rest.strip_prefix("{%") {
+        Some(script) => Some(ScriptSource::Inline { source: inline_script(script, lines), line: i + 1 }),
+        None if !rest.trim().is_empty() => Some(ScriptSource::File { path: rest.trim().to_string() }),
+        None => None,
+    }
 }
 
 /// The text of an inline `{% … %}` script that starts with `first` (just after

@@ -44,6 +44,9 @@ export function newRequest(name = "New request"): Request {
   };
 }
 
+/** The method as sent: upper-cased, GET when blank. */
+export const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
+
 export function displayName(req: Request): string {
   if (req.name.trim()) return req.name.trim();
   const n = req.directives.find((d) => d.name === "name")?.value;

@@ -3,13 +3,13 @@
 // Evaluated once per script context, before the user's script, as a function
 // the engine (src/script.rs) calls with:
 //   host: Rust functions this API is built on (`host.test(name, passed, message)`,
-//         `host.log(line)`, `host.setVariable(name, value)`, and the Session's
-//         Global variables: `host.globalGet(name)`, `host.globalSet(name, value)`,
-//         `host.globalClear(name)`, `host.globalIsEmpty()`)
+//         `host.testFailed(name, thrown)`, which says why, the way a script's own
+//         failure says it, `host.log(line)`, `host.setVariable(name, value)`, and
+//         the Session's Global variables: `host.globalGet(name)`,
+//         `host.globalSet(name, value)`, `host.globalClear(name)`, `host.globalIsEmpty()`)
 //   data: the exchange as plain JSON. A response handler gets { response: { status,
 //         headers, body, json, mimeType, charset } }, a pre-request script gets
-//         { request: { environment, variables } } (name → value objects); both
-//         get limits: { time, memory }.
+//         { request: { environment, variables } } (name → value objects).
 // It defines the globals the user's script sees and keeps `host` out of reach.
 //
 // Every JetBrains API that isn't implemented here throws "<api> isn't supported
@@ -53,25 +53,9 @@
       },
     );
 
-  const memoryMessage = () => "Stopped at " + data.limits.memory + ", the memory limit for a script";
-
-  // What a failed test says about the error that failed it.
-  function messageOf(e) {
-    // QuickJS throws `null` when it can't even allocate its out-of-memory error.
-    if (e === null) return memoryMessage();
-    if (e instanceof Error) {
-      if (e.name === "InternalError" && e.message === "out of memory") {
-        return memoryMessage();
-      }
-      const plain = e instanceof AssertionError || e instanceof UnsupportedApiError || e.name === "Error";
-      return plain ? e.message : e.name + ": " + e.message;
-    }
-    return String(e);
-  }
-
-  // How `client.log` writes a value: text as it is, objects as JSON where they
-  // can be, anything else as JavaScript would print it.
-  function logText(v) {
+  // A value as text, as `client.log` writes it and `{{name}}` reads it: text as it
+  // is, objects as JSON where they can be, anything else as JavaScript prints it.
+  function asText(v) {
     if (typeof v === "string") return v;
     if (typeof v === "object" && v !== null) {
       try {
@@ -82,10 +66,6 @@
     }
     return String(v);
   }
-
-  // A value as `{{name}}` text: a string as it is, an object as JSON, anything else as JavaScript prints it.
-  const variableText = (value) =>
-    typeof value === "string" ? value : value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
 
   // An object with the members of `known`, where any other member is the unsupported API `prefix.member`.
   const partlySupported = (prefix, known) =>
@@ -107,7 +87,7 @@
         fn();
         host.test(name, true, null);
       } catch (e) {
-        host.test(name, false, messageOf(e));
+        host.testFailed(name, e);
       } finally {
         testDepth--;
       }
@@ -123,7 +103,7 @@
     // The Session's Global variables, which later requests in the workspace read as `{{name}}`.
     global: partlySupported("client.global", {
       set(name, value) {
-        host.globalSet(String(name), variableText(value));
+        host.globalSet(String(name), asText(value));
       },
       get(name) {
         const value = host.globalGet(String(name));
@@ -137,7 +117,7 @@
       },
     }),
     log(...values) {
-      host.log(values.map(logText).join(" "));
+      host.log(values.map(asText).join(" "));
     },
     exit: unsupported("client.exit"),
   };
@@ -179,7 +159,7 @@
       variables: {
         set(name, value) {
           if (Array.isArray(value)) throw new UnsupportedApiError("request.variables.set with an array (iterations)");
-          const text = variableText(value);
+          const text = asText(value);
           variables.set(String(name), text);
           host.setVariable(String(name), text);
         },

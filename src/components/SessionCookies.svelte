@@ -5,6 +5,7 @@
   editing or adding cookies by hand.
 -->
 <script lang="ts">
+  import { api } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import { storedCookieRow } from "../lib/cookies";
   import { sessionView } from "../lib/sessionView.svelte";
@@ -14,7 +15,7 @@
   import Icon from "./Icon.svelte";
   import SessionSection from "./SessionSection.svelte";
 
-  const cookies = sessionView<StoredCookie[]>(() => app.sessionCookies(), []);
+  const cookies = sessionView<StoredCookie[]>(() => api.sessionCookies(), []);
   const list = $derived(cookies.current ?? []);
 </script>
 
