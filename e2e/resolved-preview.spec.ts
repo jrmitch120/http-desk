@@ -59,6 +59,8 @@ test("the preview follows edits and the environment; dynamic variables stay plac
   await expect(target).toHaveText("GET http://127.0.0.1:8765/png/1?q=a%20b&id={{$uuid}}");
   const dynamic = target.locator(".var.dynamic");
   await expect(dynamic).toHaveText("{{$uuid}}");
+  // Leave the URL bar first, or {{petId}}'s card can cover {{$uuid}}.
+  await page.mouse.move(0, 0);
   await dynamic.hover();
   await expect(page.getByRole("tooltip")).toHaveText("Dynamic variable: a new value is generated on every send");
 
