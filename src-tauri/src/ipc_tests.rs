@@ -16,6 +16,7 @@ mod renaming;
 mod reply;
 mod request_variables;
 mod runner;
+mod script_files;
 mod scripts;
 mod session;
 mod usages;

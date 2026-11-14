@@ -590,7 +590,18 @@ fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) ->
             warnings.push("Multipart body without a boundary in Content-Type".into());
         }
     }
+    warnings.extend(req.response_handler_parts().into_iter().filter_map(|part| match part {
+        HandlerPart::Redirect { path, overwrite } => Some(redirect_not_run(&path, overwrite)),
+        _ => None,
+    }));
     warnings
+}
+
+/// The note on a request with a JetBrains `>> file` / `>>! file` response
+/// redirect, which is kept in the file but never run (nothing is written).
+pub fn redirect_not_run(path: &str, overwrite: bool) -> String {
+    let bang = if overwrite { "!" } else { "" };
+    format!("HttpDesk doesn't run response redirects: >>{bang} {path} doesn't save the response to a file.")
 }
 
 /// Resolves variables and applies enablement. Disabled components are never included.

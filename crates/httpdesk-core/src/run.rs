@@ -4,10 +4,11 @@
 //!
 //! A request in a run **fails** on a network error, a script error, a failed test or
 //! assert, or a blocked send. An HTTP error status alone is not a failure. A failure
-//! doesn't stop the run.
+//! doesn't stop the run unless it's asked to stop on the first one.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Notify;
 
@@ -66,16 +67,34 @@ impl Cancel {
     }
 }
 
+/// How a run goes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RunOptions {
+    /// How long to wait between one request's end and the next one's start (for
+    /// rate limits). Stop doesn't wait for it.
+    pub delay: Duration,
+    /// End the run after the first request that fails; the rest aren't sent.
+    pub stop_on_failure: bool,
+}
+
 /// Sends `requests` in order in `ctx`, reporting each one's progress to `on_event`
-/// with its index. Stops when `cancel` fires, the request in flight included.
-/// Returns whether it was cancelled.
+/// with its index. Stops when `cancel` fires, the request in flight or the delay
+/// included, or (with `options.stop_on_failure`) after a request fails. Returns
+/// whether it was cancelled.
 pub async fn run(
     ctx: &SendContext,
     requests: Vec<Outgoing>,
+    options: RunOptions,
     cancel: &Cancel,
     mut on_event: impl FnMut(usize, RunEvent),
 ) -> bool {
     for (index, out) in requests.into_iter().enumerate() {
+        if index > 0 && !options.delay.is_zero() {
+            tokio::select! {
+                _ = tokio::time::sleep(options.delay) => {}
+                _ = cancel.cancelled() => return true,
+            }
+        }
         if cancel.is_cancelled() {
             return true;
         }
@@ -87,16 +106,18 @@ pub async fn run(
                 return true;
             }
         };
-        on_event(
-            index,
-            match result {
-                Ok(sent) => {
-                    let failed = failed(&sent.response);
-                    RunEvent::Sent { sent: Box::new(sent), failed }
-                }
-                Err(e) => RunEvent::Failed(e),
-            },
-        );
+        let event = match result {
+            Ok(sent) => {
+                let failed = failed(&sent.response);
+                RunEvent::Sent { sent: Box::new(sent), failed }
+            }
+            Err(e) => RunEvent::Failed(e),
+        };
+        let failed = matches!(event, RunEvent::Sent { failed: true, .. } | RunEvent::Failed(_));
+        on_event(index, event);
+        if failed && options.stop_on_failure {
+            break;
+        }
     }
     cancel.is_cancelled()
 }

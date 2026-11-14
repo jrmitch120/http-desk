@@ -1,13 +1,14 @@
 //! Runs (`run::run`) against a mock server: every request of a file in order, the
-//! Session carried from each to the next, which requests fail, and Stop. Observed
-//! as what the server receives and the events the run reports.
+//! Session carried from each to the next, which requests fail, Stop, and the run's
+//! options (stop on first failure, a delay between requests). Observed as what the
+//! server receives and the events the run reports.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use httpdesk_core::exec::{ClientPool, ExecSettings};
-use httpdesk_core::run::{self, Cancel, RunEvent};
+use httpdesk_core::run::{self, Cancel, RunEvent, RunOptions};
 use httpdesk_core::send::{Outgoing, Scripts, SendContext};
 use httpdesk_core::session::Session;
 use httpdesk_core::*;
@@ -28,7 +29,12 @@ fn context(session: &Arc<Session>) -> SendContext {
 /// Runs every request of `text` (the file at `/ws/api.http`), returning what the run
 /// reported for each request, by index.
 async fn run_file(session: &Arc<Session>, text: &str) -> Vec<(usize, Reported)> {
-    run_file_cancelling(session, text, &Cancel::default(), |_, _| {}).await
+    run_file_with(session, text, RunOptions::default()).await
+}
+
+/// Runs every request of `text` with `options` (see `run_file`).
+async fn run_file_with(session: &Arc<Session>, text: &str, options: RunOptions) -> Vec<(usize, Reported)> {
+    run_file_cancelling(session, text, options, &Cancel::default(), |_, _| {}).await
 }
 
 /// What a run reported for one request, without the response body.
@@ -43,13 +49,14 @@ enum Reported {
 async fn run_file_cancelling(
     session: &Arc<Session>,
     text: &str,
+    options: RunOptions,
     cancel: &Cancel,
     on_event: impl Fn(usize, &Reported) + Send,
 ) -> Vec<(usize, Reported)> {
     let file = parse(text);
     let items = Outgoing::all_in(Path::new("/ws/api.http"), &file);
     let events = Mutex::new(Vec::new());
-    run::run(&context(session), items, cancel, |i, event| {
+    run::run(&context(session), items, options, cancel, |i, event| {
         let reported = match event {
             RunEvent::Sending => Reported::Sending,
             RunEvent::Sent { sent, failed } => Reported::Sent { status: sent.response.status, failed },
@@ -180,7 +187,7 @@ async fn stopping_a_run_cancels_the_request_in_flight_and_sends_nothing_after_it
     let session = Arc::new(Session::default());
     let events = tokio::time::timeout(
         Duration::from_secs(10),
-        run_file_cancelling(&session, &text, &cancel, stop_once_slow_is_sent),
+        run_file_cancelling(&session, &text, RunOptions::default(), &cancel, stop_once_slow_is_sent),
     )
     .await
     .expect("the run stops without waiting for the slow response");
@@ -195,4 +202,93 @@ async fn stopping_a_run_cancels_the_request_in_flight_and_sends_nothing_after_it
         ]
     );
     assert!(received(&server, "/three").await.is_empty(), "nothing after the stopped request is sent");
+}
+
+#[tokio::test]
+async fn stopping_a_run_during_its_delay_stops_it_at_once() {
+    let server = MockServer::start().await;
+    Mock::given(path("/one")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    Mock::given(path("/two")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let text = format!("GET {uri}/one\n\n###\nGET {uri}/two\n", uri = server.uri());
+    let cancel = Cancel::default();
+
+    let stopper = cancel.clone();
+    let stop_once_one_is_sent = move |i: usize, r: &Reported| {
+        if i == 0 && matches!(r, Reported::Sent { .. }) {
+            let stopper = stopper.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                stopper.cancel();
+            });
+        }
+    };
+    let options = RunOptions { delay: Duration::from_secs(60), ..RunOptions::default() };
+    let events = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_file_cancelling(&Arc::new(Session::default()), &text, options, &cancel, stop_once_one_is_sent),
+    )
+    .await
+    .expect("the run stops without waiting out its delay");
+
+    assert_eq!(events, vec![(0, Reported::Sending), (0, Reported::Sent { status: 200, failed: false })]);
+    assert!(received(&server, "/two").await.is_empty(), "nothing after the delay is sent");
+}
+
+#[tokio::test]
+async fn with_stop_on_first_failure_the_run_ends_after_the_first_failing_request() {
+    let server = MockServer::start().await;
+    Mock::given(path("/missing")).respond_with(ResponseTemplate::new(404)).mount(&server).await;
+    Mock::given(path("/ok")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    Mock::given(path("/after")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    // A 404 alone isn't a failure; the failing test is.
+    let text = format!(
+        "GET {uri}/missing\n\
+         \n\
+         ###\n\
+         GET {uri}/ok\n\
+         \n\
+         > {{%\n\
+         client.test(\"Created\", function() {{ client.assert(response.status === 201, \"Expected 201\"); }});\n\
+         %}}\n\
+         \n\
+         ###\n\
+         GET {uri}/after\n",
+        uri = server.uri()
+    );
+
+    let options = RunOptions { stop_on_failure: true, ..RunOptions::default() };
+    let events = run_file_with(&Arc::new(Session::default()), &text, options).await;
+
+    assert_eq!(
+        events,
+        vec![
+            (0, Reported::Sending),
+            (0, Reported::Sent { status: 404, failed: false }),
+            (1, Reported::Sending),
+            (1, Reported::Sent { status: 200, failed: true }),
+        ]
+    );
+    assert!(received(&server, "/after").await.is_empty(), "nothing after the failing request is sent");
+}
+
+#[tokio::test]
+async fn with_stop_on_first_failure_a_blocked_send_ends_the_run_too() {
+    let server = MockServer::start().await;
+    Mock::given(path("/ok")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    // `nobody` is read before it's sent: that send is blocked.
+    let text = format!(
+        "GET {uri}/ok?token={{{{nobody.response.body.$.token}}}}\n\
+         \n\
+         ###\n\
+         # @name nobody\n\
+         GET {uri}/ok\n",
+        uri = server.uri()
+    );
+
+    let options = RunOptions { stop_on_failure: true, ..RunOptions::default() };
+    let events = run_file_with(&Arc::new(Session::default()), &text, options).await;
+
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(matches!(&events[1], (0, Reported::Failed(_))), "{events:?}");
+    assert!(received(&server, "/ok").await.is_empty(), "nothing after the blocked request is sent");
 }

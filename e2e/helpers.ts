@@ -88,6 +88,8 @@ export interface MockState {
   sentSkipScripts: boolean[];
   /** The Cookie header the Session's jar gave each send, in order ("" for none). */
   sentCookies: string[];
+  /** The options each run got, in order. */
+  runOptions: { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean }[];
   /** The settings it last saved. */
   settings: {
     theme: string;
@@ -99,6 +101,7 @@ export interface MockState {
     envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
     trustedWorkspaces: string[];
+    runnerOptions: Record<string, { delayMs: number; stopOnFailure: boolean }>;
   };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
@@ -132,6 +135,8 @@ export interface MockState {
   menuStateChanges: MenuStateChange[][];
   /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
   openedUrls: string[];
+  /** The script files "Open in default editor" opened, in order. */
+  openedPaths: string[];
   /** The OS clipboard the clipboard plugin reads and writes. */
   clipboard: string;
   /** The texts the clipboard plugin wrote, in order. */
