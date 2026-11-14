@@ -11,7 +11,7 @@ import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
-import { envVariables, isDynamic, makeVarProvider, MASK, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
+import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
 import type { AuthPart, EnvironmentSet, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
@@ -42,6 +42,25 @@ if (new URLSearchParams(location.search).get("requestVars") === "1") {
   ];
   (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
   files[`${ROOT}/api/pets.http`] = withVars;
+}
+// `?chain=1`: Create pet is `# @name createPet`, and Get pet image reads the new pet's id
+// from its latest exchange (`{{createPet.response.body.$.id}}`), a Request variable.
+if (new URLSearchParams(location.search).get("chain") === "1") {
+  const chained = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  (chained.requests[1] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
+  chained.requests[2].url = "{{baseUrl}}/png/{{createPet.response.body.$.id}}";
+  files[`${ROOT}/api/pets.http`] = chained;
+}
+// `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
+// log "Checking the status" before its test and "Done" after it.
+if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
+  const withLogs = structuredClone(jetbrains);
+  const req = withLogs.requests.find((r) => r.responseHandler?.startsWith("> {%")) as { responseHandler: string; raw: unknown };
+  req.responseHandler = req.responseHandler
+    .replace("> {%\n", '> {%\n    client.log("Checking the status");\n')
+    .replace(/\n%\}$/, '\n    client.log("Done");\n%}');
+  req.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withLogs;
 }
 const tree = {
   name: "demo",
@@ -139,6 +158,7 @@ type PreviewArgs = {
   fileVariables: { name: string; value: string }[];
   environment: string | null;
   requestKey?: string;
+  requestNames?: string[];
 };
 /**
  * A rough stand-in for the core's `exec::preview` (tested for real in Rust), resolving
@@ -147,11 +167,11 @@ type PreviewArgs = {
  * marks; a masked prompted value masked, unanswered ones kept as written; query values
  * percent-encoded; the Content-Type the body implies; the default headers.
  */
-function previewRequest({ request: r, filePath, fileVariables, environment, requestKey }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs) {
   const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
-  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues });
+  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues, requestNames });
   const undefinedNames = new Set<string>();
   const circular: string[][] = [];
   // Reference by reference, as the core marks each one a Secret went into.
@@ -332,6 +352,10 @@ function mockTests(handler: string, status: number) {
       const passed = !assert || Number(assert[1]) === status;
       return { name, passed, message: passed ? null : assert![2] };
     });
+}
+/** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
+function mockLogs(handler: string) {
+  return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
 }
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
@@ -553,6 +577,25 @@ function removeNode(path: string) {
 const trashUnavailable = new URLSearchParams(location.search).get("trash") === "unavailable";
 // `?openapiConflicts=1`: OpenAPI generation reports that its target file already exists.
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
+/** The core's report for Request variables of named requests not sent in this Session. */
+function unsentError(names: string[]): Omit<SendError & { kind: "unsentRequest" }, "kind"> {
+  const quoted = names.map((n) => `\`${n}\``);
+  return {
+    message: `This request reads the latest exchange of ${quoted.join(" and ")}, which hasn't been sent in this Session. Send ${quoted.join(" and ")} first.`,
+    details: { names },
+  };
+}
+/** Which named requests have a latest exchange in the mock's Session, as `path\0name`. */
+const exchanges = new Set<string>();
+/**
+ * Like the core's send: the named requests (of `requestNames`) whose Request variables
+ * the request reads but which haven't been sent in this Session, sorted.
+ */
+function unsentRequests(r: Request, filePath: string | null, requestNames: string[]): string[] {
+  const texts = [r.url, ...r.headers.items.filter((h) => h.enabled).flatMap((h) => [h.name, h.value]), r.body.enabled ? r.body.text : ""];
+  const names = texts.flatMap((t) => segments(t).flatMap(({ ref }) => (ref === undefined ? [] : [requestVariable(ref)?.name ?? ""])));
+  return [...new Set(names.filter((n) => n && requestNames.includes(n) && !exchanges.has(`${filePath}\0${n}`)))].sort();
+}
 // `?sendError=<kind>`: every send fails with that kind of classified error (see `SendError`),
 // except that `unresolvedVariable` fails only while no environment is selected.
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
@@ -588,6 +631,13 @@ const sendErrors: SendErrorFixtures = {
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
   untrustedWorkspace: { message: UNTRUSTED_MESSAGE, details: null },
+  unsentRequest: unsentError(["createPet"]),
+  unmatchedPath: {
+    message: "{{createPet.response.body.$.idd}}: `$.idd` matches nothing, in the latest exchange of `createPet` (received at 09:05:07)",
+    details: {
+      paths: [{ reference: "createPet.response.body.$.idd", request: "createPet", received: "2026-11-13T09:05:07.000Z", reason: "`$.idd` matches nothing" }],
+    },
+  },
   other: { message: "Something unexpected went wrong", details: null },
 };
 const sendError: SendError | null =
@@ -1072,6 +1122,9 @@ mockIPC(
         cancelledRuns.add(args.runId);
         return null;
       case "send_request": {
+        // Like the core: blocked before anything is sent, and never sent on its own.
+        const unsent = unsentRequests(args.request, args.filePath, args.requestNames ?? []);
+        if (unsent.length) throw { kind: "unsentRequest", ...unsentError(unsent) };
         sent.push(clone(args.request));
         sentPrompts.push(promptAnswers(args.requestKey));
         sentSkipScripts.push(!!args.skipScripts);
@@ -1093,6 +1146,8 @@ mockIPC(
         // An environment defines the missing variable, so picking one fixes it.
         if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
         const r = args.request;
+        const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
+        if (named) exchanges.add(`${args.filePath}\0${named}`);
         if (perf) return perfResponse(r.url, r.method);
         if (responseKind === "asReceived") return asReceivedResponse(r.method);
         if (r.url.includes("png") && bigBinary) {
@@ -1151,7 +1206,7 @@ mockIPC(
           timings: jsonTimings,
           cookies,
           tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
-          logs: [],
+          logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
         };
       }
       case "format_body":

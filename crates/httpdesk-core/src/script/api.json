@@ -10,6 +10,11 @@
     "info": "Fails the enclosing test with message when condition is false. Outside a test, records its own result."
   },
   {
+    "name": "client.log",
+    "detail": "(...values)",
+    "info": "Writes a line to the response's Log: the values joined by spaces, objects as JSON."
+  },
+  {
     "name": "response.status",
     "detail": "number",
     "info": "The response's HTTP status code."

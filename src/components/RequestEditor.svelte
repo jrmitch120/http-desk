@@ -8,7 +8,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { KeyValue } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
@@ -52,6 +52,7 @@
       envName: app.envName,
       prompts: req ? requestPrompts(req) : [],
       answers: answers.current,
+      requestNames: requestNames(doc.file),
     };
     return {
       ...makeVarProvider(scope),

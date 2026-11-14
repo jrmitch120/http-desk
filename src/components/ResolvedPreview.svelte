@@ -8,7 +8,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
-  import { fileVariables, methodClass, requestPrompts } from "../lib/http";
+  import { fileVariables, methodClass, requestNames, requestPrompts } from "../lib/http";
   import { isDynamic, MASK, SECRET_OPEN, SECRET_RE } from "../lib/vars";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -27,7 +27,7 @@
     const req = app.requestFor(tab);
     const doc = app.docs[tab.path];
     if (!show || !req || !doc) return null;
-    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSetFor(tab.path), app.sessionVersion]);
+    return JSON.stringify([req, fileVariables(doc.file), requestNames(doc.file), app.envName, app.envSetFor(tab.path), app.sessionVersion]);
   });
   let asked = 0;
   $effect(() => {

@@ -1,13 +1,13 @@
 //! JetBrains scripts, run in a sandboxed embedded QuickJS (ADR-0008).
 //!
 //! Each script gets a fresh runtime and context (`Sandbox`) with fixed limits
-//! ([`TIME_LIMIT`], [`MEMORY_LIMIT`]) and no filesystem, network or process
+//! ([`TIME_LIMIT`], [`MEMORY_LIMIT`], [`LOG_LIMIT`]) and no filesystem, network or process
 //! APIs: QuickJS has none until they're added, and only the API in
 //! `script/prelude.js` is. The prelude builds the JetBrains `client`/`response`/
 //! `request` objects from two things `install` hands it: `data`, the exchange
-//! as JSON, and `host`, the Rust functions it calls (today `host.test`).
+//! as JSON, and `host`, the Rust functions it calls (`host.test`, `host.log`).
 //!
-//! To implement a JetBrains API (`client.log`, `client.global.*`,
+//! To implement a JetBrains API (`client.global.*`,
 //! `request.variables.*`): add a Rust function to `host` in `install` (state it
 //! needs goes on `Recorded` or alongside it), call it from the prelude, and take
 //! the name out of the prelude's unsupported namespace it falls under, and list
@@ -33,6 +33,8 @@ use crate::model::{HandlerPart, Request};
 pub const TIME_LIMIT: Duration = Duration::from_secs(5);
 /// How much memory a script's runtime may hold, the response body included. Fixed: there is no setting.
 pub const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+/// How much `client.log` text a script may keep. Fixed: there is no setting.
+pub const LOG_LIMIT: usize = 1024 * 1024;
 
 const PRELUDE: &str = include_str!("script/prelude.js");
 /// The file name scripts are evaluated as, which error stacks quote.
@@ -190,11 +192,28 @@ fn install<'js>(ctx: &Ctx<'js>, data: &serde_json::Value, recorded: &Recorded) -
             tests.borrow_mut().tests.push(TestResult { name, passed, message });
         })?,
     )?;
+    let logs = recorded.clone();
+    let logged = Cell::new(0);
+    host.set("log", Function::new(ctx.clone(), move |line: String| log(&mut logs.borrow_mut().logs, &logged, line))?)?;
     let mut data = data.clone();
     data["limits"] = serde_json::json!({ "time": human(TIME_LIMIT), "memory": format!("{} MB", MEMORY_LIMIT >> 20) });
     let data: Value = ctx.json_parse(data.to_string())?;
     let prelude: Function = ctx.eval_with_options(PRELUDE, options("<prelude>"))?;
     prelude.call::<_, ()>((host, data))
+}
+
+/// Keeps a `client.log` line, unless the script has already logged [`LOG_LIMIT`]
+/// bytes (`logged`, each line counting one more for its line break): then one
+/// line says the log stopped and the rest are dropped. The log is held outside
+/// the script's runtime, so its memory limit doesn't cover it.
+fn log(logs: &mut Vec<String>, logged: &Cell<usize>, line: String) {
+    let before = logged.get();
+    logged.set(before.saturating_add(line.len() + 1));
+    if logged.get() <= LOG_LIMIT {
+        logs.push(line);
+    } else if before <= LOG_LIMIT {
+        logs.push(format!("Log stopped at {} MB, the log limit for a script", LOG_LIMIT >> 20));
+    }
 }
 
 fn options(file: &str) -> EvalOptions {

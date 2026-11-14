@@ -5,6 +5,7 @@
 pub mod body_format;
 pub mod cookies;
 pub mod env;
+pub mod exchange;
 pub mod exec;
 pub mod json_filter;
 pub mod model;

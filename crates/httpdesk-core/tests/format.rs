@@ -96,6 +96,21 @@ fn parses_vscode_fixture() {
     let patch = &f.requests[3];
     assert_eq!(patch.method, "PATCH");
     assert_eq!(patch.body.mode, BodyMode::File);
+
+    // REST Client's Request variables example: File variables holding Request variables.
+    let comment = &f.requests[4];
+    assert_eq!(comment.request_name(), Some("createComment"));
+    assert_eq!(
+        comment.variables,
+        [Variable { name: "authToken".into(), value: "{{login.response.headers.X-AuthToken}}".into() }]
+    );
+    let created = &f.requests[5];
+    assert_eq!(
+        created.variables,
+        [Variable { name: "commentId".into(), value: "{{createComment.response.body.$.id}}".into() }]
+    );
+    assert_eq!(created.url, "{{baseUrl}}/comments/{{commentId}}");
+    assert_eq!(f.request_names(), ["login", "getProfile", "createComment", "getCreatedComment"]);
 }
 
 #[test]
