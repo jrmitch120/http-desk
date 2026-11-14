@@ -31,3 +31,24 @@ PATCH {{baseUrl}}/items/1
 Content-Type: application/xml
 
 < ./item.xml
+
+###
+
+@authToken = {{login.response.headers.X-AuthToken}}
+
+# @name createComment
+POST {{baseUrl}}/comments HTTP/1.1
+Authorization: {{authToken}}
+Content-Type: application/json
+
+{
+    "content": "fake content"
+}
+
+###
+
+@commentId = {{createComment.response.body.$.id}}
+
+# @name getCreatedComment
+GET {{baseUrl}}/comments/{{commentId}} HTTP/1.1
+Authorization: {{authToken}}

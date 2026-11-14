@@ -96,3 +96,20 @@ test("Clear session asks first, then forgets the cookies and the prompt answers"
   await send(page);
   await expect(form).toBeVisible();
 });
+
+test("Clear session takes the test markers off the tab and the tree row (#138)", async ({ page }) => {
+  // `?trusted=1`: the demo workspace runs the sample handler, whose test fails on the mock's 201.
+  await openApp(page, "?trusted=1");
+  await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+  await send(page);
+  const marker = page.getByTestId("req-Post with JSON body").getByRole("img", { name: /^Tests/ });
+  await expect(marker).toBeVisible();
+  await expect(tab(page, "Post with JSON body").getByRole("img", { name: /^Tests/ })).toBeVisible();
+
+  await page.keyboard.press("Meta+j");
+  await panel(page).getByRole("button", { name: "Clear session" }).click();
+  await dialog(page, "Clear the session?").getByRole("button", { name: "Clear session" }).click();
+
+  await expect(marker).toHaveCount(0);
+  await expect(tab(page, "Post with JSON body").getByRole("img", { name: /^Tests/ })).toHaveCount(0);
+});

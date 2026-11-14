@@ -33,6 +33,8 @@ export type RequestArgs = {
   environment: string | null;
   /** The request's key (`_key`): its Prompt variables take the answers the Session holds for it. */
   requestKey: string;
+  /** The `# @name`s of the file's requests (`requestNames`): its Request variables read their latest exchanges in the Session. */
+  requestNames: string[];
 };
 
 /** Which form of a stored response body `api.responseBody` fetches. */

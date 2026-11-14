@@ -26,6 +26,20 @@ pub struct HttpFile {
     pub bom: bool,
 }
 
+impl HttpFile {
+    /// The `# @name`s of the file's requests, in order, each once: what its Request
+    /// variables can refer to (`###` text never counts).
+    pub fn request_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for name in self.requests.iter().filter_map(Request::request_name) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+        names
+    }
+}
+
 /// Content before the first request: `@var = value` lines plus other lines
 /// (comments) kept verbatim.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -320,6 +334,11 @@ impl Request {
             }
         }
         out
+    }
+
+    /// The request's `# @name`, which Request variables refer to it by. Its `###` text never is.
+    pub fn request_name(&self) -> Option<&str> {
+        self.directive("name").map(str::trim).filter(|n| !n.is_empty())
     }
 
     /// The response handler as structured parts, read from the verbatim

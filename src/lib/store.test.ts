@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
@@ -1415,6 +1415,69 @@ describe("production guard", () => {
     expect(app.dialog).toBeNull();
     expect(api.sendRequest).toHaveBeenCalledTimes(1);
   });
+
+  it("asks before sending a request first for another's Request variables", async () => {
+    const [, me] = await openAll(chained());
+    app.activeTabId = me.id;
+    const sending = app.sendFirst(me.id, "login");
+    expect(await answer("cancel")).toMatch(/production/i);
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+});
+
+/** A file whose `# @name login` POST is read by a GET's Request variable. */
+function chained(): HttpFile {
+  const f = fileOf(["POST", "Log in", "https://example.com/login"], ["GET", "Me", "https://example.com/me"]);
+  f.requests[0].directives = [{ name: "name", value: "login" }];
+  f.requests[1].headers.items = [{ name: "X-Token", value: "{{login.response.body.$.token}}", enabled: true }];
+  return f;
+}
+
+describe("Request variables", () => {
+  beforeEach(() => {
+    app.envName = null;
+    app.envSet = null;
+    app.envFolders = [];
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("send and preview name the file's named requests, so the Session's exchanges are read", async () => {
+    const [, me] = await openAll(chained());
+    await app.send(me.id);
+    await app.preview(me);
+    expect(api.sendRequest.mock.lastCall![0].requestNames).toEqual(["login"]);
+    expect(api.previewRequest.mock.lastCall![0].requestNames).toEqual(["login"]);
+  });
+
+  it("Send first opens the named request and sends it, never the request that asked", async () => {
+    const f = chained();
+    readHttpFile.mockResolvedValueOnce(f);
+    await app.openRequest(PATH, { index: 1 });
+    const me = app.activeTab!;
+
+    await app.sendFirst(me.id, "login");
+
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(api.sendRequest.mock.lastCall![0].request.url).toBe("https://example.com/login");
+    expect(app.requestFor(app.activeTab!)?.name).toBe("Log in");
+    expect(app.runs[app.activeTab!.id]?.response?.id).toBe("r1");
+  });
+
+  it("a named request's send changes the Session, so views reading it ask again", async () => {
+    const [login, me] = await openAll(chained());
+    const before = app.sessionVersion;
+    await app.send(me.id);
+    expect(app.sessionVersion).toBe(before);
+    await app.send(login.id);
+    expect(app.sessionVersion).toBe(before + 1);
+  });
+
+  it("Send first does nothing when no request in the file has that name any more", async () => {
+    const [, me] = await openAll(chained());
+    await app.sendFirst(me.id, "gone");
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
 });
 
 // #137: scripts run only in a Trusted workspace, asked the first time a send would run one.
@@ -1524,6 +1587,93 @@ describe("workspace trust", () => {
     await app.send(tab.id);
     expect(app.runs[tab.id].error?.kind).toBe("untrustedWorkspace");
     expect(app.settings!.trustedWorkspaces).toEqual([]);
+  });
+});
+
+describe("test markers", () => {
+  const pass = (name: string): TestResult => ({ name, passed: true, message: null });
+  const fail = (name: string): TestResult => ({ name, passed: false, message: "nope" });
+  const responding = (id: string, tests: TestResult[]) =>
+    api.sendRequest.mockResolvedValueOnce({ id, status: 200, tests, logs: [] } as unknown as HttpResponse);
+
+  beforeEach(() => {
+    app.settings = { theme: "dark", recentWorkspaces: [], environments: {}, environmentSettings: {}, trustedWorkspaces: [] } as unknown as AppSettings;
+    app.envName = null;
+    app.clearTestMarks();
+  });
+
+  it("are green when every test of the latest send passed, red when any failed", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    responding("r1", [pass("a"), pass("b")]);
+    await app.send(list.id);
+    responding("r2", [pass("a"), fail("Response handler")]);
+    await app.send(create.id);
+    expect(app.testMark(list.key)).toBe("passed");
+    expect(app.testMark(create.key)).toBe("failed");
+
+    responding("r3", [fail("a")]);
+    await app.send(list.id);
+    expect(app.testMark(list.key)).toBe("failed");
+  });
+
+  it("go away when the latest send had no tests or failed, and stay when it was cancelled", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    responding("r2", []);
+    await app.send(tab.id);
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r3", [pass("a")]);
+    await app.send(tab.id);
+    api.sendRequest.mockRejectedValueOnce({ kind: "refused", message: "refused", details: null });
+    await app.send(tab.id);
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r4", [fail("a")]);
+    await app.send(tab.id);
+    let reject!: (e: unknown) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+    api.cancelRequest.mockImplementationOnce(async () => reject("Request cancelled"));
+    const sending = app.send(tab.id);
+    await app.cancel(tab.id);
+    await sending;
+    expect(app.testMark(tab.key)).toBe("failed");
+  });
+
+  it("outlast the tab, since they belong to the request", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    app.closeTab(tab.id);
+    expect(app.testMark(tab.key)).toBe("passed");
+  });
+
+  it("clear with the Session: on opening a workspace, or all at once", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    app.clearTestMarks();
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r2", [fail("a")]);
+    await app.send(tab.id);
+    openWorkspace.mockResolvedValue({ root: "/ws", tree: { name: "ws", path: "/ws", isDir: true, children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue(app.settings);
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: null });
+    await app.openWorkspace("/ws");
+    expect(app.testMark(tab.key)).toBeUndefined();
+  });
+
+  it("one request's can be cleared alone", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(list.id);
+    responding("r2", [pass("a")]);
+    await app.send(create.id);
+    app.clearTestMark(list.key);
+    expect(app.testMark(list.key)).toBeUndefined();
+    expect(app.testMark(create.key)).toBe("passed");
   });
 });
 
@@ -2006,15 +2156,17 @@ describe("the Session panel", () => {
     api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
   });
 
-  it("a finished send tells views showing the Session to read it again, as its cookies may have changed", async () => {
+  it("a response that set cookies tells views showing the Session to read it again", async () => {
     const [tab] = await openAll(fileOf(["GET", "Login", "https://x/login"]));
-    let resolve!: (r: HttpResponse) => void;
-    api.sendRequest.mockReturnValueOnce(new Promise((r) => (resolve = r)));
-    const sending = app.send(tab.id);
-    const during = app.sessionVersion;
-    resolve({ id: "r1", status: 200 } as HttpResponse);
-    await sending;
-    expect(app.sessionVersion).not.toBe(during);
+    const setCookie = { name: "sid", value: "1" } as HttpResponse["cookies"][number];
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200, cookies: [setCookie] } as HttpResponse);
+    const before = app.sessionVersion;
+    await app.send(tab.id);
+    expect(app.sessionVersion).toBe(before + 1);
+
+    api.sendRequest.mockResolvedValueOnce({ id: "r2", status: 200, cookies: [] as HttpResponse["cookies"] } as HttpResponse);
+    await app.send(tab.id);
+    expect(app.sessionVersion).toBe(before + 1);
   });
 
   it("deleting a cookie or clearing them asks the shell and tells the panel to read the jar again", async () => {
@@ -2044,6 +2196,19 @@ describe("the Session panel", () => {
     await clearing;
     expect(api.clearSession).toHaveBeenCalledTimes(1);
     expect(app.sessionVersion).not.toBe(before);
+  });
+
+  it("Clear session drops every tab's and tree row's test marker, which belong to the Session", async () => {
+    app.markTests("k1", [{ name: "ok", passed: true, message: null }]);
+    app.markTests("k2", [{ name: "bad", passed: false, message: "no" }]);
+
+    const clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("clear");
+    await clearing;
+
+    expect(app.testMark("k1")).toBeUndefined();
+    expect(app.testMark("k2")).toBeUndefined();
   });
 
   it("the Session command shows the panel, and runs again to hide it", () => {

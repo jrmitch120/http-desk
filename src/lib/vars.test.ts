@@ -22,6 +22,8 @@ interface Case {
   /** The request's Prompt variables; one with a `value` has been answered. */
   prompts?: { name: string; value?: string }[];
   asked?: string[];
+  /** The file's `# @name`s; their exchanges, the core's value and its unsent/unmatched reports are the core's alone. */
+  named?: string[];
 }
 
 /**
@@ -106,6 +108,14 @@ describe("what hovering a reference shows", () => {
     expect(provider().info("nope")).toEqual({ state: "bad", source: undefined });
     expect(provider([], [], null).info("nope")).toEqual({ state: "bad", source: "no environment selected" });
     expect(provider().info("$uuid")).toEqual({ state: "dyn" });
+  });
+
+  it("marks a Request variable of a request named in the file, and only those", () => {
+    const named = makeVarProvider({ env: envVariables(set, "dev"), fileVars: [{ name: "login", value: "x" }], requestVars: [], envName: "dev", requestNames: ["login"] });
+    expect(named.info("login.response.body.$.token")).toEqual({ state: "request", source: "the latest exchange of login" });
+    expect(named.info("other.response.body.$.token")).toEqual({ state: "bad" });
+    expect(named.info("login")).toMatchObject({ state: "ok", value: "x" });
+    expect(provider([], [{ name: "login", value: "x" }]).info("login.response.body.$.token")).toEqual({ state: "bad" });
   });
 
   it("says where to edit the definition in use, when it has a row in the app", () => {
@@ -280,6 +290,7 @@ describe("the frontend resolver agrees with the core on the shared cases", () =>
       envName: environment,
       prompts: (c.prompts ?? []).map((p) => ({ name: p.name, description: "" })),
       answers: Object.fromEntries((c.prompts ?? []).flatMap((p) => (p.value === undefined ? [] : [[p.name, p.value]]))),
+      requestNames: c.named ?? [],
     });
     const r = provider.resolve(c.text);
     expect({ value: r.value, undefined: r.undefined, circular: r.circular, asked: r.asked }).toEqual({

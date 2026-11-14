@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Local, Utc};
 
+use crate::exchange::{self, NamedExchanges, UnmatchedPath};
 use crate::model::{Prompt, Variable};
 
 /// Every dynamic variable the resolver generates, without the `$`; `env.` takes a
@@ -129,6 +130,10 @@ pub struct Resolver {
     secrets: HashSet<String>,
     /// Whether a Secret went into the reference being resolved.
     secret_seen: std::cell::Cell<bool>,
+    /// The file's named requests and their latest exchanges (see [`Resolver::with_request_variables`]).
+    exchanges: NamedExchanges,
+    unsent: std::cell::RefCell<BTreeSet<String>>,
+    unmatched: std::cell::RefCell<Vec<UnmatchedPath>>,
 }
 
 impl Resolver {
@@ -168,6 +173,17 @@ impl Resolver {
     /// variables) resolves to its value between [`SECRET_MARKS`].
     pub fn with_secrets(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.secrets = names.into_iter().collect();
+        self
+    }
+
+    /// Adds Request variables: `{{x.response…}}` and `{{x.request…}}` read the latest
+    /// exchange of the request named `x` (`# @name x`) in `exchanges`, the file's named
+    /// requests. A name the file has no `# @name` for is an Undefined variable, and a
+    /// dotted reference never falls back to a variable called `x`. One whose request
+    /// hasn't been sent is reported by [`Self::unsent`], and one whose path reads
+    /// nothing by [`Self::unmatched`]; both are left as written.
+    pub fn with_request_variables(mut self, exchanges: NamedExchanges) -> Self {
+        self.exchanges = exchanges;
         self
     }
 
@@ -267,6 +283,18 @@ impl Resolver {
         self.circular.borrow().clone()
     }
 
+    /// Named requests that Request variables met so far read, but that haven't been
+    /// sent in this Session (sorted).
+    pub fn unsent(&self) -> Vec<String> {
+        self.unsent.borrow().iter().cloned().collect()
+    }
+
+    /// Request variables met so far whose path reads nothing from their request's
+    /// latest exchange, in the order found.
+    pub fn unmatched(&self) -> Vec<UnmatchedPath> {
+        self.unmatched.borrow().clone()
+    }
+
     /// Dynamic variables that failed (bad or out-of-range arguments), as messages.
     pub fn errors(&self) -> Vec<String> {
         self.errors.borrow().clone()
@@ -304,6 +332,10 @@ impl Resolver {
                         continue;
                     }
                 }
+            } else if let Some((name, path)) = exchange::split_reference(inner) {
+                // Inserted as read, never resolved further.
+                out.push_str(&self.request_variable(inner, name, path).unwrap_or_else(|| whole.to_string()));
+                continue;
             } else if let Some(prompt) = self.prompts.get(inner) {
                 // In the preview a masked value is shown masked, and an unanswered
                 // prompt as written (a placeholder, so it passes the URL check).
@@ -351,6 +383,34 @@ impl Resolver {
             }
         }
         out
+    }
+
+    /// The value of Request variable `reference` (`name.path`), or `None` when it has
+    /// none, recorded as undefined, unsent or unmatched.
+    fn request_variable(&self, reference: &str, name: &str, path: &str) -> Option<String> {
+        let Some(latest) = self.exchanges.get(name) else {
+            self.undefined.borrow_mut().insert(reference.to_string());
+            return None;
+        };
+        let Some(exchange) = latest else {
+            self.unsent.borrow_mut().insert(name.to_string());
+            return None;
+        };
+        exchange
+            .value(path)
+            .map_err(|reason| {
+                let miss = UnmatchedPath {
+                    reference: reference.to_string(),
+                    request: name.to_string(),
+                    received: exchange.received,
+                    reason,
+                };
+                let mut unmatched = self.unmatched.borrow_mut();
+                if !unmatched.contains(&miss) {
+                    unmatched.push(miss);
+                }
+            })
+            .ok()
     }
 
     /// `Ok(None)` when the variable is unknown or unset; `Err` when its arguments are bad.
