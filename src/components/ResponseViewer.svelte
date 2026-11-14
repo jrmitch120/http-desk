@@ -24,6 +24,7 @@
   import HeadersPanel from "./HeadersPanel.svelte";
   import CookiesPanel from "./CookiesPanel.svelte";
   import TimingPanel from "./TimingPanel.svelte";
+  import TestsPanel from "./TestsPanel.svelte";
   import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -104,6 +105,8 @@
     { value: "cookies", label: "Cookies", count: res?.cookies.length || undefined },
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
+    // Only when the response handler reported something.
+    ...(res?.tests?.length ? [{ value: "tests", label: "Tests", count: res.tests.length }] : []),
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
   const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
@@ -176,6 +179,8 @@
         <CookiesPanel cookies={res.cookies} url={res.url} />
       {:else if current === "timing"}
         <TimingPanel {res} />
+      {:else if current === "tests"}
+        <TestsPanel tests={res.tests} />
       {:else}
         <RequestPanel {res} />
       {/if}

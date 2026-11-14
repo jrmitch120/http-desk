@@ -218,6 +218,49 @@ pub(crate) fn is_handler_start(line: &str) -> bool {
     false
 }
 
+/// Splits a verbatim response handler into its parts. `> {%` takes everything up
+/// to the next `%}` (on the same line or a later one) as its script; lines
+/// outside any part are ignored.
+pub(crate) fn handler_parts(text: &str) -> Vec<HandlerPart> {
+    let mut parts = Vec::new();
+    let mut lines = text.split('\n').enumerate();
+    while let Some((i, line)) = lines.next() {
+        if let Some(rest) = line.strip_prefix(">>") {
+            let (overwrite, path) = match rest.strip_prefix('!') {
+                Some(p) => (true, p),
+                None => (false, rest),
+            };
+            parts.push(HandlerPart::Redirect { path: path.trim().to_string(), overwrite });
+        } else if let Some(rest) = line.strip_prefix('>') {
+            let rest = rest.trim_start();
+            let Some(script) = rest.strip_prefix("{%") else {
+                if !rest.trim().is_empty() {
+                    parts.push(HandlerPart::File { path: rest.trim().to_string() });
+                }
+                continue;
+            };
+            let mut source = String::new();
+            let mut current = script;
+            loop {
+                if let Some(end) = current.find("%}") {
+                    source.push_str(&current[..end]);
+                    break;
+                }
+                source.push_str(current);
+                match lines.next() {
+                    Some((_, next)) => {
+                        source.push('\n');
+                        current = next;
+                    }
+                    None => break,
+                }
+            }
+            parts.push(HandlerPart::Inline { source, line: i + 1 });
+        }
+    }
+    parts
+}
+
 fn trim_blank_lines<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {
     let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
     let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |e| e + 1);
