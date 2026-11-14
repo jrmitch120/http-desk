@@ -165,7 +165,7 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
     if (name.startsWith("$")) return { state: "bad" };
     const prompt = prompted.get(name);
     if (prompt === null) return { state: "prompt", source: "a prompt: asked when sent" };
-    if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered until the app quits" };
+    if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered in the Session" };
     const entry = scope.get(name);
     if (!entry) return { state: "bad", source: envName ? undefined : "no environment selected" };
     const r = resolve(`{{${name}}}`);

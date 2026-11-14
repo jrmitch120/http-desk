@@ -236,7 +236,7 @@ describe("what hovering a Prompt variable shows", () => {
   });
 
   it("shows a remembered value, masked for password prompts", () => {
-    expect(provider.info("user")).toEqual({ state: "ok", value: "ann", secret: false, source: "a prompt, remembered until the app quits" });
+    expect(provider.info("user")).toEqual({ state: "ok", value: "ann", secret: false, source: "a prompt, remembered in the Session" });
     expect(provider.info("password")).toMatchObject({ state: "ok", secret: true });
     expect(varSegments("{{otp}}", provider)[0].cls).toBe("cm-var cm-var-prompt");
   });

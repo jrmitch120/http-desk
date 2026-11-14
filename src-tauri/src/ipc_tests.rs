@@ -14,6 +14,7 @@ mod preview;
 mod renaming;
 mod reply;
 mod scripts;
+mod session;
 mod usages;
 mod watcher;
 mod window_state;

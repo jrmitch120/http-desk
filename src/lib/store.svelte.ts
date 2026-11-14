@@ -470,6 +470,8 @@ class AppStore {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
     try {
       const info = await api.openWorkspace(path);
+      // The shell started a new Session for it, so nothing from the last one shows.
+      this.sessionVersion++;
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
@@ -1067,34 +1069,41 @@ class AppStore {
       filePath: tab.path,
       fileVariables: $state.snapshot(fileVariables(doc.file)),
       environment: this.envName,
-      promptValues: this.promptAnswers(tab),
+      requestKey: tab.key,
     };
   }
 
-  /** Values typed for Prompt variables, per request key: for this app session only, never saved. */
-  private promptValues = $state<Record<string, Record<string, string>>>({});
+  /**
+   * Goes up whenever the workspace's Session changes (answers given or forgotten, or a
+   * new workspace opened), so views showing what it holds read it again.
+   */
+  sessionVersion = $state(0);
 
-  /** The values remembered for the tab's request's Prompt variables, by name. */
-  promptAnswers(tab: Tab): Record<string, string> {
-    return { ...this.promptValues[tab.key] };
+  /**
+   * The values the Session remembers for the tab's request's Prompt variables, by
+   * name. The Session (in the shell) holds them, never the webview.
+   */
+  promptAnswers(tab: Tab): Promise<Record<string, string>> {
+    return api.promptAnswers(tab.key);
   }
 
   /** Forgets the tab's request's prompted values, so its next send asks again. */
-  forgetPrompts(tab: Tab) {
-    delete this.promptValues[tab.key];
+  async forgetPrompts(tab: Tab) {
+    await api.forgetPromptAnswers(tab.key);
+    this.sessionVersion++;
   }
 
   /**
-   * Asks for the request's Prompt variables that have no remembered value, all in
-   * one form, and remembers the answers. False if the user cancelled.
+   * Asks for the request's Prompt variables that the Session has no value for, all in
+   * one form, and has the Session remember the answers. False if the user cancelled.
    */
   private async askPrompts(tab: Tab, req: Request): Promise<boolean> {
-    const remembered = this.promptAnswers(tab);
+    const remembered = await this.promptAnswers(tab);
     const asked = requestPrompts(req).filter((p) => !Object.hasOwn(remembered, p.name));
     if (!asked.length) return true;
     const r = await this.openDialog({
       title: asked.length === 1 ? `Value for "${asked[0].name}"` : "Values for this request",
-      message: "Asked once, then remembered for this request until HttpDesk quits. Never saved.",
+      message: "Asked once, then remembered for this request until you open another workspace or quit. Never saved.",
       fields: asked.map((p) => ({ label: p.name, help: p.description, masked: promptMasked(p.name), value: "" })),
       buttons: [
         CANCEL,
@@ -1102,7 +1111,8 @@ class AppStore {
       ],
     });
     if (r.button !== "send") return false;
-    this.promptValues[tab.key] = { ...remembered, ...Object.fromEntries(asked.map((p, i) => [p.name, r.values[i] ?? ""])) };
+    await api.answerPrompts(tab.key, Object.fromEntries(asked.map((p, i) => [p.name, r.values[i] ?? ""])));
+    this.sessionVersion++;
     return true;
   }
 
@@ -1120,8 +1130,8 @@ class AppStore {
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
-    // Only awaited when it asks, so an ordinary send starts loading at once.
-    if (requestPrompts(req).some((p) => !Object.hasOwn(this.promptAnswers(tab), p.name))) {
+    // Only awaited for a request with prompts, so an ordinary send starts loading at once.
+    if (requestPrompts(req).length) {
       this.confirmingSend.add(tabId);
       try {
         if (!(await this.askPrompts(tab, req))) return;

@@ -19,6 +19,9 @@ const api = vi.hoisted(() => ({
   findUsages: vi.fn(),
   sendRequest: vi.fn(),
   previewRequest: vi.fn(),
+  promptAnswers: vi.fn(),
+  answerPrompts: vi.fn(),
+  forgetPromptAnswers: vi.fn(),
   cancelRequest: vi.fn(),
   releaseResponse: vi.fn(),
   saveSettings: vi.fn(),
@@ -1846,11 +1849,25 @@ describe("renaming a variable", () => {
 });
 
 describe("Prompt variables", () => {
+  /** A stand-in for the shell's Session: prompt answers by request key. */
+  let session: Map<string, Record<string, string>>;
+  /** The answers the Session held for each sent request, in order. */
+  let sentAnswers: Record<string, string>[];
   beforeEach(() => {
     app.root = "/ws";
     app.settings = null;
     app.envName = null;
-    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+    session = new Map();
+    sentAnswers = [];
+    api.promptAnswers.mockImplementation(async (key: string) => ({ ...session.get(key) }));
+    api.answerPrompts.mockImplementation(async (key: string, answers: Record<string, string>) => {
+      session.set(key, { ...session.get(key), ...answers });
+    });
+    api.forgetPromptAnswers.mockImplementation(async (key: string) => session.delete(key));
+    api.sendRequest.mockImplementation(async (args: { requestKey: string }) => {
+      sentAnswers.push({ ...session.get(args.requestKey) });
+      return { id: "r1", status: 200 } as HttpResponse;
+    });
   });
 
   /** A tab on a POST that declares `otp` (with help text) and `password`. */
@@ -1863,7 +1880,7 @@ describe("Prompt variables", () => {
     const [tab] = await openAll(f);
     return tab;
   }
-  const sentPrompts = (call = 0) => api.sendRequest.mock.calls[call][0].promptValues;
+  const sentPrompts = (call = 0) => sentAnswers[call];
 
   it("asks once for all of them, in order, with their descriptions and masking, then sends with the values", async () => {
     const tab = await promptingTab();
@@ -1887,7 +1904,7 @@ describe("Prompt variables", () => {
     await sending;
     expect(api.sendRequest).not.toHaveBeenCalled();
     expect(app.runs[tab.id]).toBeUndefined();
-    expect(app.promptAnswers(tab)).toEqual({});
+    expect(await app.promptAnswers(tab)).toEqual({});
   });
 
   it("remembers the values: a second send, or one after reopening the tab, doesn't ask again", async () => {
@@ -1921,8 +1938,8 @@ describe("Prompt variables", () => {
     await second;
     expect(sentPrompts(1)).toEqual({ otp: "123456", password: "s3cret", user: "ann" });
 
-    app.forgetPrompts(tab);
-    expect(app.promptAnswers(tab)).toEqual({});
+    await app.forgetPrompts(tab);
+    expect(await app.promptAnswers(tab)).toEqual({});
     const third = app.send(tab.id);
     await vi.waitFor(() => expect(app.dialog).not.toBeNull());
     expect(app.dialog!.fields!.map((f) => f.label)).toEqual(["otp", "password", "user"]);
@@ -1945,23 +1962,35 @@ describe("Prompt variables", () => {
     expect(api.sendRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("the resolved preview gets the remembered values; a request without prompts sends none", async () => {
+  it("are kept in the Session, which the send and the resolved preview read by the request's key", async () => {
     const tab = await promptingTab();
     api.previewRequest.mockResolvedValue(null);
-    await app.preview(tab);
-    expect(api.previewRequest.mock.calls[0][0].promptValues).toEqual({});
     const sending = app.send(tab.id);
     await vi.waitFor(() => expect(app.dialog).not.toBeNull());
     app.closeDialog("send", "", ["1", "2"]);
     await sending;
+    expect(api.answerPrompts).toHaveBeenCalledWith(tab.key, { otp: "1", password: "2" });
+    expect(api.sendRequest.mock.calls[0][0]).toMatchObject({ requestKey: tab.key });
+    expect(api.sendRequest.mock.calls[0][0]).not.toHaveProperty("promptValues");
     await app.preview(tab);
-    expect(api.previewRequest.mock.calls[1][0].promptValues).toEqual({ otp: "1", password: "2" });
+    expect(api.previewRequest.mock.calls[0][0]).toMatchObject({ requestKey: tab.key });
+  });
 
+  it("a request without prompts is sent at once, without asking the Session", async () => {
     readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Plain", "https://x"]));
     await app.openRequest("/ws/api/plain.http", { index: 0 });
-    await app.send(app.activeTabId!);
-    expect(app.dialog).toBeNull();
-    expect(sentPrompts(1)).toEqual({});
+    void app.send(app.activeTabId!);
+    expect(app.runs[app.activeTabId!]?.loading).toBe(true);
+    expect(api.promptAnswers).not.toHaveBeenCalled();
+  });
+
+  it("opening a workspace tells views showing the Session's answers to read them again", async () => {
+    openWorkspace.mockResolvedValue({ root: "/other", tree: { name: "other", path: "/other", kind: "dir", children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue(null);
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: null });
+    const before = app.sessionVersion;
+    await app.openWorkspace("/other");
+    expect(app.sessionVersion).not.toBe(before);
   });
 });
 

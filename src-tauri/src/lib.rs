@@ -12,6 +12,7 @@ use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::script;
+use httpdesk_core::session::Session;
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
 use httpdesk_core::{HttpFile, Request, Variable};
@@ -193,6 +194,8 @@ struct AppState {
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
     clients: exec::ClientPool,
+    /// The open workspace's Session, in memory only. Opening a workspace replaces it.
+    session: Mutex<Arc<Session>>,
     /// Response bodies by response id, kept until released (see bodies.rs).
     bodies: Mutex<KeptBodies>,
     /// Recent bodies parsed as JSON, by response id (for the filter bar).
@@ -211,6 +214,12 @@ struct AppState {
 impl AppState {
     fn root(&self) -> CmdResult<PathBuf> {
         self.root.lock().unwrap().clone().ok_or_else(|| "No workspace is open".to_string())
+    }
+
+    /// The open workspace's Session. A send keeps the one it started with, so it can't
+    /// reach the next workspace's Session if that opens while it's in flight.
+    fn session(&self) -> Arc<Session> {
+        self.session.lock().unwrap().clone()
     }
 
     fn write_file(&self, path: &Path, text: &str) -> CmdResult<()> {
@@ -303,6 +312,8 @@ fn open_workspace_blocking<R: tauri::Runtime>(
     let watcher = watcher::start(app, state.self_writes.clone(), &root)?;
     *state.watcher.lock().unwrap() = Some(watcher);
     *state.root.lock().unwrap() = Some(root.clone());
+    // A new workspace starts with nothing remembered from the last one.
+    *state.session.lock().unwrap() = Arc::default();
     // Covers private env files created before HttpDesk handled workspaces inside a repo.
     let gitignore_updated = env::ensure_gitignored(&root).unwrap_or(false);
 
@@ -472,9 +483,10 @@ struct SendProgress {
 }
 
 /// What a request is sent with: the variables (its folder's environment from disk,
-/// then File variables, then its own, then its answered Prompt variables), the folder
-/// its relative paths start from, and a warning when its folder doesn't define the
-/// selected environment (it's then sent with none: ADR-0004).
+/// then File variables, then its own, then the Prompt variable answers the Session
+/// holds for `request_key`), the folder its relative paths start from, and a warning
+/// when its folder doesn't define the selected environment (it's then sent with
+/// none: ADR-0004).
 /// Shared by send and preview so the two can't disagree.
 struct RequestScope {
     resolver: Resolver,
@@ -488,7 +500,8 @@ fn request_resolver(
     file_path: Option<&Path>,
     file_variables: &[Variable],
     environment: Option<&str>,
-    prompt_values: &HashMap<String, String>,
+    session: &Session,
+    request_key: Option<&str>,
 ) -> Result<RequestScope, ExecError> {
     let base_dir = file_path
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -512,7 +525,7 @@ fn request_resolver(
         .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
     let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
         .with_secrets(secrets)
-        .with_prompts(&request.prompts(), prompt_values);
+        .with_prompts(&request.prompts(), &request_key.map(|k| session.prompt_answers().get(k)).unwrap_or_default());
     Ok(RequestScope { resolver, base_dir, env_warning })
 }
 
@@ -534,7 +547,7 @@ async fn preview_request<R: tauri::Runtime>(
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
-    prompt_values: Option<HashMap<String, String>>,
+    request_key: Option<String>,
 ) -> CmdResult<exec::RequestPreview> {
     off_main(app, move |state| {
         let root = state.root.lock().unwrap().clone();
@@ -544,7 +557,8 @@ async fn preview_request<R: tauri::Runtime>(
             file_path.as_deref(),
             &file_variables,
             environment.as_deref(),
-            &prompt_values.unwrap_or_default(),
+            &state.session(),
+            request_key.as_deref(),
         )
         .map_err(err)?;
         let mut preview = exec::preview(&request, scope.resolver);
@@ -570,7 +584,7 @@ async fn send_request<R: tauri::Runtime>(
     file_path: Option<PathBuf>,
     file_variables: Vec<Variable>,
     environment: Option<String>,
-    prompt_values: Option<HashMap<String, String>>,
+    request_key: Option<String>,
     skip_scripts: Option<bool>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
@@ -579,6 +593,7 @@ async fn send_request<R: tauri::Runtime>(
         let trusted = root.as_ref().is_some_and(|r| s.trusted_workspaces.contains(&r.to_string_lossy().into_owned()));
         (s.exec.clone(), trusted)
     };
+    let session = state.session();
     let has_scripts = script::has_scripts(&request);
     let run_scripts = has_scripts && !skip_scripts.unwrap_or(false);
     if run_scripts && !trusted {
@@ -592,7 +607,8 @@ async fn send_request<R: tauri::Runtime>(
             file_path.as_deref(),
             &file_variables,
             environment.as_deref(),
-            &prompt_values.unwrap_or_default(),
+            &session,
+            request_key.as_deref(),
         )?;
         let mut prepared = exec::prepare(&request, &scope.resolver, &scope.base_dir, &settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
@@ -642,6 +658,26 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
         Err(e) => Err(ExecError::Other(e.to_string())),
     }
+}
+
+/// The Prompt variable answers the Session holds for a request, by name. The
+/// request key is the webview's key for the request (`_key`).
+#[tauri::command]
+fn prompt_answers(state: State<'_, AppState>, request_key: String) -> HashMap<String, String> {
+    state.session().prompt_answers().get(&request_key)
+}
+
+/// Remembers answers to a request's Prompt variables in the Session, alongside any it
+/// already holds, for its next sends. Kept in memory only.
+#[tauri::command]
+fn answer_prompts(state: State<'_, AppState>, request_key: String, answers: HashMap<String, String>) {
+    state.session().prompt_answers().answer(&request_key, answers);
+}
+
+/// Forgets a request's Prompt variable answers, so its next send asks again.
+#[tauri::command]
+fn forget_prompt_answers(state: State<'_, AppState>, request_key: String) {
+    state.session().prompt_answers().forget(&request_key);
 }
 
 #[tauri::command]
@@ -1054,6 +1090,9 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             send_request,
             preview_request,
             cancel_request,
+            prompt_answers,
+            answer_prompts,
+            forget_prompt_answers,
             save_response_body,
             copy_response_body,
             release_response,

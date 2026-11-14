@@ -1,5 +1,6 @@
 //! HttpDesk core: `.http` parsing/serialization, variables, environments,
-//! request execution and OpenAPI generation. No UI or Tauri dependencies.
+//! request execution, the workspace Session and OpenAPI generation. No UI or Tauri
+//! dependencies.
 
 pub mod body_format;
 pub mod cookies;
@@ -12,6 +13,7 @@ pub mod parser;
 mod query;
 pub mod script;
 pub mod serializer;
+pub mod session;
 mod tls_probe;
 pub mod vars;
 pub mod workspace;
