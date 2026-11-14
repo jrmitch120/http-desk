@@ -1,9 +1,10 @@
 // Global application state (Svelte 5 runes). Documents are parsed `.http`
 // files; tabs point at a request inside a document by a frontend-only key.
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, errorMessage, type RequestArgs } from "./api";
+import { api, errorMessage, type RequestArgs, type RunExportFormat } from "./api";
 import { basename, dirname, displayName, fileVariables, getDirective, hasScripts, joinAnd, joinPath, nameError, newRequest, promptMasked, requestNames, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
@@ -28,6 +29,7 @@ import type {
   Request,
   RequestPreview,
   RunProgress,
+  RunRequestReport,
   SearchHit,
   SendError,
   StoredCookie,
@@ -101,6 +103,8 @@ export interface Runner {
   title: string;
   items: RunItem[];
   running: boolean;
+  /** Each request as an export shows it, from the shell once the run ends (finished or stopped). */
+  results?: RunRequestReport[];
 }
 
 /** A request a run sends: where it's from, and what `run_requests` gets for it. */
@@ -1470,6 +1474,24 @@ class AppStore {
   }
 
   /**
+   * Exports the ended run's results as JUnit XML or JSON to a file the user picks.
+   * The shell writes them as it reported them: no response body, no Secret value.
+   */
+  async exportRun(format: RunExportFormat) {
+    const runner = this.runner;
+    if (!runner?.results || runner.running) return;
+    const [name, extension] = format === "junit" ? ["JUnit XML", "xml"] : ["JSON", "json"];
+    const path = await save({ defaultPath: `${runner.title} results.${extension}`, filters: [{ name, extensions: [extension] }] });
+    if (!path) return;
+    try {
+      await api.exportRun($state.snapshot(runner.results), format, path);
+      this.toast("success", `Run results exported to ${path}`);
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+    }
+  }
+
+  /**
    * The requests of `doc` a run sends, in order: from the open tab's edits when the
    * request is open, otherwise as in the file on disk (its saved snapshot). A request
    * that isn't open and was never saved isn't in the file, so it isn't sent.
@@ -1521,11 +1543,12 @@ class AppStore {
     };
     this.panel = "runner";
     try {
-      await api.runRequests({
+      const summary = await api.runRequests({
         runId,
         selection: { requests: entries.map((e) => e.args), environment: this.envName },
         options: { skipScripts: scripts === "skip" },
       });
+      if (this.runner?.runId === runId) this.runner.results = summary.requests;
     } catch (e) {
       this.toast("error", errorMessage(e));
     } finally {

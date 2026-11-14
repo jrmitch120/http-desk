@@ -53,7 +53,11 @@ fn path_server() -> (String, mpsc::Receiver<String>) {
 /// Opens a workspace whose `api.http` is `text`, and returns it (kept until dropped)
 /// with the `run_requests` selection of all its requests.
 fn workspace(h: &Harness, text: &str) -> (tempfile::TempDir, Value) {
-    let ws = tempfile::tempdir().unwrap();
+    workspace_in(h, tempfile::tempdir().unwrap(), text)
+}
+
+/// [`workspace`] in `ws`, which may already hold env files.
+fn workspace_in(h: &Harness, ws: tempfile::TempDir, text: &str) -> (tempfile::TempDir, Value) {
     let root = crate::paths::canonicalize(ws.path()).unwrap();
     let file_path = root.join("api.http");
     std::fs::write(&file_path, text).unwrap();
@@ -95,7 +99,7 @@ fn a_run_reports_each_request_in_order_and_keeps_each_response_for_the_viewer() 
 
     let summary = h.ok("run_requests", json!({ "runId": "run1", "selection": selection, "options": {} }));
 
-    assert_eq!(summary, json!({ "cancelled": false }));
+    assert_eq!(summary["cancelled"], false);
     let events: Vec<Value> = events.try_iter().collect();
     assert_eq!(
         states(&events),
@@ -124,10 +128,47 @@ fn stopping_a_run_cancels_the_request_in_flight_and_sends_nothing_after_it() {
     h.ok("cancel_request", json!({ "runId": "run2" }));
 
     let summary = run.join().unwrap().unwrap();
-    assert_eq!(summary, json!({ "cancelled": true }));
+    assert_eq!(summary["cancelled"], true);
+    let outcomes: Vec<&Value> = summary["requests"].as_array().unwrap().iter().map(|r| &r["outcome"]).collect();
+    assert_eq!(outcomes, [&json!("passed"), &json!("cancelled"), &json!("notRun")], "every request is reported");
     assert_eq!(
         states(&events.try_iter().collect::<Vec<_>>()),
         vec![(0, "sending".into()), (0, "sent".into()), (1, "sending".into()), (1, "cancelled".into())]
     );
     assert!(received.recv_timeout(Duration::from_millis(300)).is_err(), "nothing after the stopped request is sent");
+}
+
+#[test]
+fn a_finished_run_exports_as_junit_and_json_with_no_secret_value_or_response_body() {
+    let h = Harness::new();
+    let (url, _) = path_server();
+    let ws = tempfile::tempdir().unwrap();
+    std::fs::write(ws.path().join("http-client.env.json"), json!({ "dev": { "host": url } }).to_string()).unwrap();
+    let private = json!({ "dev": { "token": "TOPSECRET42" } }).to_string();
+    std::fs::write(ws.path().join("http-client.private.env.json"), private).unwrap();
+    // The server answers with the path it got: the second body holds the Secret.
+    let text = "### Me\nGET {{host}}/me\nAuthorization: Bearer {{token}}\n\n###\nGET {{host}}/keys/{{token}}\n";
+    let (_ws, mut selection) = workspace_in(&h, ws, text);
+    selection["environment"] = json!("dev");
+
+    let summary = h.ok("run_requests", json!({ "runId": "run3", "selection": selection }));
+
+    let requests = &summary["requests"];
+    assert_eq!(requests.as_array().unwrap().len(), 2);
+    assert_eq!(
+        (&requests[0]["name"], &requests[0]["file"], &requests[0]["status"]),
+        (&json!("Me"), &json!("api.http"), &json!(200))
+    );
+    let out = tempfile::tempdir().unwrap();
+    for format in ["junit", "json"] {
+        let path = out.path().join(format!("run.{format}"));
+        h.ok("export_run", json!({ "requests": requests, "format": format, "path": path }));
+        let exported = std::fs::read_to_string(&path).unwrap();
+        assert!(exported.contains("api.http") && exported.contains("Me"), "{format}: {exported}");
+        assert!(!exported.contains("TOPSECRET42"), "{format} holds the Secret: {exported}");
+    }
+    let junit = std::fs::read_to_string(out.path().join("run.junit")).unwrap();
+    assert!(junit.starts_with("<?xml") && junit.contains("<testsuite name=\"api.http\""), "{junit}");
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(out.path().join("run.json")).unwrap()).unwrap();
+    assert_eq!(json["requests"][1]["url"], format!("{url}/keys/••••••••"));
 }

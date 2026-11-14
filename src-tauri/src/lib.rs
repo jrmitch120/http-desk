@@ -12,7 +12,7 @@ use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
-use httpdesk_core::run::{self, RunEvent};
+use httpdesk_core::run::{self, RequestReport, RunEvent};
 use httpdesk_core::send::{self, Outgoing, Scripts, SendContext, Sent};
 use httpdesk_core::session::Session;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
@@ -627,12 +627,14 @@ enum RunProgressState {
     Cancelled,
 }
 
-/// What `run_requests` returns once a Run ends: whether it was stopped. The requests
-/// it never reached reported nothing.
+/// What `run_requests` returns once a Run ends: whether it was stopped, and each of
+/// its requests as an export shows it (`run::RequestReport`: no response body, no
+/// Secret value), those it never reached included.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunSummary {
     cancelled: bool,
+    requests: Vec<RequestReport>,
 }
 
 /// Runs `selection` (GLOSSARY "Run"): sends each request in order through the same flow
@@ -652,7 +654,7 @@ async fn run_requests<R: tauri::Runtime>(
     let ctx = send_context(&state, selection.environment, options.skip_scripts);
     let cancel = run::Cancel::default();
     state.runs.lock().unwrap().insert(run_id.clone(), cancel.clone());
-    let cancelled = run::run(&ctx, selection.requests, &cancel, |index, event| {
+    let report = run::run(&ctx, selection.requests, &cancel, |index, event| {
         let state = match event {
             RunEvent::Sending => RunProgressState::Sending,
             RunEvent::Sent { sent, failed } => {
@@ -666,7 +668,35 @@ async fn run_requests<R: tauri::Runtime>(
     })
     .await;
     state.runs.lock().unwrap().remove(&run_id);
-    Ok(RunSummary { cancelled })
+    Ok(RunSummary { cancelled: report.cancelled, requests: report.requests })
+}
+
+/// The formats a Run's results export as.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ExportFormat {
+    Junit,
+    Json,
+}
+
+/// Writes a Run's results (`run_requests`' `requests`) to `path`, which the user picked
+/// in the save dialog, as JUnit XML or JSON. Not confined to the workspace, like a
+/// saved response body.
+#[tauri::command]
+async fn export_run<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    requests: Vec<RequestReport>,
+    format: ExportFormat,
+    path: PathBuf,
+) -> CmdResult<()> {
+    off_main(app, move |state| {
+        let text = match format {
+            ExportFormat::Junit => run::export::junit(&requests),
+            ExportFormat::Json => run::export::json(&requests),
+        };
+        state.write_file(&path, &text)
+    })
+    .await
 }
 
 /// The Prompt variable answers the Session holds for a request, by name. The
@@ -1129,6 +1159,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             save_environments,
             send_request,
             run_requests,
+            export_run,
             preview_request,
             cancel_request,
             prompt_answers,

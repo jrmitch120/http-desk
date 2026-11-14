@@ -118,12 +118,7 @@ pub fn scope(
     out: &Outgoing,
 ) -> Result<RequestScope, ExecError> {
     let request = &out.request;
-    let base_dir = out
-        .file_path
-        .as_deref()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| root.map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base_dir = base_dir(root, out);
     let env_set = match root {
         Some(r) => env::load_for(r, &base_dir).map_err(|e| ExecError::Other(e.to_string()))?,
         None => EnvironmentSet::default(),
@@ -136,10 +131,7 @@ pub fn scope(
         _ => None,
     };
     let env_vars = env::variables(&env_set, environment);
-    // A File variable of a Secret's name replaces it, so it's no Secret.
-    let secrets = env::secret_names(&env_set, environment)
-        .into_iter()
-        .filter(|n| !out.file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
+    let secrets = secret_names(&env_set, environment, out);
     let answers = out.request_key.as_deref().map(|k| session.prompt_answers().get(k)).unwrap_or_default();
     let resolver = Resolver::for_request(&env_vars, &out.file_variables, &request.variables, Some(&base_dir))
         .with_secrets(secrets)
@@ -150,6 +142,36 @@ pub fn scope(
             None => out.request_names.iter().map(|n| (n.clone(), None)).collect(),
         });
     Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
+}
+
+/// The folder `out`'s relative paths start from: its file's, else the root.
+fn base_dir(root: Option<&Path>, out: &Outgoing) -> PathBuf {
+    out.file_path
+        .as_deref()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .or_else(|| root.map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The names whose value is a Secret for `out`: its environment's, except those a File
+/// or request variable replaces (it's then no Secret).
+fn secret_names(env_set: &EnvironmentSet, environment: Option<&str>, out: &Outgoing) -> Vec<String> {
+    env::secret_names(env_set, environment)
+        .into_iter()
+        .filter(|n| !out.file_variables.iter().chain(&out.request.variables).any(|v| &v.name == n))
+        .collect()
+}
+
+/// The values of the Secrets `out` is sent with (see [`scope`]), for what must never
+/// show them (a Run's export). Empty ones are left out: there's nothing to hide.
+pub fn secret_values(root: Option<&Path>, environment: Option<&str>, out: &Outgoing) -> Vec<String> {
+    let Some(root) = root else { return Vec::new() };
+    let Ok(env_set) = env::load_for(root, &base_dir(Some(root), out)) else { return Vec::new() };
+    let vars = env::variables(&env_set, environment);
+    secret_names(&env_set, environment, out)
+        .into_iter()
+        .filter_map(|n| vars.get(&n).filter(|v| !v.is_empty()).cloned())
+        .collect()
 }
 
 /// A folder as the UI names it: relative to the workspace root with a trailing `/`

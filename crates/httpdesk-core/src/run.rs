@@ -5,6 +5,9 @@
 //! A request in a run **fails** on a network error, a script error, a failed test or
 //! assert, or a blocked send. An HTTP error status alone is not a failure. A failure
 //! doesn't stop the run.
+//!
+//! When it ends, a run reports each of its requests ([`RunReport`]), which [`export`]
+//! turns into JSON or JUnit XML.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,6 +16,20 @@ use tokio::sync::Notify;
 
 use crate::exec::{ExecError, HttpResponse};
 use crate::send::{self, Outgoing, SendContext, Sent};
+
+pub mod export;
+mod report;
+
+use report::Secrets;
+pub use report::{Failure, Outcome, Reason, RequestReport};
+
+/// What a run reports when it ends: whether it was stopped, and each of its requests
+/// in order, those it never reached included.
+#[derive(Debug, Clone)]
+pub struct RunReport {
+    pub cancelled: bool,
+    pub requests: Vec<RequestReport>,
+}
 
 /// What a run reports about one of its requests, in this order: `Sending`, then one of
 /// the others. A request the run never reached reports nothing.
@@ -68,23 +85,27 @@ impl Cancel {
 
 /// Sends `requests` in order in `ctx`, reporting each one's progress to `on_event`
 /// with its index. Stops when `cancel` fires, the request in flight included.
-/// Returns whether it was cancelled.
+/// Returns what happened to each request.
 pub async fn run(
     ctx: &SendContext,
     requests: Vec<Outgoing>,
     cancel: &Cancel,
     mut on_event: impl FnMut(usize, RunEvent),
-) -> bool {
+) -> RunReport {
+    let root = ctx.root.as_deref();
+    let mut reports: Vec<RequestReport> = requests.iter().map(|out| RequestReport::not_run(root, out)).collect();
     for (index, out) in requests.into_iter().enumerate() {
         if cancel.is_cancelled() {
-            return true;
+            return RunReport { cancelled: true, requests: reports };
         }
         on_event(index, RunEvent::Sending);
+        let secrets = Secrets::new(send::secret_values(root, ctx.environment.as_deref(), &out));
         let result = tokio::select! {
             result = send::send(ctx, out, |_| {}) => result,
             _ = cancel.cancelled() => {
+                reports[index].cancelled();
                 on_event(index, RunEvent::Cancelled);
-                return true;
+                return RunReport { cancelled: true, requests: reports };
             }
         };
         on_event(
@@ -92,11 +113,15 @@ pub async fn run(
             match result {
                 Ok(sent) => {
                     let failed = failed(&sent.response);
+                    reports[index].sent(&sent.response, failed, &secrets);
                     RunEvent::Sent { sent: Box::new(sent), failed }
                 }
-                Err(e) => RunEvent::Failed(e),
+                Err(e) => {
+                    reports[index].failed(&e, &secrets);
+                    RunEvent::Failed(e)
+                }
             },
         );
     }
-    cancel.is_cancelled()
+    RunReport { cancelled: cancel.is_cancelled(), requests: reports }
 }

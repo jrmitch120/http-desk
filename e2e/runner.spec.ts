@@ -135,3 +135,40 @@ test("in a workspace that isn't trusted, a run with scripts asks once up front",
   await expect(state(page, "Send a form with the text and file fields", "Passed")).toBeVisible();
   expect(await mockState(page, "sentSkipScripts")).toEqual([true, true, true, true, true]);
 });
+
+// #146: Export writes the run's results (as the shell reports them) to the file picked
+// in the save dialog, which the mock answers with `/demo/<default name>`.
+test("a finished run exports as JUnit XML or JSON to the file picked", async ({ page }) => {
+  await openApp(page, "?trusted=1&status=404");
+
+  await runFile(page, "samples", "jetbrains.http");
+  await expect(runner(page)).toContainText("4 passed · 1 failed");
+  await runner(page).getByRole("button", { name: "Export" }).click();
+  await page.getByRole("menuitem", { name: "JUnit XML…" }).click();
+
+  await expect(page.getByText("Run results exported to /demo/jetbrains.http results.xml")).toBeVisible();
+  const exports = await mockState(page, "runExports");
+  expect(exports.map((e) => [e.format, e.path])).toEqual([["junit", "/demo/jetbrains.http results.xml"]]);
+  expect(exports[0].requests).toHaveLength(5);
+  const failed = exports[0].requests.find((r) => r.name === "Post with JSON body");
+  expect(failed).toMatchObject({ file: "samples/jetbrains.http", method: "POST", status: 404, outcome: "failed", failure: { reason: "test" } });
+
+  await runner(page).getByRole("button", { name: "Export" }).click();
+  await page.getByRole("menuitem", { name: "JSON…" }).click();
+  await expect.poll(async () => (await mockState(page, "runExports")).map((e) => e.format)).toEqual(["junit", "json"]);
+});
+
+test("Export is offered once the run ends, and a stopped run exports every request", async ({ page }) => {
+  await openApp(page, "?download=slow");
+
+  await runFile(page, "api", "pets.http");
+  await expect(state(page, "List pets", "Sending…")).toBeVisible();
+  await expect(runner(page).getByRole("button", { name: "Export" })).toHaveCount(0);
+  await runner(page).getByRole("button", { name: "Stop", exact: true }).click();
+  await runner(page).getByRole("button", { name: "Export" }).click();
+  await page.getByRole("menuitem", { name: "JSON…" }).click();
+
+  await expect
+    .poll(async () => (await mockState(page, "runExports")).flatMap((e) => e.requests.map((r) => r.outcome)))
+    .toEqual(["cancelled", "notRun", "notRun"]);
+});
