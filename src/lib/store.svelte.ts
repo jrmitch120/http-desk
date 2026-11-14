@@ -30,6 +30,7 @@ import type {
   RequestPreview,
   SearchHit,
   SendError,
+  StoredCookie,
   TestResult,
   TreeNode,
   Usage,
@@ -167,6 +168,8 @@ class PendingForm<S, C> {
 }
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
+/** A panel in the panel area below the requests (`PanelArea.svelte`). */
+export type PanelId = "session";
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls";
 
@@ -223,6 +226,8 @@ class AppStore {
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
   modal = $state<ModalKind>(null);
+  /** The panel shown below the requests, if any. */
+  panel = $state<PanelId | null>(null);
   dialog = $state<DialogState | null>(null);
   private extractForm = new PendingForm<Extraction, ExtractChoice>();
   /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
@@ -1121,6 +1126,55 @@ class AppStore {
     this.sessionVersion++;
   }
 
+  /** Shows `panel` below the requests, or hides it if it's the one shown. */
+  togglePanel(panel: PanelId) {
+    this.panel = this.panel === panel ? null : panel;
+  }
+
+  /** The cookies in the Session's jar, for the Session panel. */
+  sessionCookies(): Promise<StoredCookie[]> {
+    return api.sessionCookies();
+  }
+
+  /** Deletes one cookie from the Session's jar, so later sends don't carry it. */
+  async deleteCookie(c: Pick<StoredCookie, "domain" | "path" | "name">) {
+    await this.changeSession(() => api.deleteCookie(c.domain, c.path, c.name));
+  }
+
+  /** Deletes every cookie in the Session's jar. */
+  async clearCookies() {
+    await this.changeSession(() => api.clearCookies());
+  }
+
+  /**
+   * Empties the whole Session, every section of it, once the user confirms (Clear
+   * session in the Session panel).
+   */
+  async clearSession() {
+    const r = await this.choose(
+      "Clear the session?",
+      "HttpDesk forgets what it remembers for this workspace between sends: cookies, prompt answers, the latest exchange of each named request and test results. Files and environments aren't changed.",
+      [
+        { ...CANCEL, focus: true },
+        { label: "Clear session", value: "clear", role: "primary", danger: true },
+      ],
+    );
+    if (r.button !== "clear") return;
+    await this.changeSession(() => api.clearSession());
+    this.clearTestMarks();
+  }
+
+  /** Runs a change to the Session in the shell, then has views showing it read it again. */
+  private async changeSession(change: () => Promise<unknown>) {
+    try {
+      await change();
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+    } finally {
+      this.sessionVersion++;
+    }
+  }
+
   /**
    * Asks for the request's Prompt variables that the Session has no value for, all in
    * one form, and has the Session remember the answers. False if the user cancelled.
@@ -1176,6 +1230,10 @@ class AppStore {
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc), skipScripts: scripts === "skip" });
+      // The Session changed if the jar kept cookies the response set, or if the request is
+      // named (its exchange is now the latest, which Request variables read): views
+      // showing the Session read it again, even if the tab has closed.
+      if (response.cookies?.length || getDirective(req, "name")?.trim()) this.sessionVersion++;
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
         this.releaseResponse(response);
@@ -1183,8 +1241,6 @@ class AppStore {
       }
       this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
       if (previous?.id !== response.id) this.releaseResponse(previous);
-      // Its exchange is now the latest in the Session, which Request variables read.
-      if (getDirective(req, "name")?.trim()) this.sessionVersion++;
       this.markTests(tab.key, response.tests);
     } catch (e) {
       if (this.runs[tabId]?.runId !== runId) return;

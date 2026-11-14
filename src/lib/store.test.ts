@@ -34,6 +34,10 @@ const api = vi.hoisted(() => ({
   getTree: vi.fn(),
   trustWorkspace: vi.fn(),
   revokeWorkspaceTrust: vi.fn(),
+  sessionCookies: vi.fn(),
+  deleteCookie: vi.fn(),
+  clearCookies: vi.fn(),
+  clearSession: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -2173,6 +2177,79 @@ describe("what Request variable completion reads from the Session", () => {
   it("offers nothing when the Session can't be read", async () => {
     api.exchangeShape.mockRejectedValueOnce("gone");
     expect(await app.exchangeShape("/ws/unreadable.http", "login")).toBeNull();
+  });
+});
+
+describe("the Session panel", () => {
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("a response that set cookies tells views showing the Session to read it again", async () => {
+    const [tab] = await openAll(fileOf(["GET", "Login", "https://x/login"]));
+    const setCookie = { name: "sid", value: "1" } as HttpResponse["cookies"][number];
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200, cookies: [setCookie] } as HttpResponse);
+    const before = app.sessionVersion;
+    await app.send(tab.id);
+    expect(app.sessionVersion).toBe(before + 1);
+
+    api.sendRequest.mockResolvedValueOnce({ id: "r2", status: 200, cookies: [] as HttpResponse["cookies"] } as HttpResponse);
+    await app.send(tab.id);
+    expect(app.sessionVersion).toBe(before + 1);
+  });
+
+  it("deleting a cookie or clearing them asks the shell and tells the panel to read the jar again", async () => {
+    let before = app.sessionVersion;
+    await app.deleteCookie({ domain: "example.com", path: "/", name: "sid" });
+    expect(api.deleteCookie).toHaveBeenCalledWith("example.com", "/", "sid");
+    expect(app.sessionVersion).not.toBe(before);
+
+    before = app.sessionVersion;
+    await app.clearCookies();
+    expect(api.clearCookies).toHaveBeenCalledTimes(1);
+    expect(app.sessionVersion).not.toBe(before);
+  });
+
+  it("Clear session empties the shell's Session only once the user confirms", async () => {
+    const before = app.sessionVersion;
+    let clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog?.title).toBe("Clear the session?"));
+    app.closeDialog("cancel");
+    await clearing;
+    expect(api.clearSession).not.toHaveBeenCalled();
+    expect(app.sessionVersion).toBe(before);
+
+    clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("clear");
+    await clearing;
+    expect(api.clearSession).toHaveBeenCalledTimes(1);
+    expect(app.sessionVersion).not.toBe(before);
+  });
+
+  it("Clear session drops every tab's and tree row's test marker, which belong to the Session", async () => {
+    app.markTests("k1", [{ name: "ok", passed: true, message: null }]);
+    app.markTests("k2", [{ name: "bad", passed: false, message: "no" }]);
+
+    const clearing = app.clearSession();
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("clear");
+    await clearing;
+
+    expect(app.testMark("k1")).toBeUndefined();
+    expect(app.testMark("k2")).toBeUndefined();
+  });
+
+  it("the Session command shows the panel, and runs again to hide it", () => {
+    app.panel = null;
+    expect(runCommand("toggle-session")).toBe(true);
+    expect(app.panel).toBe("session");
+    expect(command("toggle-session").checked?.()).toBe(true);
+    runCommand("toggle-session");
+    expect(app.panel).toBeNull();
   });
 });
 
