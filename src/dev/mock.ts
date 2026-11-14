@@ -43,6 +43,19 @@ if (new URLSearchParams(location.search).get("requestVars") === "1") {
   (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
   files[`${ROOT}/api/pets.http`] = withVars;
 }
+// `?preScript=sign|fail` gives List pets a pre-request script: one that sets
+// `signature`, or one that throws at its line 3 (the send then fails, see `send_request`).
+const preScriptParam = new URLSearchParams(location.search).get("preScript");
+if (preScriptParam) {
+  const withScript = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const body =
+    preScriptParam === "fail"
+      ? '  request.variables.set("signature", "x");\n  throw new Error("no token");'
+      : '  request.variables.set("signature", request.environment.get("token"));';
+  (withScript.requests[0] as { preScript: string | null }).preScript = `< {%\n${body}\n%}`;
+  (withScript.requests[0] as { raw: string | null }).raw = null;
+  files[`${ROOT}/api/pets.http`] = withScript;
+}
 // `?chain=1`: Create pet is `# @name createPet`, and Get pet image reads the new pet's id
 // from its latest exchange (`{{createPet.response.body.$.id}}`), a Request variable.
 if (new URLSearchParams(location.search).get("chain") === "1") {
@@ -358,6 +371,14 @@ function keepCookies(cookies: ResponseCookie[]) {
   }
 }
 
+/** The shell's warning on a send whose scripts were skipped, naming them. */
+function scriptsSkipped(r: Request): string {
+  const pre = hasScripts({ ...r, responseHandler: null });
+  const handler = hasScripts({ ...r, preScript: null });
+  const skipped = pre && handler ? "the pre-request script and the response handler" : pre ? "the pre-request script" : "the response handler";
+  return `Sent without scripts: ${skipped} didn't run.`;
+}
+
 /** What the shell's script engine would report for `handler`, roughly: each
  *  `client.test("name", …)` passes unless it asserts `response.status === N`
  *  and the status isn't N; then it fails with the assertion's message. */
@@ -651,6 +672,7 @@ const sendErrors: SendErrorFixtures = {
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
   untrustedWorkspace: { message: UNTRUSTED_MESSAGE, details: null },
+  preRequestScript: { message: "no token (line 3)", details: { line: 3 } },
   unsentRequest: unsentError(["createPet"]),
   unmatchedPath: {
     message: "{{createPet.response.body.$.idd}}: `$.idd` matches nothing, in the latest exchange of `createPet` (received at 09:05:07)",
@@ -1168,6 +1190,10 @@ mockIPC(
         if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
           throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
         }
+        // Like the shell: a pre-request script that throws stops the send.
+        if (runScripts && args.request.preScript?.includes("throw ")) {
+          throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
+        }
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
@@ -1238,7 +1264,7 @@ mockIPC(
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
           },
-          warnings: hasScripts(r) && !runScripts ? ["Sent without scripts: the response handler didn't run."] : [],
+          warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
           timings: jsonTimings,
           cookies,
           tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
