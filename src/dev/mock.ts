@@ -9,6 +9,7 @@ import jetbrains from "./jetbrains.json";
 import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { responseRedirects } from "../lib/scripts";
 import { requestVariableReads } from "../lib/checks";
+import { environmentMissing, redirectNotRun, scriptFileMissing, scriptFileOutside, sentWithoutScripts, UNTRUSTED_MESSAGE, unsentMessage } from "./coreMessages";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
@@ -122,8 +123,8 @@ function locateScriptFile(filePath: string | null, path: string): string {
     else if (part !== "." && part !== "") parts.push(part);
   }
   const resolved = path.startsWith("/") ? path : parts.join("/");
-  if (!resolved.startsWith(`${ROOT}/`)) throw `Script file ${path} is outside the workspace`;
-  if (!Object.hasOwn(scriptFiles, resolved)) throw `Script file ${path} doesn't exist`;
+  if (!resolved.startsWith(`${ROOT}/`)) throw scriptFileOutside(path);
+  if (!Object.hasOwn(scriptFiles, resolved)) throw scriptFileMissing(path);
   return resolved;
 }
 /** The file references (`< path` / `> path`) in a pre-request script or handler. */
@@ -136,7 +137,7 @@ const fileReferences = (text: string | null, sigil: "<" | ">") =>
 const redirectNotes = (r: Request) =>
   responseRedirects(r).map((line) => {
     const [, bang, path] = /^>>(!?)\s*(.*)$/.exec(line)!;
-    return `HttpDesk doesn't run response redirects: >>${bang} ${path.trim()} doesn't save the response to a file.`;
+    return redirectNotRun(bang, path.trim());
   });
 const tree = {
   name: "demo",
@@ -312,7 +313,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
   for (const chain of new Set(circular.map((c) => c.join(" → ")))) warnings.push(`Circular variable reference: ${chain}`);
   if (environment && !own.environments.some((e) => e.name === environment)) {
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
-    warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
+    warnings.unshift(environmentMissing(environment, dir || "the workspace root"));
   }
   warnings.push(...redirectNotes(r));
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
@@ -459,7 +460,7 @@ function scriptsSkipped(r: Request): string {
   const pre = hasScripts({ ...r, responseHandler: null });
   const handler = hasScripts({ ...r, preScript: null });
   const skipped = pre && handler ? "the pre-request script and the response handler" : pre ? "the pre-request script" : "the response handler";
-  return `Sent without scripts: ${skipped} didn't run.`;
+  return sentWithoutScripts(skipped);
 }
 
 /** What the shell's script engine would report for `handler`, roughly: each
@@ -727,9 +728,8 @@ const trashUnavailable = new URLSearchParams(location.search).get("trash") === "
 const openapiConflicts = new URLSearchParams(location.search).get("openapiConflicts") === "1";
 /** The core's report for Request variables of named requests not sent in this Session. */
 function unsentError(names: string[]): Omit<SendError & { kind: "unsentRequest" }, "kind"> {
-  const quoted = names.map((n) => `\`${n}\``);
   return {
-    message: `This request reads the latest exchange of ${quoted.join(" and ")}, which hasn't been sent in this Session. Send ${quoted.join(" and ")} first.`,
+    message: unsentMessage(names),
     details: { names },
   };
 }
@@ -815,8 +815,6 @@ function unsentRequests(r: Request, filePath: string | null, requestNames: strin
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
 /** A transport error's message as the core writes it: reqwest's error chain ending in `cause`. */
 const connectErrorChain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
-/** The core's `ExecError::UntrustedWorkspace` message. */
-const UNTRUSTED_MESSAGE = "This request has a script, and this workspace isn't trusted to run scripts. Trust it, or send without scripts.";
 /** The fixture for each kind: the rest of the `SendError` of that kind. */
 type SendErrorFixtures = { [K in SendErrorKind]: Omit<SendError & { kind: K }, "kind"> };
 const sendErrors: SendErrorFixtures = {
