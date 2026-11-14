@@ -10,8 +10,10 @@
 //! To implement a JetBrains API (`client.global.*`,
 //! `request.variables.*`): add a Rust function to `host` in `install` (state it
 //! needs goes on `Recorded` or alongside it), call it from the prelude, and take
-//! the name out of the prelude's unsupported namespace it falls under. A
-//! pre-request runner is `Sandbox::run` with its own `data`.
+//! the name out of the prelude's unsupported namespace it falls under, and list
+//! it in `script/api.json`, which the Scripts editor's completion offers (a test
+//! checks the list against the prelude). A pre-request runner is `Sandbox::run`
+//! with its own `data`.
 //!
 //! A script never fails the send: its errors, including running out of time or
 //! memory, become failed [`TestResult`]s.

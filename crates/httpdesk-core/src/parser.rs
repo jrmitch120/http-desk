@@ -269,6 +269,11 @@ fn trim_blank_lines<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {
 
 /// Parses a single block. Returns `None` if it contains no request line.
 pub(crate) fn parse_block(raw: &str) -> Option<Request> {
+    parse_block_at(raw).map(|(req, _)| req)
+}
+
+/// [`parse_block`], and which of the block's lines (0-based) is its request line.
+pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     let lines: Vec<&str> = raw.lines().collect();
     let mut idx = 0;
     let mut req = Request::default();
@@ -357,6 +362,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         }
         break t;
     };
+    let request_line_at = idx - 1;
 
     let (method, mut url, version) = parse_request_line(request_line);
     req.method = method;
@@ -513,7 +519,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         }
     }
 
-    Some(req)
+    Some((req, request_line_at))
 }
 
 /// Puts disabled part lines before the closing `--boundary--` line, or at the end.
