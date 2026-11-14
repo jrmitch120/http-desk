@@ -5,8 +5,9 @@
 // samples/jetbrains.http's "Post with JSON body" tests for a 200 (the mock answers a
 // POST with 201). `?trusted=1` trusts the workspace, `?download=slow` makes each
 // send take 2 s, and `?prompts=` declares Prompt variables on List pets.
+// #145: the Runner's options (a delay, stop on first failure) and Re-run failed.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, sentRequests, treeItem, treeMenu, urlBar } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, sentRequests, treeItem, treeMenu, urlBar } from "./helpers";
 
 const runner = (page: Page) => page.getByRole("region", { name: "Runner" });
 const row = (page: Page, name: string) => runner(page).getByRole("listitem").filter({ hasText: name });
@@ -121,6 +122,58 @@ test("Stop cancels the request in flight, and the panel shows which requests did
   await expect(runner(page)).toContainText("3 didn't run");
   await expect(runner(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   expect(await sentRequests(page)).toHaveLength(1);
+});
+
+test("with Stop on first failure, a run ends at the first failing request and the rest don't run; the options are remembered", async ({ page }) => {
+  await openApp(page, "?trusted=1");
+  await menuClick(page, "toggle-runner");
+  const delay = runner(page).getByRole("textbox", { name: "Delay between requests" });
+  await delay.fill("150");
+  await delay.press("Enter");
+  await runner(page).getByRole("switch", { name: "Stop on first failure" }).click();
+  await expect.poll(async () => (await mockState(page, "settings")).runnerOptions).toEqual({ "/demo": { delayMs: 150, stopOnFailure: true } });
+
+  await runFile(page, "samples", "jetbrains.http");
+
+  await expect(state(page, "Post with JSON body", "Failed")).toBeVisible();
+  for (const name of ["Multi-line query", "Basic auth", "Send a form with the text and file fields"]) {
+    await expect(state(page, name, "Didn't run")).toBeVisible();
+  }
+  await expect(runner(page)).toContainText("1 passed · 1 failed · 3 didn't run");
+  expect(await sentRequests(page)).toHaveLength(2);
+  expect(await mockState(page, "runOptions")).toEqual([{ skipScripts: false, delayMs: 150, stopOnFailure: true }]);
+
+  await page.reload();
+  await expect(treeItem(page, "api")).toBeVisible();
+  await menuClick(page, "toggle-runner");
+  await expect(runner(page).getByRole("textbox", { name: "Delay between requests" })).toHaveValue("150");
+  await expect(runner(page).getByRole("switch", { name: "Stop on first failure" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("after fixing a failing request, Re-run failed runs only the failed ones, as the tab now shows them, and they pass", async ({ page }) => {
+  await openApp(page, "?trusted=1");
+  await runFile(page, "samples", "jetbrains.http");
+  await expect(runner(page)).toContainText("4 passed · 1 failed");
+  const rerun = runner(page).getByRole("button", { name: "Re-run failed" });
+
+  // The fix: its test expects the 201 the mock answers a POST with. Left unsaved.
+  await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+  await page.locator(".subtab", { hasText: "Settings" }).click();
+  const handler = page.getByRole("group", { name: "Scripts" }).getByRole("group", { name: "Response handler" }).locator(".cm-content");
+  await handler.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText('client.test("Created", function() { client.assert(response.status === 201, "Not 201"); });');
+  await expect(handler).toContainText("response.status === 201");
+  await rerun.click();
+
+  await expect(state(page, "Post with JSON body", "Passed")).toBeVisible();
+  await expect(runner(page).getByRole("listitem")).toHaveCount(1);
+  await expect(row(page, "Post with JSON body")).toContainText("unsaved");
+  await expect(runner(page)).toContainText("1 passed · 0 failed");
+  const sent = await sentRequests(page);
+  expect(sent).toHaveLength(6);
+  expect(sent[5].method).toBe("POST");
+  await expect(rerun).toHaveCount(0);
 });
 
 test("in a workspace that isn't trusted, a run with scripts asks once up front", async ({ page }) => {

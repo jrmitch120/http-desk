@@ -508,6 +508,16 @@ export interface AppSettings {
   /** Trusted workspaces (canonical roots): the only ones whose scripts run. Only the
    *  shell changes it (`api.trustWorkspace`/`api.revokeWorkspaceTrust`); a save keeps the shell's. */
   trustedWorkspaces: string[];
+  /** Per workspace root: the Runner's options, as last set in its panel. */
+  runnerOptions: Record<string, RunnerOptions>;
+}
+
+/** The Runner's options in one workspace (`RunnerOptions` in src-tauri/src/lib.rs). */
+export interface RunnerOptions {
+  /** Wait between requests, ms. */
+  delayMs: number;
+  /** End a run at its first failure (GLOSSARY "Run"); the rest don't run. */
+  stopOnFailure: boolean;
 }
 
 /** Column widths of the Environments matrix in one workspace, px. A column not listed keeps its default width. */

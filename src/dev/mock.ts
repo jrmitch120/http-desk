@@ -378,6 +378,7 @@ let settings = {
   envMatrixWidths: {},
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
   trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
+  runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -395,6 +396,8 @@ const promptAnswers = (requestKey?: string) => ({ ...(requestKey ? sessionPrompt
 const sentPrompts: Record<string, string>[] = [];
 /** Each send's `skipScripts` ("Send without scripts"). */
 const sentSkipScripts: boolean[] = [];
+/** The options each `run_requests` got, in order. */
+const runOptions: Record<string, unknown>[] = [];
 /** Like the Session's cookie jar: the cookies responses set, by domain, path and name. Opening a workspace empties it. */
 let sessionJar = new Map<string, StoredCookie>();
 const jarKey = (c: Pick<StoredCookie, "domain" | "path" | "name">) => `${c.domain}\t${c.path}\t${c.name}`;
@@ -535,6 +538,7 @@ window.addEventListener(
   sentPrompts,
   sentSkipScripts,
   sentCookies,
+  runOptions,
   get savedPaths() {
     return [...savedPaths];
   },
@@ -1393,14 +1397,18 @@ mockIPC(
           failure: null,
           tests: [],
         }));
+        runOptions.push(clone(options ?? {}));
         for (let index = 0; index < selection.requests.length; index++) {
+          // Like the core: the delay between requests, which Stop cuts short.
+          for (let waited = 0; index > 0 && waited < (options?.delayMs ?? 0) && !cancelledRuns.has(runId); waited += 10) await delay(10);
           if (cancelledRuns.delete(runId)) return { cancelled: true, requests };
           await emit("run-progress", { runId, index, state: "sending" });
+          let failed: boolean;
           try {
             const request = { ...selection.requests[index], environment: selection.environment, skipScripts: options?.skipScripts, runId };
             const response = (await mockSend(request)) as HttpResponse;
             const tests = response.tests ?? [];
-            const failed = tests.some((t) => !t.passed);
+            failed = tests.some((t) => !t.passed);
             const failing = tests.filter((t) => !t.passed).map((t) => `"${t.name}": ${t.message}`);
             Object.assign(requests[index], {
               url: response.request?.url ?? null,
@@ -1420,8 +1428,10 @@ mockIPC(
             const error = e as { kind?: string; message?: string };
             const reason = error.kind === "preRequestScript" ? "script" : ["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"].includes(error.kind ?? "") ? "network" : "blocked";
             Object.assign(requests[index], { outcome: "failed", failure: { reason, message: error.message ?? String(e) } });
+            failed = true;
             await emit("run-progress", { runId, index, state: "failed", error: e });
           }
+          if (failed && options?.stopOnFailure) break;
         }
         return { cancelled: cancelledRuns.delete(runId), requests };
       }

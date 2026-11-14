@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use httpdesk_core::exec::{ClientPool, ExecSettings};
-use httpdesk_core::run::{self, export, Cancel, Failure, Outcome, Reason, RequestReport, RunReport};
+use httpdesk_core::run::{self, export, Cancel, Failure, Outcome, Reason, RequestReport, RunOptions, RunReport};
 use httpdesk_core::script::TestResult;
 use httpdesk_core::send::{Outgoing, Scripts, SendContext};
 use httpdesk_core::session::Session;
@@ -43,7 +43,7 @@ async fn run_files(root: &Path, files: &[(&str, &str)]) -> RunReport {
         session: Arc::new(Session::default()),
         clients: ClientPool::default(),
     };
-    run::run(&ctx, items, &Cancel::default(), |_, _| {}).await
+    run::run(&ctx, items, RunOptions::default(), &Cancel::default(), |_, _| {}).await
 }
 
 async fn ok_server() -> MockServer {

@@ -2609,4 +2609,29 @@ describe("Run file", () => {
     await app.runFile(PATH);
     expect(api.releaseResponse).toHaveBeenCalledWith("r0");
   });
+
+  it("runs with the workspace's runner options", async () => {
+    app.settings = { runnerOptions: { "/ws": { delayMs: 250, stopOnFailure: true }, "/other": { delayMs: 9, stopOnFailure: false } } } as unknown as AppSettings;
+    await openAll(fileOf(["GET", "A", "https://example.com/a"]));
+
+    await app.runFile(PATH);
+
+    expect(api.runRequests.mock.calls[0][0].options).toEqual({ skipScripts: false, delayMs: 250, stopOnFailure: true });
+  });
+
+  it("Re-run failed runs only the failed requests, in order, as their tabs show them now", async () => {
+    const f = fileOf(["GET", "A", "https://example.com/a"], ["GET", "B", "https://example.com/b"], ["GET", "C", "https://example.com/c"]);
+    const [, b] = await openAll(f);
+    reports = (i) => (i === 2 ? "cancelled" : "sent"); // B fails, C is stopped
+    await app.runFile(PATH);
+    expect(app.runner!.items.map((i) => i.state)).toEqual(["passed", "failed", "cancelled"]);
+    app.requestFor(b)!.url = "https://example.com/fixed";
+    reports = () => "sent";
+
+    await app.rerunFailed();
+
+    const rerun = api.runRequests.mock.calls[1][0].selection.requests as { request: { url: string }; requestKey: string }[];
+    expect(rerun.map((r) => [r.request.url, r.requestKey])).toEqual([["https://example.com/fixed", b.key]]);
+    expect(app.runner!.items.map((i) => [i.name, i.state, i.unsaved])).toEqual([["B", "passed", true]]);
+  });
 });

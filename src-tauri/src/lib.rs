@@ -100,6 +100,20 @@ struct AppSettings {
     /// `save_settings` keeps it as is, so a page saving an older copy can't undo either.
     #[serde(deserialize_with = "or_default")]
     trusted_workspaces: Vec<String>,
+    /// Per workspace: the Runner's options, as last set in its panel.
+    #[serde(deserialize_with = "or_default")]
+    runner_options: HashMap<String, RunnerOptions>,
+}
+
+/// The Runner's options in one workspace (see `AppSettings::runner_options`). The
+/// webview sends them with each run (`RunOptions`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RunnerOptions {
+    /// Wait between requests, ms.
+    delay_ms: u64,
+    /// End a run at its first failure.
+    stop_on_failure: bool,
 }
 
 /// Column widths of the Environments matrix in one workspace, px. Columns not
@@ -186,6 +200,7 @@ impl Default for AppSettings {
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
             trusted_workspaces: Vec::new(),
+            runner_options: HashMap::new(),
         }
     }
 }
@@ -603,11 +618,14 @@ struct RunSelection {
 }
 
 /// How a Run goes. `skip_scripts`: the user chose to run without scripts (as "Send
-/// without scripts").
+/// without scripts"). `delay_ms`: the wait between requests. `stop_on_failure`: end
+/// the run at the first request that fails (see `run::RunOptions`).
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct RunOptions {
     skip_scripts: bool,
+    delay_ms: u64,
+    stop_on_failure: bool,
 }
 
 /// Payload of the `run-progress` event: what happened to request `index` of run `run_id`.
@@ -659,7 +677,11 @@ async fn run_requests<R: tauri::Runtime>(
     let ctx = send_context(&state, selection.environment, options.skip_scripts);
     let cancel = run::Cancel::default();
     state.runs.lock().unwrap().insert(run_id.clone(), cancel.clone());
-    let report = run::run(&ctx, selection.requests, &cancel, |index, event| {
+    let run_options = run::RunOptions {
+        delay: std::time::Duration::from_millis(options.delay_ms),
+        stop_on_failure: options.stop_on_failure,
+    };
+    let report = run::run(&ctx, selection.requests, run_options, &cancel, |index, event| {
         let state = match event {
             RunEvent::Sending => RunProgressState::Sending,
             RunEvent::Sent { sent, failed } => {

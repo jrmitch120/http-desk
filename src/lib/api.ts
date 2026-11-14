@@ -47,8 +47,9 @@ export type RunSelection = {
   environment: string | null;
 };
 
-/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"). */
-export type RunOptions = { skipScripts?: boolean };
+/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"),
+ *  with `delayMs` between requests, ending at its first failure with `stopOnFailure`. */
+export type RunOptions = { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean };
 
 /** What `run_requests` resolves with (`RunSummary`): whether it was stopped, and each
  *  request as an export shows it, those it never reached included. */
