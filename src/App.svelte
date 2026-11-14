@@ -19,10 +19,11 @@
   import ExtractVariable from "./components/ExtractVariable.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
+  import RunnerPanel from "./components/RunnerPanel.svelte";
   import { updates } from "./lib/updates.svelte";
   import { handleCommandKey, shortcutHint } from "./lib/commands";
   import { startNativeMenu } from "./lib/nativeMenu.svelte";
-  import { SIDEBAR } from "./lib/panes";
+  import { PANEL, SIDEBAR } from "./lib/panes";
   import { openContextMenu, openFromKeyboard } from "./lib/editMenu";
 
   onMount(() => {
@@ -39,6 +40,8 @@
   });
 
   let main: HTMLElement | undefined = $state();
+  /** The work area's share above the open panel, for this app session. */
+  let panelSplit = $state(PANEL.initial);
   let work: HTMLElement | undefined = $state();
 
   // Hiding the sidebar while it or its separator has focus hands focus to the
@@ -88,27 +91,43 @@
         {/snippet}
         {#snippet second()}
           <section class="work" bind:this={work}>
-            <TabBar />
-            {#if app.activeTab}
-              {#key app.activeTab.id}
-                <RequestView tab={app.activeTab} />
-              {/key}
-            {:else}
-              <div class="empty-state">
-                <Icon name="send" size={34} stroke={1.3} />
-                <div>Open a request from the explorer, or create a new one.</div>
-                <div class="row">
-                  <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
-                  <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
-                </div>
-                <div class="hints muted">
-                  <span><kbd>{shortcutHint("send")}</kbd> send</span>
-                  <span><kbd>{shortcutHint("save")}</kbd> save</span>
-                  <span><kbd>{shortcutHint("search")}</kbd> search</span>
-                  <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
-                </div>
-              </div>
-            {/if}
+            <!-- The panel area: an open panel (the Runner) sits under the tabs and the request. -->
+            <SplitPane
+              size={panelSplit}
+              limits={PANEL}
+              ratio
+              stacked
+              secondCollapsed={!app.panel}
+              label="Resize panel"
+              onresize={(s) => (panelSplit = s)}
+            >
+              {#snippet first()}
+                <TabBar />
+                {#if app.activeTab}
+                  {#key app.activeTab.id}
+                    <RequestView tab={app.activeTab} />
+                  {/key}
+                {:else}
+                  <div class="empty-state">
+                    <Icon name="send" size={34} stroke={1.3} />
+                    <div>Open a request from the explorer, or create a new one.</div>
+                    <div class="row">
+                      <button class="btn" onclick={() => app.createFile(app.root!)}><Icon name="plus" />New .http file</button>
+                      <button class="btn" onclick={() => (app.modal = "openapi")}><Icon name="import" />Import OpenAPI</button>
+                    </div>
+                    <div class="hints muted">
+                      <span><kbd>{shortcutHint("send")}</kbd> send</span>
+                      <span><kbd>{shortcutHint("save")}</kbd> save</span>
+                      <span><kbd>{shortcutHint("search")}</kbd> search</span>
+                      <span><kbd>{shortcutHint("manage-environments")}</kbd> environments</span>
+                    </div>
+                  </div>
+                {/if}
+              {/snippet}
+              {#snippet second()}
+                {#if app.panel === "runner"}<RunnerPanel />{/if}
+              {/snippet}
+            </SplitPane>
           </section>
         {/snippet}
       </SplitPane>

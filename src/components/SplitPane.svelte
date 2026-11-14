@@ -5,7 +5,8 @@
   // The size is the caller's: `onresize` reports a new one, and the caller
   // stores it and passes it back as `size`. `collapsed` hides the first pane and
   // the separator, so the second takes the whole; the first stays mounted, keeping
-  // its state for when it's shown again, at the same size.
+  // its state for when it's shown again, at the same size. `secondCollapsed` does
+  // the same for the second pane, which the first then fills.
   import type { Snippet } from "svelte";
   import { clampPane, type PaneLimits } from "../lib/panes";
 
@@ -18,6 +19,8 @@
     stacked?: boolean;
     /** Hides the first pane and the separator (not rendered, not focusable). */
     collapsed?: boolean;
+    /** Hides the second pane and the separator; the first takes the whole. */
+    secondCollapsed?: boolean;
     /** Accessible name of the separator. */
     label: string;
     /** Called with the new size after a drag, a key press or a double-click. */
@@ -26,7 +29,7 @@
     second: Snippet;
   }
 
-  let { size, limits, ratio = false, stacked = false, collapsed = false, label, onresize, first, second }: Props = $props();
+  let { size, limits, ratio = false, stacked = false, collapsed = false, secondCollapsed = false, label, onresize, first, second }: Props = $props();
 
   const id = $props.id();
   let root: HTMLDivElement;
@@ -86,10 +89,10 @@
 </script>
 
 <div class="split-pane" class:stacked bind:this={root}>
-  <div class="pane" class:collapsed id="{id}-first" style:flex-basis={basis}>
+  <div class="pane" class:collapsed class:whole={secondCollapsed} id="{id}-first" style:flex-basis={secondCollapsed ? null : basis}>
     {@render first()}
   </div>
-  {#if !collapsed}
+  {#if !collapsed && !secondCollapsed}
     <!-- A focusable separator with a value is a widget in ARIA (the window
          splitter pattern); Svelte's checker only knows the static kind. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -112,7 +115,7 @@
       {onkeydown}
     ></div>
   {/if}
-  <div class="pane rest">
+  <div class="pane rest" class:collapsed={secondCollapsed}>
     {@render second()}
   </div>
 </div>
@@ -136,7 +139,8 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .rest {
+  .rest,
+  .whole {
     flex: 1 1 0;
   }
   .pane.collapsed {

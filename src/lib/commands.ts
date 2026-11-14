@@ -28,6 +28,8 @@ export type CommandId =
   | "check-updates"
   | "send"
   | "cancel"
+  | "run-file"
+  | "stop-run"
   | "duplicate-request"
   | "rename-request"
   | "show-source"
@@ -213,6 +215,14 @@ const COMMANDS: Command[] = [
     enabled: () => !!app.activeTabId && !!app.runs[app.activeTabId]?.loading,
     run: () => app.activeTabId && void app.cancel(app.activeTabId),
   },
+  {
+    // The active request's file, every request in order (GLOSSARY "Run").
+    id: "run-file",
+    label: "Run File",
+    enabled: () => withTab() && !app.running,
+    run: () => app.activeTab && void app.runFile(app.activeTab.path),
+  },
+  { id: "stop-run", label: "Stop Run", enabled: () => app.running, run: () => void app.stopRun() },
   {
     id: "duplicate-request",
     label: "Duplicate",

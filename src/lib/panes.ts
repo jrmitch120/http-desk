@@ -16,6 +16,8 @@ export interface PaneLimits {
 export const SIDEBAR: PaneLimits = { min: 200, max: 560, initial: 280, step: 16 };
 /** Request pane's share of the request/response split. */
 export const SPLIT: PaneLimits = { min: 0.2, max: 0.8, initial: 0.5, step: 0.05 };
+/** The work area's share above an open panel (the Runner); not saved. */
+export const PANEL: PaneLimits = { min: 0.2, max: 0.8, initial: 0.5, step: 0.05 };
 
 /** `v` kept within `limits`; anything that isn't a finite number gives the default. */
 export function clampPane(v: unknown, limits: PaneLimits): number {

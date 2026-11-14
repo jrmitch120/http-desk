@@ -36,6 +36,17 @@ export type RequestArgs = {
   requestNames: string[];
 };
 
+/** What a run sends (`RunSelection` in src-tauri/src/lib.rs): its requests in order,
+ *  each as `send_request` takes it, and the environment they're all sent with. Run
+ *  file, folder and selection differ only in which requests are listed. */
+export type RunSelection = {
+  requests: Omit<RequestArgs, "environment">[];
+  environment: string | null;
+};
+
+/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"). */
+export type RunOptions = { skipScripts?: boolean };
+
 /** Which form of a stored response body `api.responseBody` fetches. */
 export type BodyFetchView = "raw" | "pretty" | "bytes";
 
@@ -70,7 +81,12 @@ export const api = {
   sendRequest: (args: RequestArgs & { runId: string; skipScripts?: boolean }) => invoke<HttpResponse>("send_request", args),
   /** What `sendRequest` with the same arguments would send, without sending it. */
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
+  /** Cancels a send, or stops a run (its request in flight included), by its run id. */
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
+  /** Sends the selection's requests in order, the way `sendRequest` sends each, reporting
+   *  them as `run-progress` events (`RunProgress`). Resolves when the run ends. */
+  runRequests: (args: { runId: string; selection: RunSelection; options: RunOptions }) =>
+    invoke<{ cancelled: boolean }>("run_requests", args),
   /** The answers the workspace's Session holds for a request's Prompt variables, by name. */
   promptAnswers: (requestKey: string) => invoke<Record<string, string>>("prompt_answers", { requestKey }),
   /** Has the Session remember answers to a request's Prompt variables (in memory only). */

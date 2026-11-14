@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   answerPrompts: vi.fn(),
   forgetPromptAnswers: vi.fn(),
   cancelRequest: vi.fn(),
+  runRequests: vi.fn(),
   releaseResponse: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
@@ -2372,5 +2373,131 @@ describe("Extract to variable", () => {
     await extract(b.id, "https://b.example.com", { name: "host", target: { kind: "file" } });
     expect(file().requests[1].variables).toEqual([{ name: "host", value: "https://b.example.com" }]);
     expect(file().header.variables[0]).toEqual({ name: "host", value: "https://a.example.com" });
+  });
+});
+
+describe("Run file", () => {
+  /** A stand-in for the shell's Session: prompt answers by request key. */
+  let session: Map<string, Record<string, string>>;
+  /** What each `run_requests` call reports, by request index; `sent` by default. */
+  let reports: (index: number) => RunProgress["state"];
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = null;
+    app.envFolders = [];
+    app.runner = null;
+    session = new Map();
+    reports = () => "sent";
+    api.promptAnswers.mockImplementation(async (key: string) => ({ ...session.get(key) }));
+    api.answerPrompts.mockImplementation(async (key: string, answers: Record<string, string>) => {
+      session.set(key, { ...session.get(key), ...answers });
+    });
+    // Like the shell: each request is reported sending, then as `reports` says.
+    api.runRequests.mockImplementation(async ({ runId, selection }: { runId: string; selection: { requests: unknown[] } }) => {
+      for (let index = 0; index < selection.requests.length; index++) {
+        app.onRunProgress({ runId, index, state: "sending" });
+        const state = reports(index);
+        if (state === "sent") {
+          const response = { id: `r${index}`, status: 200, tests: [{ name: "ok", passed: index !== 1, message: null }] } as HttpResponse;
+          app.onRunProgress({ runId, index, state, response, failed: index === 1 });
+        } else if (state === "cancelled") {
+          app.onRunProgress({ runId, index, state });
+          return { cancelled: true };
+        }
+      }
+      return { cancelled: false };
+    });
+  });
+
+  const sentRequests = () => api.runRequests.mock.calls[0][0].selection.requests as { request: { url: string }; requestKey: string }[];
+
+  it("sends every request of the file in order: an open tab's edits, else the file on disk, marking unsaved edits", async () => {
+    const f = fileOf(["GET", "A", "https://example.com/a"], ["POST", "B", "https://example.com/b"]);
+    readHttpFile.mockResolvedValueOnce(f);
+    await app.openRequest(PATH, { index: 0 });
+    app.requestFor(app.activeTab)!.url = "https://example.com/edited";
+
+    await app.runFile(PATH);
+
+    expect(sentRequests().map((r) => r.request.url)).toEqual(["https://example.com/edited", "https://example.com/b"]);
+    expect(app.runner!.items.map((i) => [i.name, i.unsaved])).toEqual([
+      ["A", true],
+      ["B", false],
+    ]);
+  });
+
+  it("shows each result as it arrives, and marks the requests' tests", async () => {
+    await openAll(fileOf(["GET", "A", "https://example.com/a"], ["GET", "B", "https://example.com/b"]));
+
+    await app.runFile(PATH);
+
+    expect(app.panel).toBe("runner");
+    expect(app.runner!.running).toBe(false);
+    expect(app.runner!.items.map((i) => [i.state, i.response?.id])).toEqual([
+      ["passed", "r0"],
+      ["failed", "r1"],
+    ]);
+    expect(app.runner!.items.map((i) => app.testMark(i.key))).toEqual(["passed", "failed"]);
+    expect(app.runs).toEqual({}); // a run doesn't replace what the tabs show
+  });
+
+  it("after a stop, shows which requests didn't run", async () => {
+    await openAll(fileOf(["GET", "A", "https://example.com/a"], ["GET", "B", "https://example.com/b"], ["GET", "C", "https://example.com/c"]));
+    reports = (i) => (i === 1 ? "cancelled" : "sent");
+
+    await app.runFile(PATH);
+
+    expect(app.runner!.items.map((i) => i.state)).toEqual(["passed", "cancelled", "notRun"]);
+  });
+
+  it("asks once, up front, for each Prompt variable no request has an answer for", async () => {
+    const f = fileOf(["GET", "A", "https://example.com/a?otp={{otp}}"], ["GET", "B", "https://example.com/b?otp={{otp}}"]);
+    f.requests[0].directives = [{ name: "prompt", value: "otp One-time code" }];
+    f.requests[1].directives = [
+      { name: "prompt", value: "otp" },
+      { name: "prompt", value: "user" },
+    ];
+    const [a, b] = await openAll(f);
+    session.set(b.key, { user: "ada" });
+
+    const running = app.runFile(PATH);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.fields!.map((x) => [x.label, x.help])).toEqual([["otp", "One-time code"]]);
+    expect(api.runRequests).not.toHaveBeenCalled();
+    app.closeDialog("run", "", ["123456"]);
+    await running;
+
+    expect(session.get(a.key)).toEqual({ otp: "123456" });
+    expect(session.get(b.key)).toEqual({ user: "ada", otp: "123456" });
+    expect(sentRequests().map((r) => r.requestKey)).toEqual([a.key, b.key]);
+  });
+
+  it("with a Production environment, asks once listing the requests that aren't GET, HEAD or OPTIONS; Cancel runs nothing", async () => {
+    app.settings = { environmentSettings: { "/ws": { prod: { production: true } } } } as unknown as AppSettings;
+    app.envSet = { shared: [], environments: [{ name: "prod", variables: [] }], privateFileIgnored: null };
+    app.envName = "prod";
+    await openAll(fileOf(["GET", "List", "https://example.com/a"], ["POST", "Create", "https://example.com/b"], ["DELETE", "Remove", "https://example.com/c"]));
+
+    const running = app.runFile(PATH);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.message).toMatch(/"prod"/);
+    expect(app.dialog!.message).toMatch(/POST Create/);
+    expect(app.dialog!.message).toMatch(/DELETE Remove/);
+    expect(app.dialog!.message).not.toMatch(/List/);
+    expect(app.dialog!.buttons.find((b) => b.focus)?.value).toBe("cancel");
+    app.closeDialog("cancel");
+    await running;
+
+    expect(api.runRequests).not.toHaveBeenCalled();
+    expect(app.dialog).toBeNull();
+  });
+
+  it("a new run lets go of the last run's responses", async () => {
+    await openAll(fileOf(["GET", "A", "https://example.com/a"]));
+    await app.runFile(PATH);
+    await app.runFile(PATH);
+    expect(api.releaseResponse).toHaveBeenCalledWith("r0");
   });
 });

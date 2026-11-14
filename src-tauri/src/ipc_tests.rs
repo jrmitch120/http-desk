@@ -14,6 +14,7 @@ mod preview;
 mod renaming;
 mod reply;
 mod request_variables;
+mod runner;
 mod scripts;
 mod session;
 mod usages;
@@ -88,24 +89,30 @@ impl Harness {
     }
 
     fn call(&self, cmd: &str, args: Value) -> Result<Value, Value> {
-        get_ipc_response(
-            &self.webview,
-            InvokeRequest {
-                cmd: cmd.into(),
-                callback: tauri::ipc::CallbackFn(0),
-                error: tauri::ipc::CallbackFn(1),
-                url: APP_URL.parse().unwrap(),
-                body: tauri::ipc::InvokeBody::Json(args),
-                headers: Default::default(),
-                invoke_key: INVOKE_KEY.to_string(),
-            },
-        )
-        .map(|b| b.deserialize::<Value>().unwrap())
+        call_on(&self.webview, cmd, args)
     }
 
     fn ok(&self, cmd: &str, args: Value) -> Value {
         self.call(cmd, args).unwrap_or_else(|e| panic!("{cmd} failed: {e}"))
     }
+}
+
+/// Invokes `cmd` from `webview`, as `Harness::call` does. Blocks until it returns, so
+/// a test calls it on another thread to act while a command is under way.
+fn call_on(webview: &tauri::WebviewWindow<MockRuntime>, cmd: &str, args: Value) -> Result<Value, Value> {
+    get_ipc_response(
+        webview,
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: APP_URL.parse().unwrap(),
+            body: tauri::ipc::InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        },
+    )
+    .map(|b| b.deserialize::<Value>().unwrap())
 }
 
 /// One-shot HTTP server on a background thread; returns (url, received raw request).
