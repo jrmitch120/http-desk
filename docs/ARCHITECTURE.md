@@ -689,7 +689,14 @@ Decisions made during implementation, beyond the plan above:
   resolved preview shows the same error. Nothing is ever sent on its own: "Send `x`
   first" (`app.sendFirst`) opens `x` and sends it the normal way, prompts and the
   production confirmation included. The editors mark a Request variable of a named
-  request `cm-var-request`.
+  request `cm-var-request`. Completion after `{{` offers the file's `# @name`s; inside
+  a Request variable it offers the next path segment (`src/lib/requestPaths.ts`):
+  `response`/`request`, `body`/`headers`, then header names, or `$`/`*` and the JSON
+  keys (`keyCompletion`, as the filter bar). Those come from `exchange_shape(filePath,
+  name)`: the latest exchange's status, time received, and each side's header names
+  and JSON body shape (`Exchange::shape`), or null when unsent, which still offers the
+  structure with a hint that it hasn't been sent. The store (`app.exchangeShape`) reads
+  it once per (file, name) until `sessionVersion` changes.
 * **Undefined-variable checks** catch them before sending, without blocking it.
   `src/lib/checks.ts` reads what a send resolves (the URL; active params and headers;
   the enabled auth's fields, an API key's name only as a query param; the enabled body

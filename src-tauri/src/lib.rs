@@ -703,6 +703,19 @@ fn forget_prompt_answers(state: State<'_, AppState>, request_key: String) {
     state.session().prompt_answers().forget(&request_key);
 }
 
+/// The shape of the latest exchange of the request named `name` in `file_path`, in the
+/// Session: its status, when it arrived, and each side's header names and JSON keys,
+/// which its Request variables' paths complete from. Null when it hasn't been sent.
+/// Off the main thread, since it parses the bodies.
+#[tauri::command]
+async fn exchange_shape<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: PathBuf,
+    name: String,
+) -> CmdResult<Option<exchange::ExchangeShape>> {
+    off_main(app, move |state| Ok(state.session().exchanges().latest(&file_path, &name).map(|e| e.shape()))).await
+}
+
 #[tauri::command]
 fn cancel_request(state: State<'_, AppState>, run_id: String) {
     if let Some(handle) = state.running.lock().unwrap().remove(&run_id) {
@@ -1116,6 +1129,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             prompt_answers,
             answer_prompts,
             forget_prompt_answers,
+            exchange_shape,
             save_response_body,
             copy_response_body,
             release_response,

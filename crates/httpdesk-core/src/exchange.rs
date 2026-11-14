@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use chrono::{DateTime, Local, Utc};
 
 use crate::exec::{decode_text, HttpResponse, PreparedRequest};
-use crate::json_filter::JsonDocument;
+use serde::Serialize;
+
+use crate::json_filter::{JsonDocument, Shape};
 use crate::model::Request;
 
 /// One side of an exchange: its headers and complete body.
@@ -38,6 +40,43 @@ impl Message {
         decode_text(&self.body, self.content_type.as_deref())
             .unwrap_or_else(|| String::from_utf8_lossy(&self.body).into_owned())
     }
+
+    /// Its header names (each once) and its body's JSON shape: what its paths can read.
+    pub fn shape(&self) -> MessageShape {
+        let mut headers: Vec<String> = Vec::new();
+        for (name, _) in &self.headers {
+            if !headers.iter().any(|h| h.eq_ignore_ascii_case(name)) {
+                headers.push(name.clone());
+            }
+        }
+        let body = if self.body.is_empty() { None } else { JsonDocument::parse(&self.text()).ok() };
+        MessageShape { headers, body: body.map(|doc| doc.shape().clone()) }
+    }
+}
+
+/// What a named request's latest exchange offers to complete its Request variables
+/// (and to describe it): when it arrived, its status, and each side's shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExchangeShape {
+    /// Serialized as RFC 3339 in UTC, with milliseconds.
+    #[serde(serialize_with = "rfc3339")]
+    pub received: DateTime<Utc>,
+    pub status: u16,
+    pub response: MessageShape,
+    pub request: MessageShape,
+}
+
+/// One side of an exchange as completion sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MessageShape {
+    /// Header names in the order sent or received, each once (its first spelling).
+    pub headers: Vec<String>,
+    /// The keys at each place in a JSON body; `None` for a body that isn't JSON, or none.
+    pub body: Option<Shape>,
+}
+
+fn rfc3339<S: serde::Serializer>(at: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 /// A named request's send: the request as sent, the response, and when it arrived.
@@ -46,10 +85,22 @@ pub struct Exchange {
     /// The request as prepared and sent: its headers (the default ones included) and full body.
     pub request: Message,
     pub response: Message,
+    /// The response's status code.
+    pub status: u16,
     pub received: DateTime<Utc>,
 }
 
 impl Exchange {
+    /// What completion offers for this exchange's paths, with its status and when it arrived.
+    pub fn shape(&self) -> ExchangeShape {
+        ExchangeShape {
+            received: self.received,
+            status: self.status,
+            response: self.response.shape(),
+            request: self.request.shape(),
+        }
+    }
+
     /// The value a Request variable's `path` (what follows `name.`, such as
     /// `response.body.$.token`) reads from this exchange, or why it reads nothing.
     pub fn value(&self, path: &str) -> Result<String, String> {
@@ -146,8 +197,9 @@ impl PendingExchange {
     /// Records the exchange, with `response` and its `body`, as the latest of its
     /// request in `exchanges`, received now.
     pub fn finish(self, exchanges: &Exchanges, response: &HttpResponse, body: Arc<[u8]>) {
+        let status = response.status;
         let response = Message { headers: response.headers.clone(), body, content_type: response.content_type.clone() };
-        let exchange = Exchange { request: self.request, response, received: Utc::now() };
+        let exchange = Exchange { request: self.request, response, status, received: Utc::now() };
         exchanges.record(&self.file, &self.name, exchange);
     }
 }

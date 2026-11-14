@@ -355,3 +355,59 @@ async fn the_rest_client_docs_chain_runs_through_file_variables() {
     let created = received(&server, "/api/comments/42").await.pop().expect("sent to the id the comment got");
     assert_eq!(header(&created, "authorization"), Some("tok-1"));
 }
+
+#[tokio::test]
+async fn the_latest_exchanges_shape_lists_each_sides_json_keys_and_header_names_for_completion() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_raw(r#"{"token":"t","user":{"id":1,"roles":[{"name":"admin"}]}}"#, "application/json")
+                .insert_header("X-Token", "a")
+                .append_header("x-token", "b"),
+        )
+        .mount(&server)
+        .await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    let text = format!(
+        "# @name login\nPOST {uri}/login\nX-Client: cli\nContent-Type: application/json\n\n{{\"user\": \"ann\"}}\n",
+        uri = server.uri()
+    );
+    assert!(session.exchanges().latest(file, "login").is_none());
+    let before = chrono::Utc::now();
+    send(&session, file, &text, 0).await.unwrap();
+
+    let shape = session.exchanges().latest(file, "login").unwrap().shape();
+    assert_eq!(shape.status, 201);
+    assert!(shape.received >= before);
+    let json = serde_json::to_value(&shape).unwrap();
+    assert_eq!(
+        json["response"]["body"],
+        serde_json::json!({ "keys": [
+            ["token", {}],
+            ["user", { "keys": [["id", {}], ["roles", { "items": { "keys": [["name", {}]] } }]] }],
+        ] })
+    );
+    let response_headers = json["response"]["headers"].as_array().unwrap();
+    let tokens = response_headers.iter().filter(|h| h.as_str().unwrap().eq_ignore_ascii_case("x-token")).count();
+    assert_eq!(tokens, 1, "each name once: {response_headers:?}");
+    assert!(response_headers.contains(&serde_json::json!("content-type")), "{response_headers:?}");
+    assert_eq!(json["request"]["body"], serde_json::json!({ "keys": [["user", {}]] }));
+    assert!(json["request"]["headers"].as_array().unwrap().contains(&serde_json::json!("X-Client")), "{json}");
+    assert!(json["received"].as_str().unwrap().ends_with('Z'), "{json}");
+}
+
+#[tokio::test]
+async fn a_body_that_isnt_json_has_no_shape_but_its_headers_are_listed() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login")).respond_with(ResponseTemplate::new(200).set_body_string("ok")).mount(&server).await;
+    let session = Session::default();
+    let file = Path::new("/ws/api.http");
+    send(&session, file, &format!("# @name login\nGET {}/login\n", server.uri()), 0).await.unwrap();
+
+    let json = serde_json::to_value(session.exchanges().latest(file, "login").unwrap().shape()).unwrap();
+    assert_eq!(json["response"]["body"], serde_json::Value::Null);
+    assert!(!json["response"]["headers"].as_array().unwrap().is_empty());
+    assert_eq!(json["request"]["body"], serde_json::Value::Null, "nothing was sent in the body");
+}

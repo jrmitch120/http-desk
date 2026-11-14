@@ -6,6 +6,7 @@ import type {
   BodyKind,
   FilterResult,
   FormatMode,
+  ExchangeShape,
   JsonShape,
   EnvironmentSet,
   FolderEnvironments,
@@ -77,6 +78,8 @@ export const api = {
   answerPrompts: (requestKey: string, answers: Record<string, string>) => invoke<void>("answer_prompts", { requestKey, answers }),
   /** Forgets a request's Prompt variable answers, so its next send asks again. */
   forgetPromptAnswers: (requestKey: string) => invoke<void>("forget_prompt_answers", { requestKey }),
+  /** The shape of the latest exchange of the request named `name` in `filePath`, in the Session; null if it hasn't been sent. */
+  exchangeShape: (filePath: string, name: string) => invoke<ExchangeShape | null>("exchange_shape", { filePath, name }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no
