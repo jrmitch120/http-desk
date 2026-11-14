@@ -29,6 +29,7 @@ import type {
   RequestPreview,
   SearchHit,
   SendError,
+  TestResult,
   TreeNode,
   Usage,
   UsageField,
@@ -472,6 +473,7 @@ class AppStore {
       const info = await api.openWorkspace(path);
       // The shell started a new Session for it, so nothing from the last one shows.
       this.sessionVersion++;
+      this.clearTestMarks();
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
@@ -1159,6 +1161,7 @@ class AppStore {
       if (previous?.id !== response.id) this.releaseResponse(previous);
       // Its exchange is now the latest in the Session, which Request variables read.
       if (getDirective(req, "name")?.trim()) this.sessionVersion++;
+      this.markTests(tab.key, response.tests);
     } catch (e) {
       if (this.runs[tabId]?.runId !== runId) return;
       if (this.cancelled.delete(runId)) {
@@ -1167,6 +1170,7 @@ class AppStore {
         const error = toSendError(e);
         this.runs[tabId] = { runId, loading: false, startedAt: 0, error };
         this.releaseResponse(previous);
+        this.clearTestMark(tab.key);
         // The shell knows best: trust revoked elsewhere asks again on the next send.
         if (error.kind === "untrustedWorkspace" && this.settings) {
           this.settings.trustedWorkspaces = (this.settings.trustedWorkspaces ?? []).filter((p) => p !== this.root);
@@ -1190,6 +1194,35 @@ class AppStore {
     if (!tab || !req) return;
     await this.openRequest(tab.path, { key: req._key });
     if (this.activeTabId) await this.send(this.activeTabId);
+  }
+
+  /**
+   * The test marker of each request whose latest send ran tests, by request key:
+   * "passed" when every test passed, "failed" when any failed (a handler error
+   * included). They belong to the Session, not the tab: a closed tab's request keeps
+   * its marker, and they all go when the Session is cleared (`clearTestMarks`).
+   */
+  private testMarks = $state<Record<string, "passed" | "failed">>({});
+
+  /** The tab strip's and the tree's marker for the request with this key, if its latest send ran tests. */
+  testMark(key: string): "passed" | "failed" | undefined {
+    return this.testMarks[key];
+  }
+
+  /** Records the latest send's tests as the request's marker; no tests, no marker. */
+  markTests(key: string, tests: TestResult[] | undefined) {
+    if (tests?.length) this.testMarks[key] = tests.every((t) => t.passed) ? "passed" : "failed";
+    else this.clearTestMark(key);
+  }
+
+  /** Drops one request's marker, for when its latest result is cleared. */
+  clearTestMark(key: string) {
+    delete this.testMarks[key];
+  }
+
+  /** Drops every marker, for when the Session is cleared (a workspace opened, or Clear session). */
+  clearTestMarks() {
+    this.testMarks = {};
   }
 
   /** The workspace whose scripts the user chose to skip ("Send without scripts"), until it's opened again. */

@@ -2,15 +2,18 @@
 //
 // Evaluated once per script context, before the user's script, as a function
 // the engine (src/script.rs) calls with:
-//   host: Rust functions this API is built on (`host.test(name, passed, message)`)
+//   host: Rust functions this API is built on (`host.test(name, passed, message)`,
+//         `host.log(line)`)
 //   data: the exchange as plain JSON ({ response: { status, headers, body, json,
 //         mimeType, charset }, limits: { time, memory } })
 // It defines the globals the user's script sees and keeps `host` out of reach.
 //
 // Every JetBrains API that isn't implemented here throws "<api> isn't supported
 // in HttpDesk" instead of doing nothing. To implement one, add a Rust function to
-// `host` in src/script.rs, call it from here, and take its name out of the
-// unsupported namespace it falls under.
+// `host` in src/script.rs, call it from here, take its name out of the
+// unsupported namespace it falls under, and list it in api.json (next to this
+// file), which the Scripts editor completes from. A test (tests/scripts.rs)
+// fails until the list names exactly what this file implements.
 (function (host, data) {
   "use strict";
 
@@ -58,6 +61,20 @@
     return String(e);
   }
 
+  // How `client.log` writes a value: text as it is, objects as JSON where they
+  // can be, anything else as JavaScript would print it.
+  function logText(v) {
+    if (typeof v === "string") return v;
+    if (typeof v === "object" && v !== null) {
+      try {
+        return JSON.stringify(v);
+      } catch (_) {
+        // A cycle or a BigInt inside: fall through to String.
+      }
+    }
+    return String(v);
+  }
+
   let testDepth = 0;
 
   const client = {
@@ -83,7 +100,9 @@
       host.test(text, !!condition, condition ? null : text);
     },
     global: unsupportedNamespace("client.global"),
-    log: unsupported("client.log"),
+    log(...values) {
+      host.log(values.map(logText).join(" "));
+    },
     exit: unsupported("client.exit"),
   };
 

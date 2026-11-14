@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
@@ -1583,6 +1583,93 @@ describe("workspace trust", () => {
     await app.send(tab.id);
     expect(app.runs[tab.id].error?.kind).toBe("untrustedWorkspace");
     expect(app.settings!.trustedWorkspaces).toEqual([]);
+  });
+});
+
+describe("test markers", () => {
+  const pass = (name: string): TestResult => ({ name, passed: true, message: null });
+  const fail = (name: string): TestResult => ({ name, passed: false, message: "nope" });
+  const responding = (id: string, tests: TestResult[]) =>
+    api.sendRequest.mockResolvedValueOnce({ id, status: 200, tests, logs: [] } as unknown as HttpResponse);
+
+  beforeEach(() => {
+    app.settings = { theme: "dark", recentWorkspaces: [], environments: {}, environmentSettings: {}, trustedWorkspaces: [] } as unknown as AppSettings;
+    app.envName = null;
+    app.clearTestMarks();
+  });
+
+  it("are green when every test of the latest send passed, red when any failed", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    responding("r1", [pass("a"), pass("b")]);
+    await app.send(list.id);
+    responding("r2", [pass("a"), fail("Response handler")]);
+    await app.send(create.id);
+    expect(app.testMark(list.key)).toBe("passed");
+    expect(app.testMark(create.key)).toBe("failed");
+
+    responding("r3", [fail("a")]);
+    await app.send(list.id);
+    expect(app.testMark(list.key)).toBe("failed");
+  });
+
+  it("go away when the latest send had no tests or failed, and stay when it was cancelled", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    responding("r2", []);
+    await app.send(tab.id);
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r3", [pass("a")]);
+    await app.send(tab.id);
+    api.sendRequest.mockRejectedValueOnce({ kind: "refused", message: "refused", details: null });
+    await app.send(tab.id);
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r4", [fail("a")]);
+    await app.send(tab.id);
+    let reject!: (e: unknown) => void;
+    api.sendRequest.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+    api.cancelRequest.mockImplementationOnce(async () => reject("Request cancelled"));
+    const sending = app.send(tab.id);
+    await app.cancel(tab.id);
+    await sending;
+    expect(app.testMark(tab.key)).toBe("failed");
+  });
+
+  it("outlast the tab, since they belong to the request", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    app.closeTab(tab.id);
+    expect(app.testMark(tab.key)).toBe("passed");
+  });
+
+  it("clear with the Session: on opening a workspace, or all at once", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(tab.id);
+    app.clearTestMarks();
+    expect(app.testMark(tab.key)).toBeUndefined();
+
+    responding("r2", [fail("a")]);
+    await app.send(tab.id);
+    openWorkspace.mockResolvedValue({ root: "/ws", tree: { name: "ws", path: "/ws", isDir: true, children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue(app.settings);
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: null });
+    await app.openWorkspace("/ws");
+    expect(app.testMark(tab.key)).toBeUndefined();
+  });
+
+  it("one request's can be cleared alone", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    responding("r1", [pass("a")]);
+    await app.send(list.id);
+    responding("r2", [pass("a")]);
+    await app.send(create.id);
+    app.clearTestMark(list.key);
+    expect(app.testMark(list.key)).toBeUndefined();
+    expect(app.testMark(create.key)).toBe("passed");
   });
 });
 
