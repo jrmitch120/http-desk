@@ -1,0 +1,62 @@
+[
+  {
+    "name": "client.test",
+    "detail": "(name, fn)",
+    "info": "Records a test called name. It passes unless fn throws or a client.assert in it fails."
+  },
+  {
+    "name": "client.assert",
+    "detail": "(condition, message?)",
+    "info": "Fails the enclosing test with message when condition is false. Outside a test, records its own result."
+  },
+  {
+    "name": "client.log",
+    "detail": "(...values)",
+    "info": "Writes a line to the response's Log: the values joined by spaces, objects as JSON."
+  },
+  {
+    "name": "response.status",
+    "detail": "number",
+    "info": "The response's HTTP status code."
+  },
+  {
+    "name": "response.body",
+    "detail": "object | string",
+    "info": "The response body: parsed JSON for a JSON response, otherwise its text."
+  },
+  {
+    "name": "response.headers.valueOf",
+    "detail": "(name)",
+    "info": "The first value of the header called name (any case), or null."
+  },
+  {
+    "name": "response.headers.valuesOf",
+    "detail": "(name)",
+    "info": "Every value of the header called name (any case)."
+  },
+  {
+    "name": "response.contentType.mimeType",
+    "detail": "string",
+    "info": "The response's media type, e.g. application/json."
+  },
+  {
+    "name": "response.contentType.charset",
+    "detail": "string | null",
+    "info": "The charset from the response's Content-Type, if it has one."
+  },
+  {
+    "name": "request.variables.set",
+    "detail": "(name, value)",
+    "info": "Sets {{name}} for this request only. An object is written as JSON."
+  },
+  {
+    "name": "request.variables.get",
+    "detail": "(name)",
+    "info": "The value request.variables.set gave name, or null."
+  },
+  {
+    "name": "request.environment.get",
+    "detail": "(name)",
+    "info": "The selected environment's value for name, private values included, or null."
+  }
+]

@@ -1301,7 +1301,7 @@ class AppStore {
     try {
       const r = await this.choose(
         "Run this workspace's scripts?",
-        `${what === "run" ? "Requests in this run have response handler scripts" : "This request has a response handler script"}. Scripts in ${this.root} run only if you trust this workspace. Trust it only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
+        `${what === "run" ? "Requests in this run have scripts" : "This request has a script"}. Scripts in ${this.root} run only if you trust this workspace. Trust it only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
         [
           { ...CANCEL, focus: true },
           { label: what === "run" ? "Run without scripts" : "Send without scripts", value: "skip" },

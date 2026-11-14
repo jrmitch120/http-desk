@@ -128,7 +128,7 @@ test("in a workspace that isn't trusted, a run with scripts asks once up front",
 
   await runFile(page, "samples", "jetbrains.http");
   const ask = dialog(page, "Run this workspace's scripts?");
-  await expect(ask).toContainText("Requests in this run have response handler scripts");
+  await expect(ask).toContainText("Requests in this run have scripts");
   expect(await sentRequests(page)).toEqual([]);
   await ask.getByRole("button", { name: "Run without scripts" }).click();
 

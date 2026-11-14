@@ -460,4 +460,14 @@ describe("hasScripts (the core's script::has_scripts)", () => {
   ])("%s → %s", (handler, expected) => {
     expect(hasScripts(withHandler(handler))).toBe(expected);
   });
+
+  it.each([
+    ['< {% request.variables.set("a", "1") %}', true],
+    ["< {%\n  request.variables.set('a', '1');\n%}", true],
+    ["< ./sign.js", true],
+    ["<", false],
+    [null, false],
+  ])("pre-request %s → %s", (preScript, expected) => {
+    expect(hasScripts({ ...newRequest("r"), preScript })).toBe(expected);
+  });
 });

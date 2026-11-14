@@ -7,7 +7,7 @@ use std::path::Path;
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecOutcome, ExecSettings};
-use httpdesk_core::script::{run_response_handler, TestResult};
+use httpdesk_core::script::{run_pre_request_script, run_response_handler, TestResult};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::path;
@@ -286,6 +286,56 @@ async fn each_handler_gets_a_fresh_context() {
     let handler = "> {% client.assert(typeof leftover === 'undefined' && ({}).polluted === undefined, 'fresh'); %}";
     let (_, _, tests) = run(&server, "user", handler).await;
     assert_eq!(tests, [pass("fresh")]);
+}
+
+/// Visits every member of the script globals and reports, as the name of a
+/// last test, the paths that work: values, and functions that don't throw
+/// "not supported" when called. Wrapped as a handler or a pre-request script.
+const IMPLEMENTED: &str = r#"
+const found = [];
+function visit(path, value) {
+  if (typeof value === "function") {
+    try { value(); } catch (e) { if (e.name === "UnsupportedApiError") return; }
+    found.push(path);
+  } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) {
+      let member;
+      try { member = value[key]; } catch (e) { continue; }
+      visit(path + "." + key, member);
+    }
+  } else {
+    found.push(path);
+  }
+}
+// A pre-request script has no `response` at all.
+for (const root of ["client", "request", "response", "crypto", "$random", "jsonPath", "xpath"]) {
+  if (globalThis[root] !== undefined) visit(root, globalThis[root]);
+}
+client.test(JSON.stringify(found.sort()), function () {});
+"#;
+
+/// The Scripts editor completes the API listed in `src/script/api.json`, so it
+/// must name exactly what the prelude implements: an API a ticket implements is
+/// listed there too, and nothing unsupported is offered. Completion offers
+/// `response.*` only in a response handler and `request.*` only in a pre-request
+/// script (`src/lib/scriptApi.ts`), so each kind is checked against that share.
+#[tokio::test]
+async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
+    let listed: serde_json::Value = serde_json::from_str(include_str!("../src/script/api.json")).unwrap();
+    let mut listed: Vec<&str> = listed.as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    listed.sort_unstable();
+    let listed_without =
+        |prefix: &str| -> Vec<&str> { listed.iter().copied().filter(|n| !n.starts_with(prefix)).collect() };
+
+    let server = server().await;
+    let (_, _, tests) = run(&server, "text", &format!("> {{%{IMPLEMENTED}%}}")).await;
+    let in_handler: Vec<String> = serde_json::from_str(&tests.last().unwrap().name).unwrap();
+    assert_eq!(in_handler, listed_without("request."));
+
+    let req = parse(&format!("< {{%{IMPLEMENTED}%}}\nGET {}/text\n", server.uri())).requests.remove(0);
+    let pre = run_pre_request_script(&req, &HashMap::new()).unwrap();
+    let in_pre_request: Vec<String> = serde_json::from_str(&pre.results.tests.last().unwrap().name).unwrap();
+    assert_eq!(in_pre_request, listed_without("response."));
 }
 
 /// Sends `GET <server>/<route>` followed by `handler`, then runs the handler for everything it reported.

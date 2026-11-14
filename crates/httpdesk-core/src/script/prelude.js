@@ -3,15 +3,19 @@
 // Evaluated once per script context, before the user's script, as a function
 // the engine (src/script.rs) calls with:
 //   host: Rust functions this API is built on (`host.test(name, passed, message)`,
-//         `host.log(line)`)
-//   data: the exchange as plain JSON ({ response: { status, headers, body, json,
-//         mimeType, charset }, limits: { time, memory } })
+//         `host.log(line)`, `host.setVariable(name, value)`)
+//   data: the exchange as plain JSON. A response handler gets { response: { status,
+//         headers, body, json, mimeType, charset } }, a pre-request script gets
+//         { request: { environment, variables } } (name → value objects); both
+//         get limits: { time, memory }.
 // It defines the globals the user's script sees and keeps `host` out of reach.
 //
 // Every JetBrains API that isn't implemented here throws "<api> isn't supported
 // in HttpDesk" instead of doing nothing. To implement one, add a Rust function to
-// `host` in src/script.rs, call it from here, and take its name out of the
-// unsupported namespace it falls under.
+// `host` in src/script.rs, call it from here, take its name out of the
+// unsupported namespace it falls under, and list it in api.json (next to this
+// file), which the Scripts editor completes from. A test (tests/scripts.rs)
+// fails until the list names exactly what this file implements.
 (function (host, data) {
   "use strict";
 
@@ -104,34 +108,68 @@
     exit: unsupported("client.exit"),
   };
 
-  const r = data.response;
-  let body = r.body;
-  if (r.json) {
-    try {
-      body = JSON.parse(r.body);
-    } catch (_) {
-      // Not valid JSON after all: the script sees the text, as in JetBrains.
+  // The response, for a response handler. A pre-request script has none.
+  function responseApi(r) {
+    let body = r.body;
+    if (r.json) {
+      try {
+        body = JSON.parse(r.body);
+      } catch (_) {
+        // Not valid JSON after all: the script sees the text, as in JetBrains.
+      }
     }
+    const lower = (name) => String(name).toLowerCase();
+    return {
+      status: r.status,
+      body,
+      headers: {
+        valueOf(name) {
+          const found = r.headers.find(([k]) => k.toLowerCase() === lower(name));
+          return found ? found[1] : null;
+        },
+        valuesOf(name) {
+          return r.headers.filter(([k]) => k.toLowerCase() === lower(name)).map(([, v]) => v);
+        },
+      },
+      contentType: { mimeType: r.mimeType, charset: r.charset },
+    };
   }
-  const lower = (name) => String(name).toLowerCase();
-  const response = {
-    status: r.status,
-    body,
-    headers: {
-      valueOf(name) {
-        const found = r.headers.find(([k]) => k.toLowerCase() === lower(name));
-        return found ? found[1] : null;
+
+  // The request a pre-request script runs before: its variables (for `{{name}}`
+  // in this request only) and the selected environment. Every other member is
+  // unsupported.
+  function requestApi(r) {
+    const variables = new Map(Object.entries(r.variables));
+    const environment = new Map(Object.entries(r.environment));
+    const known = {
+      variables: {
+        set(name, value) {
+          if (Array.isArray(value)) throw new UnsupportedApiError("request.variables.set with an array (iterations)");
+          const text = typeof value === "string" ? value : value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
+          variables.set(String(name), text);
+          host.setVariable(String(name), text);
+        },
+        get(name) {
+          return variables.has(String(name)) ? variables.get(String(name)) : null;
+        },
       },
-      valuesOf(name) {
-        return r.headers.filter(([k]) => k.toLowerCase() === lower(name)).map(([, v]) => v);
+      environment: {
+        get(name) {
+          return environment.has(String(name)) ? environment.get(String(name)) : null;
+        },
       },
-    },
-    contentType: { mimeType: r.mimeType, charset: r.charset },
-  };
+    };
+    return new Proxy(known, {
+      get(target, key) {
+        if (typeof key !== "string" || Object.hasOwn(target, key)) return target[key];
+        throw new UnsupportedApiError("request." + key);
+      },
+    });
+  }
 
   globalThis.client = client;
-  globalThis.response = response;
-  globalThis.request = unsupportedNamespace("request");
+  if (data.response) globalThis.response = responseApi(data.response);
+  globalThis.request = data.request ? requestApi(data.request) : unsupportedNamespace("request");
   globalThis.crypto = unsupportedNamespace("crypto");
   globalThis.$random = unsupportedNamespace("$random");
   globalThis.jsonPath = unsupported("jsonPath");

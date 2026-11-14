@@ -1,12 +1,13 @@
 //! One send, the way every send goes, whether the user sent the request or a Run did:
-//! resolve (blocking on unsent or unmatched Request variables) → prepare → execute with
-//! the Session's cookie jar → response handler → record the named request's exchange
-//! in the Session. A pre-request script goes between resolving and preparing.
+//! resolve (blocking on unsent or unmatched Request variables) → pre-request script →
+//! prepare → execute with the Session's cookie jar → response handler → record the
+//! named request's exchange in the Session.
 //!
 //! The shell's `send_request` and `run_requests` both send through [`send`], so a
 //! step added here applies to both. The shell keeps only what is the UI's: the body
 //! store, cancellation and events.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -100,6 +101,9 @@ pub struct RequestScope {
     pub base_dir: PathBuf,
     /// Set when its folder doesn't define the selected environment (it's then sent with none: ADR-0004).
     pub env_warning: Option<String>,
+    /// The environment's variables, private ones included: what a pre-request
+    /// script's `request.environment.get` reads.
+    pub environment: HashMap<String, String>,
 }
 
 /// What `out` is sent with: the variables (its folder's environment from disk, then
@@ -145,7 +149,7 @@ pub fn scope(
             // Unsaved nowhere: its named requests have no exchanges.
             None => out.request_names.iter().map(|n| (n.clone(), None)).collect(),
         });
-    Ok(RequestScope { resolver, base_dir, env_warning })
+    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
 }
 
 /// A folder as the UI names it: relative to the workspace root with a trailing `/`
@@ -157,8 +161,32 @@ fn folder_label(root: &Path, dir: &Path) -> String {
     }
 }
 
-/// The warning on a response whose request has a script that was skipped.
-pub const SCRIPTS_SKIPPED: &str = "Sent without scripts: the response handler didn't run.";
+/// The warning on a response whose request has scripts that were skipped, naming them.
+fn scripts_skipped(request: &Request) -> String {
+    let pre = !request.pre_request_parts().is_empty();
+    let handler = request.response_handler_parts().iter().any(|p| p.is_script());
+    let skipped = match (pre, handler) {
+        (true, true) => "the pre-request script and the response handler",
+        (true, false) => "the pre-request script",
+        _ => "the response handler",
+    };
+    format!("Sent without scripts: {skipped} didn't run.")
+}
+
+/// Runs the request's pre-request script, if it has one, off the async workers
+/// (it may take up to the script time limit).
+async fn run_pre_request(
+    request: &Request,
+    environment: &HashMap<String, String>,
+) -> Result<script::PreRequestResults, ExecError> {
+    if request.pre_request_parts().is_empty() {
+        return Ok(Default::default());
+    }
+    let (request, environment) = (request.clone(), environment.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment))
+        .await
+        .map_err(|e| ExecError::Other(e.to_string()))?
+}
 
 /// Sends `out` in `ctx` (see the module docs). `on_progress` gets the body bytes
 /// received so far (see [`exec::execute_on`]). Dropping the future cancels the send;
@@ -170,18 +198,22 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         return Err(ExecError::UntrustedWorkspace);
     }
 
-    let (prepared, ssl) = {
+    let (prepared, ssl, pre) = {
         let scope = scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, &out)?;
-        let mut prepared = exec::prepare(&out.request, &scope.resolver, &scope.base_dir, &ctx.settings)?;
+        // JetBrains order: the pre-request script runs before variables are substituted.
+        let pre =
+            if run_scripts { run_pre_request(&out.request, &scope.environment).await? } else { Default::default() };
+        let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
+        let mut prepared = exec::prepare(&out.request, &resolver, &scope.base_dir, &ctx.settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
         if has_scripts && !run_scripts {
-            prepared.warnings.push(SCRIPTS_SKIPPED.into());
+            prepared.warnings.push(scripts_skipped(&out.request));
         }
         let ssl = match (&ctx.root, &ctx.environment) {
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
-        (prepared, ssl)
+        (prepared, ssl, pre.results)
     };
 
     // A `# @name` request's exchange becomes its latest, in the Session the send started in.
@@ -199,8 +231,9 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         let handler_body = body.clone();
         response = tokio::task::spawn_blocking(move || {
             let results = script::run_response_handler(&request, &response, &handler_body);
-            response.tests = results.tests;
-            response.logs = results.logs;
+            // The pre-request script's tests and logs come first.
+            response.tests = pre.tests.into_iter().chain(results.tests).collect();
+            response.logs = pre.logs.into_iter().chain(results.logs).collect();
             response
         })
         .await

@@ -107,6 +107,20 @@ async fn a_login_then_a_call_with_its_token_runs_in_order_and_the_call_is_author
 }
 
 #[tokio::test]
+async fn a_run_sends_each_request_the_way_a_send_does_pre_request_script_included() {
+    let server = MockServer::start().await;
+    Mock::given(path("/signed/abc-42")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let text = format!(
+        "< {{% request.variables.set(\"signature\", \"abc-\" + (40 + 2)) %}}\nGET {uri}/signed/{{{{signature}}}}\n",
+        uri = server.uri()
+    );
+
+    let events = run_file(&Arc::new(Session::default()), &text).await;
+
+    assert_eq!(events[1], (0, Reported::Sent { status: 200, failed: false }));
+}
+
+#[tokio::test]
 async fn an_error_status_alone_is_not_a_failure_and_a_failing_test_or_blocked_send_is() {
     let server = MockServer::start().await;
     Mock::given(path("/missing")).respond_with(ResponseTemplate::new(404)).mount(&server).await;
