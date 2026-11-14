@@ -5,6 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { json } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
 import { xml } from "@codemirror/lang-xml";
+import { javascript } from "@codemirror/lang-javascript";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
@@ -33,7 +34,7 @@ import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
 
-export type Language = "json" | "xml" | "html" | "text";
+export type Language = "json" | "xml" | "html" | "javascript" | "text";
 
 export const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--text)", height: "100%", fontSize: "12.5px" },
@@ -121,6 +122,8 @@ export function languageExtension(lang: Language): Extension {
       return xml();
     case "html":
       return html();
+    case "javascript":
+      return javascript();
     default:
       return [];
   }
