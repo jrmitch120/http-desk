@@ -16,12 +16,17 @@
 //! `script/api.json`, which the Scripts editor's completion offers (a test
 //! checks the list against the prelude).
 //!
+//! A script written as a file reference (`< sign.js`, `> check.js`) is read by
+//! [`ScriptFiles`], relative to the `.http` file and only from inside the
+//! workspace, then runs like an inline one. Scripts themselves still read no files.
+//!
 //! A response handler never fails the send: its errors, including running out of
 //! time or memory, become failed [`TestResult`]s. A pre-request script's error
 //! does: it is [`ExecError::PreRequestScript`], and nothing is sent.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -85,28 +90,32 @@ pub struct PreRequestResults {
 pub fn run_pre_request_script(
     request: &Request,
     environment: &HashMap<String, String>,
+    files: &ScriptFiles,
 ) -> Result<PreRequestResults, ExecError> {
     let mut out = PreRequestResults::default();
     for part in request.pre_request_parts() {
-        match part {
-            PreRequestPart::Inline { source, line } => {
-                let data = serde_json::json!({
-                    "request": { "environment": environment, "variables": out.variables },
-                });
-                let mut run = Sandbox::run(&source, &data);
-                out.results.tests.append(&mut run.results.tests);
-                out.results.logs.append(&mut run.results.logs);
-                out.variables.extend(run.variables);
-                if let Some(e) = run.error {
-                    return Err(ExecError::PreRequestScript { message: e.message, line: e.line.map(|l| line + l - 1) });
+        let script = match part {
+            PreRequestPart::Inline { source, line } => Script { source, origin: Origin::Inline(line) },
+            PreRequestPart::File { path } => match files.read(&path) {
+                Ok(source) => Script { source, origin: Origin::File(path) },
+                Err(message) => return Err(ExecError::PreRequestScript { message, line: None }),
+            },
+        };
+        let data = serde_json::json!({
+            "request": { "environment": environment, "variables": out.variables },
+        });
+        let mut run = Sandbox::run(&script.source, &data);
+        out.results.tests.append(&mut run.results.tests);
+        out.results.logs.append(&mut run.results.logs);
+        out.variables.extend(run.variables);
+        if let Some(e) = run.error {
+            // The UI names a line of the request's own script; a file's is in the message.
+            return Err(match script.origin {
+                Origin::Inline(line) => {
+                    ExecError::PreRequestScript { message: e.message, line: e.line.map(|l| line + l - 1) }
                 }
-            }
-            PreRequestPart::File { path } => {
-                return Err(ExecError::PreRequestScript {
-                    message: format!("Pre-request script files ({path}) aren't supported in HttpDesk yet"),
-                    line: None,
-                })
-            }
+                Origin::File(_) => ExecError::PreRequestScript { message: script.origin.describe(e), line: None },
+            });
         }
     }
     Ok(out)
@@ -114,37 +123,132 @@ pub fn run_pre_request_script(
 
 /// Runs `request`'s response handler against the response it got. `>>` output
 /// redirects are not run.
-pub fn run_response_handler(request: &Request, response: &HttpResponse, body: &[u8]) -> ScriptResults {
+pub fn run_response_handler(
+    request: &Request,
+    response: &HttpResponse,
+    body: &[u8],
+    files: &ScriptFiles,
+) -> ScriptResults {
     let parts = request.response_handler_parts();
     let mut results = ScriptResults::default();
     if !parts.iter().any(HandlerPart::is_script) {
         return results;
     }
     let data = serde_json::json!({ "response": response_data(response, body) });
+    let failed = |message| TestResult { name: HANDLER_TEST_NAME.into(), passed: false, message: Some(message) };
     for part in parts {
-        match part {
-            HandlerPart::Inline { source, line } => {
-                let mut run = Sandbox::run(&source, &data);
-                if let Some(e) = run.error {
-                    let at = e.line.map(|l| format!(" (line {})", line + l - 1)).unwrap_or_default();
-                    run.results.tests.push(TestResult {
-                        name: HANDLER_TEST_NAME.into(),
-                        passed: false,
-                        message: Some(format!("{}{at}", e.message)),
-                    });
+        let script = match part {
+            HandlerPart::Inline { source, line } => Script { source, origin: Origin::Inline(line) },
+            HandlerPart::File { path } => match files.read(&path) {
+                Ok(source) => Script { source, origin: Origin::File(path) },
+                Err(message) => {
+                    results.tests.push(failed(message));
+                    continue;
                 }
-                results.tests.append(&mut run.results.tests);
-                results.logs.append(&mut run.results.logs);
-            }
-            HandlerPart::File { path } => results.tests.push(TestResult {
-                name: HANDLER_TEST_NAME.into(),
-                passed: false,
-                message: Some(format!("Response handler files ({path}) aren't supported in HttpDesk yet")),
-            }),
-            HandlerPart::Redirect { .. } => {}
+            },
+            HandlerPart::Redirect { .. } => continue,
+        };
+        let mut run = Sandbox::run(&script.source, &data);
+        if let Some(e) = run.error {
+            run.results.tests.push(failed(script.origin.describe(e)));
         }
+        results.tests.append(&mut run.results.tests);
+        results.logs.append(&mut run.results.logs);
     }
     results
+}
+
+/// Where a request's script files (`< sign.js`, `> check.js`) are read from:
+/// relative to its `.http` file's folder, and only from inside the workspace.
+/// Symlinks are followed before that check, so a link can't reach outside.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptFiles {
+    /// The workspace root; `None` when no workspace is open, and nothing can be read.
+    root: Option<PathBuf>,
+    /// The `.http` file's folder.
+    dir: PathBuf,
+}
+
+impl ScriptFiles {
+    /// Files of a `.http` file in `dir`, in the workspace at `root`.
+    pub fn new(root: Option<&Path>, dir: &Path) -> Self {
+        ScriptFiles { root: root.map(Path::to_path_buf), dir: dir.to_path_buf() }
+    }
+
+    /// The file `reference` (as written after `<` or `>`) names, with symlinks
+    /// resolved, or why it can't be used: it doesn't exist, isn't a file, or is
+    /// (or points) outside the workspace.
+    pub fn locate(&self, reference: &str) -> Result<PathBuf, String> {
+        let failed = |why: &str| format!("Script file {reference} {why}");
+        let Some(root) = &self.root else { return Err(failed("can't be read: no workspace is open")) };
+        let root = std::fs::canonicalize(root).map_err(|e| failed(&format!("can't be read: {e}")))?;
+        let path = self.dir.join(reference);
+        let target = match std::fs::canonicalize(&path) {
+            Ok(target) => target,
+            // A file outside is refused for that, whether or not it exists.
+            Err(_) if !resolve_existing(&path).starts_with(&root) => return Err(failed("is outside the workspace")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(failed("doesn't exist")),
+            Err(e) => return Err(failed(&format!("can't be read: {e}"))),
+        };
+        if !target.starts_with(&root) {
+            return Err(failed("is outside the workspace"));
+        }
+        if !target.is_file() {
+            return Err(failed("isn't a file"));
+        }
+        Ok(target)
+    }
+
+    /// The text of the file `reference` names (see [`ScriptFiles::locate`]).
+    pub fn read(&self, reference: &str) -> Result<String, String> {
+        let path = self.locate(reference)?;
+        std::fs::read_to_string(path).map_err(|e| format!("Script file {reference} can't be read: {e}"))
+    }
+}
+
+/// `path` with its longest existing ancestor canonicalized and the rest applied
+/// lexically, to tell where a path that doesn't exist would be.
+fn resolve_existing(path: &Path) -> PathBuf {
+    let comps: Vec<Component> = path.components().collect();
+    for i in (1..=comps.len()).rev() {
+        let Ok(mut out) = std::fs::canonicalize(comps[..i].iter().collect::<PathBuf>()) else { continue };
+        for c in &comps[i..] {
+            match c {
+                Component::Normal(n) => out.push(n),
+                Component::ParentDir => {
+                    out.pop();
+                }
+                _ => {}
+            }
+        }
+        return out;
+    }
+    path.to_path_buf()
+}
+
+/// A script to run, and where its text came from.
+struct Script {
+    source: String,
+    origin: Origin,
+}
+
+/// Where a script's text is: in the `.http` file, from this line (1-based) of the
+/// pre-request script or handler on, or in a script file, as referenced.
+enum Origin {
+    Inline(usize),
+    File(String),
+}
+
+impl Origin {
+    /// The script's error message, naming the line it was at.
+    fn describe(&self, e: ScriptError) -> String {
+        let at = match (self, e.line) {
+            (_, None) => String::new(),
+            (Origin::Inline(line), Some(l)) => format!(" (line {})", line + l - 1),
+            (Origin::File(path), Some(l)) => format!(" ({path} line {l})"),
+        };
+        format!("{}{at}", e.message)
+    }
 }
 
 /// The response as the prelude reads it.

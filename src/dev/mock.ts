@@ -7,6 +7,7 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
+import { responseRedirects } from "../lib/scripts";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
@@ -75,6 +76,47 @@ if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
   req.raw = null;
   files[`${ROOT}/samples/jetbrains.http`] = withLogs;
 }
+// `?scriptFiles=1`: List pets runs the handler file `./check-status.js` (in `scriptFiles`
+// below), and Create pet references a pre-request script file that doesn't exist and a
+// handler file outside the workspace.
+if (new URLSearchParams(location.search).get("scriptFiles") === "1") {
+  const withFiles = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const [list, create] = withFiles.requests as { preScript: string | null; responseHandler: string | null; raw: unknown }[];
+  list.responseHandler = "> ./check-status.js";
+  create.preScript = "< ./missing.js";
+  create.responseHandler = "> ../../outside.js";
+  list.raw = create.raw = null;
+  files[`${ROOT}/api/pets.http`] = withFiles;
+}
+/** The workspace's script files (`> check.js`), by path. */
+const scriptFiles: Record<string, string> = {
+  [`${ROOT}/api/check-status.js`]: 'client.test("Status is 200", function () {\n  client.assert(response.status === 200, "Response status is not 200");\n});\n',
+};
+/** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
+ *  `.http` file at `filePath`, or (thrown) why it can't be used. */
+function locateScriptFile(filePath: string | null, path: string): string {
+  const parts = (filePath ? filePath.slice(0, filePath.lastIndexOf("/")) : ROOT).split("/");
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "." && part !== "") parts.push(part);
+  }
+  const resolved = path.startsWith("/") ? path : parts.join("/");
+  if (!resolved.startsWith(`${ROOT}/`)) throw `Script file ${path} is outside the workspace`;
+  if (!Object.hasOwn(scriptFiles, resolved)) throw `Script file ${path} doesn't exist`;
+  return resolved;
+}
+/** The file references (`< path` / `> path`) in a pre-request script or handler. */
+const fileReferences = (text: string | null, sigil: "<" | ">") =>
+  (text ?? "").split("\n").flatMap((line) => {
+    const rest = line.trim().startsWith(sigil) && !line.startsWith(">>") ? line.trim().slice(1).trim() : "";
+    return rest && !rest.startsWith("{%") ? [rest] : [];
+  });
+/** The core's note on a request with `>> file` redirects (`exec::redirect_not_run`). */
+const redirectNotes = (r: Request) =>
+  responseRedirects(r).map((line) => {
+    const [, bang, path] = /^>>(!?)\s*(.*)$/.exec(line)!;
+    return `HttpDesk doesn't run response redirects: >>${bang} ${path.trim()} doesn't save the response to a file.`;
+  });
 const tree = {
   name: "demo",
   path: ROOT,
@@ -242,6 +284,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
     warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
   }
+  warnings.push(...redirectNotes(r));
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
 }
 /**
@@ -393,6 +436,18 @@ function mockTests(handler: string, status: number) {
       return { name, passed, message: passed ? null : assert![2] };
     });
 }
+/** `mockTests` for a handler, then its script files' tests (or a failed "Response
+ *  handler" entry for a file that can't be read, like the core). */
+function handlerTests(handler: string, filePath: string | null, status: number) {
+  const fromFiles = fileReferences(handler, ">").flatMap((path) => {
+    try {
+      return mockTests(scriptFiles[locateScriptFile(filePath, path)], status);
+    } catch (message) {
+      return [{ name: "Response handler", passed: false, message: String(message) }];
+    }
+  });
+  return [...mockTests(handler, status), ...fromFiles];
+}
 /** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
 function mockLogs(handler: string) {
   return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
@@ -418,6 +473,8 @@ let webviewZoom: number | null = null;
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
 const openedUrls: string[] = [];
+/** The script files "Open in default editor" opened, in order. */
+const openedPaths: string[] = [];
 /** The OS clipboard, as the clipboard plugin reads and writes it. */
 let clipboardText = "";
 /** The texts the clipboard plugin wrote, in order. */
@@ -492,6 +549,10 @@ window.addEventListener(
   /** The URLs the opener opened in the browser, in order. */
   get openedUrls() {
     return [...openedUrls];
+  },
+  /** The script files opened in the default editor, in order. */
+  get openedPaths() {
+    return [...openedPaths];
   },
   /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
   get clipboard() {
@@ -1042,6 +1103,14 @@ async function mockSend(args: any) {
   if (runScripts && args.request.preScript?.includes("throw ")) {
     throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
   }
+  // Like the core: a pre-request script file that can't be read stops the send.
+  for (const path of runScripts ? fileReferences(args.request.preScript, "<") : []) {
+    try {
+      locateScriptFile(args.filePath, path);
+    } catch (message) {
+      throw { kind: "preRequestScript", message, details: { line: null } };
+    }
+  }
   if (slowDownload) {
     for (let i = 1; i <= 20; i++) {
       await delay(100);
@@ -1121,10 +1190,10 @@ async function mockSend(args: any) {
       method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
       headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
     },
-    warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
+    warnings: [...(hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : []), ...redirectNotes(r)],
     timings: jsonTimings,
     cookies,
-    tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
+    tests: runScripts ? handlerTests(r.responseHandler ?? "", args.filePath, status) : [],
     logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
   };
 }
@@ -1295,6 +1364,12 @@ mockIPC(
         return null;
       case "cancel_request":
         cancelledRuns.add(args.runId);
+        return null;
+      case "check_script_file":
+        locateScriptFile(args.filePath, args.path);
+        return null;
+      case "open_script_file":
+        openedPaths.push(locateScriptFile(args.filePath, args.path));
         return null;
       case "send_request":
         return mockSend(args);

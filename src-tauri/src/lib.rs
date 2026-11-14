@@ -13,6 +13,7 @@ use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
 use httpdesk_core::run::{self, RunEvent};
+use httpdesk_core::script::ScriptFiles;
 use httpdesk_core::send::{self, Outgoing, Scripts, SendContext, Sent};
 use httpdesk_core::session::Session;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
@@ -26,6 +27,7 @@ mod copying;
 mod deleting;
 mod json_docs;
 mod menu;
+mod opening;
 mod paths;
 mod quit;
 mod self_writes;
@@ -36,6 +38,7 @@ use bodies::{KeptBodies, KeptBody};
 use copying::Clipboard;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
+use opening::Opener;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -196,6 +199,8 @@ struct AppState {
     trash: Trash,
     /// Where Copy body writes (the OS clipboard; tests replace it).
     clipboard: Clipboard,
+    /// What opens script files in the default editor (the OS; tests replace it).
+    opener: Opener,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Runs under way, by run id, to stop them (`cancel_request`).
     runs: Mutex<HashMap<String, run::Cancel>>,
@@ -667,6 +672,46 @@ async fn run_requests<R: tauri::Runtime>(
     .await;
     state.runs.lock().unwrap().remove(&run_id);
     Ok(RunSummary { cancelled })
+}
+
+/// Where the scripts of a request in `file_path` read their files from: its
+/// folder (the root for a request in no file), inside the open workspace.
+fn script_files(state: &AppState, file_path: Option<&Path>) -> CmdResult<ScriptFiles> {
+    let root = state.root()?;
+    let dir = file_path.and_then(Path::parent).map_or_else(|| root.clone(), Path::to_path_buf);
+    Ok(ScriptFiles::new(Some(&root), &dir))
+}
+
+/// The Scripts editor's check of a script file reference (`path`, as a request in
+/// `file_path` writes it): an error says why it can't run (missing, not a file,
+/// outside the workspace).
+#[tauri::command]
+async fn check_script_file<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: Option<PathBuf>,
+    path: String,
+) -> CmdResult<()> {
+    off_main(app, move |state| script_files(state, file_path.as_deref())?.locate(&path).map(drop)).await
+}
+
+/// "Open in default editor" for a script file reference, checked like
+/// `check_script_file`. Only a `.js` file is opened: the default app for other
+/// kinds (`.command`, `.app`, …) may run them.
+#[tauri::command]
+async fn open_script_file<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: Option<PathBuf>,
+    path: String,
+) -> CmdResult<()> {
+    let handle = app.clone();
+    off_main(app, move |state| {
+        let target = script_files(state, file_path.as_deref())?.locate(&path)?;
+        if !target.extension().is_some_and(|e| e.eq_ignore_ascii_case("js")) {
+            return Err("Only .js script files can be opened from HttpDesk".into());
+        }
+        state.opener.open(&handle, &paths::simplified(&target))
+    })
+    .await
 }
 
 /// The Prompt variable answers the Session holds for a request, by name. The
@@ -1142,6 +1187,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             save_environments,
             send_request,
             run_requests,
+            check_script_file,
+            open_script_file,
             preview_request,
             cancel_request,
             prompt_answers,

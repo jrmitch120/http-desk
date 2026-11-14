@@ -85,6 +85,10 @@ export const api = {
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
   /** Cancels a send, or stops a run (its request in flight included), by its run id. */
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
+  /** Rejects with why a script file reference (`path`, written in the file at `filePath`) can't run: missing, or outside the workspace. */
+  checkScriptFile: (filePath: string | null, path: string) => invoke<void>("check_script_file", { filePath, path }),
+  /** Opens a script file reference in the default editor (a `.js` file inside the workspace only). */
+  openScriptFile: (filePath: string | null, path: string) => invoke<void>("open_script_file", { filePath, path }),
   /** Sends the selection's requests in order, the way `sendRequest` sends each, reporting
    *  them as `run-progress` events (`RunProgress`). Resolves when the run ends. */
   runRequests: (args: { runId: string; selection: RunSelection; options: RunOptions }) =>
