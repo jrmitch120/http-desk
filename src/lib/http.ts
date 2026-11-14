@@ -563,6 +563,15 @@ export function fileVariables(file: HttpFile): Variable[] {
   return [...file.header.variables, ...file.requests.flatMap((r) => r.variables)];
 }
 
+/**
+ * The `# @name`s of the file's requests, in order, each once: what its Request
+ * variables can read (the core's `HttpFile::request_names`). `###` text never counts.
+ */
+export function requestNames(file: HttpFile): string[] {
+  const names = file.requests.map((r) => getDirective(r, "name")?.trim()).filter((n): n is string => !!n);
+  return [...new Set(names)];
+}
+
 // ------------------------------------------------------------------ formatting
 
 /** "A", "A and B", "A, B and C". */

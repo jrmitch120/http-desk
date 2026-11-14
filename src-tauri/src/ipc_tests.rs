@@ -13,6 +13,7 @@ mod paths;
 mod preview;
 mod renaming;
 mod reply;
+mod request_variables;
 mod session;
 mod usages;
 mod watcher;

@@ -501,7 +501,9 @@ kbd {
   text-decoration-skip-ink: none;
   text-underline-offset: 2px;
 }
-.cm-var-dyn {
+/* Generated (a dynamic variable) or read from an exchange (a Request variable) when sent. */
+.cm-var-dyn,
+.cm-var-request {
   color: var(--var-dyn);
   background: color-mix(in srgb, var(--var-dyn) 12%, transparent);
 }

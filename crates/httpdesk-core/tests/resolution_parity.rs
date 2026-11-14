@@ -6,6 +6,7 @@
 use httpdesk_core::env;
 use std::collections::HashMap;
 
+use httpdesk_core::exchange::{Exchange, Message, NamedExchanges};
 use httpdesk_core::model::{Prompt, Variable};
 use httpdesk_core::vars::Resolver;
 use serde::Deserialize;
@@ -45,6 +46,46 @@ struct Case {
     /// Unanswered prompts met: asked when sent.
     #[serde(default)]
     asked: Vec<String>,
+    /// The file's `# @name`s.
+    #[serde(default)]
+    named: Vec<String>,
+    /// The latest exchange of each named request that was sent.
+    #[serde(default)]
+    exchanges: HashMap<String, ExchangeCase>,
+    /// The core's value, when it differs from the frontend's (it reads Request variables).
+    #[serde(default)]
+    core_value: Option<String>,
+    /// Named requests Request variables read that haven't been sent.
+    #[serde(default)]
+    unsent: Vec<String>,
+    /// Request variables whose path reads nothing.
+    #[serde(default)]
+    unmatched: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ExchangeCase {
+    request: MessageCase,
+    response: MessageCase,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct MessageCase {
+    headers: Vec<(String, String)>,
+    body: String,
+    content_type: Option<String>,
+}
+
+impl MessageCase {
+    fn message(&self) -> Message {
+        Message {
+            headers: self.headers.clone(),
+            body: self.body.as_bytes().into(),
+            content_type: self.content_type.clone(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -103,17 +144,33 @@ fn the_core_resolver_gives_the_shared_answers() {
             c.prompts.iter().map(|p| Prompt { name: p.name.clone(), description: String::new() }).collect();
         let answers: HashMap<String, String> =
             c.prompts.iter().filter_map(|p| Some((p.name.clone(), p.value.clone()?))).collect();
-        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(&dir)).with_prompts(&prompts, &answers);
+        let exchanges: NamedExchanges = c
+            .named
+            .iter()
+            .map(|name| {
+                let exchange = c.exchanges.get(name).map(|e| {
+                    let (request, response) = (e.request.message(), e.response.message());
+                    std::sync::Arc::new(Exchange { request, response, received: chrono::Utc::now() })
+                });
+                (name.clone(), exchange)
+            })
+            .collect();
+        let r = Resolver::for_request(&vars, &c.file, &c.request, Some(&dir))
+            .with_prompts(&prompts, &answers)
+            .with_request_variables(exchanges);
         let value = r.resolve(&c.text);
+        let expected = c.core_value.as_ref().unwrap_or(&c.value);
         assert!(
-            value == c.value || matches_with_dynamics(&c.value, &value),
-            "{}: got {value:?}, expected {:?}",
+            &value == expected || matches_with_dynamics(expected, &value),
+            "{}: got {value:?}, expected {expected:?}",
             c.case,
-            c.value
         );
         assert_eq!(r.undefined(), c.undefined, "{}: undefined", c.case);
         assert_eq!(r.circular(), c.circular, "{}: circular", c.case);
         assert_eq!(r.unanswered(), c.asked, "{}: asked", c.case);
+        assert_eq!(r.unsent(), c.unsent, "{}: unsent", c.case);
+        let unmatched: Vec<String> = r.unmatched().into_iter().map(|u| u.reference).collect();
+        assert_eq!(unmatched, c.unmatched, "{}: unmatched", c.case);
         assert!(r.errors().is_empty(), "{}: {:?}", c.case, r.errors());
     }
 }

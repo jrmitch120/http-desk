@@ -1409,6 +1409,69 @@ describe("production guard", () => {
     expect(app.dialog).toBeNull();
     expect(api.sendRequest).toHaveBeenCalledTimes(1);
   });
+
+  it("asks before sending a request first for another's Request variables", async () => {
+    const [, me] = await openAll(chained());
+    app.activeTabId = me.id;
+    const sending = app.sendFirst(me.id, "login");
+    expect(await answer("cancel")).toMatch(/production/i);
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+});
+
+/** A file whose `# @name login` POST is read by a GET's Request variable. */
+function chained(): HttpFile {
+  const f = fileOf(["POST", "Log in", "https://example.com/login"], ["GET", "Me", "https://example.com/me"]);
+  f.requests[0].directives = [{ name: "name", value: "login" }];
+  f.requests[1].headers.items = [{ name: "X-Token", value: "{{login.response.body.$.token}}", enabled: true }];
+  return f;
+}
+
+describe("Request variables", () => {
+  beforeEach(() => {
+    app.envName = null;
+    app.envSet = null;
+    app.envFolders = [];
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200 } as HttpResponse);
+  });
+
+  it("send and preview name the file's named requests, so the Session's exchanges are read", async () => {
+    const [, me] = await openAll(chained());
+    await app.send(me.id);
+    await app.preview(me);
+    expect(api.sendRequest.mock.lastCall![0].requestNames).toEqual(["login"]);
+    expect(api.previewRequest.mock.lastCall![0].requestNames).toEqual(["login"]);
+  });
+
+  it("Send first opens the named request and sends it, never the request that asked", async () => {
+    const f = chained();
+    readHttpFile.mockResolvedValueOnce(f);
+    await app.openRequest(PATH, { index: 1 });
+    const me = app.activeTab!;
+
+    await app.sendFirst(me.id, "login");
+
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(api.sendRequest.mock.lastCall![0].request.url).toBe("https://example.com/login");
+    expect(app.requestFor(app.activeTab!)?.name).toBe("Log in");
+    expect(app.runs[app.activeTab!.id]?.response?.id).toBe("r1");
+  });
+
+  it("a named request's send changes the Session, so views reading it ask again", async () => {
+    const [login, me] = await openAll(chained());
+    const before = app.sessionVersion;
+    await app.send(me.id);
+    expect(app.sessionVersion).toBe(before);
+    await app.send(login.id);
+    expect(app.sessionVersion).toBe(before + 1);
+  });
+
+  it("Send first does nothing when no request in the file has that name any more", async () => {
+    const [, me] = await openAll(chained());
+    await app.sendFirst(me.id, "gone");
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("environment settings", () => {

@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, joinAnd, joinPath, nameError, newRequest, promptMasked, requestPrompts, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, getDirective, joinAnd, joinPath, nameError, newRequest, promptMasked, requestNames, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
@@ -1069,12 +1069,14 @@ class AppStore {
       fileVariables: $state.snapshot(fileVariables(doc.file)),
       environment: this.envName,
       requestKey: tab.key,
+      requestNames: requestNames(doc.file),
     };
   }
 
   /**
-   * Goes up whenever the workspace's Session changes (answers given or forgotten, or a
-   * new workspace opened), so views showing what it holds read it again.
+   * Goes up whenever the workspace's Session changes (answers given or forgotten, a
+   * named request's exchange recorded, or a new workspace opened), so views showing
+   * what it holds read it again.
    */
   sessionVersion = $state(0);
 
@@ -1152,6 +1154,8 @@ class AppStore {
       }
       this.runs[tabId] = { runId, loading: false, startedAt: 0, response };
       if (previous?.id !== response.id) this.releaseResponse(previous);
+      // Its exchange is now the latest in the Session, which Request variables read.
+      if (getDirective(req, "name")?.trim()) this.sessionVersion++;
     } catch (e) {
       if (this.runs[tabId]?.runId !== runId) return;
       if (this.cancelled.delete(runId)) {
@@ -1163,6 +1167,21 @@ class AppStore {
     } finally {
       this.cancelled.delete(runId);
     }
+  }
+
+  /**
+   * "Send `name` first": opens the request named `name` (`# @name`) in the file of tab
+   * `tabId`, whose Request variables read its latest exchange, and sends it the
+   * normal way (prompts and the production confirmation included). Never resends
+   * the request that asked: the user does that.
+   */
+  async sendFirst(tabId: string, name: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const doc = tab && this.docs[tab.path];
+    const req = doc?.file.requests.find((r) => getDirective(r, "name")?.trim() === name);
+    if (!tab || !req) return;
+    await this.openRequest(tab.path, { key: req._key });
+    if (this.activeTabId) await this.send(this.activeTabId);
   }
 
   /** Tabs whose send is waiting on the prompt form or the production confirmation. */

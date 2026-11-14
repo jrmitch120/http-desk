@@ -338,8 +338,23 @@ export type SendError = { message: string } & (
   /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
   | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
+  /** Request variables read the latest exchange of these named requests, which haven't been sent in this Session. */
+  | { kind: "unsentRequest"; details: { names: string[] } }
+  /** Request variables whose path reads nothing from their request's latest exchange. */
+  | { kind: "unmatchedPath"; details: { paths: UnmatchedPath[] } }
   | { kind: "other"; details: null }
 );
+
+/** A Request variable whose path read nothing (the core's `exchange::UnmatchedPath`). */
+export interface UnmatchedPath {
+  /** As written between the braces, trimmed: `login.response.body.$.tok`. */
+  reference: string;
+  /** The `# @name` of the request whose latest exchange it looked in. */
+  request: string;
+  /** When that exchange's response arrived (RFC 3339). */
+  received: string;
+  reason: string;
+}
 
 export type SendErrorKind = SendError["kind"];
 

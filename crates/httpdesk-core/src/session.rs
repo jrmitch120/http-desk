@@ -6,24 +6,32 @@
 //! Session it started in, so one that finishes after a switch can't reach the next.
 //!
 //! Each part of the Session is its own section with its own lock, so a send reading
-//! one never waits on another. Today that is prompt answers. The cookie jar, the
-//! latest exchange of each named request and Global variables join them as further
+//! one never waits on another. Today that is prompt answers and the latest exchange
+//! of each named request. The cookie jar and Global variables join them as further
 //! sections.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
+
+use crate::exchange::Exchanges;
 
 /// What HttpDesk remembers about one workspace between sends (see the module docs).
 /// Shared between sends behind an `Arc`; every section locks itself.
 #[derive(Debug, Default)]
 pub struct Session {
     prompt_answers: PromptAnswers,
+    exchanges: Exchanges,
 }
 
 impl Session {
     /// The values typed for Prompt variables, per request.
     pub fn prompt_answers(&self) -> &PromptAnswers {
         &self.prompt_answers
+    }
+
+    /// The latest exchange of each named request, per file, which Request variables read.
+    pub fn exchanges(&self) -> &Exchanges {
+        &self.exchanges
     }
 }
 

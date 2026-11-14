@@ -72,6 +72,20 @@ export function envVariables(set: EnvironmentSet | null, envName: string | null)
   return out;
 }
 
+/**
+ * For a `{{…}}` reference (trimmed): the request name and the path after it when it
+ * is a Request variable (`name.response…` or `name.request…`), as the core's
+ * `exchange::split_reference` reads it. It never falls back to a variable of that name.
+ */
+export function requestVariable(reference: string): { name: string; path: string } | null {
+  const dot = reference.indexOf(".");
+  if (dot <= 0) return null;
+  const [name, path] = [reference.slice(0, dot), reference.slice(dot + 1)];
+  const side = path.split(".", 1)[0];
+  if (name.startsWith("$") || /\s/.test(name) || (side !== "response" && side !== "request")) return null;
+  return { name, path };
+}
+
 /** What a request's `{{references}}` can see, as the core's `Resolver::for_request` takes it. */
 export interface Scope {
   /** The selected environment over the shared variables (`envVariables`). */
@@ -87,6 +101,8 @@ export interface Scope {
   prompts?: Prompt[];
   /** Values remembered for them; a prompt without one is asked when sent. */
   answers?: Record<string, string>;
+  /** The `# @name`s of the file's requests (`requestNames`): what its Request variables can read. */
+  requestNames?: string[];
 }
 
 interface Entry {
@@ -99,7 +115,7 @@ interface Entry {
   definition?: Definition;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {} }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {}, requestNames = [] }: Scope): VarProvider {
   // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
   const prompted = new Map<string, { value: string; masked: boolean } | null>();
   for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
@@ -133,6 +149,12 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
             undefinedNames.add(name);
             return whole;
           }
+          // Read from the Session's exchange by the core when sent; undefined without a `# @name`.
+          const requestVar = requestVariable(name);
+          if (requestVar) {
+            if (!requestNames.includes(requestVar.name)) undefinedNames.add(name);
+            return whole;
+          }
           const prompt = prompted.get(name);
           if (prompt) {
             secret ||= prompt.masked;
@@ -163,6 +185,9 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
   function info(name: string): VarInfo {
     if (isDynamic(name)) return { state: "dyn" };
     if (name.startsWith("$")) return { state: "bad" };
+    const requestVar = requestVariable(name);
+    if (requestVar)
+      return requestNames.includes(requestVar.name) ? { state: "request", source: `the latest exchange of ${requestVar.name}` } : { state: "bad" };
     const prompt = prompted.get(name);
     if (prompt === null) return { state: "prompt", source: "a prompt: asked when sent" };
     if (prompt) return { state: "ok", value: prompt.value, secret: prompt.masked, source: "a prompt, remembered in the Session" };
