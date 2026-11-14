@@ -6,7 +6,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
-import { promptMasked, requestPrompts, segments } from "../lib/http";
+import { hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
@@ -298,6 +298,8 @@ let settings = {
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
+  // `?trusted=1`: the demo workspace is already a Trusted workspace.
+  trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -310,6 +312,23 @@ if (saved) settings = JSON.parse(saved);
 const sent: unknown[] = [];
 /** The `promptValues` each `send_request` got, in order. */
 const sentPrompts: Record<string, string>[] = [];
+/** Each send's `skipScripts` ("Send without scripts"). */
+const sentSkipScripts: boolean[] = [];
+
+/** What the shell's script engine would report for `handler`, roughly: each
+ *  `client.test("name", …)` passes unless it asserts `response.status === N`
+ *  and the status isn't N; then it fails with the assertion's message. */
+function mockTests(handler: string, status: number) {
+  return handler
+    .split("client.test(")
+    .slice(1)
+    .map((chunk) => {
+      const name = /^\s*"([^"]*)"/.exec(chunk)?.[1] ?? "";
+      const assert = /response\.status === (\d+), "([^"]*)"/.exec(chunk);
+      const passed = !assert || Number(assert[1]) === status;
+      return { name, passed, message: passed ? null : assert![2] };
+    });
+}
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
 /** The response ids `response_shape` was asked for, in order (fetched once per response). */
@@ -387,6 +406,7 @@ window.addEventListener(
 (window as unknown as { __mock: unknown }).__mock = {
   sent,
   sentPrompts,
+  sentSkipScripts,
   get savedPaths() {
     return [...savedPaths];
   },
@@ -534,6 +554,8 @@ const openapiConflicts = new URLSearchParams(location.search).get("openapiConfli
 const sendErrorKind = new URLSearchParams(location.search).get("sendError");
 /** A transport error's message as the core writes it: reqwest's error chain ending in `cause`. */
 const connectErrorChain = (cause: string) => `error sending request for url (http://api.exmaple.com/pets): client error (Connect): ${cause}`;
+/** The core's `ExecError::UntrustedWorkspace` message. */
+const UNTRUSTED_MESSAGE = "This request has a script, and this workspace isn't trusted to run scripts. Trust it, or send without scripts.";
 /** The fixture for each kind: the rest of the `SendError` of that kind. */
 type SendErrorFixtures = { [K in SendErrorKind]: Omit<SendError & { kind: K }, "kind"> };
 const sendErrors: SendErrorFixtures = {
@@ -561,6 +583,7 @@ const sendErrors: SendErrorFixtures = {
   },
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
+  untrustedWorkspace: { message: UNTRUSTED_MESSAGE, details: null },
   other: { message: "Something unexpected went wrong", details: null },
 };
 const sendError: SendError | null =
@@ -933,9 +956,18 @@ mockIPC(
         settingsServed = true;
         return clone(settings);
       case "save_settings":
-        settings = args.settings;
+        // Like the shell: trust is only changed by its own commands.
+        settings = { ...args.settings, trustedWorkspaces: settings.trustedWorkspaces };
         sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
         return null;
+      case "trust_workspace":
+        if (!settings.trustedWorkspaces.includes(ROOT)) settings.trustedWorkspaces = [...settings.trustedWorkspaces, ROOT];
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
+        return clone(settings.trustedWorkspaces);
+      case "revoke_workspace_trust":
+        settings.trustedWorkspaces = settings.trustedWorkspaces.filter((p: string) => p !== args.path);
+        sessionStorage.setItem(SAVED_SETTINGS, JSON.stringify(settings));
+        return clone(settings.trustedWorkspaces);
       case "path_exists":
         return true;
       case "open_workspace":
@@ -1029,6 +1061,12 @@ mockIPC(
       case "send_request": {
         sent.push(clone(args.request));
         sentPrompts.push(clone(args.promptValues ?? {}));
+        sentSkipScripts.push(!!args.skipScripts);
+        // Like the shell: a script in a workspace that isn't trusted is refused, unsent.
+        const runScripts = hasScripts(args.request) && !args.skipScripts;
+        if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
+          throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
+        }
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
@@ -1096,9 +1134,11 @@ mockIPC(
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
           },
-          warnings: [],
+          warnings: hasScripts(r) && !runScripts ? ["Sent without scripts: the response handler didn't run."] : [],
           timings: jsonTimings,
           cookies,
+          tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
+          logs: [],
         };
       }
       case "format_body":

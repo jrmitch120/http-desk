@@ -1,0 +1,257 @@
+//! JetBrains scripts, run in a sandboxed embedded QuickJS (ADR-0008).
+//!
+//! Each script gets a fresh runtime and context (`Sandbox`) with fixed limits
+//! ([`TIME_LIMIT`], [`MEMORY_LIMIT`]) and no filesystem, network or process
+//! APIs: QuickJS has none until they're added, and only the API in
+//! `script/prelude.js` is. The prelude builds the JetBrains `client`/`response`/
+//! `request` objects from two things `install` hands it: `data`, the exchange
+//! as JSON, and `host`, the Rust functions it calls (today `host.test`).
+//!
+//! To implement a JetBrains API (`client.log`, `client.global.*`,
+//! `request.variables.*`): add a Rust function to `host` in `install` (state it
+//! needs goes on `Recorded` or alongside it), call it from the prelude, and take
+//! the name out of the prelude's unsupported namespace it falls under. A
+//! pre-request runner is `Sandbox::run` with its own `data`.
+//!
+//! A script never fails the send: its errors, including running out of time or
+//! memory, become failed [`TestResult`]s.
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use rquickjs::context::EvalOptions;
+use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Function, Object, Runtime, Value};
+use serde::{Deserialize, Serialize};
+
+use crate::exec::{decode_text, HttpResponse};
+use crate::model::{HandlerPart, Request};
+
+/// How long a script may run. Fixed: there is no setting.
+pub const TIME_LIMIT: Duration = Duration::from_secs(5);
+/// How much memory a script's runtime may hold, the response body included. Fixed: there is no setting.
+pub const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
+const PRELUDE: &str = include_str!("script/prelude.js");
+/// The file name scripts are evaluated as, which error stacks quote.
+const SCRIPT_FILE: &str = "<script>";
+/// The test name a response handler's own error is reported under.
+pub const HANDLER_TEST_NAME: &str = "Response handler";
+
+/// One `client.test`, top-level `client.assert`, or script error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestResult {
+    pub name: String,
+    pub passed: bool,
+    /// Why it failed; `None` when it passed.
+    pub message: Option<String>,
+}
+
+/// What running a request's scripts produced.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptResults {
+    pub tests: Vec<TestResult>,
+    pub logs: Vec<String>,
+}
+
+/// Whether sending `request` would run any script, which only a Trusted
+/// workspace may do.
+pub fn has_scripts(request: &Request) -> bool {
+    request.response_handler_parts().iter().any(HandlerPart::is_script)
+}
+
+/// Runs `request`'s response handler against the response it got. `>>` output
+/// redirects are not run.
+pub fn run_response_handler(request: &Request, response: &HttpResponse, body: &[u8]) -> ScriptResults {
+    let parts = request.response_handler_parts();
+    let mut results = ScriptResults::default();
+    if !parts.iter().any(HandlerPart::is_script) {
+        return results;
+    }
+    let data = serde_json::json!({ "response": response_data(response, body) });
+    for part in parts {
+        match part {
+            HandlerPart::Inline { source, line } => {
+                let mut run = Sandbox::run(&source, &data);
+                if let Some(e) = run.error {
+                    let at = e.line.map(|l| format!(" (line {})", line + l - 1)).unwrap_or_default();
+                    run.results.tests.push(TestResult {
+                        name: HANDLER_TEST_NAME.into(),
+                        passed: false,
+                        message: Some(format!("{}{at}", e.message)),
+                    });
+                }
+                results.tests.append(&mut run.results.tests);
+                results.logs.append(&mut run.results.logs);
+            }
+            HandlerPart::File { path } => results.tests.push(TestResult {
+                name: HANDLER_TEST_NAME.into(),
+                passed: false,
+                message: Some(format!("Response handler files ({path}) aren't supported in HttpDesk yet")),
+            }),
+            HandlerPart::Redirect { .. } => {}
+        }
+    }
+    results
+}
+
+/// The response as the prelude reads it.
+fn response_data(response: &HttpResponse, body: &[u8]) -> serde_json::Value {
+    let ct = response.content_type.as_deref();
+    let text = decode_text(body, ct).unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
+    let mut params = ct.unwrap_or("").split(';').map(str::trim);
+    let mime_type = params.next().unwrap_or("").to_string();
+    let charset = params.find_map(|p| p.strip_prefix("charset=")).map(|c| c.trim_matches('"').to_string());
+    serde_json::json!({
+        "status": response.status,
+        "headers": response.headers,
+        "body": text,
+        "json": response.body_kind == crate::body_format::ResponseKind::Json,
+        "mimeType": mime_type,
+        "charset": charset,
+    })
+}
+
+/// A script's own failure: its message and the script line (1-based) it was at.
+struct ScriptError {
+    message: String,
+    line: Option<usize>,
+}
+
+struct Run {
+    results: ScriptResults,
+    error: Option<ScriptError>,
+}
+
+/// What a script's `host` functions record, read once it has finished.
+type Recorded = Rc<RefCell<ScriptResults>>;
+
+/// One script in a fresh QuickJS runtime and context.
+struct Sandbox;
+
+impl Sandbox {
+    fn run(source: &str, data: &serde_json::Value) -> Run {
+        let recorded = Recorded::default();
+        let error = Self::try_run(source, data, &recorded).err();
+        let results = recorded.take();
+        Run { results, error }
+    }
+
+    fn try_run(source: &str, data: &serde_json::Value, recorded: &Recorded) -> Result<(), ScriptError> {
+        let engine = |e: rquickjs::Error| ScriptError { message: format!("Script engine error: {e}"), line: None };
+        let rt = Runtime::new().map_err(engine)?;
+        rt.set_memory_limit(MEMORY_LIMIT);
+        rt.set_max_stack_size(1024 * 1024);
+        let started = Instant::now();
+        let timed_out = Rc::new(Cell::new(false));
+        let flag = timed_out.clone();
+        rt.set_interrupt_handler(Some(Box::new(move || {
+            let over = started.elapsed() > TIME_LIMIT;
+            if over {
+                flag.set(true);
+            }
+            over
+        })));
+        let ctx = Context::full(&rt).map_err(engine)?;
+        let outcome = ctx.with(|ctx| {
+            let result = install(&ctx, data, recorded).and_then(|()| {
+                ctx.eval_with_options::<(), _>(source, options(SCRIPT_FILE))?;
+                while ctx.execute_pending_job() {}
+                Ok(())
+            });
+            result.catch(&ctx).map_err(|caught| describe(caught, timed_out.get()))
+        });
+        match outcome {
+            // QuickJS throws `null` when it can't even allocate the out-of-memory error.
+            Err(Failure::Null) if rt.memory_usage().malloc_size as usize > MEMORY_LIMIT / 4 * 3 => Err(memory_error()),
+            Err(Failure::Null) => Err(ScriptError { message: "null".into(), line: None }),
+            Err(Failure::Error(e)) => Err(e),
+            Ok(()) => Ok(()),
+        }
+    }
+}
+
+/// How a script failed, before telling a thrown `null` from running out of memory.
+enum Failure {
+    Error(ScriptError),
+    Null,
+}
+
+/// Evaluates the prelude and calls it with `host` and the exchange's data.
+fn install<'js>(ctx: &Ctx<'js>, data: &serde_json::Value, recorded: &Recorded) -> rquickjs::Result<()> {
+    let host = Object::new(ctx.clone())?;
+    let tests = recorded.clone();
+    host.set(
+        "test",
+        Function::new(ctx.clone(), move |name: String, passed: bool, message: Option<String>| {
+            tests.borrow_mut().tests.push(TestResult { name, passed, message });
+        })?,
+    )?;
+    let mut data = data.clone();
+    data["limits"] = serde_json::json!({ "time": human(TIME_LIMIT), "memory": format!("{} MB", MEMORY_LIMIT >> 20) });
+    let data: Value = ctx.json_parse(data.to_string())?;
+    let prelude: Function = ctx.eval_with_options(PRELUDE, options("<prelude>"))?;
+    prelude.call::<_, ()>((host, data))
+}
+
+fn options(file: &str) -> EvalOptions {
+    let mut options = EvalOptions::default();
+    options.filename = Some(file.into());
+    options.global = true;
+    options.strict = false;
+    options
+}
+
+fn human(d: Duration) -> String {
+    format!("{} s", d.as_secs())
+}
+
+/// The message and line a failed script reports.
+fn describe(caught: CaughtError<'_>, timed_out: bool) -> Failure {
+    if timed_out {
+        return Failure::Error(ScriptError {
+            message: format!("Stopped after {}, the time limit for a script", human(TIME_LIMIT)),
+            line: None,
+        });
+    }
+    let (message, stack) = match caught {
+        CaughtError::Exception(e) => {
+            let name: Option<String> = e.as_object().get("name").ok();
+            let message = e.message().unwrap_or_default();
+            let message = match name.as_deref() {
+                Some("InternalError") if message == "out of memory" => return Failure::Error(memory_error()),
+                Some("Error" | "UnsupportedApiError") | None => message,
+                Some(name) => format!("{name}: {message}"),
+            };
+            (message, e.stack())
+        }
+        CaughtError::Value(v) if v.is_null() => return Failure::Null,
+        CaughtError::Value(v) => (value_text(&v), None),
+        CaughtError::Error(e) => (e.to_string(), None),
+    };
+    Failure::Error(ScriptError { message, line: stack.as_deref().and_then(script_line) })
+}
+
+fn memory_error() -> ScriptError {
+    ScriptError { message: format!("Stopped at {} MB, the memory limit for a script", MEMORY_LIMIT >> 20), line: None }
+}
+
+fn value_text(v: &Value<'_>) -> String {
+    if let Some(s) = v.as_string() {
+        return s.to_string().unwrap_or_default();
+    }
+    v.ctx()
+        .json_stringify(v.clone())
+        .ok()
+        .flatten()
+        .and_then(|s| s.to_string().ok())
+        .unwrap_or_else(|| "Script threw".into())
+}
+
+/// The first line of the user's script in a QuickJS stack (`at f (<script>:3:5)`).
+fn script_line(stack: &str) -> Option<usize> {
+    let at = stack.find(&format!("{SCRIPT_FILE}:"))? + SCRIPT_FILE.len() + 1;
+    let digits: String = stack[at..].chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}

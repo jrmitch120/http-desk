@@ -63,7 +63,9 @@ export const api = {
   /** Saves `set` as folder `dir`'s own pair of env files (the root's by default). */
   saveEnvironments: (set: EnvironmentSet, dir = "") => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set, dir }),
 
-  sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),
+  /** Sends the request, then runs its response handler unless `skipScripts`. A request
+   *  with a script in a workspace that isn't trusted fails `untrustedWorkspace`, unsent. */
+  sendRequest: (args: RequestArgs & { runId: string; skipScripts?: boolean }) => invoke<HttpResponse>("send_request", args),
   /** What `sendRequest` with the same arguments would send, without sending it. */
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
@@ -105,7 +107,12 @@ export const api = {
   responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
+  /** Saves the settings; `trustedWorkspaces` is the shell's and stays as it is. */
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
+  /** Makes the open workspace a Trusted workspace; returns every Trusted workspace. */
+  trustWorkspace: () => invoke<string[]>("trust_workspace"),
+  /** Stops trusting the workspace at `path`; returns the Trusted workspaces left. */
+  revokeWorkspaceTrust: (path: string) => invoke<string[]>("revoke_workspace_trust", { path }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 

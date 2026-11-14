@@ -66,6 +66,9 @@ pub enum ExecError {
     CircularHost(Vec<Vec<String>>),
     #[error("{}", .0.join("\n"))]
     DynamicVariable(Vec<String>),
+    /// The request has a script, and the workspace isn't a Trusted workspace.
+    #[error("This request has a script, and this workspace isn't trusted to run scripts. Trust it, or send without scripts.")]
+    UntrustedWorkspace,
 }
 
 /// `a → b → a`, chains separated by `; `.
@@ -97,6 +100,7 @@ pub enum ErrorKind {
     UnresolvedVariable,
     CircularVariable,
     File,
+    UntrustedWorkspace,
     Other,
 }
 
@@ -113,6 +117,7 @@ impl ExecError {
             ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
             ExecError::CircularHost(_) => ErrorKind::CircularVariable,
             ExecError::File { .. } => ErrorKind::File,
+            ExecError::UntrustedWorkspace => ErrorKind::UntrustedWorkspace,
             ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
             | ExecError::InvalidHeader(_)
@@ -656,6 +661,13 @@ pub struct HttpResponse {
     /// Every `Set-Cookie` received, redirect hops first, each with the URL
     /// that set it. Shown only; never sent back.
     pub cookies: Vec<ResponseCookie>,
+    /// The response handler's `client.test`/`client.assert` results and its
+    /// own failure, if any (see [`crate::script`]). Empty when nothing ran.
+    #[serde(default)]
+    pub tests: Vec<crate::script::TestResult>,
+    /// What the scripts logged. Empty until `client.log` is implemented.
+    #[serde(default)]
+    pub logs: Vec<String>,
 }
 
 pub struct ExecOutcome {
@@ -1177,6 +1189,8 @@ pub async fn execute_on(
             warnings,
             timings,
             cookies,
+            tests: Vec::new(),
+            logs: Vec::new(),
         },
         body,
     })

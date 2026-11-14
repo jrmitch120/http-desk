@@ -13,6 +13,7 @@ mod paths;
 mod preview;
 mod renaming;
 mod reply;
+mod scripts;
 mod usages;
 mod watcher;
 mod window_state;

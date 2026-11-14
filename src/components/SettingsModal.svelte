@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Application settings: appearance, request defaults, TLS, response limits.
+  // Application settings: appearance, request defaults, TLS, response limits, Trusted workspaces.
   import { open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { updates } from "../lib/updates.svelte";
@@ -170,6 +170,19 @@
             onchange={(v) => setExec({ maxBodyBytes: v * 1024 * 1024 })}
           />
         </div>
+      </section>
+
+      <section aria-labelledby="settings-trust">
+        <h3 id="settings-trust">Trusted workspaces</h3>
+        {#each settings.trustedWorkspaces ?? [] as path (path)}
+          <div class="setting" data-testid="trusted-workspace">
+            <div class="label"><span class="mono selectable">{path}</span>{#if path === app.root}<small class="muted">The open workspace</small>{/if}</div>
+            <button class="btn small" onclick={() => app.revokeTrust(path)}>Revoke</button>
+          </div>
+        {:else}
+          <p class="note muted">No workspace is trusted yet.</p>
+        {/each}
+        <p class="note muted">Scripts in a workspace's <span class="mono">.http</span> files run only once you trust it. HttpDesk asks the first time a send would run one, and keeps the answer here, never in the workspace.</p>
       </section>
     </div>
   {:else}
