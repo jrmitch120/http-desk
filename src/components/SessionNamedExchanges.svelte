@@ -6,6 +6,7 @@
   again whenever the Session changes, so a send shows up at once.
 -->
 <script lang="ts">
+  import { api } from "../lib/api";
   import { app } from "../lib/store.svelte";
   import { receivedAt, workspaceFile } from "../lib/exchanges";
   import { sessionView } from "../lib/sessionView.svelte";
@@ -15,7 +16,7 @@
   import Icon from "./Icon.svelte";
   import SessionSection from "./SessionSection.svelte";
 
-  const exchanges = sessionView<NamedExchange[]>(() => app.namedExchanges(), []);
+  const exchanges = sessionView<NamedExchange[]>(() => api.namedExchanges(), []);
   const list = $derived(exchanges.current ?? []);
 </script>
 

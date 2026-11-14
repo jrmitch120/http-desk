@@ -857,7 +857,11 @@ Decisions made during implementation, beyond the plan above:
   `sessionView`, which reads again whenever `app.sessionVersion` goes up (a send
   whose response set cookies, a named request's send, a send whose scripts ran, a delete
   or clear, another workspace), wrapped in `SessionSection` for
-  its heading, count and Clear button. The Global variables section lists each one's
+  its heading, count and Clear button. The page's side of the Session (that version, the
+  exchange shapes completion reads, an opened exchange, the test markers, and the
+  panel's deletes and clears) is `src/lib/session.svelte.ts`; workspace trust is
+  `trust.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
+  a small host interface, and `app.*` hands over to them. The Global variables section lists each one's
   name and value, with a Delete button each and Clear Global variables
   (`session_globals`, `delete_global`, `clear_globals`); nothing is edited by hand. The Cookies section uses the Cookies tab's table
   (`CookieTable.svelte`) with a Delete button per cookie (`session_cookies`,
