@@ -698,7 +698,7 @@ async fn exchange_shape<R: tauri::Runtime>(
     app: AppHandle<R>,
     file_path: PathBuf,
     name: String,
-) -> CmdResult<Option<exchange::ExchangeShape>> {
+) -> CmdResult<Option<httpdesk_core::exchange::ExchangeShape>> {
     off_main(app, move |state| Ok(state.session().exchanges().latest(&file_path, &name).map(|e| e.shape()))).await
 }
 
