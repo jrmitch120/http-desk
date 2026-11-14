@@ -235,6 +235,25 @@ const ensureKey = (r: Request) => {
   return r._key;
 };
 
+/** The files under `node` (itself, if it's a file), in the order the explorer shows them. */
+function treeFiles(node: TreeNode): string[] {
+  return node.kind === "file" ? [node.path] : (node.children ?? []).flatMap(treeFiles);
+}
+
+function findNode(node: TreeNode, path: string): TreeNode | undefined {
+  if (node.path === path) return node;
+  for (const child of node.children ?? []) {
+    const found = findNode(child, path);
+    if (found) return found;
+  }
+}
+
+/** A request in the explorer: its file and its key (`_key`). */
+export interface RequestRef {
+  path: string;
+  key: string;
+}
+
 class AppStore {
   root = $state<string | null>(null);
   tree = $state<TreeNode | null>(null);
@@ -272,6 +291,11 @@ class AppStore {
   private windowTheme: "light" | "dark" | null | undefined = undefined;
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
+  /** The requests picked in the explorer with ⌘/Ctrl- or Shift-click, Space or
+   *  Shift+arrows; none means the explorer's selection is the active request. */
+  treeSelection = $state<RequestRef[]>([]);
+  /** Where a Shift-click range starts: the request last clicked or toggled. */
+  private selectionAnchor: RequestRef | null = null;
   modal = $state<ModalKind>(null);
   /** The panel shown below the requests, if any. */
   panel = $state<PanelId | null>(null);
@@ -542,6 +566,7 @@ class AppStore {
       if (this.panel === "runner") this.panel = null;
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
+      this.clearTreeSelection();
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
@@ -817,9 +842,7 @@ class AppStore {
       });
     }
     // Explorer order, as the backend returns them; files not in the tree go last.
-    const order = new Map<string, number>();
-    const walk = (n: TreeNode) => (n.kind === "file" ? order.set(n.path, order.size) : n.children?.forEach(walk));
-    if (this.tree) walk(this.tree);
+    const order = new Map((this.tree ? treeFiles(this.tree) : []).map((path, i) => [path, i]));
     const rank = (h: SearchHit) => order.get(h.path) ?? order.size;
     return hits.sort((a, b) => rank(a) - rank(b) || (a.path === b.path ? a.index - b.index : 0));
   }
@@ -1457,6 +1480,95 @@ class AppStore {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     await this.run(basename(path), this.runEntries(path, doc));
+  }
+
+  /**
+   * Runs every request of every `.http` file under the folder at `path`, subfolders
+   * included, in the order the explorer shows them; each file's requests in file
+   * order. Global variables and cookies carry from file to file; Request variables
+   * don't, since they belong to their file. Asks first as `runFile` does.
+   */
+  async runFolder(path: string) {
+    const folder = this.tree && findNode(this.tree, path);
+    if (!folder) return;
+    await this.run(basename(path), await this.entriesOf(treeFiles(folder)));
+  }
+
+  /**
+   * Runs the requests selected in the explorer (`selectedRequests`), across files if
+   * need be, in the order the explorer shows them. Asks first as `runFile` does.
+   */
+  async runSelection() {
+    const picked = this.selectedRequests;
+    const order = new Map((this.tree ? treeFiles(this.tree) : []).map((path, i) => [path, i]));
+    const rank = (path: string) => order.get(path) ?? order.size;
+    const paths = [...new Set(picked.map((r) => r.path))].sort((a, b) => rank(a) - rank(b));
+    const entries = await this.entriesOf(paths, (path, key) => picked.some((r) => r.path === path && r.key === key));
+    await this.run(`${entries.length} selected ${entries.length === 1 ? "request" : "requests"}`, entries);
+  }
+
+  /** The run entries of each file of `paths` in turn, loading the ones not loaded yet;
+   *  `keep` picks which requests of a file go in. A file that won't load is left out. */
+  private async entriesOf(paths: string[], keep: (path: string, key: string) => boolean = () => true): Promise<RunEntry[]> {
+    const docs = await Promise.all(paths.map((p) => this.loadDoc(p)));
+    return paths.flatMap((p, i) => {
+      const doc = docs[i];
+      return doc ? this.runEntries(p, doc).filter((e) => keep(p, e.key)) : [];
+    });
+  }
+
+  /** The requests selected in the explorer: those picked, else the active request. */
+  get selectedRequests(): RequestRef[] {
+    if (this.treeSelection.length) return this.treeSelection;
+    const tab = this.activeTab;
+    return tab ? [{ path: tab.path, key: tab.key }] : [];
+  }
+
+  /** Whether the explorer shows the request as selected. */
+  isTreeSelected(path: string, key: string): boolean {
+    return this.selectedRequests.some((r) => r.path === path && r.key === key);
+  }
+
+  /**
+   * Selects a request in the explorer. `only`: a plain click, which goes back to
+   * selecting just the active request. `toggle` (⌘/Ctrl-click, Space): adds or removes
+   * it, keeping what's selected, the active request included. `range` (Shift-click,
+   * Shift+arrows): selects the requests the explorer shows from the last one clicked
+   * or toggled (else `start`, else the active request) to this one.
+   */
+  selectRequest(path: string, key: string, how: "only" | "toggle" | "range", start?: RequestRef) {
+    const ref = { path, key };
+    if (how === "only") {
+      this.treeSelection = [];
+    } else if (how === "range") {
+      const anchor = this.selectionAnchor ?? start ?? this.selectedRequests[0] ?? ref;
+      const rows = this.shownRequests();
+      const at = (r: RequestRef) => rows.findIndex((x) => x.path === r.path && x.key === r.key);
+      const [from, to] = [at(anchor), at(ref)];
+      this.treeSelection = from < 0 || to < 0 ? [ref] : rows.slice(Math.min(from, to), Math.max(from, to) + 1);
+      this.selectionAnchor = from < 0 ? ref : anchor;
+      return;
+    } else {
+      const picked = this.selectedRequests;
+      this.treeSelection = this.isTreeSelected(path, key) ? picked.filter((r) => r.path !== path || r.key !== key) : [...picked, ref];
+    }
+    this.selectionAnchor = ref;
+  }
+
+  /** The request rows the explorer shows, top to bottom: those of expanded files in expanded folders. */
+  private shownRequests(): RequestRef[] {
+    const walk = (n: TreeNode): RequestRef[] => {
+      if (!this.expanded[n.path]) return [];
+      if (n.kind === "dir") return (n.children ?? []).flatMap(walk);
+      return (this.docs[n.path]?.file.requests ?? []).map((r) => ({ path: n.path, key: r._key! }));
+    };
+    return (this.tree?.children ?? []).flatMap(walk);
+  }
+
+  /** Goes back to the explorer selecting just the active request. */
+  clearTreeSelection() {
+    this.treeSelection = [];
+    this.selectionAnchor = null;
   }
 
   /** Whether a run is under way. */

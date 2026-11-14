@@ -84,6 +84,14 @@ const tree = {
     { name: "samples", path: `${ROOT}/samples`, kind: "dir", children: [{ name: "jetbrains.http", path: `${ROOT}/samples/jetbrains.http`, kind: "file" }] },
   ],
 };
+// `?subfolder=1` adds api/v2/orders.http (List orders, Create order: pets.http's first
+// two requests renamed), which the tree shows above api/pets.http, as folders go first.
+if (new URLSearchParams(location.search).get("subfolder") === "1") {
+  const orders = structuredClone(pets);
+  const requests = orders.requests.slice(0, 2).map((r, i) => ({ ...r, name: ["List orders", "Create order"][i], url: "{{baseUrl}}/orders", raw: null }));
+  files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
+  tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
+}
 let envSet = {
   shared: [{ name: "version", value: "v1", secret: false }],
   environments: [

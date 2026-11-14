@@ -123,6 +123,92 @@ test("Stop cancels the request in flight, and the panel shows which requests did
   expect(await sentRequests(page)).toHaveLength(1);
 });
 
+// #144: Run folder and Run selection. `?subfolder=1` adds api/v2/orders.http (List
+// orders, Create order), which the explorer shows above api/pets.http.
+
+/** Expands each folder or file of `path` that isn't expanded yet. */
+async function expand(page: Page, ...path: string[]) {
+  for (const label of path) {
+    const row = treeItem(page, label);
+    if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  }
+}
+
+const group = (page: Page, file: string) => runner(page).getByRole("group", { name: file, exact: true });
+const selectedRows = (page: Page) => page.getByRole("treeitem", { selected: true });
+
+test("Run folder runs every file under it, subfolders first as the tree shows them, and the panel groups results by file", async ({ page }) => {
+  await openApp(page, "?subfolder=1");
+
+  await treeMenu(page, "api", "Run folder");
+
+  await expect(state(page, "Get pet image", "Passed")).toBeVisible();
+  expect((await sentRequests(page)).map((r) => r.url)).toEqual([
+    "{{baseUrl}}/orders",
+    "{{baseUrl}}/orders",
+    "{{baseUrl}}/pets",
+    "{{baseUrl}}/pets",
+    "{{baseUrl}}/png/{{petId}}",
+  ]);
+  await expect(runner(page)).toContainText("5 passed · 0 failed");
+  await expect(group(page, "api/v2/orders.http").getByRole("listitem")).toHaveText([/List orders/, /Create order/]);
+  await expect(group(page, "api/pets.http").getByRole("listitem")).toHaveText([/List pets/, /Create pet/, /Get pet image/]);
+});
+
+test("⌘-click picks requests across files, and Run selection runs exactly those in tree order", async ({ page }) => {
+  await openApp(page, "?trusted=1");
+  await expand(page, "samples", "jetbrains.http", "api", "pets.http");
+
+  await treeItem(page, "Post with JSON body").click();
+  await treeItem(page, "Create pet").click({ modifiers: ["Meta"] });
+  await treeItem(page, "Get pet image").click({ modifiers: ["Meta"] });
+  await treeItem(page, "Get pet image").click({ modifiers: ["Meta"] }); // and back out
+  await expect(selectedRows(page)).toHaveCount(2);
+  await treeMenu(page, "Create pet", "Run selection");
+
+  await expect(state(page, "Post with JSON body", "Failed")).toBeVisible(); // its test wants a 200
+  expect((await sentRequests(page)).map((r) => r.url)).toEqual(["{{baseUrl}}/pets", "{{host}}/post"]);
+  await expect(runner(page).getByRole("listitem")).toHaveCount(2);
+  await expect(group(page, "api/pets.http")).toContainText("Create pet");
+  await expect(group(page, "samples/jetbrains.http")).toContainText("Post with JSON body");
+});
+
+test("Shift-click selects a range without opening it, and a plain click goes back to just the request it opens", async ({ page }) => {
+  await openApp(page);
+  await expand(page, "api", "pets.http");
+
+  await treeItem(page, "List pets").click();
+  await treeItem(page, "Get pet image").click({ modifiers: ["Shift"] });
+  await expect(selectedRows(page)).toHaveText([/List pets/, /Create pet/, /Get pet image/]);
+  await expect(page.getByRole("tab")).toHaveCount(1);
+
+  await treeItem(page, "Create pet").click();
+  await expect(selectedRows(page)).toHaveText([/Create pet/]);
+  await expect(page.getByRole("tab", { selected: true })).toContainText("Create pet");
+});
+
+test("from the keyboard: Space toggles a request, Shift+arrows extend, Escape clears, and Shift+F10 runs the selection", async ({ page }) => {
+  await openApp(page);
+  await expand(page, "api", "pets.http");
+  await expect(page.getByRole("tree", { name: "Explorer" })).toHaveAttribute("aria-multiselectable", "true");
+
+  await treeItem(page, "List pets").focus();
+  await page.keyboard.press(" ");
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(selectedRows(page)).toHaveText([/List pets/, /Create pet/]);
+  await page.keyboard.press("Escape");
+  await expect(selectedRows(page)).toHaveCount(0);
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press(" ");
+  await expect(selectedRows(page)).toHaveText([/Get pet image/]);
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Run selection", exact: true }).click();
+
+  await expect(state(page, "Get pet image", "Passed")).toBeVisible();
+  expect((await sentRequests(page)).map((r) => r.url)).toEqual(["{{baseUrl}}/png/{{petId}}"]);
+});
+
 test("in a workspace that isn't trusted, a run with scripts asks once up front", async ({ page }) => {
   await openApp(page);
 

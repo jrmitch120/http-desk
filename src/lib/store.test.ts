@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
-import { newRequest } from "./http";
+import { basename, newRequest } from "./http";
 
 const api = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
@@ -2576,5 +2576,106 @@ describe("Run file", () => {
     await app.runFile(PATH);
     await app.runFile(PATH);
     expect(api.releaseResponse).toHaveBeenCalledWith("r0");
+  });
+});
+
+describe("Run folder and Run selection", () => {
+  // The tree shows api/v2/orders.http before api/books.http, and zoo.http after api/.
+  const ORDERS = "/ws/api/v2/orders.http";
+  const ZOO = "/ws/zoo.http";
+  const files: Record<string, HttpFile> = {};
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = null;
+    app.envFolders = [];
+    app.runner = null;
+    app.expanded = {};
+    app.clearTreeSelection();
+    app.tree = {
+      name: "ws",
+      path: "/ws",
+      kind: "dir",
+      children: [
+        {
+          name: "api",
+          path: "/ws/api",
+          kind: "dir",
+          children: [
+            { name: "v2", path: "/ws/api/v2", kind: "dir", children: [{ name: "orders.http", path: ORDERS, kind: "file" }] },
+            { name: "books.http", path: PATH, kind: "file" },
+          ],
+        },
+        { name: "zoo.http", path: ZOO, kind: "file" },
+      ],
+    };
+    files[ORDERS] = fileOf(["GET", "Orders", "https://x/orders"], ["POST", "Order", "https://x/order"]);
+    files[PATH] = fileOf(["GET", "Books", "https://x/books"], ["POST", "Book", "https://x/book"]);
+    files[ZOO] = fileOf(["GET", "Animals", "https://x/zoo"]);
+    readHttpFile.mockImplementation(async (path: string) => structuredClone(files[path]));
+    api.promptAnswers.mockResolvedValue({});
+    api.runRequests.mockResolvedValue({ cancelled: false });
+  });
+
+  const sentUrls = () => (api.runRequests.mock.calls[0][0].selection.requests as { request: { url: string } }[]).map((r) => r.request.url);
+  const keyOf = (path: string, name: string) => app.docs[path].file.requests.find((r) => r.name === name)!._key!;
+  /** The selected requests as "file name/request name", for reading. */
+  const selected = () => app.selectedRequests.map((r) => `${basename(r.path)}/${app.docs[r.path].file.requests.find((q) => q._key === r.key)!.name}`);
+
+  it("Run folder sends every request of every file under it, subfolders included, in the order the tree shows them", async () => {
+    await app.openRequest(PATH, { index: 1 });
+    app.requestFor(app.activeTab)!.url = "https://x/edited";
+
+    await app.runFolder("/ws/api");
+
+    expect(sentUrls()).toEqual(["https://x/orders", "https://x/order", "https://x/books", "https://x/edited"]);
+    expect(app.runner!.title).toBe("api");
+    expect(app.runner!.items.map((i) => [i.path, i.name, i.unsaved])).toEqual([
+      [ORDERS, "Orders", false],
+      [ORDERS, "Order", false],
+      [PATH, "Books", false],
+      [PATH, "Book", true],
+    ]);
+  });
+
+  it("Run selection sends exactly the requests picked across files, in tree order, whatever order they were picked in", async () => {
+    await Promise.all([app.loadDoc(PATH), app.loadDoc(ZOO), app.loadDoc(ORDERS)]);
+    app.selectRequest(ZOO, keyOf(ZOO, "Animals"), "toggle");
+    app.selectRequest(PATH, keyOf(PATH, "Book"), "toggle");
+    app.selectRequest(ORDERS, keyOf(ORDERS, "Orders"), "toggle");
+
+    await app.runSelection();
+
+    expect(sentUrls()).toEqual(["https://x/orders", "https://x/book", "https://x/zoo"]);
+    expect(app.runner!.title).toBe("3 selected requests");
+  });
+
+  it("⌘/Ctrl-click adds to the open request and toggles; a plain click goes back to just the open request", async () => {
+    await app.openRequest(ORDERS, { index: 0 });
+    await app.loadDoc(PATH);
+
+    app.selectRequest(PATH, keyOf(PATH, "Book"), "toggle");
+    expect(selected()).toEqual(["orders.http/Orders", "books.http/Book"]);
+    app.selectRequest(ORDERS, keyOf(ORDERS, "Orders"), "toggle");
+    expect(selected()).toEqual(["books.http/Book"]);
+
+    app.selectRequest(ORDERS, keyOf(ORDERS, "Order"), "only");
+    await app.openRequest(ORDERS, { key: keyOf(ORDERS, "Order") });
+    expect(selected()).toEqual(["orders.http/Order"]);
+  });
+
+  it("Shift-click selects the requests the explorer shows from the last one clicked, across files", async () => {
+    app.expanded = { "/ws": true, "/ws/api": true, "/ws/api/v2": true, [ORDERS]: true, [PATH]: true };
+    await Promise.all([app.loadDoc(ORDERS), app.loadDoc(PATH), app.loadDoc(ZOO)]);
+    await app.openRequest(ORDERS, { index: 1 });
+    app.selectRequest(ORDERS, keyOf(ORDERS, "Order"), "only");
+
+    app.selectRequest(PATH, keyOf(PATH, "Book"), "range");
+    expect(selected()).toEqual(["orders.http/Order", "books.http/Books", "books.http/Book"]);
+
+    // From the same start, upwards; zoo.http is collapsed, so its request isn't in reach.
+    app.selectRequest(ORDERS, keyOf(ORDERS, "Orders"), "range");
+    expect(selected()).toEqual(["orders.http/Orders", "orders.http/Order"]);
   });
 });
