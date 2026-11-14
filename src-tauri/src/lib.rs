@@ -603,9 +603,12 @@ async fn send_request<R: tauri::Runtime>(
     let on_progress = move |received| {
         let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    // Each send gets a client no other send is using (see ClientPool).
+    // Each send gets a client no other send is using (see ClientPool), and uses the
+    // cookie jar of the Session it started in.
     let client = state.clients.checkout(&prepared, &settings, &ssl)?;
-    let task = tokio::spawn(async move { exec::execute_on(&client, prepared, &settings, on_progress).await });
+    let jar = session.cookies().clone();
+    let task =
+        tokio::spawn(async move { exec::execute_on(&client, prepared, &settings, Some(&jar), on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);

@@ -16,7 +16,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::body_format::{self, ResponseKind};
-use crate::cookies::{self, ResponseCookie};
+use crate::cookies::{self, CookieJar, ResponseCookie};
 use crate::env::SslConfig;
 use crate::model::*;
 use crate::parser::DISABLED_MARKER;
@@ -213,6 +213,10 @@ pub struct PreparedRequest {
     pub follow_redirects: bool,
     pub timeout_ms: u64,
     pub connect_timeout_ms: u64,
+    /// `# @no-cookie-jar`: the send neither sends the Session's cookies nor
+    /// keeps the ones it receives.
+    #[serde(default)]
+    pub no_cookie_jar: bool,
     pub warnings: Vec<String>,
 }
 
@@ -553,8 +557,19 @@ pub fn prepare(
     let connect_timeout_ms =
         req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
     let follow_redirects = settings.follow_redirects && req.directive("no-redirect").is_none();
+    let no_cookie_jar = req.directive("no-cookie-jar").is_some();
 
-    Ok(PreparedRequest { method, url, headers, body, follow_redirects, timeout_ms, connect_timeout_ms, warnings })
+    Ok(PreparedRequest {
+        method,
+        url,
+        headers,
+        body,
+        follow_redirects,
+        timeout_ms,
+        connect_timeout_ms,
+        no_cookie_jar,
+        warnings,
+    })
 }
 
 /// What [`preview`] shows: the method, URL and headers a send would produce.
@@ -755,14 +770,33 @@ async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
 /// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
 /// with the hooks that time its phases and record the cookies its responses
 /// set. [`execute`] builds one per send; [`execute_on`] reuses one, which lets
-/// a later request go over a connection that is still open.
+/// a later request go over a connection that is still open. A client belongs to
+/// no Session: each send tells it which cookie jar to use.
 ///
 /// It times and records one request at a time: concurrent sends on one client
-/// would mix their phases and cookies. [`ClientPool`] keeps to that.
+/// would mix their phases, cookies and jars. [`ClientPool`] keeps to that.
 pub struct ExecClient {
     http: reqwest::Client,
     timing: timing::Recorder,
     cookies: Arc<cookies::Recorder>,
+}
+
+/// One send's use of its client's cookie store. Dropping it, however the send
+/// ends (finished, failed or cancelled), lets go of the send's jar.
+struct CookieSend<'a>(&'a cookies::Recorder);
+
+impl CookieSend<'_> {
+    /// The cookies the send's responses set, and the `Cookie` header the jar
+    /// gave its final hop.
+    fn finish(self) -> (Vec<ResponseCookie>, Option<String>) {
+        self.0.finish()
+    }
+}
+
+impl Drop for CookieSend<'_> {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
 }
 
 impl ExecClient {
@@ -1058,10 +1092,10 @@ fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> 
     }
 }
 
-/// Sends `p` on a new [`ExecClient`] built for it.
+/// Sends `p` on a new [`ExecClient`] built for it, with no cookie jar.
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
     let client = ExecClient::new(&p, settings, ssl)?;
-    execute_on(&client, p, settings, |_| {}).await
+    execute_on(&client, p, settings, None, |_| {}).await
 }
 
 /// The shortest gap between two progress reports, so a body arriving in many
@@ -1073,10 +1107,16 @@ pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 /// downloads, `on_progress` gets the body bytes received on the wire so far:
 /// at most once per [`PROGRESS_INTERVAL`], each larger than the last, and none
 /// after the function returns.
+///
+/// `jar` is the cookie jar of the Session the send belongs to: its matching
+/// cookies are sent, on every redirect hop, and the cookies each hop sets are
+/// kept in it. With none, or with `# @no-cookie-jar`, no cookie is sent or kept.
+/// Either way the response lists the cookies it set.
 pub async fn execute_on(
     client: &ExecClient,
     p: PreparedRequest,
     settings: &ExecSettings,
+    jar: Option<&CookieJar>,
     mut on_progress: impl FnMut(usize) + Send,
 ) -> Result<ExecOutcome, ExecError> {
     let method =
@@ -1094,10 +1134,10 @@ pub async fn execute_on(
     }
 
     client.timing.reset();
-    // Drop anything an earlier request on this client left behind (one that
-    // failed part-way never took its cookies), so this response lists only
-    // the cookies set while it was being fetched.
-    client.cookies.take();
+    // This response lists only the cookies set while it was being fetched, and
+    // the client lets go of the jar however the send ends.
+    client.cookies.start(jar.filter(|_| !p.no_cookie_jar).cloned());
+    let cookies = CookieSend(&client.cookies);
     let start = Instant::now();
     let mut resp = match builder.send().await {
         Ok(resp) => resp,
@@ -1148,8 +1188,11 @@ pub async fn execute_on(
     let end = Instant::now();
     let elapsed = end - start;
     let timings = client.timing.timings(start, headers_at, end);
-    let cookies = client.cookies.take();
-    let request = final_request(&p, &client.timing.hops(), &final_url);
+    let (cookies, jar_cookie) = cookies.finish();
+    let mut request = final_request(&p, &client.timing.hops(), &final_url);
+    if let Some(value) = jar_cookie {
+        request.headers.push(("Cookie".into(), value));
+    }
     let mut warnings = p.warnings;
     warnings.extend(unsupported);
     warnings.extend(decode_failure);
