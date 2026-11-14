@@ -7,7 +7,7 @@ use std::path::Path;
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
-use httpdesk_core::script::run_pre_request_script;
+use httpdesk_core::script::{run_pre_request_script, ScriptFiles};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -22,9 +22,19 @@ async fn server() -> MockServer {
 /// with `env`, then the variables (env, File variables, the request's own and the
 /// script's), then prepare and execute. The error is the send's, if it failed.
 async fn send(server: &MockServer, file: &str, env: &HashMap<String, String>) -> Result<(), ExecError> {
+    send_in(server, file, env, &ScriptFiles::default()).await
+}
+
+/// [`send`], reading the pre-request script's files with `files`.
+async fn send_in(
+    server: &MockServer,
+    file: &str,
+    env: &HashMap<String, String>,
+    files: &ScriptFiles,
+) -> Result<(), ExecError> {
     let file = parse(&file.replace("<server>", &server.uri()));
     let req = &file.requests[0];
-    let pre = run_pre_request_script(req, env)?;
+    let pre = run_pre_request_script(req, env, files)?;
     let resolver = Resolver::for_request(env, &file.header.variables, &req.variables, None)
         .with_pre_request_variables(&pre.variables);
     let settings = ExecSettings::default();
@@ -194,7 +204,7 @@ async fn tests_and_asserts_in_a_pre_request_script_are_results_and_do_not_block_
     send(&server, file, &env(&[])).await.unwrap();
     received(&server).await;
     let req = parse(file).requests.remove(0);
-    let tests = run_pre_request_script(&req, &env(&[])).unwrap().results.tests;
+    let tests = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default()).unwrap().results.tests;
     let summary: Vec<_> = tests.iter().map(|t| (t.name.as_str(), t.passed, t.message.as_deref())).collect();
     assert_eq!(summary, [("needs a token", false, Some("needs a token")), ("ok", true, None)]);
 }
@@ -239,21 +249,61 @@ async fn unimplemented_request_apis_fail_naming_the_api() {
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
+/// A workspace `<tmp>/ws` (canonical, as the shell opens one) with an `api/`
+/// folder for the `.http` file, and the [`ScriptFiles`] of a file in `api/`.
+/// `<tmp>` itself is outside the workspace.
+fn workspace() -> (tempfile::TempDir, std::path::PathBuf, ScriptFiles) {
+    let outer = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(outer.path()).unwrap().join("ws");
+    std::fs::create_dir_all(root.join("api")).unwrap();
+    let files = ScriptFiles::new(Some(&root), &root.join("api"));
+    (outer, root, files)
+}
+
 #[tokio::test]
-async fn a_pre_request_script_file_is_not_supported_yet_and_sends_nothing() {
+async fn a_pre_request_script_file_next_to_the_http_file_runs_before_the_request_is_built() {
     let server = server().await;
-    let (message, line) = script_error(send(&server, "< ./sign.js\nGET <server>/x\n", &env(&[])).await.unwrap_err());
-    assert_eq!(
-        (message.as_str(), line),
-        ("Pre-request script files (./sign.js) aren't supported in HttpDesk yet", None)
-    );
+    let (_outer, root, files) = workspace();
+    std::fs::write(root.join("api/sign.js"), "request.variables.set(\"sig\", \"from-file\");\n").unwrap();
+    let file = "< ./sign.js\n< {% request.variables.set(\"inline\", \"too\"); %}\nGET <server>/x\nX-Sig: {{sig}}\nX-Inline: {{inline}}\n";
+    send_in(&server, file, &env(&[]), &files).await.unwrap();
+    let got = received(&server).await;
+    assert_eq!(header(&got, "x-sig").as_deref(), Some("from-file"));
+    assert_eq!(header(&got, "x-inline").as_deref(), Some("too"));
+}
+
+#[tokio::test]
+async fn a_pre_request_script_file_that_throws_names_the_file_and_line_and_sends_nothing() {
+    let server = server().await;
+    let (_outer, root, files) = workspace();
+    std::fs::write(root.join("api/sign.js"), "const a = 1;\nmissing.call();\n").unwrap();
+    let (message, line) =
+        script_error(send_in(&server, "< sign.js\nGET <server>/x\n", &env(&[]), &files).await.unwrap_err());
+    assert_eq!((message.as_str(), line), ("ReferenceError: missing is not defined (sign.js line 2)", None));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_pre_request_script_file_or_one_outside_the_workspace_sends_nothing() {
+    let server = server().await;
+    let (outer, _root, files) = workspace();
+    std::fs::write(outer.path().join("outside.js"), "request.variables.set(\"sig\", \"x\");").unwrap();
+    let cases = [
+        ("./sign.js", "Script file ./sign.js doesn't exist"),
+        ("../../outside.js", "Script file ../../outside.js is outside the workspace"),
+    ];
+    for (reference, expected) in cases {
+        let file = format!("< {reference}\nGET <server>/x\n");
+        let (message, line) = script_error(send_in(&server, &file, &env(&[]), &files).await.unwrap_err());
+        assert_eq!((message.as_str(), line), (expected, None));
+    }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn a_request_without_a_pre_request_script_sets_nothing() {
     let req = parse("GET https://example.com\n\n> {% client.test(\"t\", () => {}); %}\n").requests.remove(0);
-    let pre = run_pre_request_script(&req, &env(&[])).unwrap();
+    let pre = run_pre_request_script(&req, &env(&[]), &ScriptFiles::default()).unwrap();
     assert!(pre.variables.is_empty());
     assert!(pre.results.tests.is_empty());
 }

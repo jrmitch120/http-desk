@@ -3,11 +3,11 @@
 //! JetBrains APIs HttpDesk doesn't implement.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, prepare, ExecOutcome, ExecSettings};
-use httpdesk_core::script::{run_pre_request_script, run_response_handler, TestResult};
+use httpdesk_core::script::{run_pre_request_script, run_response_handler, ScriptFiles, TestResult};
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::matchers::path;
@@ -34,12 +34,22 @@ async fn server() -> MockServer {
 
 /// Sends `GET <server>/<route>` followed by `handler`, then runs the handler.
 async fn run(server: &MockServer, route: &str, handler: &str) -> (Request, ExecOutcome, Vec<TestResult>) {
+    run_in(server, route, handler, &ScriptFiles::default()).await
+}
+
+/// [`run`], reading the handler's script files with `files`.
+async fn run_in(
+    server: &MockServer,
+    route: &str,
+    handler: &str,
+    files: &ScriptFiles,
+) -> (Request, ExecOutcome, Vec<TestResult>) {
     let text = format!("GET {}/{route}\n\n{handler}\n", server.uri());
     let req = parse(&text).requests.remove(0);
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    let results = run_response_handler(&req, &outcome.response, &outcome.body);
+    let results = run_response_handler(&req, &outcome.response, &outcome.body, files);
     (req, outcome, results.tests)
 }
 
@@ -264,19 +274,121 @@ async fn running_out_of_memory_inside_a_test_fails_that_test() {
     assert_eq!(tests, [fail("hog", "Stopped at 64 MB, the memory limit for a script"), pass("after")]);
 }
 
+/// A workspace `<tmp>/ws` (canonical, as the shell opens one) with an `api/`
+/// folder for the `.http` file, and the [`ScriptFiles`] of a file in `api/`.
+/// `<tmp>` itself is outside the workspace.
+fn workspace() -> (tempfile::TempDir, PathBuf, ScriptFiles) {
+    let outer = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(outer.path()).unwrap().join("ws");
+    std::fs::create_dir_all(root.join("api")).unwrap();
+    let files = ScriptFiles::new(Some(&root), &root.join("api"));
+    (outer, root, files)
+}
+
 #[tokio::test]
-async fn a_script_file_reference_fails_naming_it_and_a_redirect_runs_nothing() {
+async fn a_handler_file_next_to_the_http_file_runs_and_its_tests_show() {
     let server = server().await;
-    let (_, _, tests) = run(&server, "user", "> ./check.js").await;
+    let (_outer, root, files) = workspace();
+    let source =
+        "client.test(\"Created\", function () {\n  client.assert(response.status === 201, \"not 201\");\n});\n";
+    std::fs::write(root.join("api/check.js"), source).unwrap();
+    for reference in ["./check.js", "check.js"] {
+        let (_, _, tests) = run_in(&server, "user", &format!("> {reference}"), &files).await;
+        assert_eq!(tests, [pass("Created")], "{reference}");
+    }
+    // Its own errors name the file and its line.
+    std::fs::create_dir(root.join("scripts")).unwrap();
+    std::fs::write(root.join("scripts/fail.js"), "client.test(\"ok\", () => {});\n\nmissing.call();\n").unwrap();
+    let (_, _, tests) = run_in(&server, "user", "> ../scripts/fail.js", &files).await;
     assert_eq!(
         tests,
-        [fail("Response handler", "Response handler files (./check.js) aren't supported in HttpDesk yet")]
+        [pass("ok"), fail("Response handler", "ReferenceError: missing is not defined (../scripts/fail.js line 3)")]
     );
-    let (_, _, tests) = run(&server, "user", ">> ./saved.json").await;
+}
+
+#[tokio::test]
+async fn a_missing_handler_file_or_one_outside_the_workspace_is_a_failed_test_and_a_redirect_runs_nothing() {
+    let server = server().await;
+    let (outer, root, files) = workspace();
+    std::fs::write(outer.path().join("outside.js"), "client.test(\"ran\", () => {});").unwrap();
+    std::fs::create_dir(root.join("api/lib.js")).unwrap();
+    let cases = [
+        ("./missing.js", "Script file ./missing.js doesn't exist"),
+        ("../../outside.js", "Script file ../../outside.js is outside the workspace"),
+        ("../../nowhere.js", "Script file ../../nowhere.js is outside the workspace"),
+        ("./lib.js", "Script file ./lib.js isn't a file"),
+    ];
+    for (reference, message) in cases {
+        let (_, _, tests) = run_in(&server, "user", &format!("> {reference}"), &files).await;
+        assert_eq!(tests, [fail("Response handler", message)], "{reference}");
+    }
+    // A later script still runs.
+    let (_, _, tests) = run_in(&server, "user", "> ./missing.js\n> {% client.assert(true, 'after'); %}", &files).await;
+    assert_eq!(tests, [fail("Response handler", "Script file ./missing.js doesn't exist"), pass("after")]);
+
+    // Without a workspace there is nowhere to read it from.
+    let (_, _, tests) = run(&server, "user", "> ./check.js").await;
+    assert_eq!(tests, [fail("Response handler", "Script file ./check.js can't be read: no workspace is open")]);
+
+    let (_, _, tests) = run_in(&server, "user", ">> ./saved.json", &files).await;
     assert_eq!(tests, []);
-    let (req, _, tests) = run(&server, "user", "> {% client.assert(true, 'ran'); %}\n>> ./saved.json").await;
+    let (req, _, tests) = run_in(&server, "user", "> {% client.assert(true, 'ran'); %}\n>> ./saved.json", &files).await;
     assert_eq!(tests, [pass("ran")]);
     assert!(req.response_handler.unwrap().ends_with(">> ./saved.json"));
+    assert!(!root.join("api/saved.json").exists() && !root.join("saved.json").exists());
+}
+
+#[tokio::test]
+async fn a_response_redirect_sends_normally_and_the_send_and_the_preview_note_that_it_isnt_run() {
+    let server = server().await;
+    let (_outer, root, files) = workspace();
+    let note = |redirect: &str| {
+        format!("HttpDesk doesn't run response redirects: {redirect} doesn't save the response to a file.")
+    };
+    let (req, outcome, tests) =
+        run_in(&server, "user", "> {% client.assert(true, 'ran'); %}\n>> out.json\n>>! ./saved.json", &files).await;
+    assert_eq!(outcome.response.status, 201);
+    assert_eq!(tests, [pass("ran")]);
+    assert_eq!(outcome.response.warnings, [note(">> out.json"), note(">>! ./saved.json")]);
+    let preview = exec::preview(&req, Resolver::new(HashMap::new()));
+    assert_eq!(preview.warnings, [note(">> out.json"), note(">>! ./saved.json")]);
+    let written: Vec<_> = walk(&root);
+    assert!(written.iter().all(|p| !p.ends_with("out.json") && !p.ends_with("saved.json")), "{written:?}");
+
+    let (_, outcome, _) = run_in(&server, "user", "> {% client.assert(true, 'ran'); %}", &files).await;
+    assert_eq!(outcome.response.warnings, Vec::<String>::new());
+}
+
+/// Every path below `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flat_map(|e| {
+            let path = e.unwrap().path();
+            let below = if path.is_dir() { walk(&path) } else { Vec::new() };
+            std::iter::once(path).chain(below)
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_handler_file_symlinked_to_outside_the_workspace_is_refused() {
+    let server = server().await;
+    let (outer, root, files) = workspace();
+    std::fs::write(outer.path().join("outside.js"), "client.test(\"ran\", () => {});").unwrap();
+    std::os::unix::fs::symlink(outer.path().join("outside.js"), root.join("api/link.js")).unwrap();
+    std::os::unix::fs::symlink(outer.path(), root.join("up")).unwrap();
+    for reference in ["./link.js", "../up/outside.js"] {
+        let (_, _, tests) = run_in(&server, "user", &format!("> {reference}"), &files).await;
+        let message = format!("Script file {reference} is outside the workspace");
+        assert_eq!(tests, [fail("Response handler", &message)], "{reference}");
+    }
+    // A link to a file inside the workspace is fine.
+    std::fs::write(root.join("real.js"), "client.test(\"linked\", () => {});").unwrap();
+    std::os::unix::fs::symlink(root.join("real.js"), root.join("api/inside.js")).unwrap();
+    let (_, _, tests) = run_in(&server, "user", "> inside.js", &files).await;
+    assert_eq!(tests, [pass("linked")]);
 }
 
 #[tokio::test]
@@ -333,7 +445,7 @@ async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
     assert_eq!(in_handler, listed_without("request."));
 
     let req = parse(&format!("< {{%{IMPLEMENTED}%}}\nGET {}/text\n", server.uri())).requests.remove(0);
-    let pre = run_pre_request_script(&req, &HashMap::new()).unwrap();
+    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptFiles::default()).unwrap();
     let in_pre_request: Vec<String> = serde_json::from_str(&pre.results.tests.last().unwrap().name).unwrap();
     assert_eq!(in_pre_request, listed_without("response."));
 }
@@ -345,7 +457,7 @@ async fn results(server: &MockServer, route: &str, handler: &str) -> script::Scr
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    run_response_handler(&req, &outcome.response, &outcome.body)
+    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptFiles::default())
 }
 
 #[tokio::test]

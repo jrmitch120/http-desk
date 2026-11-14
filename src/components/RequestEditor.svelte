@@ -307,7 +307,7 @@
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} bind:file={doc.file} {variables} />
+          <RequestSettings {req} bind:file={doc.file} filePath={tab.path} {variables} />
         {/if}
       </div>
     {/if}

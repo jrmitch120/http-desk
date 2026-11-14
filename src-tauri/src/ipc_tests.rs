@@ -15,6 +15,7 @@ mod preview;
 mod renaming;
 mod reply;
 mod request_variables;
+mod script_files;
 mod scripts;
 mod session;
 mod usages;

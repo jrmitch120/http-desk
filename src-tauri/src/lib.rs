@@ -26,6 +26,7 @@ mod copying;
 mod deleting;
 mod json_docs;
 mod menu;
+mod opening;
 mod paths;
 mod quit;
 mod self_writes;
@@ -36,6 +37,7 @@ use bodies::{KeptBodies, KeptBody};
 use copying::Clipboard;
 use deleting::{DeleteOutcome, Trash};
 use json_docs::JsonDocs;
+use opening::Opener;
 use self_writes::SelfWrites;
 
 type CmdResult<T> = Result<T, String>;
@@ -192,6 +194,8 @@ struct AppState {
     trash: Trash,
     /// Where Copy body writes (the OS clipboard; tests replace it).
     clipboard: Clipboard,
+    /// What opens script files in the default editor (the OS; tests replace it).
+    opener: Opener,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
     clients: exec::ClientPool,
@@ -601,12 +605,13 @@ fn scripts_skipped(request: &Request) -> String {
 async fn run_pre_request(
     request: &Request,
     environment: &HashMap<String, String>,
+    files: &script::ScriptFiles,
 ) -> Result<script::PreRequestResults, ExecError> {
     if request.pre_request_parts().is_empty() {
         return Ok(Default::default());
     }
-    let (request, environment) = (request.clone(), environment.clone());
-    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment))
+    let (request, environment, files) = (request.clone(), environment.clone(), files.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files))
         .await
         .map_err(|e| ExecError::Other(e.to_string()))?
 }
@@ -641,7 +646,7 @@ async fn send_request<R: tauri::Runtime>(
         return Err(ExecError::UntrustedWorkspace);
     }
 
-    let (prepared, ssl, pre) = {
+    let (prepared, ssl, pre, files) = {
         let scope = request_resolver(
             root.as_deref(),
             &request,
@@ -652,8 +657,11 @@ async fn send_request<R: tauri::Runtime>(
             request_key.as_deref(),
             &request_names.unwrap_or_default(),
         )?;
+        // Script files are read relative to the `.http` file, from inside the workspace.
+        let files = script::ScriptFiles::new(root.as_deref(), &scope.base_dir);
         // JetBrains order: the pre-request script runs before variables are substituted.
-        let pre = if run_scripts { run_pre_request(&request, &scope.environment).await? } else { Default::default() };
+        let pre =
+            if run_scripts { run_pre_request(&request, &scope.environment, &files).await? } else { Default::default() };
         let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
         let mut prepared = exec::prepare(&request, &resolver, &scope.base_dir, &settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
@@ -664,7 +672,7 @@ async fn send_request<R: tauri::Runtime>(
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
-        (prepared, ssl, pre.results)
+        (prepared, ssl, pre.results, files)
     };
 
     // A `# @name` request's exchange becomes its latest, in the Session the send started in.
@@ -682,7 +690,7 @@ async fn send_request<R: tauri::Runtime>(
         if run_scripts {
             // Up to the script time limit of CPU work: off the async workers.
             let handled = tokio::task::spawn_blocking(move || {
-                let results = script::run_response_handler(&request, &outcome.response, &outcome.body);
+                let results = script::run_response_handler(&request, &outcome.response, &outcome.body, &files);
                 // The pre-request script's tests and logs come first.
                 outcome.response.tests = pre.tests.into_iter().chain(results.tests).collect();
                 outcome.response.logs = pre.logs.into_iter().chain(results.logs).collect();
@@ -712,6 +720,46 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
         Err(e) => Err(ExecError::Other(e.to_string())),
     }
+}
+
+/// Where the scripts of a request in `file_path` read their files from: its
+/// folder (the root for a request in no file), inside the open workspace.
+fn script_files(state: &AppState, file_path: Option<&Path>) -> CmdResult<script::ScriptFiles> {
+    let root = state.root()?;
+    let dir = file_path.and_then(Path::parent).map_or_else(|| root.clone(), Path::to_path_buf);
+    Ok(script::ScriptFiles::new(Some(&root), &dir))
+}
+
+/// The Scripts editor's check of a script file reference (`path`, as a request in
+/// `file_path` writes it): an error says why it can't run (missing, not a file,
+/// outside the workspace).
+#[tauri::command]
+async fn check_script_file<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: Option<PathBuf>,
+    path: String,
+) -> CmdResult<()> {
+    off_main(app, move |state| script_files(state, file_path.as_deref())?.locate(&path).map(drop)).await
+}
+
+/// "Open in default editor" for a script file reference, checked like
+/// `check_script_file`. Only a `.js` file is opened: the default app for other
+/// kinds (`.command`, `.app`, …) may run them.
+#[tauri::command]
+async fn open_script_file<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: Option<PathBuf>,
+    path: String,
+) -> CmdResult<()> {
+    let handle = app.clone();
+    off_main(app, move |state| {
+        let target = script_files(state, file_path.as_deref())?.locate(&path)?;
+        if !target.extension().is_some_and(|e| e.eq_ignore_ascii_case("js")) {
+            return Err("Only .js script files can be opened from HttpDesk".into());
+        }
+        state.opener.open(&handle, &paths::simplified(&target))
+    })
+    .await
 }
 
 /// The Prompt variable answers the Session holds for a request, by name. The
@@ -1142,6 +1190,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             load_folder_environments,
             save_environments,
             send_request,
+            check_script_file,
+            open_script_file,
             preview_request,
             cancel_request,
             prompt_answers,

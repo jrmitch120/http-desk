@@ -130,6 +130,8 @@ export interface MockState {
   menuStateChanges: MenuStateChange[][];
   /** The URLs the opener opened in the browser, in order (refused ones aren't listed). */
   openedUrls: string[];
+  /** The script files "Open in default editor" opened, in order. */
+  openedPaths: string[];
   /** The OS clipboard the clipboard plugin reads and writes. */
   clipboard: string;
   /** The texts the clipboard plugin wrote, in order. */
