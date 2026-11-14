@@ -1,8 +1,9 @@
 <!--
   The Runner panel (in the panel area, PanelArea.svelte): the last run (`app.runner`)
-  live, one row per request with its state, status, time and tests, and Stop while
-  it runs. Selecting a row opens its result in the response viewer beside the list;
-  a run never touches what the tabs show.
+  live, one row per request with its state, status, time and tests, Stop while it
+  runs, and Re-run failed once it's done. Selecting a row opens its result in the
+  response viewer beside the list; a run never touches what the tabs show. Its
+  options (a delay, stop on first failure) are the workspace's, for the next run.
 -->
 <script lang="ts">
   import { app, type RunItem } from "../lib/store.svelte";
@@ -10,9 +11,12 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
+  import NumberField from "./NumberField.svelte";
   import ResponseViewer from "./ResponseViewer.svelte";
+  import Toggle from "./Toggle.svelte";
 
   const runner = $derived(app.runner);
+  const options = $derived(app.runnerOptions);
   let selected = $state<number | null>(null);
   // A new run starts with nothing open.
   let shownRun = "";
@@ -62,7 +66,21 @@
     <span class="spacer"></span>
     {#if runner?.running}
       <button class="btn small" onclick={() => app.stopRun()}><Icon name="stop" />Stop</button>
+    {:else if app.canRerunFailed}
+      <button class="btn small" onclick={() => app.rerunFailed()}><Icon name="refresh" />Re-run failed</button>
     {/if}
+    <div class="options" role="group" aria-label="Runner options">
+      <span class="option">
+        <span class="muted">Delay</span>
+        <NumberField label="Delay between requests" unit="ms" integer min={0} value={options.delayMs} onchange={(delayMs) => app.setRunnerOptions({ delayMs })} />
+      </span>
+      <Toggle
+        label="Stop on first failure"
+        title={options.stopOnFailure ? "A failure ends the run — click to run every request" : "Every request runs — click to end a run at its first failure"}
+        checked={options.stopOnFailure}
+        onchange={(stopOnFailure) => app.setRunnerOptions({ stopOnFailure })}
+      />
+    </div>
   </div>
   {#if runner}
     <div class="body">
@@ -135,6 +153,19 @@
   }
   .spacer {
     flex: 1;
+  }
+  .options {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .option {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .option :global(.number-field) {
+    width: 92px;
   }
   .body {
     flex: 1;
