@@ -495,6 +495,9 @@ struct RequestScope {
     resolver: Resolver,
     base_dir: PathBuf,
     env_warning: Option<String>,
+    /// The environment's variables, private ones included: what a pre-request
+    /// script's `request.environment.get` reads.
+    environment: HashMap<String, String>,
 }
 
 // One argument per input of the scope, as the IPC calls give them (`RequestArgs`).
@@ -537,7 +540,7 @@ fn request_resolver(
             // Unsaved nowhere: its named requests have no exchanges.
             None => request_names.iter().map(|n| (n.clone(), None)).collect(),
         });
-    Ok(RequestScope { resolver, base_dir, env_warning })
+    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
 }
 
 /// A folder as the UI names it: relative to the workspace root with a trailing `/`
@@ -581,8 +584,32 @@ async fn preview_request<R: tauri::Runtime>(
     .await
 }
 
-/// The warning on a response whose request has a script that was skipped.
-const SCRIPTS_SKIPPED: &str = "Sent without scripts: the response handler didn't run.";
+/// The warning on a response whose request has scripts that were skipped, naming them.
+fn scripts_skipped(request: &Request) -> String {
+    let pre = !request.pre_request_parts().is_empty();
+    let handler = request.response_handler_parts().iter().any(|p| p.is_script());
+    let skipped = match (pre, handler) {
+        (true, true) => "the pre-request script and the response handler",
+        (true, false) => "the pre-request script",
+        _ => "the response handler",
+    };
+    format!("Sent without scripts: {skipped} didn't run.")
+}
+
+/// Runs the request's pre-request script, if it has one, off the async workers
+/// (it may take up to the script time limit).
+async fn run_pre_request(
+    request: &Request,
+    environment: &HashMap<String, String>,
+) -> Result<script::PreRequestResults, ExecError> {
+    if request.pre_request_parts().is_empty() {
+        return Ok(Default::default());
+    }
+    let (request, environment) = (request.clone(), environment.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment))
+        .await
+        .map_err(|e| ExecError::Other(e.to_string()))?
+}
 
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
@@ -614,7 +641,7 @@ async fn send_request<R: tauri::Runtime>(
         return Err(ExecError::UntrustedWorkspace);
     }
 
-    let (prepared, ssl) = {
+    let (prepared, ssl, pre) = {
         let scope = request_resolver(
             root.as_deref(),
             &request,
@@ -625,16 +652,19 @@ async fn send_request<R: tauri::Runtime>(
             request_key.as_deref(),
             &request_names.unwrap_or_default(),
         )?;
-        let mut prepared = exec::prepare(&request, &scope.resolver, &scope.base_dir, &settings)?;
+        // JetBrains order: the pre-request script runs before variables are substituted.
+        let pre = if run_scripts { run_pre_request(&request, &scope.environment).await? } else { Default::default() };
+        let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
+        let mut prepared = exec::prepare(&request, &resolver, &scope.base_dir, &settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
         if has_scripts && !run_scripts {
-            prepared.warnings.push(SCRIPTS_SKIPPED.into());
+            prepared.warnings.push(scripts_skipped(&request));
         }
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
-        (prepared, ssl)
+        (prepared, ssl, pre.results)
     };
 
     // A `# @name` request's exchange becomes its latest, in the Session the send started in.
@@ -653,8 +683,9 @@ async fn send_request<R: tauri::Runtime>(
             // Up to the script time limit of CPU work: off the async workers.
             let handled = tokio::task::spawn_blocking(move || {
                 let results = script::run_response_handler(&request, &outcome.response, &outcome.body);
-                outcome.response.tests = results.tests;
-                outcome.response.logs = results.logs;
+                // The pre-request script's tests and logs come first.
+                outcome.response.tests = pre.tests.into_iter().chain(results.tests).collect();
+                outcome.response.logs = pre.logs.into_iter().chain(results.logs).collect();
                 outcome
             });
             outcome = handled.await.map_err(|e| ExecError::Other(e.to_string()))?;

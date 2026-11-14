@@ -105,8 +105,8 @@
     { value: "cookies", label: "Cookies", count: res?.cookies.length || undefined },
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
-    // Only when the response handler reported something.
-    ...(res?.tests?.length ? [{ value: "tests", label: "Tests", count: res.tests.length }] : []),
+    // Only when the response's scripts reported or logged something.
+    ...(res?.tests?.length || res?.logs?.length ? [{ value: "tests", label: "Tests", count: res.tests.length || undefined }] : []),
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
   const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
@@ -180,7 +180,7 @@
       {:else if current === "timing"}
         <TimingPanel {res} />
       {:else if current === "tests"}
-        <TestsPanel tests={res.tests} />
+        <TestsPanel tests={res.tests} logs={res.logs ?? []} />
       {:else}
         <RequestPanel {res} />
       {/if}

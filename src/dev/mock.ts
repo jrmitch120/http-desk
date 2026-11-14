@@ -43,6 +43,19 @@ if (new URLSearchParams(location.search).get("requestVars") === "1") {
   (withVars.requests[1] as { variables: unknown[] }).variables = [{ name: "kind", value: "cat" }];
   files[`${ROOT}/api/pets.http`] = withVars;
 }
+// `?preScript=sign|fail` gives List pets a pre-request script: one that sets
+// `signature`, or one that throws at its line 3 (the send then fails, see `send_request`).
+const preScriptParam = new URLSearchParams(location.search).get("preScript");
+if (preScriptParam) {
+  const withScript = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const body =
+    preScriptParam === "fail"
+      ? '  request.variables.set("signature", "x");\n  throw new Error("no token");'
+      : '  request.variables.set("signature", request.environment.get("token"));';
+  (withScript.requests[0] as { preScript: string | null }).preScript = `< {%\n${body}\n%}`;
+  (withScript.requests[0] as { raw: string | null }).raw = null;
+  files[`${ROOT}/api/pets.http`] = withScript;
+}
 // `?chain=1`: Create pet is `# @name createPet`, and Get pet image reads the new pet's id
 // from its latest exchange (`{{createPet.response.body.$.id}}`), a Request variable.
 if (new URLSearchParams(location.search).get("chain") === "1") {
@@ -50,6 +63,17 @@ if (new URLSearchParams(location.search).get("chain") === "1") {
   (chained.requests[1] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
   chained.requests[2].url = "{{baseUrl}}/png/{{createPet.response.body.$.id}}";
   files[`${ROOT}/api/pets.http`] = chained;
+}
+// `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
+// log "Checking the status" before its test and "Done" after it.
+if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
+  const withLogs = structuredClone(jetbrains);
+  const req = withLogs.requests.find((r) => r.responseHandler?.startsWith("> {%")) as { responseHandler: string; raw: unknown };
+  req.responseHandler = req.responseHandler
+    .replace("> {%\n", '> {%\n    client.log("Checking the status");\n')
+    .replace(/\n%\}$/, '\n    client.log("Done");\n%}');
+  req.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withLogs;
 }
 const tree = {
   name: "demo",
@@ -328,6 +352,14 @@ const sentPrompts: Record<string, string>[] = [];
 /** Each send's `skipScripts` ("Send without scripts"). */
 const sentSkipScripts: boolean[] = [];
 
+/** The shell's warning on a send whose scripts were skipped, naming them. */
+function scriptsSkipped(r: Request): string {
+  const pre = hasScripts({ ...r, responseHandler: null });
+  const handler = hasScripts({ ...r, preScript: null });
+  const skipped = pre && handler ? "the pre-request script and the response handler" : pre ? "the pre-request script" : "the response handler";
+  return `Sent without scripts: ${skipped} didn't run.`;
+}
+
 /** What the shell's script engine would report for `handler`, roughly: each
  *  `client.test("name", …)` passes unless it asserts `response.status === N`
  *  and the status isn't N; then it fails with the assertion's message. */
@@ -341,6 +373,10 @@ function mockTests(handler: string, status: number) {
       const passed = !assert || Number(assert[1]) === status;
       return { name, passed, message: passed ? null : assert![2] };
     });
+}
+/** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
+function mockLogs(handler: string) {
+  return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
 }
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
@@ -628,6 +664,7 @@ const sendErrors: SendErrorFixtures = {
   invalidUrl: { message: 'Invalid URL "http://[x": invalid IPv6 address', details: { url: "http://[x", reason: "invalid IPv6 address" } },
   file: { message: "Could not read file /demo/api/missing.json: No such file or directory (os error 2)", details: { path: "/demo/api/missing.json", reason: "No such file or directory (os error 2)" } },
   untrustedWorkspace: { message: UNTRUSTED_MESSAGE, details: null },
+  preRequestScript: { message: "no token (line 3)", details: { line: 3 } },
   unsentRequest: unsentError(["createPet"]),
   unmatchedPath: {
     message: "{{createPet.response.body.$.idd}}: `$.idd` matches nothing, in the latest exchange of `createPet` (received at 09:05:07)",
@@ -1133,6 +1170,10 @@ mockIPC(
         if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
           throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
         }
+        // Like the shell: a pre-request script that throws stops the send.
+        if (runScripts && args.request.preScript?.includes("throw ")) {
+          throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
+        }
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
@@ -1211,11 +1252,11 @@ mockIPC(
             method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
             headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
           },
-          warnings: hasScripts(r) && !runScripts ? ["Sent without scripts: the response handler didn't run."] : [],
+          warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
           timings: jsonTimings,
           cookies,
           tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
-          logs: [],
+          logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
         };
       }
       case "format_body":

@@ -263,6 +263,17 @@ impl HandlerPart {
     }
 }
 
+/// One part of a request's pre-request script (JetBrains `<` lines above the
+/// request line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreRequestPart {
+    /// `< {% … %}`: the script text between the markers, and the line of the
+    /// pre-request script (1-based) that text starts on, so errors can name its lines.
+    Inline { source: String, line: usize },
+    /// `< path.js`: a script file, relative to the `.http` file.
+    File { path: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Request {
@@ -273,7 +284,8 @@ pub struct Request {
     pub directives: Vec<Directive>,
     /// `@var = value` lines inside this request block.
     pub variables: Vec<Variable>,
-    /// Verbatim JetBrains pre-request script (`< {% … %}`); preserved, not executed yet.
+    /// Verbatim JetBrains pre-request script (`< {% … %}`, `< file.js`), as written
+    /// back. [`Request::pre_request_parts`] is the form that runs.
     pub pre_script: Option<String>,
     pub method: String,
     /// URL without the query string.
@@ -345,6 +357,12 @@ impl Request {
     /// [`Request::response_handler`] (which stays what is written back).
     pub fn response_handler_parts(&self) -> Vec<HandlerPart> {
         self.response_handler.as_deref().map(crate::parser::handler_parts).unwrap_or_default()
+    }
+
+    /// The pre-request script as structured parts, read from the verbatim
+    /// [`Request::pre_script`] (which stays what is written back).
+    pub fn pre_request_parts(&self) -> Vec<PreRequestPart> {
+        self.pre_script.as_deref().map(crate::parser::pre_request_parts).unwrap_or_default()
     }
 
     /// Human-friendly label: `### name`, then `@name`, then `METHOD url`.

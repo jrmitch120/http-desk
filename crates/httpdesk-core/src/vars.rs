@@ -155,6 +155,21 @@ impl Resolver {
         Resolver { vars, base_dir: base_dir.map(Path::to_path_buf), ..Default::default() }
     }
 
+    /// Adds the values the request's pre-request script set with
+    /// `request.variables.set`, for this request only.
+    ///
+    /// Their precedence is decided here and nowhere else. For now it is the
+    /// JetBrains-documented order (environment > global > in-place > per-request),
+    /// so they are the lowest scope: a name the environment, a File variable or the
+    /// request's own `@name` defines keeps that value. An answered Prompt variable
+    /// still overrides them. #129 records Rider's observed order and #139 follows it.
+    pub fn with_pre_request_variables(mut self, variables: &HashMap<String, String>) -> Self {
+        for (name, value) in variables {
+            self.vars.entry(name.clone()).or_insert_with(|| value.clone());
+        }
+        self
+    }
+
     /// Adds the request's Prompt variables. An answered one (its value in `answers`)
     /// overrides every other variable of the same name, also inside other variables'
     /// values, and is used as typed. An unanswered one is left as written and

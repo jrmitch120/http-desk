@@ -129,7 +129,6 @@ async fn unimplemented_jetbrains_apis_fail_naming_the_api() {
     let calls = [
         ("client.global.set(\"a\", \"b\")", "client.global.set"),
         ("client.global.get(\"a\")", "client.global.get"),
-        ("client.log(\"hi\")", "client.log"),
         ("client.exit()", "client.exit"),
         ("request.variables.get(\"a\")", "request.variables"),
         ("request.environment.get(\"a\")", "request.environment"),
@@ -287,4 +286,98 @@ async fn each_handler_gets_a_fresh_context() {
     let handler = "> {% client.assert(typeof leftover === 'undefined' && ({}).polluted === undefined, 'fresh'); %}";
     let (_, _, tests) = run(&server, "user", handler).await;
     assert_eq!(tests, [pass("fresh")]);
+}
+
+/// Visits every member of the script globals and reports, as the name of a
+/// last test, the paths that work: values, and functions that don't throw
+/// "not supported" when called.
+const IMPLEMENTED: &str = r#"> {%
+const found = [];
+function visit(path, value) {
+  if (typeof value === "function") {
+    try { value(); } catch (e) { if (e.name === "UnsupportedApiError") return; }
+    found.push(path);
+  } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) {
+      let member;
+      try { member = value[key]; } catch (e) { continue; }
+      visit(path + "." + key, member);
+    }
+  } else {
+    found.push(path);
+  }
+}
+for (const root of ["client", "request", "response", "crypto", "$random", "jsonPath", "xpath"]) visit(root, globalThis[root]);
+client.test(JSON.stringify(found.sort()), function () {});
+%}"#;
+
+/// The Scripts editor completes the API listed in `src/script/api.json`, so it
+/// must name exactly what the prelude implements: an API a ticket implements is
+/// listed there too, and nothing unsupported is offered.
+#[tokio::test]
+async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
+    let listed: serde_json::Value = serde_json::from_str(include_str!("../src/script/api.json")).unwrap();
+    let mut listed: Vec<&str> = listed.as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    listed.sort_unstable();
+    let server = server().await;
+    let (_, _, tests) = run(&server, "text", IMPLEMENTED).await;
+    let implemented: Vec<String> = serde_json::from_str(&tests.last().unwrap().name).unwrap();
+    assert_eq!(implemented, listed);
+}
+
+/// Sends `GET <server>/<route>` followed by `handler`, then runs the handler for everything it reported.
+async fn results(server: &MockServer, route: &str, handler: &str) -> script::ScriptResults {
+    let text = format!("GET {}/{route}\n\n{handler}\n", server.uri());
+    let req = parse(&text).requests.remove(0);
+    let settings = ExecSettings::default();
+    let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
+    let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
+    run_response_handler(&req, &outcome.response, &outcome.body)
+}
+
+#[tokio::test]
+async fn client_log_lines_are_kept_in_order_as_text() {
+    let server = server().await;
+    let handler = r#"> {%
+    client.log("Status " + response.status);
+    client.test("logs inside a test too", () => client.log(response.body.tags));
+    client.log({ id: response.body.id }, 2, null, undefined, true);
+    client.log();
+%}"#;
+    let results = results(&server, "user", handler).await;
+    assert_eq!(results.logs, ["Status 201", r#"["x","y"]"#, r#"{"id":7} 2 null undefined true"#, ""]);
+    assert_eq!(results.tests, [pass("logs inside a test too")]);
+}
+
+#[tokio::test]
+async fn lines_logged_before_a_handler_fails_are_kept() {
+    let server = server().await;
+    let handler = "> {%\n  client.log(\"before\");\n  missing();\n  client.log(\"never\");\n%}";
+    let results = results(&server, "user", handler).await;
+    assert_eq!(results.logs, ["before"]);
+    assert_eq!(results.tests, [fail("Response handler", "ReferenceError: missing is not defined (line 3)")]);
+}
+
+#[tokio::test]
+async fn a_value_that_cannot_be_written_as_json_is_logged_as_text() {
+    let server = server().await;
+    let handler = r#"> {%
+    const loop = {}; loop.self = loop;
+    client.log(loop, () => 1, Symbol("s"), 10n);
+%}"#;
+    let results = results(&server, "user", handler).await;
+    assert_eq!(results.logs, ["[object Object] () => 1 Symbol(s) 10"]);
+    assert_eq!(results.tests, []);
+}
+
+#[tokio::test]
+async fn logging_without_bound_stops_at_the_log_limit_and_says_so() {
+    let server = server().await;
+    let handler = "> {% const line = 'x'.repeat(1000); for (let i = 0; i < 5000; i++) client.log(line); client.assert(true, 'ran on'); %}";
+    let results = results(&server, "user", handler).await;
+    let kept: usize = results.logs.iter().map(String::len).sum();
+    assert!(kept <= script::LOG_LIMIT + 100, "{kept}");
+    assert_eq!(results.logs.last().unwrap(), "Log stopped at 1 MB, the log limit for a script");
+    assert_eq!(results.logs.iter().filter(|l| l.starts_with("Log stopped")).count(), 1);
+    assert_eq!(results.tests, [pass("ran on")]);
 }

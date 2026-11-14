@@ -5,6 +5,7 @@
   import { getDirective, lastNamed, setDirective, variableNameError } from "../lib/http";
   import Toggle from "./Toggle.svelte";
   import KeyValueGrid from "./KeyValueGrid.svelte";
+  import ScriptsEditor from "./ScriptsEditor.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
 
   let { req, file = $bindable(), variables = null }: { req: Request; file: HttpFile; variables?: VarProvider | null } = $props();
@@ -36,10 +37,11 @@
     if (row) tick().then(() => grid?.focusValue(row));
   });
 
+  // Scripts have their own section (ScriptsEditor); JetBrains `>>` redirects are only kept.
+  const redirects = $derived((req.responseHandler ?? "").split("\n").some((l) => l.startsWith(">>")));
   const preserved = $derived(
     [
-      req.preScript && "a pre-request script",
-      req.responseHandler && "a response handler",
+      redirects && "an output redirect (>> file)",
       req.extraLines.length && `${req.extraLines.length} other line${req.extraLines.length > 1 ? "s" : ""} in the header area`,
     ].filter(Boolean) as string[],
   );
@@ -88,6 +90,8 @@
     </label>
   </section>
 
+  <ScriptsEditor {req} />
+
   <section>
     <h3>File variables</h3>
     <p class="muted sub">Defined at the top of this file as <code>@name = value</code> and available to every request in it. They override environment values.</p>
@@ -116,7 +120,7 @@
         </ul>
       {/if}
       {#if preserved.length}
-        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact. Response handlers run after a send in a Trusted workspace; pre-request scripts and output redirects don't run yet.</p>
+        <p class="muted sub">This request also contains {preserved.join(", ")}. HttpDesk keeps it intact{redirects ? ", and doesn't run output redirects" : ""}.</p>
       {/if}
     </section>
   {/if}
