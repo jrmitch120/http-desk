@@ -19,7 +19,7 @@
   import ExtractVariable from "./components/ExtractVariable.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
-  import RunnerPanel from "./components/RunnerPanel.svelte";
+  import PanelArea from "./components/PanelArea.svelte";
   import { updates } from "./lib/updates.svelte";
   import { handleCommandKey, shortcutHint } from "./lib/commands";
   import { startNativeMenu } from "./lib/nativeMenu.svelte";
@@ -40,8 +40,6 @@
   });
 
   let main: HTMLElement | undefined = $state();
-  /** The work area's share above the open panel, for this app session. */
-  let panelSplit = $state(PANEL.initial);
   let work: HTMLElement | undefined = $state();
 
   // Hiding the sidebar while it or its separator has focus hands focus to the
@@ -52,9 +50,22 @@
     untrack(() => {
       const focused = document.activeElement;
       if (!main?.contains(focused) || work?.contains(focused)) return;
-      (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
+      focusRequests();
     });
   });
+
+  // Likewise hiding the panel area while it or its separator has focus.
+  $effect.pre(() => {
+    if (app.panel) return;
+    untrack(() => {
+      const focused = document.activeElement;
+      if (focused?.closest(".panel-area") || focused?.matches('[role="separator"][aria-label="Resize panel"]')) focusRequests();
+    });
+  });
+
+  function focusRequests() {
+    (work?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? work?.querySelector<HTMLElement>(".tabbar .plus"))?.focus();
+  }
 
   function onKey(e: KeyboardEvent) {
     // Already handled by an editor's keymap (CodeMirror prevents default).
@@ -91,15 +102,14 @@
         {/snippet}
         {#snippet second()}
           <section class="work" bind:this={work}>
-            <!-- The panel area: an open panel (the Runner) sits under the tabs and the request. -->
             <SplitPane
-              size={panelSplit}
-              limits={PANEL}
-              ratio
               stacked
-              secondCollapsed={!app.panel}
+              end
+              collapsed={!app.panel}
+              size={app.settings?.panelHeight ?? PANEL.initial}
+              limits={PANEL}
               label="Resize panel"
-              onresize={(s) => (panelSplit = s)}
+              onresize={(panelHeight) => app.updateSettings({ panelHeight })}
             >
               {#snippet first()}
                 <TabBar />
@@ -125,7 +135,7 @@
                 {/if}
               {/snippet}
               {#snippet second()}
-                {#if app.panel === "runner"}<RunnerPanel />{/if}
+                {#if app.panel}<PanelArea />{/if}
               {/snippet}
             </SplitPane>
           </section>

@@ -1,7 +1,8 @@
 <!--
-  The Runner panel: the last run (`app.runner`) live, one row per request with its
-  state, status, time and tests, and Stop while it runs. Selecting a row opens its
-  result in the response viewer beside the list; a run never touches what the tabs show.
+  The Runner panel (in the panel area, PanelArea.svelte): the last run (`app.runner`)
+  live, one row per request with its state, status, time and tests, and Stop while
+  it runs. Selecting a row opens its result in the response viewer beside the list;
+  a run never touches what the tabs show.
 -->
 <script lang="ts">
   import { app, type RunItem } from "../lib/store.svelte";
@@ -50,21 +51,19 @@
   }
 </script>
 
-<section class="runner" aria-label="Runner">
-  <header>
-    <span class="title">Run</span>
+<div class="runner">
+  <div class="toolbar">
     {#if runner}
-      <span class="what selectable">{runner.title}</span>
-      <span class="muted summary" aria-live="polite">{runner.running ? "Running…" : summary}</span>
+      <span class="title selectable">{runner.title}</span>
+      <span class="muted" aria-live="polite">{runner.running ? "Running…" : summary}</span>
+    {:else}
+      <span class="muted">Run a file from its menu in the explorer, or Request → Run File.</span>
     {/if}
     <span class="spacer"></span>
     {#if runner?.running}
       <button class="btn small" onclick={() => app.stopRun()}><Icon name="stop" />Stop</button>
     {/if}
-    <button class="icon-btn" aria-label="Close runner" use:tooltip={"Close the Runner panel"} onclick={() => (app.panel = null)}>
-      <Icon name="x" />
-    </button>
-  </header>
+  </div>
   {#if runner}
     <div class="body">
       <ol class="items" aria-label="Run results">
@@ -112,32 +111,27 @@
       </div>
     </div>
   {/if}
-</section>
+</div>
 
 <style>
   .runner {
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    background: var(--panel);
-    border-top: 1px solid var(--border);
   }
-  header {
+  .toolbar {
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 34px;
-    padding: 0 6px 0 14px;
+    min-height: 30px;
+    padding: 2px 10px 2px 16px;
     border-bottom: 1px solid var(--border);
-    flex: none;
     font-size: 12px;
+    flex: none;
   }
   .title {
     font-weight: 600;
-  }
-  .summary {
-    font-size: 12px;
   }
   .spacer {
     flex: 1;

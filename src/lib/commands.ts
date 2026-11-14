@@ -34,6 +34,9 @@ export type CommandId =
   | "rename-request"
   | "show-source"
   | "toggle-sidebar"
+  | "toggle-session"
+  | "toggle-runner"
+  | "clear-session"
   | "zoom-in"
   | "zoom-out"
   | "zoom-reset"
@@ -251,6 +254,22 @@ const COMMANDS: Command[] = [
     checked: () => app.sidebarShown,
     run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
   },
+  {
+    id: "toggle-session",
+    label: "Show Session",
+    shortcut: { mod: true, key: "j" },
+    enabled: inWorkspace,
+    checked: () => app.panel === "session",
+    run: () => app.togglePanel("session"),
+  },
+  {
+    id: "toggle-runner",
+    label: "Show Runner",
+    enabled: inWorkspace,
+    checked: () => app.panel === "runner",
+    run: () => app.togglePanel("runner"),
+  },
+  { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {
     shortcut: { mod: true, key: "=" },
     // ⌘+ on a US keyboard is ⇧=; other layouts need Shift for = or have a + of their own, as the keypad does.

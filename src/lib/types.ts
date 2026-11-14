@@ -253,7 +253,7 @@ export interface HttpResponse {
   request: SentRequest;
   warnings: string[];
   timings: Timings;
-  /** Every Set-Cookie received, redirect hops first. Shown only; never sent back. */
+  /** Every Set-Cookie received, redirect hops first. The Session's jar keeps them and sends them back. */
   cookies: ResponseCookie[];
   /** The response handler's `client.test`/`client.assert` results and its own
    *  failure, if any. Empty when no handler ran (`httpdesk_core::script`). */
@@ -319,6 +319,25 @@ export interface ResponseCookie {
   raw: string;
   /** Set when the header couldn't be read as a cookie; the other fields are then empty. */
   parseError: string | null;
+}
+
+/**
+ * A cookie in the Session's jar (`httpdesk_core::cookies::StoredCookie`). Its
+ * domain, path and name identify it.
+ */
+export interface StoredCookie {
+  name: string;
+  value: string;
+  /** The host it is sent to, without a leading dot; its subdomains too unless `hostOnly`. */
+  domain: string;
+  /** Set without a Domain attribute, so sent to exactly `domain`. */
+  hostOnly: boolean;
+  path: string;
+  /** RFC 3339 UTC; absent for a cookie that lasts until the Session ends. */
+  expires?: string | null;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: "Strict" | "Lax" | "None" | null;
 }
 
 /** The syntax `format_body` formats (core `body_format::BodyKind`). */
@@ -434,6 +453,8 @@ export interface AppSettings {
   sidebarWidth: number;
   /** The sidebar is hidden (View → Show Sidebar, ⌘B / Ctrl+B). */
   sidebarHidden: boolean;
+  /** Height in px of the panel area below the requests (View → Show Session). */
+  panelHeight: number;
   /** The zoom of the whole interface, `1` being 100% (View → Zoom In / Zoom Out / Actual Size, ⌘= / ⌘- / ⌘0). */
   zoom: number;
   /** Request pane's share (0..1) of the request/response split, per layout. */

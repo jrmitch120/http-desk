@@ -18,6 +18,7 @@ import type {
   RequestPreview,
   SearchHit,
   SpecSummary,
+  StoredCookie,
   TreeNode,
   Variable,
   WorkspaceInfo,
@@ -93,6 +94,14 @@ export const api = {
   answerPrompts: (requestKey: string, answers: Record<string, string>) => invoke<void>("answer_prompts", { requestKey, answers }),
   /** Forgets a request's Prompt variable answers, so its next send asks again. */
   forgetPromptAnswers: (requestKey: string) => invoke<void>("forget_prompt_answers", { requestKey }),
+  /** The cookies in the Session's jar: unexpired ones, by domain, then path, then name. */
+  sessionCookies: () => invoke<StoredCookie[]>("session_cookies"),
+  /** Deletes one cookie from the Session's jar. False if there was none. */
+  deleteCookie: (domain: string, path: string, name: string) => invoke<boolean>("delete_cookie", { domain, path, name }),
+  /** Deletes every cookie in the Session's jar. */
+  clearCookies: () => invoke<void>("clear_cookies"),
+  /** Empties the whole Session: cookies, prompt answers and every other section. */
+  clearSession: () => invoke<void>("clear_session"),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no

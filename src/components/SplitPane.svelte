@@ -1,12 +1,11 @@
 <script lang="ts">
-  // Two panes and a separator between them. The first pane has the size; the
-  // second takes the rest. Drag the separator, or focus it and use the arrow
-  // keys (Home/End for the limits); double-click resets to the default.
-  // The size is the caller's: `onresize` reports a new one, and the caller
-  // stores it and passes it back as `size`. `collapsed` hides the first pane and
-  // the separator, so the second takes the whole; the first stays mounted, keeping
-  // its state for when it's shown again, at the same size. `secondCollapsed` does
-  // the same for the second pane, which the first then fills.
+  // Two panes and a separator between them. The first pane has the size (the
+  // second with `end`); the other takes the rest. Drag the separator, or focus it
+  // and use the arrow keys (Home/End for the limits); double-click resets to the
+  // default. The size is the caller's: `onresize` reports a new one, and the
+  // caller stores it and passes it back as `size`. `collapsed` hides the sized
+  // pane and the separator, so the other takes the whole; the sized one stays
+  // mounted, keeping its state for when it's shown again, at the same size.
   import type { Snippet } from "svelte";
   import { clampPane, type PaneLimits } from "../lib/panes";
 
@@ -17,10 +16,10 @@
     ratio?: boolean;
     /** Panes one above the other (a horizontal separator) instead of side by side. */
     stacked?: boolean;
-    /** Hides the first pane and the separator (not rendered, not focusable). */
+    /** The second pane has the size, and the first takes the rest (a panel docked at the end). */
+    end?: boolean;
+    /** Hides the sized pane and the separator (not rendered, not focusable). */
     collapsed?: boolean;
-    /** Hides the second pane and the separator; the first takes the whole. */
-    secondCollapsed?: boolean;
     /** Accessible name of the separator. */
     label: string;
     /** Called with the new size after a drag, a key press or a double-click. */
@@ -29,7 +28,7 @@
     second: Snippet;
   }
 
-  let { size, limits, ratio = false, stacked = false, collapsed = false, secondCollapsed = false, label, onresize, first, second }: Props = $props();
+  let { size, limits, ratio = false, stacked = false, end = false, collapsed = false, label, onresize, first, second }: Props = $props();
 
   const id = $props.id();
   let root: HTMLDivElement;
@@ -51,8 +50,8 @@
     if (next !== clampPane(size, limits)) onresize(next);
   }
 
-  /** The pointer's position along the drag axis. */
-  const pointerAt = (e: PointerEvent) => (stacked ? e.clientY : e.clientX);
+  /** The pointer's position along the drag axis, growing towards the sized pane's far side. */
+  const pointerAt = (e: PointerEvent) => (stacked ? e.clientY : e.clientX) * (end ? -1 : 1);
 
   function onpointerdown(e: PointerEvent) {
     if (e.button !== 0) return;
@@ -76,7 +75,9 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    const [back, forward] = stacked ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"];
+    const keys = stacked ? ["ArrowUp", "ArrowDown"] : ["ArrowLeft", "ArrowRight"];
+    // The separator moves with the arrow; the sized pane grows when it moves away from it.
+    const [back, forward] = end ? keys.reverse() : keys;
     let next: number;
     if (e.key === back) next = current - limits.step;
     else if (e.key === forward) next = current + limits.step;
@@ -88,11 +89,21 @@
   }
 </script>
 
-<div class="split-pane" class:stacked bind:this={root}>
-  <div class="pane" class:collapsed class:whole={secondCollapsed} id="{id}-first" style:flex-basis={secondCollapsed ? null : basis}>
-    {@render first()}
+{#snippet sized(content: Snippet)}
+  <div class="pane" class:collapsed id="{id}-sized" style:flex-basis={basis}>
+    {@render content()}
   </div>
-  {#if !collapsed && !secondCollapsed}
+{/snippet}
+
+<div class="split-pane" class:stacked bind:this={root}>
+  {#if end}
+    <div class="pane rest">
+      {@render first()}
+    </div>
+  {:else}
+    {@render sized(first)}
+  {/if}
+  {#if !collapsed}
     <!-- A focusable separator with a value is a widget in ARIA (the window
          splitter pattern); Svelte's checker only knows the static kind. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -102,7 +113,7 @@
       role="separator"
       tabindex="0"
       aria-label={label}
-      aria-controls="{id}-first"
+      aria-controls="{id}-sized"
       aria-orientation={stacked ? "horizontal" : "vertical"}
       aria-valuenow={announced(current)}
       aria-valuemin={announced(limits.min)}
@@ -115,9 +126,13 @@
       {onkeydown}
     ></div>
   {/if}
-  <div class="pane rest" class:collapsed={secondCollapsed}>
-    {@render second()}
-  </div>
+  {#if end}
+    {@render sized(second)}
+  {:else}
+    <div class="pane rest">
+      {@render second()}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -139,8 +154,7 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .rest,
-  .whole {
+  .rest {
     flex: 1 1 0;
   }
   .pane.collapsed {
