@@ -25,8 +25,10 @@ import type {
   FolderEnvironments,
   HttpFile,
   HttpResponse,
+  NamedExchange,
   Request,
   RequestPreview,
+  RequestVariableReading,
   SearchHit,
   SendError,
   StoredCookie,
@@ -479,6 +481,8 @@ class AppStore {
       // The shell started a new Session for it, so nothing from the last one shows.
       this.sessionVersion++;
       this.clearTestMarks();
+      this.exchangeKeys.clear();
+      this.shownExchange = null;
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
@@ -1122,6 +1126,73 @@ class AppStore {
     await this.changeSession(() => api.clearCookies());
   }
 
+  /** Each named request with a latest exchange in the Session, for the Session panel. */
+  namedExchanges(): Promise<NamedExchange[]> {
+    return api.namedExchanges();
+  }
+
+  /**
+   * The key of the request whose send recorded each latest exchange, by `path\0name`:
+   * the request whose test marker goes when the exchange is forgotten. Of two
+   * requests sharing a name, the one sent last.
+   */
+  private exchangeKeys = new Map<string, string>();
+
+  /**
+   * Forgets one named request's latest exchange, so its Request variables read as
+   * unsent, with the test marker of the send that recorded it.
+   */
+  async removeNamedExchange(entry: Pick<NamedExchange, "file" | "name">) {
+    if (!(await this.changeSession(() => api.removeNamedExchange(entry.file, entry.name)))) return;
+    const id = `${entry.file}\0${entry.name}`;
+    const key = this.exchangeKeys.get(id);
+    if (key) this.clearTestMark(key);
+    this.exchangeKeys.delete(id);
+  }
+
+  /** Forgets every named request's latest exchange, with the test markers of the sends that recorded them. */
+  async clearNamedExchanges() {
+    if (!(await this.changeSession(() => api.clearNamedExchanges()))) return;
+    for (const key of this.exchangeKeys.values()) this.clearTestMark(key);
+    this.exchangeKeys.clear();
+  }
+
+  /**
+   * A latest exchange opened from the Session panel, shown in a response viewer of
+   * its own (`ExchangeView.svelte`) under a pseudo tab: its response is a copy with
+   * its own id, so the request's tab keeps the response it shows.
+   */
+  shownExchange = $state<{ entry: NamedExchange; tab: Tab } | null>(null);
+
+  /** Shows a named request's latest exchange in the response viewer, over the open tabs. */
+  async openExchange(entry: NamedExchange) {
+    let response: HttpResponse;
+    try {
+      response = await api.openExchange(entry.file, entry.name);
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+      return;
+    }
+    this.closeExchange();
+    const tab: Tab = { id: `exchange:${uid()}`, path: entry.file, key: "" };
+    this.runs[tab.id] = { runId: uid(), loading: false, startedAt: 0, response };
+    this.shownExchange = { entry, tab };
+  }
+
+  /** Closes the shown exchange, releasing its copy of the response. */
+  closeExchange() {
+    const shown = this.shownExchange;
+    if (!shown) return;
+    this.shownExchange = null;
+    this.releaseResponse(this.runs[shown.tab.id]?.response);
+    delete this.runs[shown.tab.id];
+  }
+
+  /** What Request variable `reference` of a request in file `path` reads now, for its hover (null if it isn't one). */
+  requestVariable(path: string, reference: string): Promise<RequestVariableReading | null> {
+    return api.requestVariable(path, reference);
+  }
+
   /**
    * Empties the whole Session, every section of it, once the user confirms (Clear
    * session in the Session panel).
@@ -1138,14 +1209,20 @@ class AppStore {
     if (r.button !== "clear") return;
     await this.changeSession(() => api.clearSession());
     this.clearTestMarks();
+    this.exchangeKeys.clear();
   }
 
-  /** Runs a change to the Session in the shell, then has views showing it read it again. */
-  private async changeSession(change: () => Promise<unknown>) {
+  /**
+   * Runs a change to the Session in the shell, then has views showing it read it
+   * again. False (after saying why) if it failed.
+   */
+  private async changeSession(change: () => Promise<unknown>): Promise<boolean> {
     try {
       await change();
+      return true;
     } catch (e) {
       this.toast("error", errorMessage(e));
+      return false;
     } finally {
       this.sessionVersion++;
     }
@@ -1209,7 +1286,9 @@ class AppStore {
       // The Session changed if the jar kept cookies the response set, or if the request is
       // named (its exchange is now the latest, which Request variables read): views
       // showing the Session read it again, even if the tab has closed.
-      if (response.cookies?.length || getDirective(req, "name")?.trim()) this.sessionVersion++;
+      const named = getDirective(req, "name")?.trim();
+      if (response.cookies?.length || named) this.sessionVersion++;
+      if (named) this.exchangeKeys.set(`${tab.path}\0${named}`, tab.key);
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
         this.releaseResponse(response);

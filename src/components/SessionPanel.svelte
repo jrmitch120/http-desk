@@ -6,6 +6,7 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import SessionCookies from "./SessionCookies.svelte";
+  import SessionNamedExchanges from "./SessionNamedExchanges.svelte";
 </script>
 
 <div class="session">
@@ -15,6 +16,7 @@
   </div>
   <div class="sections">
     <SessionCookies />
+    <SessionNamedExchanges />
   </div>
 </div>
 
@@ -42,6 +44,9 @@
     flex-direction: column;
   }
   /* Sections stack and the panel scrolls, rather than each table scrolling on its own. */
+  .sections > :global(section) {
+    flex: none;
+  }
   .sections :global(.data-table) {
     flex: none;
     overflow: visible;

@@ -37,6 +37,11 @@ const api = vi.hoisted(() => ({
   deleteCookie: vi.fn(),
   clearCookies: vi.fn(),
   clearSession: vi.fn(),
+  namedExchanges: vi.fn(),
+  removeNamedExchange: vi.fn(),
+  clearNamedExchanges: vi.fn(),
+  openExchange: vi.fn(),
+  requestVariable: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -2209,6 +2214,85 @@ describe("the Session panel", () => {
 
     expect(app.testMark("k1")).toBeUndefined();
     expect(app.testMark("k2")).toBeUndefined();
+  });
+
+  describe("Named exchanges", () => {
+    const pass = [{ name: "ok", passed: true, message: null }];
+    const responding = (id: string) => api.sendRequest.mockResolvedValueOnce({ id, status: 200, tests: pass, logs: [] } as unknown as HttpResponse);
+    beforeEach(() => app.clearTestMarks());
+
+    it("removing one asks the shell, drops the marker of the request whose send it was, and has views read the Session again", async () => {
+      const [login, me] = await openAll(chained());
+      responding("r1");
+      await app.send(login.id);
+      responding("r2");
+      await app.send(me.id);
+      const before = app.sessionVersion;
+
+      await app.removeNamedExchange({ file: PATH, name: "login" });
+
+      expect(api.removeNamedExchange).toHaveBeenCalledWith(PATH, "login");
+      expect(app.testMark(login.key)).toBeUndefined();
+      expect(app.testMark(me.key)).toBe("passed");
+      expect(app.sessionVersion).not.toBe(before);
+    });
+
+    it("clearing them drops the markers of the named requests' sends only", async () => {
+      const [login, me] = await openAll(chained());
+      responding("r1");
+      await app.send(login.id);
+      responding("r2");
+      await app.send(me.id);
+
+      await app.clearNamedExchanges();
+
+      expect(api.clearNamedExchanges).toHaveBeenCalledTimes(1);
+      expect(app.testMark(login.key)).toBeUndefined();
+      expect(app.testMark(me.key)).toBe("passed");
+    });
+
+    it("of two requests sharing a name, removing it drops the marker of the one sent last", async () => {
+      const f = chained();
+      f.requests[1].directives = [{ name: "name", value: "login" }];
+      const [first, second] = await openAll(f);
+      responding("r1");
+      await app.send(first.id);
+      responding("r2");
+      await app.send(second.id);
+
+      await app.removeNamedExchange({ file: PATH, name: "login" });
+
+      expect(app.testMark(first.key)).toBe("passed");
+      expect(app.testMark(second.key)).toBeUndefined();
+    });
+
+    it("opening one shows its response in a view of its own, leaving the tab's; closing it releases the copy", async () => {
+      const [login] = await openAll(chained());
+      responding("r1");
+      await app.send(login.id);
+      api.openExchange.mockResolvedValueOnce({ id: "x1", status: 200 } as HttpResponse);
+
+      await app.openExchange({ file: PATH, name: "login", status: 200, received: "2026-11-13T09:05:07.000Z" });
+
+      expect(api.openExchange).toHaveBeenCalledWith(PATH, "login");
+      const shown = app.shownExchange!;
+      expect(shown.entry.name).toBe("login");
+      expect(app.runs[shown.tab.id]?.response?.id).toBe("x1");
+      expect(app.runs[login.id]?.response?.id).toBe("r1");
+
+      app.closeExchange();
+      expect(app.shownExchange).toBeNull();
+      expect(app.runs[shown.tab.id]).toBeUndefined();
+      expect(api.releaseResponse).toHaveBeenCalledWith("x1");
+      expect(api.releaseResponse).not.toHaveBeenCalledWith("r1");
+    });
+
+    it("an exchange that's gone by the time it's opened says so", async () => {
+      api.openExchange.mockRejectedValueOnce("`login` has no exchange in this Session");
+      await app.openExchange({ file: PATH, name: "login", status: 200, received: "2026-11-13T09:05:07.000Z" });
+      expect(app.shownExchange).toBeNull();
+      expect(app.toasts.map((t) => t.message)).toContain("`login` has no exchange in this Session");
+    });
   });
 
   it("the Session command shows the panel, and runs again to hide it", () => {
