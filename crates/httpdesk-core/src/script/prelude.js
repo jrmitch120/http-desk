@@ -3,7 +3,9 @@
 // Evaluated once per script context, before the user's script, as a function
 // the engine (src/script.rs) calls with:
 //   host: Rust functions this API is built on (`host.test(name, passed, message)`,
-//         `host.log(line)`, `host.setVariable(name, value)`)
+//         `host.log(line)`, `host.setVariable(name, value)`, and the Session's
+//         Global variables: `host.globalGet(name)`, `host.globalSet(name, value)`,
+//         `host.globalClear(name)`, `host.globalIsEmpty()`)
 //   data: the exchange as plain JSON. A response handler gets { response: { status,
 //         headers, body, json, mimeType, charset } }, a pre-request script gets
 //         { request: { environment, variables } } (name → value objects); both
@@ -51,11 +53,15 @@
       },
     );
 
+  const memoryMessage = () => "Stopped at " + data.limits.memory + ", the memory limit for a script";
+
   // What a failed test says about the error that failed it.
   function messageOf(e) {
+    // QuickJS throws `null` when it can't even allocate its out-of-memory error.
+    if (e === null) return memoryMessage();
     if (e instanceof Error) {
       if (e.name === "InternalError" && e.message === "out of memory") {
-        return "Stopped at " + data.limits.memory + ", the memory limit for a script";
+        return memoryMessage();
       }
       const plain = e instanceof AssertionError || e instanceof UnsupportedApiError || e.name === "Error";
       return plain ? e.message : e.name + ": " + e.message;
@@ -76,6 +82,19 @@
     }
     return String(v);
   }
+
+  // A value as `{{name}}` text: a string as it is, an object as JSON, anything else as JavaScript prints it.
+  const variableText = (value) =>
+    typeof value === "string" ? value : value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
+
+  // An object with the members of `known`, where any other member is the unsupported API `prefix.member`.
+  const partlySupported = (prefix, known) =>
+    new Proxy(known, {
+      get(target, key) {
+        if (typeof key !== "string" || Object.hasOwn(target, key)) return target[key];
+        throw new UnsupportedApiError(prefix + "." + key);
+      },
+    });
 
   let testDepth = 0;
 
@@ -101,7 +120,22 @@
       }
       host.test(text, !!condition, condition ? null : text);
     },
-    global: unsupportedNamespace("client.global"),
+    // The Session's Global variables, which later requests in the workspace read as `{{name}}`.
+    global: partlySupported("client.global", {
+      set(name, value) {
+        host.globalSet(String(name), variableText(value));
+      },
+      get(name) {
+        const value = host.globalGet(String(name));
+        return value === undefined ? null : value;
+      },
+      clear(name) {
+        host.globalClear(String(name));
+      },
+      isEmpty() {
+        return host.globalIsEmpty();
+      },
+    }),
     log(...values) {
       host.log(values.map(logText).join(" "));
     },
@@ -145,7 +179,7 @@
       variables: {
         set(name, value) {
           if (Array.isArray(value)) throw new UnsupportedApiError("request.variables.set with an array (iterations)");
-          const text = typeof value === "string" ? value : value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
+          const text = variableText(value);
           variables.set(String(name), text);
           host.setVariable(String(name), text);
         },
@@ -159,12 +193,7 @@
         },
       },
     };
-    return new Proxy(known, {
-      get(target, key) {
-        if (typeof key !== "string" || Object.hasOwn(target, key)) return target[key];
-        throw new UnsupportedApiError("request." + key);
-      },
-    });
+    return partlySupported("request", known);
   }
 
   globalThis.client = client;

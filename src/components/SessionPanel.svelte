@@ -6,6 +6,7 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import SessionCookies from "./SessionCookies.svelte";
+  import SessionGlobals from "./SessionGlobals.svelte";
   import SessionNamedExchanges from "./SessionNamedExchanges.svelte";
 </script>
 
@@ -15,6 +16,7 @@
     <button class="btn small danger" onclick={() => app.clearSession()}>Clear session</button>
   </div>
   <div class="sections">
+    <SessionGlobals />
     <SessionCookies />
     <SessionNamedExchanges />
   </div>

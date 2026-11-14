@@ -6,15 +6,14 @@
 //! Session it started in, so one that finishes after a switch can't reach the next.
 //!
 //! Each part of the Session is its own section with its own lock, so a send reading
-//! one never waits on another. Today that is prompt answers, the cookie jar and the
-//! latest exchange of each named request. Global variables join them as a further
-//! section.
+//! one never waits on another: prompt answers, the cookie jar, the latest exchange
+//! of each named request, and Global variables.
 //!
 //! A new section is a private field with an accessor, and a line in [`Session::clear`]
 //! (which won't compile until it has one), so Clear session empties it too.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::cookies::CookieJar;
 use crate::exchange::Exchanges;
@@ -26,6 +25,7 @@ pub struct Session {
     prompt_answers: PromptAnswers,
     cookies: CookieJar,
     exchanges: Exchanges,
+    globals: GlobalVariables,
 }
 
 impl Session {
@@ -45,14 +45,21 @@ impl Session {
         &self.exchanges
     }
 
+    /// The Global variables scripts have set with `client.global.set`, which every
+    /// later request in the workspace can use as `{{name}}`.
+    pub fn globals(&self) -> &GlobalVariables {
+        &self.globals
+    }
+
     /// Empties every section, as a new Session would be (Clear session). A send
     /// under way when it's cleared may still add to it as it finishes.
     pub fn clear(&self) {
         // Destructured, so a new section fails to compile until it's cleared here too.
-        let Session { prompt_answers, cookies, exchanges } = self;
+        let Session { prompt_answers, cookies, exchanges, globals } = self;
         prompt_answers.clear();
         cookies.clear();
         exchanges.clear();
+        globals.clear();
     }
 }
 
@@ -88,6 +95,48 @@ impl PromptAnswers {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashMap<String, String>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The Global variables of a Session: the values scripts store with
+/// `client.global.set`, by name. A script reads and writes them as it runs, so a
+/// handler that throws keeps what it set before the throw. Cloning shares them.
+#[derive(Debug, Clone, Default)]
+pub struct GlobalVariables(Arc<Mutex<BTreeMap<String, String>>>);
+
+impl GlobalVariables {
+    /// The value of `name`, if a script has set it.
+    pub fn get(&self, name: &str) -> Option<String> {
+        self.lock().get(name).cloned()
+    }
+
+    /// Sets `name` to `value`, replacing any value it had.
+    pub fn set(&self, name: &str, value: &str) {
+        self.lock().insert(name.to_string(), value.to_string());
+    }
+
+    /// Clears `name`; whether it was set.
+    pub fn remove(&self, name: &str) -> bool {
+        self.lock().remove(name).is_some()
+    }
+
+    /// Whether none is set.
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
+    }
+
+    /// Every one, sorted by name.
+    pub fn list(&self) -> BTreeMap<String, String> {
+        self.lock().clone()
+    }
+
+    /// Clears every one.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, String>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

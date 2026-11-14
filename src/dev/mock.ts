@@ -70,6 +70,21 @@ if (chainMode === "1" || chainMode === "dup") {
   if (chainMode === "dup") (chained.requests[2] as { directives: unknown[] }).directives = [{ name: "name", value: "createPet" }];
   files[`${ROOT}/api/pets.http`] = chained;
 }
+// `?globals=1`: List pets' response handler stores the Global variable `loginToken`
+// (`client.global.set("loginToken", "abc123")`), and samples/jetbrains.http's "Get request
+// with a header", in another file, sends it as `{{loginToken}}` in its URL.
+if (new URLSearchParams(location.search).get("globals") === "1") {
+  const withHandler = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const list = withHandler.requests[0] as { responseHandler: string | null; raw: unknown };
+  list.responseHandler = '> {%\n    client.global.set("loginToken", "abc123");\n%}';
+  list.raw = null;
+  files[`${ROOT}/api/pets.http`] = withHandler;
+  const withToken = structuredClone(jetbrains);
+  const get = withToken.requests[0] as { url: string; raw: unknown };
+  get.url = "{{host}}/get/{{loginToken}}";
+  get.raw = null;
+  files[`${ROOT}/samples/jetbrains.http`] = withToken;
+}
 // `?handlerLogs=1` has samples/jetbrains.http's response handler (Post with JSON body)
 // log "Checking the status" before its test and "Done" after it.
 if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
@@ -239,7 +254,8 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
   const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
-  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues, requestNames });
+  const globals = Object.fromEntries(sessionGlobals);
+  const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, globals, envName: environment, prompts, answers: promptValues, requestNames });
   const undefinedNames = new Set<string>();
   const circular: string[][] = [];
   // Reference by reference, as the core marks each one a Secret went into.
@@ -411,6 +427,13 @@ const sentPrompts: Record<string, string>[] = [];
 const sentSkipScripts: boolean[] = [];
 /** The options each `run_requests` got, in order. */
 const runOptions: Record<string, unknown>[] = [];
+/** Like the Session's Global variables: what scripts stored with `client.global.set`, by name. Opening a workspace empties them. */
+let sessionGlobals = new Map<string, string>();
+/** Like the core's script engine, roughly: each `client.global.set("name", "value")` in
+ *  `script`, with a string literal value, in order. */
+function setGlobals(script: string | null) {
+  for (const m of (script ?? "").matchAll(/client\.global\.set\("([^"]*)",\s*"([^"]*)"\)/g)) sessionGlobals.set(m[1], m[2]);
+}
 /** Like the Session's cookie jar: the cookies responses set, by domain, path and name. Opening a workspace empties it. */
 let sessionJar = new Map<string, StoredCookie>();
 const jarKey = (c: Pick<StoredCookie, "domain" | "path" | "name">) => `${c.domain}\t${c.path}\t${c.name}`;
@@ -1175,6 +1198,8 @@ async function mockSend(args: any) {
   if (runScripts && !settings.trustedWorkspaces.includes(ROOT)) {
     throw { kind: "untrustedWorkspace", message: UNTRUSTED_MESSAGE, details: null };
   }
+  // Like the core: Global variables a pre-request script sets stand even if it then throws.
+  if (runScripts) setGlobals(args.request.preScript);
   // Like the shell: a pre-request script that throws stops the send.
   if (runScripts && args.request.preScript?.includes("throw ")) {
     throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
@@ -1200,6 +1225,7 @@ async function mockSend(args: any) {
   // An environment defines the missing variable, so picking one fixes it.
   if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
   const r = args.request;
+  if (runScripts) setGlobals(r.responseHandler);
   const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
   // Like the core: a named request's exchange becomes its latest (its response side once known).
   const sentHeaders: [string, string][] = r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]);
@@ -1336,6 +1362,7 @@ mockIPC(
         settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
         sessionPrompts = new Map();
         sessionJar = new Map();
+        sessionGlobals = new Map();
         forgetExchanges();
         return { root: ROOT, tree, gitignoreUpdated: false };
       case "set_menu":
@@ -1435,9 +1462,17 @@ mockIPC(
       case "clear_cookies":
         sessionJar.clear();
         return null;
+      case "session_globals":
+        return [...sessionGlobals].sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => ({ name, value }));
+      case "delete_global":
+        return sessionGlobals.delete(args.name);
+      case "clear_globals":
+        sessionGlobals.clear();
+        return null;
       case "clear_session":
         sessionPrompts = new Map();
         sessionJar = new Map();
+        sessionGlobals = new Map();
         forgetExchanges();
         return null;
       case "named_exchanges":

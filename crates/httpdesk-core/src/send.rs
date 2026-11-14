@@ -18,7 +18,7 @@ use crate::exchange;
 use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse};
 use crate::model::{HttpFile, Request, Variable};
 use crate::script;
-use crate::session::Session;
+use crate::session::{GlobalVariables, Session};
 use crate::vars::Resolver;
 
 /// A request to send, with what its file gives it: the shape of the webview's
@@ -106,9 +106,10 @@ pub struct RequestScope {
     pub environment: HashMap<String, String>,
 }
 
-/// What `out` is sent with: the variables (its folder's environment from disk, then
-/// File variables, then its own, then the Prompt variable answers the Session holds
-/// for its request key), and the Request variables of its file's named requests (read
+/// What `out` is sent with: the variables (its folder's environment from disk, the
+/// Session's Global variables, File variables and its own, and the Prompt variable
+/// answers the Session holds for its request key; precedence is the Resolver's), and
+/// the Request variables of its file's named requests (read
 /// from their latest exchanges in the Session). Shared by send and preview so the two
 /// can't disagree.
 pub fn scope(
@@ -135,6 +136,7 @@ pub fn scope(
     let answers = out.request_key.as_deref().map(|k| session.prompt_answers().get(k)).unwrap_or_default();
     let resolver = Resolver::for_request(&env_vars, &out.file_variables, &request.variables, Some(&base_dir))
         .with_secrets(secrets)
+        .with_globals(session.globals().list())
         .with_prompts(&request.prompts(), &answers)
         .with_request_variables(match &out.file_path {
             Some(file) => session.exchanges().for_file(file, &out.request_names),
@@ -154,7 +156,9 @@ fn base_dir(root: Option<&Path>, out: &Outgoing) -> PathBuf {
 }
 
 /// The names whose value is a Secret for `out`: its environment's, except those a File
-/// or request variable replaces (it's then no Secret).
+/// or request variable replaces (it's then no Secret). A Global variable or a
+/// pre-request script's value replaces one only for some sends, so the Resolver
+/// decides that per send.
 fn secret_names(env_set: &EnvironmentSet, environment: Option<&str>, out: &Outgoing) -> Vec<String> {
     env::secret_names(env_set, environment)
         .into_iter()
@@ -201,12 +205,13 @@ async fn run_pre_request(
     request: &Request,
     environment: &HashMap<String, String>,
     files: &script::ScriptFiles,
+    globals: &GlobalVariables,
 ) -> Result<script::PreRequestResults, ExecError> {
     if request.pre_request_parts().is_empty() {
         return Ok(Default::default());
     }
-    let (request, environment, files) = (request.clone(), environment.clone(), files.clone());
-    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files))
+    let (request, environment, files, globals) = (request.clone(), environment.clone(), files.clone(), globals.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files, &globals))
         .await
         .map_err(|e| ExecError::Other(e.to_string()))?
 }
@@ -226,12 +231,14 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         // Script files are read relative to the `.http` file, from inside the workspace.
         let files = script::ScriptFiles::new(ctx.root.as_deref(), &scope.base_dir);
         // JetBrains order: the pre-request script runs before variables are substituted.
+        let globals = ctx.session.globals();
         let pre = if run_scripts {
-            run_pre_request(&out.request, &scope.environment, &files).await?
+            run_pre_request(&out.request, &scope.environment, &files, globals).await?
         } else {
             Default::default()
         };
-        let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
+        // The Global variables again: the script may have set some.
+        let resolver = scope.resolver.with_pre_request_variables(&pre.variables).with_globals(globals.list());
         let mut prepared = exec::prepare(&out.request, &resolver, &scope.base_dir, &ctx.settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
         if has_scripts && !run_scripts {
@@ -257,8 +264,9 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         // Up to the script time limit of CPU work: off the async workers.
         let request = out.request.clone();
         let handler_body = body.clone();
+        let globals = ctx.session.globals().clone();
         response = tokio::task::spawn_blocking(move || {
-            let results = script::run_response_handler(&request, &response, &handler_body, &files);
+            let results = script::run_response_handler(&request, &response, &handler_body, &files, &globals);
             // The pre-request script's tests and logs come first.
             response.tests = pre.tests.into_iter().chain(results.tests).collect();
             response.logs = pre.logs.into_iter().chain(results.logs).collect();

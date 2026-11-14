@@ -327,7 +327,6 @@ async fn a_cookie_set_in_one_file_is_sent_by_the_next_file_of_the_run() {
 }
 
 #[tokio::test]
-#[ignore = "Global variables (`client.global`) land with #139"]
 async fn a_global_variable_set_in_one_file_is_read_by_the_next_file_of_the_run() {
     let server = MockServer::start().await;
     Mock::given(path("/login"))

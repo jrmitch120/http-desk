@@ -188,7 +188,7 @@ export interface Resolution {
  */
 export interface VarCompletion {
   name: string;
-  source: "file" | "environment" | "shared" | "prompt" | "request" | "dynamic";
+  source: "file" | "global" | "environment" | "shared" | "prompt" | "request" | "dynamic";
   preview?: string;
   secret?: boolean;
   /** Dynamic variables: the argument hint (empty without arguments). */

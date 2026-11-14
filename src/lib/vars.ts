@@ -95,6 +95,11 @@ export interface Scope {
   fileVars: Variable[];
   /** The request's own `@name` lines, which win over the rest of the file. */
   requestVars: Variable[];
+  /** The Session's Global variables (`client.global.set`), by name. */
+  globals?: Record<string, string>;
+  /** What the request's pre-request script set with `request.variables.set`. Known only
+   *  when the core sends it, so the editor has none; the shared resolution cases do. */
+  preRequestVars?: Record<string, string>;
   /** The `@name` lines at the top of the file (some of `fileVars`): the ones the request's Settings edit. */
   headerVars?: Variable[];
   envName: string | null;
@@ -118,12 +123,16 @@ interface Entry {
   definition?: Definition;
 }
 
-export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], envName, prompts = [], answers = {}, requestNames = [], exchange }: Scope): VarProvider {
+export function makeVarProvider({ env, fileVars, requestVars, globals = {}, preRequestVars = {}, headerVars = [], envName, prompts = [], answers = {}, requestNames = [], exchange }: Scope): VarProvider {
   // Answered prompts are used as typed, over everything else; unanswered ones are asked when sent.
   const prompted = new Map<string, { value: string; masked: boolean } | null>();
   for (const p of prompts) prompted.set(p.name, Object.hasOwn(answers, p.name) ? { value: answers[p.name], masked: promptMasked(p.name) } : null);
 
-  // Later wins: environment, then the file, then the request's own declarations.
+  // The precedence of every variable, as the core's `Scopes::lookup` decides it: later
+  // wins. The environment (private over public, over the shared variables), then Global
+  // variables, then the file, then the request's own declarations, then what its
+  // pre-request script set: Rider's order, measured with ijhttp (#129). An answered
+  // prompt wins over all of them (`prompted`, checked first).
   const scope = new Map<string, Entry>();
   for (const [name, e] of Object.entries(env)) {
     const source = e.source === SHARED ? "shared variables" : `environment "${e.source}"`;
@@ -131,11 +140,13 @@ export function makeVarProvider({ env, fileVars, requestVars, headerVars = [], e
     const definition: Definition = { kind: "env", env: e.source, name, ...(e.dir !== undefined ? { dir: e.dir } : {}) };
     scope.set(name, { value: e.value, secret: e.secret, source, origin, definition });
   }
+  for (const [name, value] of Object.entries(globals)) scope.set(name, { value, secret: false, source: "a Global variable, set by a script", origin: "global" });
   for (const v of fileVars) {
     const definition: Definition = { kind: headerVars.includes(v) ? "file" : "request", name: v.name };
     scope.set(v.name, { value: v.value, secret: false, source: "this file", origin: "file", definition });
   }
   for (const v of requestVars) scope.set(v.name, { value: v.value, secret: false, source: "this request", origin: "file", definition: { kind: "request", name: v.name } });
+  for (const [name, value] of Object.entries(preRequestVars)) scope.set(name, { value, secret: false, source: "this request's pre-request script", origin: "file" });
 
   function resolve(text: string): Resolution {
     const undefinedNames = new Set<string>();

@@ -37,6 +37,7 @@ import type {
   SearchHit,
   SendError,
   StoredCookie,
+  GlobalVariable,
   TestResult,
   TreeNode,
   Usage,
@@ -1221,6 +1222,21 @@ class AppStore {
     this.panel = this.panel === panel ? null : panel;
   }
 
+  /** The Session's Global variables, for the Session panel and the editor's variable checks. */
+  globalVariables(): Promise<GlobalVariable[]> {
+    return api.sessionGlobals();
+  }
+
+  /** Deletes one Global variable, so later sends don't use it. */
+  async deleteGlobal(name: string) {
+    await this.changeSession(() => api.deleteGlobal(name));
+  }
+
+  /** Deletes every Global variable. */
+  async clearGlobals() {
+    await this.changeSession(() => api.clearGlobals());
+  }
+
   /** The cookies in the Session's jar, for the Session panel. */
   sessionCookies(): Promise<StoredCookie[]> {
     return api.sessionCookies();
@@ -1316,7 +1332,7 @@ class AppStore {
   async clearSession() {
     const r = await this.choose(
       "Clear the session?",
-      "HttpDesk forgets what it remembers for this workspace between sends: cookies, prompt answers, the latest exchange of each named request and test results. Files and environments aren't changed.",
+      "HttpDesk forgets what it remembers for this workspace between sends: Global variables, cookies, prompt answers, the latest exchange of each named request and test results. Files and environments aren't changed.",
       [
         { ...CANCEL, focus: true },
         { label: "Clear session", value: "clear", role: "primary", danger: true },
@@ -1399,11 +1415,12 @@ class AppStore {
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc), skipScripts: scripts === "skip" });
-      // The Session changed if the jar kept cookies the response set, or if the request is
-      // named (its exchange is now the latest, which Request variables read): views
-      // showing the Session read it again, even if the tab has closed.
+      // The Session changed if the jar kept cookies the response set, if the request is
+      // named (its exchange is now the latest, which Request variables read), or if its
+      // scripts ran (they may have set Global variables): views showing the Session read
+      // it again, even if the tab has closed.
       const named = getDirective(req, "name")?.trim();
-      if (response.cookies?.length || named) this.sessionVersion++;
+      if (response.cookies?.length || named || scripts === "run") this.sessionVersion++;
       this.noteExchange(tab.path, tab.key, req);
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
@@ -1414,6 +1431,8 @@ class AppStore {
       if (previous?.id !== response.id) this.releaseResponse(previous);
       this.markTests(tab.key, response.tests);
     } catch (e) {
+      // A pre-request script that failed may have set Global variables first.
+      if (scripts === "run") this.sessionVersion++;
       if (this.runs[tabId]?.runId !== runId) return;
       if (this.cancelled.delete(runId)) {
         this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous };
@@ -1908,6 +1927,8 @@ class AppStore {
         item.state = "failed";
         item.error = toSendError(p.error);
         this.clearTestMark(item.key);
+        // A pre-request script that failed may have set Global variables first.
+        this.sessionVersion++;
         break;
       case "cancelled":
         item.state = "cancelled";

@@ -34,6 +34,12 @@ struct Case {
     file: Vec<Variable>,
     #[serde(default)]
     request: Vec<Variable>,
+    /// The Session's Global variables.
+    #[serde(default)]
+    globals: HashMap<String, String>,
+    /// What the request's pre-request script set with `request.variables.set`.
+    #[serde(default)]
+    pre_request: HashMap<String, String>,
     text: String,
     value: String,
     #[serde(default)]
@@ -157,6 +163,8 @@ fn the_core_resolver_gives_the_shared_answers() {
             })
             .collect();
         let r = Resolver::for_request(&vars, &c.file, &c.request, Some(&dir))
+            .with_globals(c.globals.clone())
+            .with_pre_request_variables(&c.pre_request)
             .with_prompts(&prompts, &answers)
             .with_request_variables(exchanges);
         let value = r.resolve(&c.text);

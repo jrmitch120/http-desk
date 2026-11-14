@@ -5,7 +5,7 @@
 // List pets' response set three cookies the mock's jar keeps; `__mock.sentCookies`
 // is the Cookie header each send got from the jar.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, menuClick, mockState, openApp, openRequest, setMockResponse, tab } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, setMockResponse, tab, urlBar } from "./helpers";
 
 const panel = (page: Page) => page.getByRole("region", { name: "Session" });
 const rows = (page: Page) => panel(page).getByRole("table", { name: "Session cookies" }).locator("tbody tr");
@@ -112,4 +112,61 @@ test("Clear session takes the test markers off the tab and the tree row (#138)",
 
   await expect(marker).toHaveCount(0);
   await expect(tab(page, "Post with JSON body").getByRole("img", { name: /^Tests/ })).toHaveCount(0);
+});
+
+// #139: `?globals=1` has List pets' handler store the Global variable `loginToken`, and
+// samples/jetbrains.http's "Get request with a header" (another file) use `{{loginToken}}`.
+const globalRows = (page: Page) => panel(page).getByRole("table", { name: "Global variables" }).locator("tbody tr");
+const tokenMark = (page: Page, state: "ok" | "bad") => urlBar(page).locator(`.cm-var-${state}`, { hasText: "{{loginToken}}" });
+const undefinedCheck = (page: Page) => page.getByText("is undefined, used in");
+
+test("a Global variable a handler stores is listed at once, defines {{loginToken}} in another file, and can be deleted or cleared", async ({ page }) => {
+  await openApp(page, "?globals=1&trusted=1");
+  await page.keyboard.press("Meta+j");
+  await expect(panel(page)).toContainText("No Global variables");
+  await openRequest(page, ["samples", "jetbrains.http"], "Get request with a header");
+  await expect(tokenMark(page, "bad")).toBeVisible();
+  await expect(undefinedCheck(page)).toBeVisible();
+
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+
+  await expect(globalRows(page)).toHaveCount(1);
+  await expect(globalRows(page).first().getByRole("cell")).toHaveText(["loginToken", "abc123", ""]);
+  await expect(panel(page).getByRole("heading", { name: /^Global variables/ })).toContainText("1");
+  await tab(page, "Get request with a header").click();
+  await expect(tokenMark(page, "ok")).toBeVisible();
+  await expect(undefinedCheck(page)).toHaveCount(0);
+
+  await panel(page).getByRole("button", { name: "Delete Global variable loginToken" }).click();
+  await expect(globalRows(page)).toHaveCount(0);
+  await expect(tokenMark(page, "bad")).toBeVisible();
+
+  await tab(page, "List pets").click();
+  await send(page);
+  await expect(globalRows(page)).toHaveCount(1);
+  await panel(page).getByRole("button", { name: "Clear Global variables" }).click();
+  await expect(globalRows(page)).toHaveCount(0);
+  await expect(panel(page)).toContainText("No Global variables");
+});
+
+test("Clear session clears the Global variables, and another workspace starts with none", async ({ page }) => {
+  await openApp(page, "?globals=1&trusted=1&recent=/work/shop");
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.keyboard.press("Meta+j");
+  await send(page);
+  await expect(globalRows(page)).toHaveCount(1);
+
+  await panel(page).getByRole("button", { name: "Clear session" }).click();
+  const confirm = dialog(page, "Clear the session?");
+  await expect(confirm).toContainText("Global variables");
+  await confirm.getByRole("button", { name: "Clear session" }).click();
+  await expect(panel(page)).toContainText("No Global variables");
+
+  await send(page);
+  await expect(globalRows(page)).toHaveCount(1);
+  // The mock opens the demo workspace again, as a new one with a new Session.
+  await menuClick(page, "open-recent:/work/shop");
+  await expect.poll(() => mockState(page, "settings").then((s) => s.recentWorkspaces[0])).toBe("/work/shop");
+  await expect(panel(page)).toContainText("No Global variables");
 });

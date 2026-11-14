@@ -49,7 +49,7 @@ async fn run_in(
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    let results = run_response_handler(&req, &outcome.response, &outcome.body, files);
+    let results = run_response_handler(&req, &outcome.response, &outcome.body, files, &Default::default());
     (req, outcome, results.tests)
 }
 
@@ -137,8 +137,7 @@ async fn a_syntax_error_is_reported_with_its_line() {
 async fn unimplemented_jetbrains_apis_fail_naming_the_api() {
     let server = server().await;
     let calls = [
-        ("client.global.set(\"a\", \"b\")", "client.global.set"),
-        ("client.global.get(\"a\")", "client.global.get"),
+        ("client.global.clearAll()", "client.global.clearAll"),
         ("client.exit()", "client.exit"),
         ("request.variables.get(\"a\")", "request.variables"),
         ("request.environment.get(\"a\")", "request.environment"),
@@ -445,7 +444,7 @@ async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
     assert_eq!(in_handler, listed_without("request."));
 
     let req = parse(&format!("< {{%{IMPLEMENTED}%}}\nGET {}/text\n", server.uri())).requests.remove(0);
-    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptFiles::default()).unwrap();
+    let pre = run_pre_request_script(&req, &HashMap::new(), &ScriptFiles::default(), &Default::default()).unwrap();
     let in_pre_request: Vec<String> = serde_json::from_str(&pre.results.tests.last().unwrap().name).unwrap();
     assert_eq!(in_pre_request, listed_without("response."));
 }
@@ -457,7 +456,7 @@ async fn results(server: &MockServer, route: &str, handler: &str) -> script::Scr
     let settings = ExecSettings::default();
     let prepared = prepare(&req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let outcome = execute(prepared, &settings, &SslConfig::default()).await.unwrap();
-    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptFiles::default())
+    run_response_handler(&req, &outcome.response, &outcome.body, &ScriptFiles::default(), &Default::default())
 }
 
 #[tokio::test]

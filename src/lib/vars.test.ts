@@ -15,6 +15,10 @@ interface Case {
   environment?: string | null;
   file?: Variable[];
   request?: Variable[];
+  /** The Session's Global variables. */
+  globals?: Record<string, string>;
+  /** What the request's pre-request script set with `request.variables.set`. */
+  preRequest?: Record<string, string>;
   text: string;
   value: string;
   undefined?: string[];
@@ -280,6 +284,22 @@ function requestEnvironments(c: Case): EnvironmentSet | null {
   return environmentsFor(loaded(c), folders, c.dir ?? "");
 }
 
+describe("what a Global variable shows", () => {
+  const env = { token: { value: "env", secret: true, source: "dev" }, host: { value: "dev.example", secret: false, source: "dev" } };
+  const provider = makeVarProvider({ env, fileVars: [], requestVars: [], globals: { token: "abc123", id: "7" }, envName: "dev" });
+
+  it("is defined, with its value and where it's from, over the environment's Secret", () => {
+    expect(provider.info("token")).toEqual({ state: "ok", value: "abc123", secret: false, source: "a Global variable, set by a script" });
+    expect(provider.resolve("{{host}}/{{id}}")).toMatchObject({ value: "dev.example/7", undefined: [], secret: false });
+  });
+
+  it("is completed as a Global variable", () => {
+    const completions = provider.completions();
+    expect(completions.find((c) => c.name === "id")).toEqual({ name: "id", source: "global", preview: "7" });
+    expect(completions.find((c) => c.name === "token")).toMatchObject({ source: "global" });
+  });
+});
+
 describe("the frontend resolver agrees with the core on the shared cases", () => {
   it.each((shared.cases as Case[]).map((c) => [c.case, c] as const))("%s", (_, c) => {
     const environment = c.environment ?? null;
@@ -287,6 +307,8 @@ describe("the frontend resolver agrees with the core on the shared cases", () =>
       env: envVariables(requestEnvironments(c), environment),
       fileVars: c.file ?? [],
       requestVars: c.request ?? [],
+      globals: c.globals,
+      preRequestVars: c.preRequest,
       envName: environment,
       prompts: (c.prompts ?? []).map((p) => ({ name: p.name, description: "" })),
       answers: Object.fromEntries((c.prompts ?? []).flatMap((p) => (p.value === undefined ? [] : [[p.name, p.value]]))),
