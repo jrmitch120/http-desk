@@ -66,3 +66,47 @@ test("a path that matches nothing gets its own report naming the exchange it loo
   await expect(report).toContainText("Looked in the latest exchange of `createPet`, received at");
   await expect(report.getByRole("button", { name: "Retry" })).toBeVisible();
 });
+
+// #136: completion inside a Request variable reads the named request's latest exchange.
+const completions = (page: Page) => page.locator(".popup-layer .cm-tooltip-autocomplete");
+const labels = (page: Page) => completions(page).locator(".cm-completionLabel");
+
+test("completion offers a named request, then response, then its latest response's JSON keys as you go", async ({ page }) => {
+  await openApp(page, "?chain=1");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await send(page);
+  await expect(page.getByText("201 Created")).toBeVisible();
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+
+  await urlBar(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("{{baseUrl}}/png/{{createP");
+  await expect(completions(page).getByRole("option").filter({ hasText: "createPet" })).toContainText("request");
+  await expect(async () => {
+    await page.keyboard.press("Enter");
+    await expect(urlBar(page)).toHaveText("{{baseUrl}}/png/{{createPet.}}", { timeout: 200 });
+  }).toPass();
+  // The name goes on with its path: the next segment is offered at once.
+  await expect(labels(page)).toHaveText(["response", "request"]);
+
+  await page.keyboard.type("response.body.$.");
+  await expect(labels(page)).toHaveText(["items", "method"]);
+  await page.keyboard.type("items[0].");
+  await expect(labels(page)).toHaveText(["id", "name", "tags", "active", "owner"]);
+  await expect(async () => {
+    await page.keyboard.press("Enter");
+    await expect(urlBar(page)).toHaveText("{{baseUrl}}/png/{{createPet.response.body.$.items[0].id}}", { timeout: 200 });
+  }).toPass();
+});
+
+test("before the request is sent, completion offers the structure and says it hasn't been sent", async ({ page }) => {
+  await openApp(page, "?chain=1");
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+
+  await urlBar(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("{{createPet.response.");
+  await expect(labels(page)).toHaveText(["body", "headers"]);
+  await page.keyboard.type("headers.");
+  await expect(labels(page)).toHaveText(["createPet hasn't been sent in this Session"]);
+});

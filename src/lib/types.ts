@@ -385,6 +385,27 @@ export interface JsonShape {
   items?: JsonShape;
 }
 
+/**
+ * A named request's latest exchange in the Session as completion (and its hover)
+ * sees it (core `exchange::ExchangeShape`): when it arrived, its status, and each
+ * side's header names and JSON body shape.
+ */
+export interface ExchangeShape {
+  /** RFC 3339, UTC. */
+  received: string;
+  status: number;
+  response: MessageShape;
+  request: MessageShape;
+}
+
+/** One side of an exchange (core `exchange::MessageShape`). */
+export interface MessageShape {
+  /** Header names in order, each once. */
+  headers: string[];
+  /** Null when the body isn't JSON (or there's none). */
+  body: JsonShape | null;
+}
+
 /** Why a send failed; mirrors the core's `ExecError` kinds. */
 export type TlsReason = "selfSigned" | "expired" | "wrongHost" | "unknownIssuer" | "other";
 

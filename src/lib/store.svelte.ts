@@ -21,6 +21,7 @@ import { wording, type ButtonRole } from "./platform";
 import type {
   AppSettings,
   EnvironmentSet,
+  ExchangeShape,
   EnvironmentSettings,
   MatrixWidths,
   FolderEnvironments,
@@ -1150,6 +1151,29 @@ class AppStore {
    */
   promptAnswers(tab: Tab): Promise<Record<string, string>> {
     return api.promptAnswers(tab.key);
+  }
+
+  /** Exchange shapes read for `shapesVersion` of the Session, by `path\0name`. */
+  private exchangeShapes = new Map<string, Promise<ExchangeShape | null>>();
+  private shapesVersion = -1;
+
+  /**
+   * The shape of the latest exchange of the request named `name` in file `path`, in
+   * the Session (null if it hasn't been sent, or can't be read): what its Request
+   * variables' paths complete from. Read once, then again after the Session changes.
+   */
+  exchangeShape(path: string, name: string): Promise<ExchangeShape | null> {
+    if (this.shapesVersion !== this.sessionVersion) {
+      this.exchangeShapes.clear();
+      this.shapesVersion = this.sessionVersion;
+    }
+    const key = `${path}\0${name}`;
+    let shape = this.exchangeShapes.get(key);
+    if (!shape) {
+      shape = api.exchangeShape(path, name).catch(() => null);
+      this.exchangeShapes.set(key, shape);
+    }
+    return shape;
   }
 
   /** Forgets the tab's request's prompted values, so its next send asks again. */
