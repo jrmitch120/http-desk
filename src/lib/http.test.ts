@@ -4,6 +4,7 @@ import {
   buildForm,
   buildMultipart,
   composeUrl,
+  hasScripts,
   newRequest,
   parseFileRef,
   parseForm,
@@ -432,5 +433,21 @@ describe("custom methods", () => {
 
   it("rejects text the .http parser wouldn't read back as a method", () => {
     for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
+  });
+});
+
+describe("hasScripts (the core's script::has_scripts)", () => {
+  const withHandler = (responseHandler: string | null) => ({ ...newRequest("r"), responseHandler });
+
+  it.each([
+    ["> {% client.test('a', () => {}); %}", true],
+    ["> {%\n  client.assert(true);\n%}", true],
+    ["> ./check.js", true],
+    ["> {% client.assert(true); %}\n>> ./out.json", true],
+    [">> ./out.json", false],
+    [">>! ./out.json", false],
+    [null, false],
+  ])("%s → %s", (handler, expected) => {
+    expect(hasScripts(withHandler(handler))).toBe(expected);
   });
 });

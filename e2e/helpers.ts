@@ -84,6 +84,8 @@ export interface MockState {
   sent: { method: string; url: string }[];
   /** The Prompt variable values each send got, in order. */
   sentPrompts: Record<string, string>[];
+  /** Each send's `skipScripts` ("Send without scripts"). */
+  sentSkipScripts: boolean[];
   /** The settings it last saved. */
   settings: {
     theme: string;
@@ -94,6 +96,7 @@ export interface MockState {
     envView: "matrix" | "list";
     envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
+    trustedWorkspaces: string[];
   };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;

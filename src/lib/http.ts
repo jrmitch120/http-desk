@@ -634,6 +634,15 @@ export interface BodySyntaxWarning {
   message: string;
 }
 
+/**
+ * Whether sending the request would run a script, which only a Trusted workspace
+ * may do: a `> {% %}` or `> file.js` response handler line. `>>` output redirects
+ * aren't scripts. Mirrors the core's `script::has_scripts`.
+ */
+export function hasScripts(req: Request): boolean {
+  return (req.responseHandler ?? "").split("\n").some((l) => l.startsWith(">") && !l.startsWith(">>") && l.slice(1).trim() !== "");
+}
+
 /** Response handler or output redirect at column 0, the same rule as the parser. */
 function isHandlerStart(line: string): boolean {
   if (line.startsWith(">>")) return true;

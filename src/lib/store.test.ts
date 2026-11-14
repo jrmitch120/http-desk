@@ -31,6 +31,8 @@ const api = vi.hoisted(() => ({
   loadFolderEnvironments: vi.fn(),
   saveEnvironments: vi.fn(),
   getTree: vi.fn(),
+  trustWorkspace: vi.fn(),
+  revokeWorkspaceTrust: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -1408,6 +1410,116 @@ describe("production guard", () => {
     await Promise.all([first, second]);
     expect(app.dialog).toBeNull();
     expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #137: scripts run only in a Trusted workspace, asked the first time a send would run one.
+describe("workspace trust", () => {
+  const HANDLER = '> {% client.test("ok", () => {}); %}';
+
+  beforeEach(() => {
+    app.root = "/ws";
+    app.settings = { theme: "dark", recentWorkspaces: [], environments: {}, environmentSettings: {}, trustedWorkspaces: [] } as unknown as AppSettings;
+    app.envName = null;
+    app.envSet = { shared: [], environments: [], privateFileIgnored: null };
+    app.envFolders = [];
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 200, tests: [] } as unknown as HttpResponse);
+    api.trustWorkspace.mockResolvedValue(["/ws"]);
+    api.revokeWorkspaceTrust.mockResolvedValue([]);
+  });
+
+  async function tabWith(handler: string | null) {
+    const f = fileOf(["GET", "Req", "https://api.example.com/books"]);
+    f.requests[0].responseHandler = handler;
+    const [tab] = await openAll(f);
+    return tab;
+  }
+
+  const skipped = (call: number) => api.sendRequest.mock.calls[call][0].skipScripts;
+
+  it("asks before running a handler in an untrusted workspace, with Trust and run, Send without scripts and Cancel", async () => {
+    const tab = await tabWith(HANDLER);
+    const sending = app.send(tab.id);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.buttons.map((b) => b.label)).toEqual(["Cancel", "Send without scripts", "Trust and run"]);
+    expect(app.dialog!.buttons.find((b) => b.focus)?.value).toBe("cancel");
+    expect(app.dialog!.message).toMatch(/\/ws/);
+    app.closeDialog("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.runs[tab.id]).toBeUndefined();
+  });
+
+  it("Trust and run trusts the workspace in the shell, sends with scripts, and never asks again", async () => {
+    const tab = await tabWith(HANDLER);
+    const sending = app.send(tab.id);
+    await answer("trust");
+    await sending;
+    expect(api.trustWorkspace).toHaveBeenCalledTimes(1);
+    expect(app.settings!.trustedWorkspaces).toEqual(["/ws"]);
+    expect(skipped(0)).toBe(false);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(skipped(1)).toBe(false);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("Send without scripts sends without them, and isn't asked again until the workspace is opened again", async () => {
+    const tab = await tabWith(HANDLER);
+    const sending = app.send(tab.id);
+    await answer("skip");
+    await sending;
+    expect(skipped(0)).toBe(true);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(skipped(1)).toBe(true);
+    expect(api.trustWorkspace).not.toHaveBeenCalled();
+
+    openWorkspace.mockResolvedValue({ root: "/ws", tree: { name: "ws", path: "/ws", isDir: true, children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue(app.settings);
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: null });
+    await app.openWorkspace("/ws");
+    const again = await tabWith(HANDLER);
+    const third = app.send(again.id);
+    await answer("cancel");
+    await third;
+    expect(api.sendRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks in a Trusted workspace", async () => {
+    app.settings!.trustedWorkspaces = ["/ws"];
+    const tab = await tabWith(HANDLER);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(skipped(0)).toBe(false);
+  });
+
+  it.each([null, ">> ./saved.json"])("never asks for a request without a script (%s)", async (handler) => {
+    const tab = await tabWith(handler);
+    await app.send(tab.id);
+    expect(app.dialog).toBeNull();
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("revoking trust goes through the shell and asks again on the next send", async () => {
+    app.settings!.trustedWorkspaces = ["/ws"];
+    await app.revokeTrust("/ws");
+    expect(api.revokeWorkspaceTrust).toHaveBeenCalledWith("/ws");
+    expect(app.settings!.trustedWorkspaces).toEqual([]);
+    const tab = await tabWith(HANDLER);
+    const sending = app.send(tab.id);
+    await answer("cancel");
+    await sending;
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("a send the shell refuses as untrusted forgets the trust this page thought it had", async () => {
+    app.settings!.trustedWorkspaces = ["/ws"];
+    api.sendRequest.mockRejectedValueOnce({ kind: "untrustedWorkspace", message: "not trusted", details: null });
+    const tab = await tabWith(HANDLER);
+    await app.send(tab.id);
+    expect(app.runs[tab.id].error?.kind).toBe("untrustedWorkspace");
+    expect(app.settings!.trustedWorkspaces).toEqual([]);
   });
 });
 
