@@ -767,13 +767,16 @@ pub struct HttpResponse {
     #[serde(default)]
     pub timings: Timings,
     /// Every `Set-Cookie` received, redirect hops first, each with the URL
-    /// that set it. Shown only; never sent back.
+    /// that set it: what the Cookies tab shows. The Session's cookie jar keeps
+    /// them apart from this (see [`crate::cookies::CookieJar`]).
     pub cookies: Vec<ResponseCookie>,
-    /// The response handler's `client.test`/`client.assert` results and its
-    /// own failure, if any (see [`crate::script`]). Empty when nothing ran.
+    /// The pre-request script's, then the response handler's, `client.test` and
+    /// `client.assert` results, and the handler's own failure, if any (see
+    /// [`crate::script`]). Empty when no script ran.
     #[serde(default)]
     pub tests: Vec<crate::script::TestResult>,
-    /// What the scripts logged. Empty until `client.log` is implemented.
+    /// What the pre-request script, then the response handler, logged with
+    /// `client.log`, at most [`crate::script::LOG_LIMIT`] per script.
     #[serde(default)]
     pub logs: Vec<String>,
 }
