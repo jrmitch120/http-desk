@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Local, Utc};
 
+mod xpath;
+
+use crate::body_format::{response_kind, ResponseKind};
 use crate::exec::{decode_text, HttpResponse, PreparedRequest};
 use serde::Serialize;
 
@@ -118,17 +121,43 @@ impl Exchange {
     }
 }
 
-/// What body path `path` reads from `message`: `*` the whole body, `$…` the first
-/// value that JSONPath matches. Every body path goes through here, so other kinds
-/// of body (by content type) plug in at one place.
+/// What body path `path` reads from `message`, as REST Client reads it: `*` the
+/// whole body; else the first match of JSONPath in a JSON body or XPath in an XML
+/// one, by its content type. `asJson.` or `asXml.` before the path reads the body
+/// as that kind whatever its type. A body that is neither (by type, or by its
+/// first character when untyped) reads by the path's own shape: `$…` JSONPath,
+/// anything else XPath.
 fn body_value(message: &Message, path: &str) -> Result<String, String> {
     if path == "*" {
         return Ok(message.text());
     }
-    if !path.starts_with('$') {
-        return Err(format!("`{path}` is neither `*` nor a JSONPath starting with `$`"));
+    let text = message.text();
+    if let Some(path) = path.strip_prefix("asJson.") {
+        return json_value(&text, path);
     }
-    let doc = JsonDocument::parse(&message.text()).map_err(|e| e.to_string())?;
+    if let Some(path) = path.strip_prefix("asXml.") {
+        return xpath::first(&text, path);
+    }
+    let jsonpath = path.starts_with('$');
+    let content_type = message.content_type.as_deref().map(|t| format!(" (`{t}`)")).unwrap_or_default();
+    match response_kind(message.content_type.as_deref(), Some(&text)) {
+        ResponseKind::Xml if jsonpath => {
+            Err(format!("the body is XML{content_type}, so it takes an XPath, not the JSONPath `{path}`"))
+        }
+        ResponseKind::Json if !jsonpath => {
+            Err(format!("the body is JSON{content_type}, so it takes a JSONPath starting with `$`, not `{path}`"))
+        }
+        _ if jsonpath => json_value(&text, path),
+        _ => xpath::first(&text, path),
+    }
+}
+
+/// The first value JSONPath `path` matches in `text`.
+fn json_value(text: &str, path: &str) -> Result<String, String> {
+    if !path.starts_with('$') {
+        return Err(format!("`{path}` isn't a JSONPath starting with `$`"));
+    }
+    let doc = JsonDocument::parse(text).map_err(|e| e.to_string())?;
     doc.first(path).map_err(|e| e.to_string())?.ok_or_else(|| format!("`{path}` matches nothing"))
 }
 
