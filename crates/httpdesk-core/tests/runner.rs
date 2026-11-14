@@ -310,6 +310,34 @@ async fn with_stop_on_first_failure_a_blocked_send_ends_the_run_too() {
 }
 
 #[tokio::test]
+async fn a_send_blocked_by_an_unsent_request_counts_as_blocked_and_its_pre_request_script_never_runs() {
+    let server = MockServer::start().await;
+    Mock::given(path("/ok")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let text = format!(
+        "< {{%\n\
+         client.global.set(\"touched\", \"yes\");\n\
+         throw new Error(\"the script ran\");\n\
+         %}}\n\
+         GET {uri}/ok?token={{{{nobody.response.body.$.token}}}}\n\
+         \n\
+         ###\n\
+         # @name nobody\n\
+         GET {uri}/ok\n",
+        uri = server.uri()
+    );
+    let session = Arc::new(Session::default());
+    let mut requests = Outgoing::all_in(Path::new("/ws/api.http"), &parse(&text));
+    requests.truncate(1);
+
+    let report = run::run(&context(&session), requests, RunOptions::default(), &Cancel::default(), |_, _| {}).await;
+
+    let failure = report.requests[0].failure.as_ref().expect("it failed");
+    assert_eq!(failure.reason, run::Reason::Blocked, "{failure:?}");
+    assert!(failure.message.contains("`nobody`"), "{failure:?}");
+    assert_eq!(session.globals().get("touched"), None);
+}
+
+#[tokio::test]
 async fn a_cookie_set_in_one_file_is_sent_by_the_next_file_of_the_run() {
     let server = MockServer::start().await;
     Mock::given(path("/login"))

@@ -240,6 +240,13 @@ impl Resolver {
         self
     }
 
+    /// A Resolver with only this one's Request variables: every other reference is
+    /// left as written, and dynamic variables aren't generated. What reading the
+    /// Request variables a request writes, and nothing else, takes.
+    pub(crate) fn request_variables_only(&self) -> Resolver {
+        Resolver { exchanges: self.exchanges.clone(), ..Default::default() }.previewing()
+    }
+
     /// For the resolved preview: dynamic variables that would generate a new value
     /// on every send (`$uuid`, `$timestamp`, `$random…`) are not generated. They
     /// resolve to placeholders that [`Resolver::replace_placeholders`] turns back

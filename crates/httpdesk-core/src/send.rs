@@ -1,11 +1,17 @@
 //! One send, the way every send goes, whether the user sent the request or a Run did:
-//! resolve (blocking on unsent or unmatched Request variables) → pre-request script →
-//! prepare → execute with the Session's cookie jar → response handler → record the
-//! named request's exchange in the Session.
+//! 1. resolve the Request variables the request writes, blocking on unsent or
+//!    unmatched ones. Nothing has run yet: not even an untrusted workspace is reported;
+//! 2. the pre-request script, which may set variables the request uses;
+//! 3. resolve the rest and prepare (blocking on an Undefined variable in the host,
+//!    and on Request variables inside other variables' values);
+//! 4. execute with the Session's cookie jar;
+//! 5. the response handler;
+//! 6. record the named request's exchange in the Session.
 //!
 //! The shell's `send_request` and `run_requests` both send through [`send`], so a
 //! step added here applies to both. The shell keeps only what is the UI's: the body
-//! store, cancellation and events.
+//! store, cancellation and events. Cancelling a send (dropping its future) also stops
+//! a script it is running.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,7 +23,7 @@ use crate::env::{self, EnvironmentSet};
 use crate::exchange;
 use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse};
 use crate::model::{HttpFile, Request, Variable};
-use crate::script;
+use crate::script::{self, RequestScripts};
 use crate::session::{GlobalVariables, Session};
 use crate::vars::Resolver;
 
@@ -104,6 +110,8 @@ pub struct RequestScope {
     /// The environment's variables, private ones included: what a pre-request
     /// script's `request.environment.get` reads.
     pub environment: HashMap<String, String>,
+    /// The names in `environment` whose value is a Secret for this request.
+    secrets: Vec<String>,
 }
 
 /// What `out` is sent with: the variables (its folder's environment from disk, the
@@ -135,7 +143,7 @@ pub fn scope(
     let secrets = secret_names(&env_set, environment, out);
     let answers = out.request_key.as_deref().map(|k| session.prompt_answers().get(k)).unwrap_or_default();
     let resolver = Resolver::for_request(&env_vars, &out.file_variables, &request.variables, Some(&base_dir))
-        .with_secrets(secrets)
+        .with_secrets(secrets.clone())
         .with_globals(session.globals().list())
         .with_prompts(&request.prompts(), &answers)
         .with_request_variables(match &out.file_path {
@@ -143,7 +151,7 @@ pub fn scope(
             // Unsaved nowhere: its named requests have no exchanges.
             None => out.request_names.iter().map(|n| (n.clone(), None)).collect(),
         });
-    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
+    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars, secrets })
 }
 
 /// The folder `out`'s relative paths start from: its file's, else the root.
@@ -166,16 +174,12 @@ fn secret_names(env_set: &EnvironmentSet, environment: Option<&str>, out: &Outgo
         .collect()
 }
 
-/// The values of the Secrets `out` is sent with (see [`scope`]), for what must never
-/// show them (a Run's export). Empty ones are left out: there's nothing to hide.
-pub fn secret_values(root: Option<&Path>, environment: Option<&str>, out: &Outgoing) -> Vec<String> {
-    let Some(root) = root else { return Vec::new() };
-    let Ok(env_set) = env::load_for(root, &base_dir(Some(root), out)) else { return Vec::new() };
-    let vars = env::variables(&env_set, environment);
-    secret_names(&env_set, environment, out)
-        .into_iter()
-        .filter_map(|n| vars.get(&n).filter(|v| !v.is_empty()).cloned())
-        .collect()
+impl RequestScope {
+    /// The values of the Secrets the request is sent with, for what must never show
+    /// them (a Run's export). Empty ones are left out: there's nothing to hide.
+    pub fn secret_values(&self) -> Vec<String> {
+        self.secrets.iter().filter_map(|n| self.environment.get(n).filter(|v| !v.is_empty()).cloned()).collect()
+    }
 }
 
 /// A folder as the UI names it: relative to the workspace root with a trailing `/`
@@ -188,10 +192,8 @@ fn folder_label(root: &Path, dir: &Path) -> String {
 }
 
 /// The warning on a response whose request has scripts that were skipped, naming them.
-fn scripts_skipped(request: &Request) -> String {
-    let pre = !request.pre_request_parts().is_empty();
-    let handler = request.response_handler_parts().iter().any(|p| p.is_script());
-    let skipped = match (pre, handler) {
+fn scripts_skipped(scripts: RequestScripts) -> String {
+    let skipped = match (scripts.pre_request, scripts.handler) {
         (true, true) => "the pre-request script and the response handler",
         (true, false) => "the pre-request script",
         _ => "the response handler",
@@ -220,14 +222,17 @@ async fn run_pre_request(
 /// received so far (see [`exec::execute_on`]). Dropping the future cancels the send;
 /// a cancelled send records nothing in the Session.
 pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usize) + Send) -> Result<Sent, ExecError> {
-    let has_scripts = script::has_scripts(&out.request);
-    let run_scripts = has_scripts && ctx.scripts != Scripts::Skip;
-    if run_scripts && ctx.scripts == Scripts::Untrusted {
-        return Err(ExecError::UntrustedWorkspace);
-    }
+    let scripts = RequestScripts::of(&out.request);
+    let run_scripts = scripts.any() && ctx.scripts != Scripts::Skip;
 
     let (prepared, ssl, pre, files) = {
         let scope = scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, &out)?;
+        // Blocked before anything runs: no script can define a Request variable, so
+        // none can unblock it, and asking to trust the workspace wouldn't either.
+        exec::check_request_variables(&out.request, &scope.resolver)?;
+        if run_scripts && ctx.scripts == Scripts::Untrusted {
+            return Err(ExecError::UntrustedWorkspace);
+        }
         // Script files are read relative to the `.http` file, from inside the workspace.
         let files = script::ScriptFiles::new(ctx.root.as_deref(), &scope.base_dir);
         // JetBrains order: the pre-request script runs before variables are substituted.
@@ -241,8 +246,8 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         let resolver = scope.resolver.with_pre_request_variables(&pre.variables).with_globals(globals.list());
         let mut prepared = exec::prepare(&out.request, &resolver, &scope.base_dir, &ctx.settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
-        if has_scripts && !run_scripts {
-            prepared.warnings.push(scripts_skipped(&out.request));
+        if scripts.any() && !run_scripts {
+            prepared.warnings.push(scripts_skipped(scripts));
         }
         let ssl = match (&ctx.root, &ctx.environment) {
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),

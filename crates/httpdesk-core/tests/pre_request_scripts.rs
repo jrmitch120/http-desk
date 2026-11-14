@@ -4,10 +4,13 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use httpdesk_core::env::SslConfig;
-use httpdesk_core::exec::{execute, prepare, ExecError, ExecSettings};
+use httpdesk_core::exec::{execute, prepare, ClientPool, ExecError, ExecSettings};
 use httpdesk_core::script::{run_pre_request_script, ScriptFiles};
+use httpdesk_core::send::{self, Outgoing, Scripts, SendContext};
+use httpdesk_core::session::Session;
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::*;
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -316,4 +319,87 @@ async fn the_response_api_is_not_there_before_the_request_is_sent() {
     let (message, line) =
         script_error(send(&server, "< {% response.status; %}\nGET <server>/x\n", &env(&[])).await.unwrap_err());
     assert_eq!((message.as_str(), line), ("ReferenceError: response is not defined", Some(1)));
+}
+
+// ---------------------------------------------------------------- the order of a send (`send::send`)
+
+fn context(session: &Arc<Session>, scripts: Scripts) -> SendContext {
+    SendContext {
+        root: None,
+        environment: None,
+        settings: ExecSettings::default(),
+        scripts,
+        session: session.clone(),
+        clients: ClientPool::default(),
+    }
+}
+
+/// Sends request `index` of `text` (the file at `/ws/api.http`) the way every send goes.
+async fn send_through(ctx: &SendContext, text: &str, index: usize) -> Result<send::Sent, ExecError> {
+    send::send(ctx, Outgoing::all_in(Path::new("/ws/api.http"), &parse(text)).remove(index), |_| {}).await
+}
+
+/// A file whose second request reads `login`'s exchange at `path`, and has a
+/// pre-request script that sets a Global variable, then throws.
+fn reader_of_login(server: &MockServer, path: &str) -> String {
+    format!(
+        "# @name login\n\
+         POST {uri}/login\n\
+         \n\
+         ###\n\
+         < {{%\n\
+         client.global.set(\"touched\", \"yes\");\n\
+         throw new Error(\"the script ran\");\n\
+         %}}\n\
+         GET {uri}/me?token={{{{login.response.{path}}}}}\n",
+        uri = server.uri()
+    )
+}
+
+#[tokio::test]
+async fn a_send_blocked_by_an_unsent_request_runs_no_pre_request_script() {
+    let server = server().await;
+    let session = Arc::new(Session::default());
+
+    let error = send_through(&context(&session, Scripts::Run), &reader_of_login(&server, "body.$.token"), 1).await;
+
+    assert!(matches!(&error, Err(ExecError::UnsentRequest(names)) if names == &["login"]), "{:?}", error.err());
+    assert_eq!(session.globals().get("touched"), None, "no client.global.set");
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_send_blocked_by_a_path_that_matches_nothing_runs_no_pre_request_script() {
+    let server = server().await;
+    let session = Arc::new(Session::default());
+    let ctx = context(&session, Scripts::Run);
+    let text = reader_of_login(&server, "headers.X-Nope");
+    send_through(&ctx, &text, 0).await.unwrap();
+
+    let error = send_through(&ctx, &text, 1).await;
+
+    assert!(matches!(&error, Err(ExecError::UnmatchedPath(_))), "{:?}", error.err());
+    assert_eq!(session.globals().get("touched"), None, "no client.global.set");
+}
+
+#[tokio::test]
+async fn in_an_untrusted_workspace_a_send_blocked_by_an_unsent_request_reports_the_block_not_the_trust() {
+    let server = server().await;
+    let session = Arc::new(Session::default());
+
+    let error =
+        send_through(&context(&session, Scripts::Untrusted), &reader_of_login(&server, "body.$.token"), 1).await;
+
+    assert!(matches!(&error, Err(ExecError::UnsentRequest(_))), "{:?}", error.err());
+}
+
+#[tokio::test]
+async fn a_pre_request_script_still_defines_a_name_the_url_uses() {
+    let server = server().await;
+    let session = Arc::new(Session::default());
+    let text = format!("< {{% request.variables.set(\"id\", \"7\"); %}}\nGET {}/pets/{{{{id}}}}\n", server.uri());
+
+    send_through(&context(&session, Scripts::Run), &text, 0).await.unwrap();
+
+    assert_eq!(received(&server).await.url.path(), "/pets/7");
 }

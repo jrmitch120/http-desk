@@ -70,10 +70,30 @@ pub struct ScriptResults {
     pub logs: Vec<String>,
 }
 
-/// Whether sending `request` would run any script, which only a Trusted
-/// workspace may do.
+/// Which scripts sending a request would run, which only a Trusted workspace may do.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RequestScripts {
+    pub pre_request: bool,
+    /// A response handler that runs (a `>>` redirect alone doesn't).
+    pub handler: bool,
+}
+
+impl RequestScripts {
+    pub fn of(request: &Request) -> Self {
+        RequestScripts {
+            pre_request: !request.pre_request_parts().is_empty(),
+            handler: request.response_handler_parts().iter().any(HandlerPart::is_script),
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.pre_request || self.handler
+    }
+}
+
+/// Whether sending `request` would run any script (see [`RequestScripts`]).
 pub fn has_scripts(request: &Request) -> bool {
-    !request.pre_request_parts().is_empty() || request.response_handler_parts().iter().any(HandlerPart::is_script)
+    RequestScripts::of(request).any()
 }
 
 /// What a request's pre-request script produced: the values it set with

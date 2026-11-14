@@ -379,6 +379,18 @@ fn request_variable_errors(resolver: &Resolver) -> Result<(), ExecError> {
     Ok(())
 }
 
+/// Fails when a Request variable written in `req` blocks its send (see
+/// [`request_variable_errors`]): the check a send makes before its pre-request script
+/// runs. Only these count, because a script can't define them, so the script can't
+/// change the answer. Every other reference, Request variables inside other
+/// variables' values included, is checked by [`prepare`], after the script.
+pub fn check_request_variables(req: &Request, resolver: &Resolver) -> Result<(), ExecError> {
+    let only = resolver.request_variables_only();
+    let _ = head(req, &only);
+    let _ = build_body(&req.body, &only, &|_| Ok(Vec::new()));
+    request_variable_errors(&only)
+}
+
 fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
     let errors = resolver.errors();
     if errors.is_empty() {

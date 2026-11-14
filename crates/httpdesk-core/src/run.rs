@@ -118,7 +118,8 @@ pub async fn run(
             return RunReport { cancelled: true, requests: reports };
         }
         on_event(index, RunEvent::Sending);
-        let secrets = Secrets::new(send::secret_values(root, ctx.environment.as_deref(), &out));
+        let scope = send::scope(root, ctx.environment.as_deref(), &ctx.session, &out);
+        let secrets = Secrets::new(scope.map(|s| s.secret_values()).unwrap_or_default());
         let result = tokio::select! {
             result = send::send(ctx, out, |_| {}) => result,
             _ = cancel.cancelled() => {
@@ -129,18 +130,19 @@ pub async fn run(
         };
         let event = match result {
             Ok(sent) => {
-                let failed = failed(&sent.response);
-                reports[index].sent(&sent.response, failed, &secrets);
-                RunEvent::Sent { sent: Box::new(sent), failed }
+                let failing = failed(&sent.response);
+                reports[index].sent(&sent.response, failing, &secrets);
+                RunEvent::Sent { sent: Box::new(sent), failed: failing }
             }
             Err(e) => {
                 reports[index].failed(&e, &secrets);
                 RunEvent::Failed(e)
             }
         };
-        let failed = matches!(event, RunEvent::Sent { failed: true, .. } | RunEvent::Failed(_));
+        let ends_run =
+            options.stop_on_failure && matches!(event, RunEvent::Sent { failed: true, .. } | RunEvent::Failed(_));
         on_event(index, event);
-        if failed && options.stop_on_failure {
+        if ends_run {
             break;
         }
     }
