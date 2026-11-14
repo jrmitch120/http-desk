@@ -60,6 +60,26 @@ describe("send error hints", () => {
     expect(sendErrorFix(e)).toBeNull();
   });
 
+  it("tells a Request variable of a request never sent apart from an undefined one", () => {
+    expect(describeSendError(err({ kind: "unsentRequest", details: { names: ["login"] } }))).toEqual({
+      heading: "Request not sent in this Session",
+      hint: "This request reads the response of `login`, so send `login` first. Nothing is sent on its own.",
+    });
+    expect(describeSendError(err({ kind: "unsentRequest", details: { names: ["login", "profile"] } })).hint).toBe(
+      "This request reads the responses of `login` and `profile`, so send them first. Nothing is sent on its own.",
+    );
+  });
+
+  it("names the exchange a Request variable's path matched nothing in, and when it arrived", () => {
+    const received = new Date(2026, 10, 13, 9, 5, 7).toISOString();
+    const e = err({ kind: "unmatchedPath", details: { paths: [{ reference: "login.response.body.$.tok", request: "login", received, reason: "`$.tok` matches nothing" }] } });
+    expect(describeSendError(e)).toEqual({
+      heading: "A Request variable matched nothing",
+      hint: `Looked in the latest exchange of \`login\`, received at ${new Date(received).toLocaleTimeString()}. Check the path, or send \`login\` again if its response has changed.`,
+    });
+    expect(sendErrorFix(e)).toBeNull();
+  });
+
   it("adds nothing to an invalid URL or an unreadable file: the message says it all", () => {
     expect(describeSendError(err({ kind: "invalidUrl", details: { url: "http://[x", reason: "invalid IPv6" } })).hint).toBeNull();
     expect(describeSendError(err({ kind: "file", details: { path: "/a.json", reason: "not found" } })).hint).toBeNull();
@@ -116,7 +136,7 @@ describe("toSendError", () => {
 });
 
 describe("sendErrorFix", () => {
-  const actions = () => ({ openSettings: vi.fn(), showRequestSettings: vi.fn(), chooseEnvironment: vi.fn() });
+  const actions = () => ({ openSettings: vi.fn(), showRequestSettings: vi.fn(), chooseEnvironment: vi.fn(), sendFirst: vi.fn() });
 
   it("opens the TLS settings for a TLS error", () => {
     const a = actions();
@@ -142,6 +162,14 @@ describe("sendErrorFix", () => {
     expect(fix.label).toBe("Choose environment");
     fix.run(a, "t1");
     expect(a.chooseEnvironment).toHaveBeenCalled();
+  });
+
+  it("sends the first unsent request for a Request variable of one never sent", () => {
+    const a = actions();
+    const fix = sendErrorFix(err({ kind: "unsentRequest", details: { names: ["login", "profile"] } }))!;
+    expect(fix.label).toBe("Send `login` first");
+    fix.run(a, "t1");
+    expect(a.sendFirst).toHaveBeenCalledWith("t1", "login");
   });
 
   it("offers nothing but Retry for the other kinds", () => {

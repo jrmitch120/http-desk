@@ -149,3 +149,18 @@ fn trust_is_never_written_into_the_workspace() {
         std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(names, ["api.http"]);
 }
+
+#[test]
+fn the_response_carries_what_its_handler_logged() {
+    let h = Harness::new();
+    let (url, _) = json_server(r#"{"ok":true}"#);
+    let (_ws, root, request) = workspace(&h, &url);
+    h.ok("trust_workspace", json!({}));
+    let mut logging = request.clone();
+    logging["responseHandler"] =
+        json!("> {%\n  client.log(\"status\", response.status);\n  client.log(response.body);\n%}");
+    logging["raw"] = Value::Null;
+    let response = send(&h, &root, &logging, None).unwrap();
+    assert_eq!(response["logs"], json!(["status 200", r#"{"ok":true}"#]));
+    assert_eq!(response["tests"], json!([]));
+}

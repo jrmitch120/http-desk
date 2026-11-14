@@ -23,9 +23,11 @@ import {
   customMethod,
   requestPrompts,
   promptMasked,
+  requestNames,
   type BulkRow,
   type MultipartPart,
 } from "./http";
+import type { HttpFile } from "./types";
 
 describe("URL ⇄ query params", () => {
   it("composes only active params", () => {
@@ -433,6 +435,14 @@ describe("custom methods", () => {
 
   it("rejects text the .http parser wouldn't read back as a method", () => {
     for (const t of ["", " ", "bad method", "pur/ge", "2PUT", "-X", "ÜBER", "{{m}}"]) expect(customMethod(t)).toBeNull();
+  });
+});
+
+describe("requestNames", () => {
+  it("lists each # @name once, in order, and never ### text", () => {
+    const req = (title: string, name?: string) => ({ ...newRequest(), name: title, directives: name === undefined ? [] : [{ name: "name", value: name }] });
+    const file: HttpFile = { header: { comments: [], variables: [], raw: null }, requests: [req("", "login"), req("only hashes"), req("", " me "), req("", "login"), req("", "")], trailing: "", lineEnding: "lf", bom: false };
+    expect(requestNames(file)).toEqual(["login", "me"]);
   });
 });
 

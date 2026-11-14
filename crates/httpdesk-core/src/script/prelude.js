@@ -3,7 +3,7 @@
 // Evaluated once per script context, before the user's script, as a function
 // the engine (src/script.rs) calls with:
 //   host: Rust functions this API is built on (`host.test(name, passed, message)`,
-//         `host.setVariable(name, value)`)
+//         `host.log(line)`, `host.setVariable(name, value)`)
 //   data: the exchange as plain JSON. A response handler gets { response: { status,
 //         headers, body, json, mimeType, charset } }, a pre-request script gets
 //         { request: { environment, variables } } (name → value objects); both
@@ -61,6 +61,20 @@
     return String(e);
   }
 
+  // How `client.log` writes a value: text as it is, objects as JSON where they
+  // can be, anything else as JavaScript would print it.
+  function logText(v) {
+    if (typeof v === "string") return v;
+    if (typeof v === "object" && v !== null) {
+      try {
+        return JSON.stringify(v);
+      } catch (_) {
+        // A cycle or a BigInt inside: fall through to String.
+      }
+    }
+    return String(v);
+  }
+
   let testDepth = 0;
 
   const client = {
@@ -86,7 +100,9 @@
       host.test(text, !!condition, condition ? null : text);
     },
     global: unsupportedNamespace("client.global"),
-    log: unsupported("client.log"),
+    log(...values) {
+      host.log(values.map(logText).join(" "));
+    },
     exit: unsupported("client.exit"),
   };
 

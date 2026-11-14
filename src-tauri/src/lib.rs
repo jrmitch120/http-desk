@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
+use httpdesk_core::exchange;
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
@@ -484,7 +485,9 @@ struct SendProgress {
 
 /// What a request is sent with: the variables (its folder's environment from disk,
 /// then File variables, then its own, then the Prompt variable answers the Session
-/// holds for `request_key`), the folder its relative paths start from, and a warning
+/// holds for `request_key`), the Request variables of its file's named requests
+/// (`request_names`, read from their latest exchanges in the Session), the folder its
+/// relative paths start from, and a warning
 /// when its folder doesn't define the selected environment (it's then sent with
 /// none: ADR-0004).
 /// Shared by send and preview so the two can't disagree.
@@ -497,6 +500,8 @@ struct RequestScope {
     environment: HashMap<String, String>,
 }
 
+// One argument per input of the scope, as the IPC calls give them (`RequestArgs`).
+#[allow(clippy::too_many_arguments)]
 fn request_resolver(
     root: Option<&Path>,
     request: &Request,
@@ -505,6 +510,7 @@ fn request_resolver(
     environment: Option<&str>,
     session: &Session,
     request_key: Option<&str>,
+    request_names: &[String],
 ) -> Result<RequestScope, ExecError> {
     let base_dir = file_path
         .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -528,7 +534,12 @@ fn request_resolver(
         .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
     let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
         .with_secrets(secrets)
-        .with_prompts(&request.prompts(), &request_key.map(|k| session.prompt_answers().get(k)).unwrap_or_default());
+        .with_prompts(&request.prompts(), &request_key.map(|k| session.prompt_answers().get(k)).unwrap_or_default())
+        .with_request_variables(match file_path {
+            Some(file) => session.exchanges().for_file(file, request_names),
+            // Unsaved nowhere: its named requests have no exchanges.
+            None => request_names.iter().map(|n| (n.clone(), None)).collect(),
+        });
     Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
 }
 
@@ -551,6 +562,7 @@ async fn preview_request<R: tauri::Runtime>(
     file_variables: Vec<Variable>,
     environment: Option<String>,
     request_key: Option<String>,
+    request_names: Option<Vec<String>>,
 ) -> CmdResult<exec::RequestPreview> {
     off_main(app, move |state| {
         let root = state.root.lock().unwrap().clone();
@@ -562,6 +574,7 @@ async fn preview_request<R: tauri::Runtime>(
             environment.as_deref(),
             &state.session(),
             request_key.as_deref(),
+            &request_names.unwrap_or_default(),
         )
         .map_err(err)?;
         let mut preview = exec::preview(&request, scope.resolver);
@@ -612,6 +625,7 @@ async fn send_request<R: tauri::Runtime>(
     file_variables: Vec<Variable>,
     environment: Option<String>,
     request_key: Option<String>,
+    request_names: Option<Vec<String>>,
     skip_scripts: Option<bool>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
@@ -636,6 +650,7 @@ async fn send_request<R: tauri::Runtime>(
             environment.as_deref(),
             &session,
             request_key.as_deref(),
+            &request_names.unwrap_or_default(),
         )?;
         // JetBrains order: the pre-request script runs before variables are substituted.
         let pre = if run_scripts { run_pre_request(&request, &scope.environment).await? } else { Default::default() };
@@ -652,14 +667,18 @@ async fn send_request<R: tauri::Runtime>(
         (prepared, ssl, pre.results)
     };
 
+    // A `# @name` request's exchange becomes its latest, in the Session the send started in.
+    let pending = exchange::begin(file_path.as_deref(), &request, &prepared);
     let progress_id = run_id.clone();
     let on_progress = move |received| {
         let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    // Each send gets a client no other send is using (see ClientPool).
+    // Each send gets a client no other send is using (see ClientPool), and uses the
+    // cookie jar of the Session it started in.
     let client = state.clients.checkout(&prepared, &settings, &ssl)?;
+    let jar = session.cookies().clone();
     let task = tokio::spawn(async move {
-        let mut outcome = exec::execute_on(&client, prepared, &settings, on_progress).await?;
+        let mut outcome = exec::execute_on(&client, prepared, &settings, Some(&jar), on_progress).await?;
         if run_scripts {
             // Up to the script time limit of CPU work: off the async workers.
             let handled = tokio::task::spawn_blocking(move || {
@@ -681,7 +700,11 @@ async fn send_request<R: tauri::Runtime>(
         Ok(Ok(outcome)) => {
             let response = outcome.response;
             let (id, content_type) = (response.id.clone(), response.content_type.clone());
-            let body = KeptBody { bytes: outcome.body.into(), content_type, kind: response.body_kind };
+            let bytes: Arc<[u8]> = outcome.body.into();
+            if let Some(pending) = pending {
+                pending.finish(session.exchanges(), &response, bytes.clone());
+            }
+            let body = KeptBody { bytes, content_type, kind: response.body_kind };
             state.bodies.lock().unwrap().push(id, body);
             Ok(response)
         }
