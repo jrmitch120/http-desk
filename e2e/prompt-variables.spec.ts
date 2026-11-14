@@ -1,9 +1,10 @@
 // #89: Prompt variables (`# @prompt name [description]`, VS Code REST Client).
 // Sending asks once for every unanswered one, and the values are remembered per
-// request for the app session only. `?prompts=` makes the mock declare them on
-// pets.http's "List pets" (GET {{baseUrl}}/pets?limit=20, `local` selected).
+// request in the workspace's Session (#130), until another workspace opens or the
+// app quits. `?prompts=` makes the mock declare them on pets.http's "List pets"
+// (GET {{baseUrl}}/pets?limit=20, `local` selected).
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, urlBar } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, urlBar } from "./helpers";
 
 const PROMPTS = `?prompts=${encodeURIComponent("baseUrl Where to send it;pass")}`;
 const form = (page: Page) => dialog(page, "Values for this request");
@@ -68,4 +69,22 @@ test("the resolved preview shows remembered values, and Forget prompted values a
   await page.locator(".subtab", { hasText: "Settings" }).click();
   await expect(page.getByText("# @prompt pass", { exact: true })).toBeVisible();
   await expect(page.getByText("# @prompt baseUrl Where to send it", { exact: true })).toBeVisible();
+});
+
+test("opening another workspace forgets every prompted value", async ({ page }) => {
+  await openApp(page, `${PROMPTS}&recent=/work/shop`);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await answer(page, "http://typed.example", "s3cret");
+  await expect.poll(async () => (await sentPrompts(page)).length).toBe(1);
+
+  // The mock opens the demo workspace again, as a new one with a new Session.
+  await menuClick(page, "open-recent:/work/shop");
+  await expect.poll(() => mockState(page, "settings").then((s) => s.recentWorkspaces[0])).toBe("/work/shop");
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await expect(urlBar(page).locator(".cm-var-prompt")).toHaveText("{{baseUrl}}");
+  await send(page);
+  await expect(form(page)).toBeVisible();
+  await form(page).getByRole("button", { name: "Cancel" }).click();
+  expect(await sentPrompts(page)).toHaveLength(1);
 });

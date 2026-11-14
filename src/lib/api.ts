@@ -30,8 +30,8 @@ export type RequestArgs = {
   filePath: string | null;
   fileVariables: Variable[];
   environment: string | null;
-  /** Values remembered for the request's Prompt variables, by name. Never written anywhere. */
-  promptValues: Record<string, string>;
+  /** The request's key (`_key`): its Prompt variables take the answers the Session holds for it. */
+  requestKey: string;
 };
 
 /** Which form of a stored response body `api.responseBody` fetches. */
@@ -67,6 +67,12 @@ export const api = {
   /** What `sendRequest` with the same arguments would send, without sending it. */
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
+  /** The answers the workspace's Session holds for a request's Prompt variables, by name. */
+  promptAnswers: (requestKey: string) => invoke<Record<string, string>>("prompt_answers", { requestKey }),
+  /** Has the Session remember answers to a request's Prompt variables (in memory only). */
+  answerPrompts: (requestKey: string, answers: Record<string, string>) => invoke<void>("answer_prompts", { requestKey, answers }),
+  /** Forgets a request's Prompt variable answers, so its next send asks again. */
+  forgetPromptAnswers: (requestKey: string) => invoke<void>("forget_prompt_answers", { requestKey }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no

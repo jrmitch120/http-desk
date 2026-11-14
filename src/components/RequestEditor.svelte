@@ -10,6 +10,7 @@
   import type { KeyValue } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
+  import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
@@ -40,6 +41,7 @@
   // The request's own environments: its folder's (ADR-0004). An environment the folder
   // doesn't define gives none, like the send.
   const envSet = $derived(app.envSetFor(tab.path));
+  const answers = promptAnswersOf(() => tab);
   const variables = $derived.by(() => {
     if (!doc) return null;
     const scope = {
@@ -49,7 +51,7 @@
       requestVars: req?.variables ?? [],
       envName: app.envName,
       prompts: req ? requestPrompts(req) : [],
-      answers: app.promptAnswers(tab),
+      answers: answers.current,
     };
     return {
       ...makeVarProvider(scope),

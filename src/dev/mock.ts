@@ -138,7 +138,7 @@ type PreviewArgs = {
   filePath: string | null;
   fileVariables: { name: string; value: string }[];
   environment: string | null;
-  promptValues?: Record<string, string>;
+  requestKey?: string;
 };
 /**
  * A rough stand-in for the core's `exec::preview` (tested for real in Rust), resolving
@@ -147,7 +147,8 @@ type PreviewArgs = {
  * marks; a masked prompted value masked, unanswered ones kept as written; query values
  * percent-encoded; the Content-Type the body implies; the default headers.
  */
-function previewRequest({ request: r, filePath, fileVariables, environment, promptValues = {} }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, requestKey }: PreviewArgs) {
+  const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
   const vars = makeVarProvider({ env: envVariables(own, environment), fileVars: fileVariables, requestVars: r.variables, envName: environment, prompts, answers: promptValues });
@@ -308,7 +309,10 @@ if (saved) settings = JSON.parse(saved);
 
 /** Browser tests read this (see `sentRequests` in e2e/helpers.ts). */
 const sent: unknown[] = [];
-/** The `promptValues` each `send_request` got, in order. */
+/** Like the shell's Session: Prompt variable answers by request key. Opening a workspace forgets them. */
+let sessionPrompts = new Map<string, Record<string, string>>();
+const promptAnswers = (requestKey?: string) => ({ ...(requestKey ? sessionPrompts.get(requestKey) : undefined) });
+/** The prompt answers the Session held for each `send_request`'s request, in order. */
 const sentPrompts: Record<string, string>[] = [];
 /** What "Save body to file" wrote, by path. */
 const savedBodies: Record<string, string> = {};
@@ -942,6 +946,7 @@ mockIPC(
         // Like the shell, the opened folder goes to the top of the recent workspaces
         // (the mock always opens the demo workspace, though).
         settings.recentWorkspaces = [args.path, ...settings.recentWorkspaces.filter((p: string) => p !== args.path)];
+        sessionPrompts = new Map();
         return { root: ROOT, tree, gitignoreUpdated: false };
       case "set_menu":
         menuBar = clone(args.layout);
@@ -1023,12 +1028,20 @@ mockIPC(
       }
       case "find_usages":
         return findUsages(String(args.name), args.open ?? []);
+      case "prompt_answers":
+        return promptAnswers(args.requestKey);
+      case "answer_prompts":
+        sessionPrompts.set(args.requestKey, { ...sessionPrompts.get(args.requestKey), ...args.answers });
+        return null;
+      case "forget_prompt_answers":
+        sessionPrompts.delete(args.requestKey);
+        return null;
       case "cancel_request":
         cancelledRuns.add(args.runId);
         return null;
       case "send_request": {
         sent.push(clone(args.request));
-        sentPrompts.push(clone(args.promptValues ?? {}));
+        sentPrompts.push(promptAnswers(args.requestKey));
         if (slowDownload) {
           for (let i = 1; i <= 20; i++) {
             await delay(100);
