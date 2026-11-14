@@ -1,7 +1,8 @@
 <script lang="ts">
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app } from "../lib/store.svelte";
-  import { menu } from "../lib/menu.svelte";
+  import { menu, type MenuItem } from "../lib/menu.svelte";
+  import { currentOS } from "../lib/platform";
   import { basename, displayName, joinPath } from "../lib/http";
   import type { TreeNode } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
@@ -35,6 +36,7 @@
       menu.show(e, [
         { label: "New .http file", icon: "plus", action: () => app.createFile(node.path) },
         { label: "New folder", icon: "folder", action: () => app.createFolder(node.path) },
+        { label: "Run folder", icon: "send", disabled: app.running, action: () => app.runFolder(node.path) },
         { separator: true },
         { label: "Rename…", icon: "edit", action: () => app.renamePath(node.path) },
         { label: wording().reveal, icon: "reveal", action: reveal },
@@ -55,9 +57,28 @@
     }
   }
 
+  /** Opens the request, which becomes the explorer's selection. */
+  function openRequest(key: string) {
+    app.selectRequest(node.path, key, "only");
+    app.openRequest(node.path, { key });
+  }
+
+  /** ⌘-click (Ctrl-click off macOS) toggles the request in the selection and Shift-click
+   *  selects a range, neither opening it; a plain click opens it. */
+  function clickRequest(e: MouseEvent, key: string) {
+    if (currentOS() === "mac" ? e.metaKey : e.ctrlKey) app.selectRequest(node.path, key, "toggle");
+    else if (e.shiftKey) app.selectRequest(node.path, key, "range");
+    else openRequest(key);
+  }
+
   function requestMenu(e: MouseEvent, key: string) {
+    // A request that's part of the selection can run it (GLOSSARY "Run").
+    const runSelection: MenuItem[] = app.isTreeSelected(node.path, key)
+      ? [{ label: "Run selection", icon: "send", disabled: app.running, action: () => app.runSelection() }]
+      : [];
     menu.show(e, [
       { label: "Open", icon: "send", action: () => app.openRequest(node.path, { key }) },
+      ...runSelection,
       { label: "Rename…", icon: "edit", action: () => app.renameRequest(node.path, key) },
       { label: "Duplicate", icon: "copy", action: () => app.duplicateRequest(node.path, key) },
       { separator: true },
@@ -124,18 +145,22 @@
   {:else if doc}
     {#each doc.file.requests as req (req._key)}
       {@const active = app.activeTab?.path === node.path && app.activeTab?.key === req._key}
+      {@const selected = app.isTreeSelected(node.path, req._key!)}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="row-item req"
         data-testid="req-{displayName(req)}"
+        data-file={node.path}
+        data-key={req._key}
         class:active
+        class:selected
         style:padding-left="{pad + 26}px"
         role="treeitem"
-        aria-selected={active}
+        aria-selected={selected}
         aria-level={depth + 2}
         tabindex="-1"
-        onclick={() => app.openRequest(node.path, { key: req._key })}
-        onkeydown={(e) => e.key === "Enter" && app.openRequest(node.path, { key: req._key })}
+        onclick={(e) => clickRequest(e, req._key!)}
+        onkeydown={(e) => e.key === "Enter" && openRequest(req._key!)}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
         <Badge method={req.method} />
@@ -170,8 +195,11 @@
   .row-item:focus-visible {
     background: var(--hover);
   }
-  .row-item.active {
+  .row-item.selected {
     background: var(--accent-soft);
+    color: var(--text);
+  }
+  .row-item.active {
     border-left-color: var(--accent);
     color: var(--text);
   }

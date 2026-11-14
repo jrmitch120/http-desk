@@ -54,7 +54,23 @@ async fn run_file_cancelling(
     on_event: impl Fn(usize, &Reported) + Send,
 ) -> Vec<(usize, Reported)> {
     let file = parse(text);
-    let items = Outgoing::all_in(Path::new("/ws/api.http"), &file);
+    run_outgoing(session, Outgoing::all_in(Path::new("/ws/api.http"), &file), options, cancel, on_event).await
+}
+
+/// Runs every request of each `(path, text)` file, the files in the order given (as a
+/// folder's run does), returning what the run reported.
+async fn run_files(session: &Arc<Session>, files: &[(&str, &str)]) -> Vec<(usize, Reported)> {
+    let items = files.iter().flat_map(|(at, text)| Outgoing::all_in(Path::new(at), &parse(text))).collect();
+    run_outgoing(session, items, RunOptions::default(), &Cancel::default(), |_, _| {}).await
+}
+
+async fn run_outgoing(
+    session: &Arc<Session>,
+    items: Vec<Outgoing>,
+    options: RunOptions,
+    cancel: &Cancel,
+    on_event: impl Fn(usize, &Reported) + Send,
+) -> Vec<(usize, Reported)> {
     let events = Mutex::new(Vec::new());
     run::run(&context(session), items, options, cancel, |i, event| {
         let reported = match event {
@@ -291,4 +307,78 @@ async fn with_stop_on_first_failure_a_blocked_send_ends_the_run_too() {
     assert_eq!(events.len(), 2, "{events:?}");
     assert!(matches!(&events[1], (0, Reported::Failed(_))), "{events:?}");
     assert!(received(&server, "/ok").await.is_empty(), "nothing after the blocked request is sent");
+}
+
+#[tokio::test]
+async fn a_cookie_set_in_one_file_is_sent_by_the_next_file_of_the_run() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", "sid=abc123; Path=/"))
+        .mount(&server)
+        .await;
+    Mock::given(path("/me")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let auth = format!("POST {uri}/login\n", uri = server.uri());
+    let users = format!("GET {uri}/me\n", uri = server.uri());
+
+    run_files(&Arc::new(Session::default()), &[("/ws/auth.http", &auth), ("/ws/users.http", &users)]).await;
+
+    let me = received(&server, "/me").await.pop().unwrap();
+    assert_eq!(header(&me, "cookie"), Some("sid=abc123"));
+}
+
+#[tokio::test]
+#[ignore = "Global variables (`client.global`) land with #139"]
+async fn a_global_variable_set_in_one_file_is_read_by_the_next_file_of_the_run() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "token": "abc123" })))
+        .mount(&server)
+        .await;
+    Mock::given(path("/me")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let auth = format!(
+        "POST {uri}/login\n\n> {{% client.global.set(\"token\", response.body.token) %}}\n",
+        uri = server.uri()
+    );
+    let users = format!("GET {uri}/me\nAuthorization: Bearer {{{{token}}}}\n", uri = server.uri());
+
+    let events =
+        run_files(&Arc::new(Session::default()), &[("/ws/auth.http", &auth), ("/ws/users.http", &users)]).await;
+
+    assert_eq!(events[3], (1, Reported::Sent { status: 200, failed: false }));
+    let me = received(&server, "/me").await.pop().unwrap();
+    assert_eq!(header(&me, "authorization"), Some("Bearer abc123"));
+}
+
+#[tokio::test]
+async fn a_request_variable_doesnt_reach_another_file_even_with_the_same_name_earlier_in_the_run() {
+    let server = MockServer::start().await;
+    Mock::given(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "token": "abc123" })))
+        .mount(&server)
+        .await;
+    Mock::given(path("/me")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let auth = format!("# @name login\nPOST {uri}/login\n", uri = server.uri());
+    // users.http names a `login` of its own, which the run hasn't sent when its reader goes.
+    let users = format!(
+        "GET {uri}/me\n\
+         Authorization: Bearer {{{{login.response.body.$.token}}}}\n\
+         \n\
+         ###\n\
+         # @name login\n\
+         POST {uri}/login\n",
+        uri = server.uri()
+    );
+
+    let events =
+        run_files(&Arc::new(Session::default()), &[("/ws/auth.http", &auth), ("/ws/users.http", &users)]).await;
+
+    assert!(
+        matches!(&events[3], (1, Reported::Failed(m)) if m.contains("`login`")),
+        "blocked as unsent: {:?}",
+        events[3]
+    );
+    assert!(
+        received(&server, "/me").await.is_empty(),
+        "the second file's reader isn't sent with the first file's login"
+    );
 }
