@@ -7,14 +7,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use httpdesk_core::body_format::{self, BodyKind, FormatMode};
+use httpdesk_core::cookies::StoredCookie;
 use httpdesk_core::env::{self, EnvironmentSet, SaveReport};
-use httpdesk_core::exchange;
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
-use httpdesk_core::script;
+use httpdesk_core::run::{self, RunEvent};
+use httpdesk_core::script::ScriptFiles;
+use httpdesk_core::send::{self, Outgoing, Scripts, SendContext, Sent};
 use httpdesk_core::session::Session;
-use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
 use httpdesk_core::{HttpFile, Request, Variable};
 use serde::{Deserialize, Serialize};
@@ -83,6 +84,9 @@ struct AppSettings {
     zoom: f64,
     /// The request pane's share of the request/response split, per layout.
     split_ratio: SplitRatio,
+    /// Height in px of the panel area below the requests (the Session panel).
+    #[serde(deserialize_with = "or_default")]
+    panel_height: f64,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
     /// How the Environments modal shows variables.
@@ -148,7 +152,7 @@ struct EnvironmentSettings {
     color: Option<String>,
 }
 
-/// Defaults must match `SIDEBAR`/`SPLIT` in src/lib/panes.ts (src/lib/panes.test.ts checks).
+/// Defaults must match `SIDEBAR`/`SPLIT`/`PANEL` in src/lib/panes.ts (src/lib/panes.test.ts checks).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct SplitRatio {
@@ -177,6 +181,7 @@ impl Default for AppSettings {
             sidebar_hidden: false,
             zoom: 1.0,
             split_ratio: SplitRatio::default(),
+            panel_height: 260.0,
             show_resolved: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
@@ -197,6 +202,8 @@ struct AppState {
     /// What opens script files in the default editor (the OS; tests replace it).
     opener: Opener,
     running: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    /// Runs under way, by run id, to stop them (`cancel_request`).
+    runs: Mutex<HashMap<String, run::Cancel>>,
     /// Idle HTTP clients, so a send can reuse a connection an earlier one left open.
     clients: exec::ClientPool,
     /// The open workspace's Session, in memory only. Opening a workspace replaces it.
@@ -487,73 +494,30 @@ struct SendProgress {
     received: usize,
 }
 
-/// What a request is sent with: the variables (its folder's environment from disk,
-/// then File variables, then its own, then the Prompt variable answers the Session
-/// holds for `request_key`), the Request variables of its file's named requests
-/// (`request_names`, read from their latest exchanges in the Session), the folder its
-/// relative paths start from, and a warning
-/// when its folder doesn't define the selected environment (it's then sent with
-/// none: ADR-0004).
-/// Shared by send and preview so the two can't disagree.
-struct RequestScope {
-    resolver: Resolver,
-    base_dir: PathBuf,
-    env_warning: Option<String>,
-    /// The environment's variables, private ones included: what a pre-request
-    /// script's `request.environment.get` reads.
-    environment: HashMap<String, String>,
+/// What sends and runs share: the open workspace and its settings, whether its scripts
+/// run (trusted, or skipped by the user's choice), the selected environment, and the
+/// Session they start in, which they keep even if another workspace opens meanwhile.
+fn send_context(state: &AppState, environment: Option<String>, skip_scripts: bool) -> SendContext {
+    let root = state.root.lock().unwrap().clone();
+    let (settings, trusted) = {
+        let s = state.settings.lock().unwrap();
+        let trusted = root.as_ref().is_some_and(|r| s.trusted_workspaces.contains(&r.to_string_lossy().into_owned()));
+        (s.exec.clone(), trusted)
+    };
+    let scripts = match (skip_scripts, trusted) {
+        (true, _) => Scripts::Skip,
+        (false, true) => Scripts::Run,
+        (false, false) => Scripts::Untrusted,
+    };
+    SendContext { root, environment, settings, scripts, session: state.session(), clients: state.clients.clone() }
 }
 
-// One argument per input of the scope, as the IPC calls give them (`RequestArgs`).
-#[allow(clippy::too_many_arguments)]
-fn request_resolver(
-    root: Option<&Path>,
-    request: &Request,
-    file_path: Option<&Path>,
-    file_variables: &[Variable],
-    environment: Option<&str>,
-    session: &Session,
-    request_key: Option<&str>,
-    request_names: &[String],
-) -> Result<RequestScope, ExecError> {
-    let base_dir = file_path
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .or_else(|| root.map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let env_set = match root {
-        Some(r) => env::load_for(r, &base_dir).map_err(|e| ExecError::Other(e.to_string()))?,
-        None => EnvironmentSet::default(),
-    };
-    let env_warning = match (root, environment) {
-        (Some(r), Some(name)) if !env_set.environments.iter().any(|e| e.name == name) => Some(format!(
-            "Environment \"{name}\" isn't defined for {}, so it's sent with no environment",
-            folder_label(r, &base_dir)
-        )),
-        _ => None,
-    };
-    let env_vars = env::variables(&env_set, environment);
-    // A File variable of a Secret's name replaces it, so it's no Secret.
-    let secrets = env::secret_names(&env_set, environment)
-        .into_iter()
-        .filter(|n| !file_variables.iter().chain(&request.variables).any(|v| &v.name == n));
-    let resolver = Resolver::for_request(&env_vars, file_variables, &request.variables, Some(&base_dir))
-        .with_secrets(secrets)
-        .with_prompts(&request.prompts(), &request_key.map(|k| session.prompt_answers().get(k)).unwrap_or_default())
-        .with_request_variables(match file_path {
-            Some(file) => session.exchanges().for_file(file, request_names),
-            // Unsaved nowhere: its named requests have no exchanges.
-            None => request_names.iter().map(|n| (n.clone(), None)).collect(),
-        });
-    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars })
-}
-
-/// A folder as the UI names it: relative to the workspace root with a trailing `/`
-/// (`api/users/`), or "the workspace root".
-fn folder_label(root: &Path, dir: &Path) -> String {
-    match env::relative_dir(root, dir) {
-        rel if rel.is_empty() => "the workspace root".into(),
-        rel => format!("{rel}/"),
-    }
+/// Keeps a send's body for the viewer, by response id, until it's released (ADR-0006).
+fn keep_body(state: &AppState, sent: &Sent) {
+    let response = &sent.response;
+    let body =
+        KeptBody { bytes: sent.body.clone(), content_type: response.content_type.clone(), kind: response.body_kind };
+    state.bodies.lock().unwrap().push(response.id.clone(), body);
 }
 
 /// The resolved preview: what `send_request` would send, without sending it (see
@@ -570,54 +534,25 @@ async fn preview_request<R: tauri::Runtime>(
 ) -> CmdResult<exec::RequestPreview> {
     off_main(app, move |state| {
         let root = state.root.lock().unwrap().clone();
-        let scope = request_resolver(
-            root.as_deref(),
-            &request,
-            file_path.as_deref(),
-            &file_variables,
-            environment.as_deref(),
-            &state.session(),
-            request_key.as_deref(),
-            &request_names.unwrap_or_default(),
-        )
-        .map_err(err)?;
-        let mut preview = exec::preview(&request, scope.resolver);
+        let out = Outgoing {
+            request,
+            file_path,
+            file_variables,
+            request_names: request_names.unwrap_or_default(),
+            request_key,
+        };
+        let scope = send::scope(root.as_deref(), environment.as_deref(), &state.session(), &out).map_err(err)?;
+        let mut preview = exec::preview(&out.request, scope.resolver);
         preview.warnings.splice(0..0, scope.env_warning);
         Ok(preview)
     })
     .await
 }
 
-/// The warning on a response whose request has scripts that were skipped, naming them.
-fn scripts_skipped(request: &Request) -> String {
-    let pre = !request.pre_request_parts().is_empty();
-    let handler = request.response_handler_parts().iter().any(|p| p.is_script());
-    let skipped = match (pre, handler) {
-        (true, true) => "the pre-request script and the response handler",
-        (true, false) => "the pre-request script",
-        _ => "the response handler",
-    };
-    format!("Sent without scripts: {skipped} didn't run.")
-}
-
-/// Runs the request's pre-request script, if it has one, off the async workers
-/// (it may take up to the script time limit).
-async fn run_pre_request(
-    request: &Request,
-    environment: &HashMap<String, String>,
-    files: &script::ScriptFiles,
-) -> Result<script::PreRequestResults, ExecError> {
-    if request.pre_request_parts().is_empty() {
-        return Ok(Default::default());
-    }
-    let (request, environment, files) = (request.clone(), environment.clone(), files.clone());
-    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files))
-        .await
-        .map_err(|e| ExecError::Other(e.to_string()))?
-}
-
-/// Unlike other commands, a failed send is a classified `{ kind, message, details }`
-/// object (see `ExecError`), so the viewer can explain it and offer the fix.
+/// Sends one request the way every send goes (`send::send`, shared with runs), and
+/// keeps its body for the viewer. Unlike other commands, a failed send is a
+/// classified `{ kind, message, details }` object (see `ExecError`), so the viewer
+/// can explain it and offer the fix.
 // Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -633,88 +568,22 @@ async fn send_request<R: tauri::Runtime>(
     request_names: Option<Vec<String>>,
     skip_scripts: Option<bool>,
 ) -> Result<HttpResponse, ExecError> {
-    let root = state.root.lock().unwrap().clone();
-    let (settings, trusted) = {
-        let s = state.settings.lock().unwrap();
-        let trusted = root.as_ref().is_some_and(|r| s.trusted_workspaces.contains(&r.to_string_lossy().into_owned()));
-        (s.exec.clone(), trusted)
-    };
-    let session = state.session();
-    let has_scripts = script::has_scripts(&request);
-    let run_scripts = has_scripts && !skip_scripts.unwrap_or(false);
-    if run_scripts && !trusted {
-        return Err(ExecError::UntrustedWorkspace);
-    }
-
-    let (prepared, ssl, pre, files) = {
-        let scope = request_resolver(
-            root.as_deref(),
-            &request,
-            file_path.as_deref(),
-            &file_variables,
-            environment.as_deref(),
-            &session,
-            request_key.as_deref(),
-            &request_names.unwrap_or_default(),
-        )?;
-        // Script files are read relative to the `.http` file, from inside the workspace.
-        let files = script::ScriptFiles::new(root.as_deref(), &scope.base_dir);
-        // JetBrains order: the pre-request script runs before variables are substituted.
-        let pre =
-            if run_scripts { run_pre_request(&request, &scope.environment, &files).await? } else { Default::default() };
-        let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
-        let mut prepared = exec::prepare(&request, &resolver, &scope.base_dir, &settings)?;
-        prepared.warnings.splice(0..0, scope.env_warning);
-        if has_scripts && !run_scripts {
-            prepared.warnings.push(scripts_skipped(&request));
-        }
-        let ssl = match (&root, &environment) {
-            (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
-            _ => Default::default(),
-        };
-        (prepared, ssl, pre.results, files)
-    };
-
-    // A `# @name` request's exchange becomes its latest, in the Session the send started in.
-    let pending = exchange::begin(file_path.as_deref(), &request, &prepared);
+    let ctx = send_context(&state, environment, skip_scripts.unwrap_or(false));
+    let out =
+        Outgoing { request, file_path, file_variables, request_names: request_names.unwrap_or_default(), request_key };
     let progress_id = run_id.clone();
     let on_progress = move |received| {
         let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    // Each send gets a client no other send is using (see ClientPool), and uses the
-    // cookie jar of the Session it started in.
-    let client = state.clients.checkout(&prepared, &settings, &ssl)?;
-    let jar = session.cookies().clone();
-    let task = tokio::spawn(async move {
-        let mut outcome = exec::execute_on(&client, prepared, &settings, Some(&jar), on_progress).await?;
-        if run_scripts {
-            // Up to the script time limit of CPU work: off the async workers.
-            let handled = tokio::task::spawn_blocking(move || {
-                let results = script::run_response_handler(&request, &outcome.response, &outcome.body, &files);
-                // The pre-request script's tests and logs come first.
-                outcome.response.tests = pre.tests.into_iter().chain(results.tests).collect();
-                outcome.response.logs = pre.logs.into_iter().chain(results.logs).collect();
-                outcome
-            });
-            outcome = handled.await.map_err(|e| ExecError::Other(e.to_string()))?;
-        }
-        Ok(outcome)
-    });
+    let task = tokio::spawn(async move { send::send(&ctx, out, on_progress).await });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
 
     match result {
-        Ok(Ok(outcome)) => {
-            let response = outcome.response;
-            let (id, content_type) = (response.id.clone(), response.content_type.clone());
-            let bytes: Arc<[u8]> = outcome.body.into();
-            if let Some(pending) = pending {
-                pending.finish(session.exchanges(), &response, bytes.clone());
-            }
-            let body = KeptBody { bytes, content_type, kind: response.body_kind };
-            state.bodies.lock().unwrap().push(id, body);
-            Ok(response)
+        Ok(Ok(sent)) => {
+            keep_body(&state, &sent);
+            Ok(sent.response)
         }
         Ok(Err(e)) => Err(e),
         Err(e) if e.is_cancelled() => Err(ExecError::Other("Request cancelled".into())),
@@ -722,12 +591,95 @@ async fn send_request<R: tauri::Runtime>(
     }
 }
 
+/// What a Run sends: its requests in order (each as the webview's `RequestArgs`
+/// without the environment: from its open tab's edits, or its file on disk), and the
+/// environment they're all sent with. A Run file, folder or selection differ only in
+/// which requests the webview lists.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunSelection {
+    requests: Vec<Outgoing>,
+    environment: Option<String>,
+}
+
+/// How a Run goes. `skip_scripts`: the user chose to run without scripts (as "Send
+/// without scripts").
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct RunOptions {
+    skip_scripts: bool,
+}
+
+/// Payload of the `run-progress` event: what happened to request `index` of run `run_id`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunProgress {
+    run_id: String,
+    index: usize,
+    #[serde(flatten)]
+    state: RunProgressState,
+}
+
+/// One request's progress in a Run (see `run::RunEvent`): `sending`, then `sent` (with
+/// the response, its body kept for the viewer), `failed` (blocked or no response) or
+/// `cancelled` (stopped while sending). `failed` is GLOSSARY's: a 4xx or 5xx alone isn't.
+#[derive(Clone, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+enum RunProgressState {
+    Sending,
+    Sent { response: Box<HttpResponse>, failed: bool },
+    Failed { error: serde_json::Value },
+    Cancelled,
+}
+
+/// What `run_requests` returns once a Run ends: whether it was stopped. The requests
+/// it never reached reported nothing.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunSummary {
+    cancelled: bool,
+}
+
+/// Runs `selection` (GLOSSARY "Run"): sends each request in order through the same flow
+/// as `send_request`, carrying the Session from each to the next, and reports each
+/// one's progress as `run-progress` events. `cancel_request(run_id)` stops it, the
+/// request in flight included. The Production confirmation and the prompts happen in
+/// the webview before it starts.
+#[tauri::command]
+async fn run_requests<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    run_id: String,
+    selection: RunSelection,
+    options: Option<RunOptions>,
+) -> CmdResult<RunSummary> {
+    let options = options.unwrap_or_default();
+    let ctx = send_context(&state, selection.environment, options.skip_scripts);
+    let cancel = run::Cancel::default();
+    state.runs.lock().unwrap().insert(run_id.clone(), cancel.clone());
+    let cancelled = run::run(&ctx, selection.requests, &cancel, |index, event| {
+        let state = match event {
+            RunEvent::Sending => RunProgressState::Sending,
+            RunEvent::Sent { sent, failed } => {
+                keep_body(&app.state::<AppState>(), &sent);
+                RunProgressState::Sent { response: Box::new(sent.response), failed }
+            }
+            RunEvent::Failed(e) => RunProgressState::Failed { error: serde_json::to_value(&e).unwrap_or_default() },
+            RunEvent::Cancelled => RunProgressState::Cancelled,
+        };
+        let _ = app.emit("run-progress", RunProgress { run_id: run_id.clone(), index, state });
+    })
+    .await;
+    state.runs.lock().unwrap().remove(&run_id);
+    Ok(RunSummary { cancelled })
+}
+
 /// Where the scripts of a request in `file_path` read their files from: its
 /// folder (the root for a request in no file), inside the open workspace.
-fn script_files(state: &AppState, file_path: Option<&Path>) -> CmdResult<script::ScriptFiles> {
+fn script_files(state: &AppState, file_path: Option<&Path>) -> CmdResult<ScriptFiles> {
     let root = state.root()?;
     let dir = file_path.and_then(Path::parent).map_or_else(|| root.clone(), Path::to_path_buf);
-    Ok(script::ScriptFiles::new(Some(&root), &dir))
+    Ok(ScriptFiles::new(Some(&root), &dir))
 }
 
 /// The Scripts editor's check of a script file reference (`path`, as a request in
@@ -782,10 +734,54 @@ fn forget_prompt_answers(state: State<'_, AppState>, request_key: String) {
     state.session().prompt_answers().forget(&request_key);
 }
 
+/// The shape of the latest exchange of the request named `name` in `file_path`, in the
+/// Session: its status, when it arrived, and each side's header names and JSON keys,
+/// which its Request variables' paths complete from. Null when it hasn't been sent.
+/// Off the main thread, since it parses the bodies.
 #[tauri::command]
+async fn exchange_shape<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    file_path: PathBuf,
+    name: String,
+) -> CmdResult<Option<httpdesk_core::exchange::ExchangeShape>> {
+    off_main(app, move |state| Ok(state.session().exchanges().latest(&file_path, &name).map(|e| e.shape()))).await
+}
+
+/// The cookies in the Session's jar, for the Session panel: unexpired ones, by
+/// domain, then path, then name.
+#[tauri::command]
+fn session_cookies(state: State<'_, AppState>) -> Vec<StoredCookie> {
+    state.session().cookies().list()
+}
+
+/// Deletes one cookie from the Session's jar, so later sends don't carry it.
+/// False if there was no such cookie.
+#[tauri::command]
+fn delete_cookie(state: State<'_, AppState>, domain: String, path: String, name: String) -> bool {
+    state.session().cookies().remove(&domain, &path, &name)
+}
+
+/// Deletes every cookie in the Session's jar.
+#[tauri::command]
+fn clear_cookies(state: State<'_, AppState>) {
+    state.session().cookies().clear();
+}
+
+/// Empties the whole Session (Clear session): every section, cookies and prompt
+/// answers included.
+#[tauri::command]
+fn clear_session(state: State<'_, AppState>) {
+    state.session().clear();
+}
+
+#[tauri::command]
+/// Cancels the send or stops the Run with this id (a Run's request in flight included).
 fn cancel_request(state: State<'_, AppState>, run_id: String) {
     if let Some(handle) = state.running.lock().unwrap().remove(&run_id) {
         handle.abort();
+    }
+    if let Some(cancel) = state.runs.lock().unwrap().remove(&run_id) {
+        cancel.cancel();
     }
 }
 
@@ -1190,6 +1186,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             load_folder_environments,
             save_environments,
             send_request,
+            run_requests,
             check_script_file,
             open_script_file,
             preview_request,
@@ -1197,6 +1194,11 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             prompt_answers,
             answer_prompts,
             forget_prompt_answers,
+            exchange_shape,
+            session_cookies,
+            delete_cookie,
+            clear_cookies,
+            clear_session,
             save_response_body,
             copy_response_body,
             release_response,

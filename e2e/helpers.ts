@@ -86,6 +86,8 @@ export interface MockState {
   sentPrompts: Record<string, string>[];
   /** Each send's `skipScripts` ("Send without scripts"). */
   sentSkipScripts: boolean[];
+  /** The Cookie header the Session's jar gave each send, in order ("" for none). */
+  sentCookies: string[];
   /** The settings it last saved. */
   settings: {
     theme: string;

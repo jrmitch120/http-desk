@@ -6,6 +6,7 @@ import type {
   BodyKind,
   FilterResult,
   FormatMode,
+  ExchangeShape,
   JsonShape,
   EnvironmentSet,
   FolderEnvironments,
@@ -18,6 +19,7 @@ import type {
   RequestPreview,
   SearchHit,
   SpecSummary,
+  StoredCookie,
   TreeNode,
   Variable,
   WorkspaceInfo,
@@ -35,6 +37,17 @@ export type RequestArgs = {
   /** The `# @name`s of the file's requests (`requestNames`): its Request variables read their latest exchanges in the Session. */
   requestNames: string[];
 };
+
+/** What a run sends (`RunSelection` in src-tauri/src/lib.rs): its requests in order,
+ *  each as `send_request` takes it, and the environment they're all sent with. Run
+ *  file, folder and selection differ only in which requests are listed. */
+export type RunSelection = {
+  requests: Omit<RequestArgs, "environment">[];
+  environment: string | null;
+};
+
+/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"). */
+export type RunOptions = { skipScripts?: boolean };
 
 /** Which form of a stored response body `api.responseBody` fetches. */
 export type BodyFetchView = "raw" | "pretty" | "bytes";
@@ -70,17 +83,32 @@ export const api = {
   sendRequest: (args: RequestArgs & { runId: string; skipScripts?: boolean }) => invoke<HttpResponse>("send_request", args),
   /** What `sendRequest` with the same arguments would send, without sending it. */
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
+  /** Cancels a send, or stops a run (its request in flight included), by its run id. */
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
   /** Rejects with why a script file reference (`path`, written in the file at `filePath`) can't run: missing, or outside the workspace. */
   checkScriptFile: (filePath: string | null, path: string) => invoke<void>("check_script_file", { filePath, path }),
   /** Opens a script file reference in the default editor (a `.js` file inside the workspace only). */
   openScriptFile: (filePath: string | null, path: string) => invoke<void>("open_script_file", { filePath, path }),
+  /** Sends the selection's requests in order, the way `sendRequest` sends each, reporting
+   *  them as `run-progress` events (`RunProgress`). Resolves when the run ends. */
+  runRequests: (args: { runId: string; selection: RunSelection; options: RunOptions }) =>
+    invoke<{ cancelled: boolean }>("run_requests", args),
   /** The answers the workspace's Session holds for a request's Prompt variables, by name. */
   promptAnswers: (requestKey: string) => invoke<Record<string, string>>("prompt_answers", { requestKey }),
   /** Has the Session remember answers to a request's Prompt variables (in memory only). */
   answerPrompts: (requestKey: string, answers: Record<string, string>) => invoke<void>("answer_prompts", { requestKey, answers }),
   /** Forgets a request's Prompt variable answers, so its next send asks again. */
   forgetPromptAnswers: (requestKey: string) => invoke<void>("forget_prompt_answers", { requestKey }),
+  /** The shape of the latest exchange of the request named `name` in `filePath`, in the Session; null if it hasn't been sent. */
+  exchangeShape: (filePath: string, name: string) => invoke<ExchangeShape | null>("exchange_shape", { filePath, name }),
+  /** The cookies in the Session's jar: unexpired ones, by domain, then path, then name. */
+  sessionCookies: () => invoke<StoredCookie[]>("session_cookies"),
+  /** Deletes one cookie from the Session's jar. False if there was none. */
+  deleteCookie: (domain: string, path: string, name: string) => invoke<boolean>("delete_cookie", { domain, path, name }),
+  /** Deletes every cookie in the Session's jar. */
+  clearCookies: () => invoke<void>("clear_cookies"),
+  /** Empties the whole Session: cookies, prompt answers and every other section. */
+  clearSession: () => invoke<void>("clear_session"),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no
