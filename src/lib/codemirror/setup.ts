@@ -9,7 +9,7 @@ import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput,
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, segments } from "../http";
-import { MASK, varClass } from "../vars";
+import { MASK, requestVariable, varClass } from "../vars";
 import {
   Decoration,
   drawSelection,
@@ -132,11 +132,12 @@ export function languageExtension(lang: Language): Extension {
  * A `{{name}}` as it resolves: `ok` (with its fully resolved `value`), `bad` (an
  * Undefined variable), `dyn` (generated at send time), `circular` (it leads back to
  * a name already being resolved; `chain` is the names followed, e.g. `a → b → a`)
- * or `prompt` (an unanswered Prompt variable, asked when sent).
+ * `prompt` (an unanswered Prompt variable, asked when sent) or `request` (a Request
+ * variable of a request named in the file, read from its latest exchange when sent).
  * `secret` when a Secret (or a masked prompted value) went into the value.
  */
 export interface VarInfo {
-  state: "ok" | "bad" | "dyn" | "circular" | "prompt";
+  state: "ok" | "bad" | "dyn" | "circular" | "prompt" | "request";
   value?: string;
   source?: string;
   secret?: boolean;
@@ -278,9 +279,14 @@ export function varCard(
   const showValue = () => (body.textContent = masked && !revealed ? `${MASK} (secret)` : info.value || "(empty)");
   if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
   else if (info.state === "bad")
-    body.textContent = name.startsWith("$") ? "Undefined — not a dynamic variable" : "Undefined — not defined in the request, the file or the environment";
+    body.textContent = name.startsWith("$")
+      ? "Undefined — not a dynamic variable"
+      : requestVariable(name)
+        ? `Undefined — no request in this file has # @name ${requestVariable(name)!.name}`
+        : "Undefined — not defined in the request, the file or the environment";
   else if (info.state === "circular") body.textContent = `Circular: ${info.chain!.join(" → ")}`;
   else if (info.state === "prompt") body.textContent = "Asked when sent";
+  else if (info.state === "request") body.textContent = "Request variable (read when sent)";
   else showValue();
   dom.append(div("var-card-name", name), body);
   if (info.source) dom.append(div("var-card-source", `from ${info.source}`));
