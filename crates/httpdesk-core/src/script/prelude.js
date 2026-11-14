@@ -9,8 +9,10 @@
 //
 // Every JetBrains API that isn't implemented here throws "<api> isn't supported
 // in HttpDesk" instead of doing nothing. To implement one, add a Rust function to
-// `host` in src/script.rs, call it from here, and take its name out of the
-// unsupported namespace it falls under.
+// `host` in src/script.rs, call it from here, take its name out of the
+// unsupported namespace it falls under, and list it in api.json (next to this
+// file), which the Scripts editor completes from. A test (tests/scripts.rs)
+// fails until the list names exactly what this file implements.
 (function (host, data) {
   "use strict";
 

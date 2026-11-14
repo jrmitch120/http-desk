@@ -288,3 +288,40 @@ async fn each_handler_gets_a_fresh_context() {
     let (_, _, tests) = run(&server, "user", handler).await;
     assert_eq!(tests, [pass("fresh")]);
 }
+
+/// Visits every member of the script globals and reports, as the name of a
+/// last test, the paths that work: values, and functions that don't throw
+/// "not supported" when called.
+const IMPLEMENTED: &str = r#"> {%
+const found = [];
+function visit(path, value) {
+  if (typeof value === "function") {
+    try { value(); } catch (e) { if (e.name === "UnsupportedApiError") return; }
+    found.push(path);
+  } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) {
+      let member;
+      try { member = value[key]; } catch (e) { continue; }
+      visit(path + "." + key, member);
+    }
+  } else {
+    found.push(path);
+  }
+}
+for (const root of ["client", "request", "response", "crypto", "$random", "jsonPath", "xpath"]) visit(root, globalThis[root]);
+client.test(JSON.stringify(found.sort()), function () {});
+%}"#;
+
+/// The Scripts editor completes the API listed in `src/script/api.json`, so it
+/// must name exactly what the prelude implements: an API a ticket implements is
+/// listed there too, and nothing unsupported is offered.
+#[tokio::test]
+async fn the_script_api_list_names_exactly_what_the_prelude_implements() {
+    let listed: serde_json::Value = serde_json::from_str(include_str!("../src/script/api.json")).unwrap();
+    let mut listed: Vec<&str> = listed.as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    listed.sort_unstable();
+    let server = server().await;
+    let (_, _, tests) = run(&server, "text", IMPLEMENTED).await;
+    let implemented: Vec<String> = serde_json::from_str(&tests.last().unwrap().name).unwrap();
+    assert_eq!(implemented, listed);
+}

@@ -1062,3 +1062,94 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
     assert_eq!(back.headers.items[1], KeyValue::disabled("X-Ok!", "1"));
     assert_eq!(back.query.items[1].name, "a:b", "a ':' is fine in a param without a description");
 }
+
+// ---------------------------------------------------------------- scripts edited in Settings (#141)
+
+/// A request the canonical renderer would rewrite (`//` comment, a header
+/// without a space), so only an edit made in place keeps the rest of it.
+const HAND_WRITTEN: &str = "### Login
+// signs in
+POST https://example.com/login
+Content-Type:application/json
+
+{\"user\": \"ada\"}
+
+> {%
+    client.test(\"status\", function () {
+        client.assert(response.status === 200, \"Response status is not 200\");
+    });
+%}
+>> ./login.json
+
+### Next
+GET https://example.com/next
+";
+
+#[test]
+fn editing_a_handler_script_changes_only_its_body() {
+    let mut f = parse(HAND_WRITTEN);
+    let handler = f.requests[0].response_handler.clone().unwrap();
+    f.requests[0].response_handler = Some(handler.replace("=== 200", "=== 201"));
+    assert_eq!(try_serialize(&f).unwrap(), HAND_WRITTEN.replace("=== 200", "=== 201"));
+}
+
+const ADDED_HANDLER: &str = "> {%\n    client.test(\"ok\", function () {});\n%}";
+const ADDED_PRE_SCRIPT: &str = "< {%\n    request.variables.set(\"id\", \"7\");\n%}";
+
+#[test]
+fn an_added_handler_goes_after_the_body_as_jetbrains_writes_it() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[1].response_handler = Some(ADDED_HANDLER.into());
+    let out = try_serialize(&f).unwrap();
+    let next = "GET https://example.com/next\n";
+    assert_eq!(out, HAND_WRITTEN.replace(next, &format!("{next}\n{ADDED_HANDLER}\n")));
+    let inline = HandlerPart::Inline { source: "\n    client.test(\"ok\", function () {});\n".into(), line: 1 };
+    assert_eq!(parse(&out).requests[1].response_handler_parts(), [inline]);
+}
+
+#[test]
+fn a_removed_handler_takes_its_blank_line_along() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].response_handler = None;
+    let out = try_serialize(&f).unwrap();
+    let handler = HAND_WRITTEN.split_once("> {%").unwrap().1.split_once("\n\n###").unwrap().0;
+    assert_eq!(out, HAND_WRITTEN.replace(&format!("\n\n> {{%{handler}"), ""));
+    assert_eq!(parse(&out).requests[0].response_handler, None);
+}
+
+#[test]
+fn an_added_pre_request_script_goes_above_the_request_line() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].pre_script = Some(ADDED_PRE_SCRIPT.into());
+    let out = try_serialize(&f).unwrap();
+    let line = "POST https://example.com/login\n";
+    assert_eq!(out, HAND_WRITTEN.replace(line, &format!("{ADDED_PRE_SCRIPT}\n{line}")));
+    assert_eq!(parse(&out).requests[0].pre_script.as_deref(), Some(ADDED_PRE_SCRIPT));
+}
+
+#[test]
+fn editing_or_removing_a_pre_request_script_changes_only_its_lines() {
+    let line = "POST https://example.com/login\n";
+    let with_script = HAND_WRITTEN.replace(line, &format!("{ADDED_PRE_SCRIPT}\n{line}"));
+
+    let mut f = parse(&with_script);
+    f.requests[0].pre_script = Some(ADDED_PRE_SCRIPT.replace("\"7\"", "\"8\""));
+    assert_eq!(try_serialize(&f).unwrap(), with_script.replace("\"7\"", "\"8\""));
+
+    let mut f = parse(&with_script);
+    f.requests[0].pre_script = None;
+    assert_eq!(try_serialize(&f).unwrap(), HAND_WRITTEN);
+}
+
+#[test]
+fn a_script_edit_alongside_another_edit_rewrites_the_request() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].response_handler = Some(ADDED_HANDLER.into());
+    f.requests[0].url = "https://example.com/signin".into();
+    let out = try_serialize(&f).unwrap();
+    assert!(
+        out.starts_with("### Login\n# signs in\nPOST https://example.com/signin\nContent-Type: application/json"),
+        "{out}"
+    );
+    assert_eq!(parse(&out).requests[0].response_handler.as_deref(), Some(ADDED_HANDLER));
+}

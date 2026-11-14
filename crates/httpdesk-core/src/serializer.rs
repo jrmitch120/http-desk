@@ -199,20 +199,22 @@ pub fn serialize(file: &HttpFile) -> String {
             prev_rendered = false;
         }
         let rendered = render_request(req);
-        // Rendered with its raw text too, so both sides use the same section order.
-        let raw = req.raw.as_ref().filter(|raw| {
-            parser::parse_block(raw).map(|p| render_request(&Request { raw: Some(raw.to_string()), ..p })).as_deref()
-                == Some(rendered.as_str())
+        let written = req.raw.as_deref().and_then(|raw| {
+            if rendered_as_written(raw).as_deref() == Some(rendered.as_str()) {
+                Some(raw.to_string())
+            } else {
+                scripts_in_place(req, raw, &rendered)
+            }
         });
-        match raw {
+        match written {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
                 // Only a file's first block may omit `###`; anywhere else it would
                 // merge into the block before it.
-                if !out.is_empty() && !parser::is_separator(raw) {
+                if !out.is_empty() && !parser::is_separator(&raw) {
                     out.push_str("###\n");
                 }
-                out.push_str(raw);
+                out.push_str(&raw);
                 prev_rendered = false;
             }
             None => {
@@ -235,6 +237,79 @@ pub fn serialize(file: &HttpFile) -> String {
         out.insert(0, parser::BOM);
     }
     out
+}
+
+/// The canonical rendering of a request block as written, rendered with its raw
+/// text too, so it uses the same section order as the model it's compared with.
+fn rendered_as_written(raw: &str) -> Option<String> {
+    parser::parse_block(raw).map(|p| render_request(&Request { raw: Some(raw.to_string()), ..p }))
+}
+
+/// `raw` with its pre-request script and response handler replaced by `req`'s,
+/// when those are all that was edited (Settings → Scripts): the rest of the
+/// request keeps the layout it was written with. `None` when anything else
+/// changed, or the edited text wouldn't read back as `req`.
+fn scripts_in_place(req: &Request, raw: &str, rendered: &str) -> Option<String> {
+    let (parsed, request_line) = parser::parse_block_at(raw)?;
+    let (old_pre, old_handler) = (parsed.pre_script.clone(), parsed.response_handler.clone());
+    if old_pre == req.pre_script && old_handler == req.response_handler {
+        return None;
+    }
+    let edited = Request {
+        pre_script: req.pre_script.clone(),
+        response_handler: req.response_handler.clone(),
+        raw: Some(raw.to_string()),
+        ..parsed
+    };
+    if render_request(&edited) != rendered {
+        return None;
+    }
+    let mut text = raw.to_string();
+    // The handler first: it comes after the request line, so that line doesn't move.
+    if old_handler != req.response_handler {
+        text = splice_handler(&text, old_handler.as_deref(), req.response_handler.as_deref())?;
+    }
+    if old_pre != req.pre_script {
+        text = splice_pre_script(&text, request_line, old_pre.as_deref(), req.pre_script.as_deref())?;
+    }
+    (rendered_as_written(&text).as_deref() == Some(rendered)).then_some(text)
+}
+
+/// The byte offset just past the last line of `text` that isn't blank.
+fn content_end(text: &str) -> usize {
+    let end = text.trim_end().len();
+    text[end..].find('\n').map_or(text.len(), |i| end + i)
+}
+
+/// `block` with its response handler (`old`, which ends the block's content)
+/// replaced by `new`. An added handler goes after a blank line, and a removed
+/// one takes the blank lines before it along.
+fn splice_handler(block: &str, old: Option<&str>, new: Option<&str>) -> Option<String> {
+    let (before, after) = match old {
+        Some(old) => {
+            let at = block.rfind(old)?;
+            (&block[..at], &block[at + old.len()..])
+        }
+        None => block.split_at(content_end(block)),
+    };
+    Some(match (old, new) {
+        (_, None) => format!("{}{after}", &before[..content_end(before)]),
+        (Some(_), Some(new)) => format!("{before}{new}{after}"),
+        (None, Some(new)) => format!("{before}\n\n{new}{after}"),
+    })
+}
+
+/// `block` with its pre-request script (`old`, written as one run of lines
+/// above the request line) replaced by `new`. An added one goes just above the
+/// request line, the `request_line`-th line of the block.
+fn splice_pre_script(block: &str, request_line: usize, old: Option<&str>, new: Option<&str>) -> Option<String> {
+    let line_at: usize = block.split_inclusive('\n').take(request_line).map(str::len).sum();
+    let (at, len) = match old {
+        Some(old) => (block[..line_at].find(old)?, old.len() + 1),
+        None => (line_at, 0),
+    };
+    let new = new.map(|n| format!("{n}\n")).unwrap_or_default();
+    Some(format!("{}{new}{}", &block[..at], &block[(at + len).min(block.len())..]))
 }
 
 /// Ensures `out` ends with a newline, plus a blank line when `blank` is set.
