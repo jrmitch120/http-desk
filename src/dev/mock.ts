@@ -7,12 +7,13 @@ import { emit } from "@tauri-apps/api/event";
 import pets from "./pets.json";
 import jetbrains from "./jetbrains.json";
 import { hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
+import { responseRedirects } from "../lib/scripts";
 import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, HttpResponse, JsonShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, SendError, SendErrorKind, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -75,6 +76,47 @@ if (new URLSearchParams(location.search).get("handlerLogs") === "1") {
   req.raw = null;
   files[`${ROOT}/samples/jetbrains.http`] = withLogs;
 }
+// `?scriptFiles=1`: List pets runs the handler file `./check-status.js` (in `scriptFiles`
+// below), and Create pet references a pre-request script file that doesn't exist and a
+// handler file outside the workspace.
+if (new URLSearchParams(location.search).get("scriptFiles") === "1") {
+  const withFiles = structuredClone(files[`${ROOT}/api/pets.http`] as typeof pets);
+  const [list, create] = withFiles.requests as { preScript: string | null; responseHandler: string | null; raw: unknown }[];
+  list.responseHandler = "> ./check-status.js";
+  create.preScript = "< ./missing.js";
+  create.responseHandler = "> ../../outside.js";
+  list.raw = create.raw = null;
+  files[`${ROOT}/api/pets.http`] = withFiles;
+}
+/** The workspace's script files (`> check.js`), by path. */
+const scriptFiles: Record<string, string> = {
+  [`${ROOT}/api/check-status.js`]: 'client.test("Status is 200", function () {\n  client.assert(response.status === 200, "Response status is not 200");\n});\n',
+};
+/** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
+ *  `.http` file at `filePath`, or (thrown) why it can't be used. */
+function locateScriptFile(filePath: string | null, path: string): string {
+  const parts = (filePath ? filePath.slice(0, filePath.lastIndexOf("/")) : ROOT).split("/");
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "." && part !== "") parts.push(part);
+  }
+  const resolved = path.startsWith("/") ? path : parts.join("/");
+  if (!resolved.startsWith(`${ROOT}/`)) throw `Script file ${path} is outside the workspace`;
+  if (!Object.hasOwn(scriptFiles, resolved)) throw `Script file ${path} doesn't exist`;
+  return resolved;
+}
+/** The file references (`< path` / `> path`) in a pre-request script or handler. */
+const fileReferences = (text: string | null, sigil: "<" | ">") =>
+  (text ?? "").split("\n").flatMap((line) => {
+    const rest = line.trim().startsWith(sigil) && !line.startsWith(">>") ? line.trim().slice(1).trim() : "";
+    return rest && !rest.startsWith("{%") ? [rest] : [];
+  });
+/** The core's note on a request with `>> file` redirects (`exec::redirect_not_run`). */
+const redirectNotes = (r: Request) =>
+  responseRedirects(r).map((line) => {
+    const [, bang, path] = /^>>(!?)\s*(.*)$/.exec(line)!;
+    return `HttpDesk doesn't run response redirects: >>${bang} ${path.trim()} doesn't save the response to a file.`;
+  });
 const tree = {
   name: "demo",
   path: ROOT,
@@ -250,6 +292,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     const dir = filePath ? filePath.slice(ROOT.length + 1, filePath.lastIndexOf("/") + 1) : "";
     warnings.unshift(`Environment "${environment}" isn't defined for ${dir || "the workspace root"}, so it's sent with no environment`);
   }
+  warnings.push(...redirectNotes(r));
   return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
 }
 /**
@@ -401,6 +444,18 @@ function mockTests(handler: string, status: number) {
       return { name, passed, message: passed ? null : assert![2] };
     });
 }
+/** `mockTests` for a handler, then its script files' tests (or a failed "Response
+ *  handler" entry for a file that can't be read, like the core). */
+function handlerTests(handler: string, filePath: string | null, status: number) {
+  const fromFiles = fileReferences(handler, ">").flatMap((path) => {
+    try {
+      return mockTests(scriptFiles[locateScriptFile(filePath, path)], status);
+    } catch (message) {
+      return [{ name: "Response handler", passed: false, message: String(message) }];
+    }
+  });
+  return [...mockTests(handler, status), ...fromFiles];
+}
 /** What the shell's script engine would log for `handler`: each `client.log("text")`, in order. */
 function mockLogs(handler: string) {
   return [...handler.matchAll(/client\.log\("([^"]*)"\)/g)].map((m) => m[1]);
@@ -426,6 +481,8 @@ let webviewZoom: number | null = null;
 const savedPaths: string[] = [];
 /** The URLs the opener opened, in order. */
 const openedUrls: string[] = [];
+/** The script files "Open in default editor" opened, in order. */
+const openedPaths: string[] = [];
 /** The OS clipboard, as the clipboard plugin reads and writes it. */
 let clipboardText = "";
 /** The texts the clipboard plugin wrote, in order. */
@@ -500,6 +557,10 @@ window.addEventListener(
   /** The URLs the opener opened in the browser, in order. */
   get openedUrls() {
     return [...openedUrls];
+  },
+  /** The script files opened in the default editor, in order. */
+  get openedPaths() {
+    return [...openedPaths];
   },
   /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
   get clipboard() {
@@ -634,8 +695,20 @@ function unsentError(names: string[]): Omit<SendError & { kind: "unsentRequest" 
     details: { names },
   };
 }
-/** Which named requests have a latest exchange in the mock's Session, as `path\0name`. */
-const exchanges = new Set<string>();
+/** The named requests with a latest exchange in the mock's Session, by `path\0name`: its shape (`exchange_shape`). */
+const exchanges = new Map<string, ExchangeShape>();
+/** Stand-in for the core's `Message::shape`: header names once each, and a JSON body's shape. */
+function messageShape(headers: [string, string][], body: string | null): MessageShape {
+  const names: string[] = [];
+  for (const [name] of headers) if (!names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  let json: JsonShape | null = null;
+  try {
+    if (body) json = mockShape(JSON.parse(body));
+  } catch {
+    json = null;
+  }
+  return { headers: names, body: json };
+}
 /**
  * Like the core's send: the named requests (of `requestNames`) whose Request variables
  * the request reads but which haven't been sent in this Session, sorted.
@@ -1038,6 +1111,14 @@ async function mockSend(args: any) {
   if (runScripts && args.request.preScript?.includes("throw ")) {
     throw { kind: "preRequestScript", ...sendErrors.preRequestScript };
   }
+  // Like the core: a pre-request script file that can't be read stops the send.
+  for (const path of runScripts ? fileReferences(args.request.preScript, "<") : []) {
+    try {
+      locateScriptFile(args.filePath, path);
+    } catch (message) {
+      throw { kind: "preRequestScript", message, details: { line: null } };
+    }
+  }
   if (slowDownload) {
     for (let i = 1; i <= 20; i++) {
       await delay(100);
@@ -1052,7 +1133,14 @@ async function mockSend(args: any) {
   if (sendError && !(sendError.kind === "unresolvedVariable" && args.environment)) throw clone(sendError);
   const r = args.request;
   const named = r.directives.find((d: { name: string }) => d.name === "name")?.value.trim();
-  if (named) exchanges.add(`${args.filePath}\0${named}`);
+  // Like the core: a named request's exchange becomes its latest (its response side once known).
+  const sentHeaders: [string, string][] = r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]);
+  const record = (status: number, headers: [string, string][], body: string | null) => {
+    if (!named) return;
+    const request = messageShape(sentHeaders, r.body.enabled ? r.body.text : null);
+    exchanges.set(`${args.filePath}\0${named}`, { received: new Date().toISOString(), status, response: messageShape(headers, body), request });
+  };
+  record(200, [], null);
   if (perf) return perfResponse(r.url, r.method);
   if (responseKind === "asReceived") return asReceivedResponse(r.method);
   if (r.url.includes("png") && bigBinary) {
@@ -1097,21 +1185,23 @@ async function mockSend(args: any) {
   textBodies.set(id, { body, kind: bodyKind });
   const cookies = responseKind === "cookies" ? mockCookies : [];
   keepCookies(cookies);
-  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c) => ["set-cookie", c.raw]);
+  const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
+  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
+  record(status, headers, body);
   return {
     id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
     url: "http://127.0.0.1:8765/pets?limit=20",
-    headers: [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies],
+    headers,
     timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
     truncated: responseKind === "truncated",
     request: {
       method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
       headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
     },
-    warnings: hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : [],
+    warnings: [...(hasScripts(r) && !runScripts ? [scriptsSkipped(r)] : []), ...redirectNotes(r)],
     timings: jsonTimings,
     cookies,
-    tests: runScripts ? mockTests(r.responseHandler ?? "", status) : [],
+    tests: runScripts ? handlerTests(r.responseHandler ?? "", args.filePath, status) : [],
     logs: runScripts ? mockLogs(r.responseHandler ?? "") : [],
   };
 }
@@ -1266,6 +1356,8 @@ mockIPC(
       case "forget_prompt_answers":
         sessionPrompts.delete(args.requestKey);
         return null;
+      case "exchange_shape":
+        return clone(exchanges.get(`${args.filePath}\0${args.name}`) ?? null);
       case "session_cookies":
         return [...sessionJar.values()].sort((a, b) => jarKey(a).localeCompare(jarKey(b)));
       case "delete_cookie":
@@ -1280,6 +1372,12 @@ mockIPC(
         return null;
       case "cancel_request":
         cancelledRuns.add(args.runId);
+        return null;
+      case "check_script_file":
+        locateScriptFile(args.filePath, args.path);
+        return null;
+      case "open_script_file":
+        openedPaths.push(locateScriptFile(args.filePath, args.path));
         return null;
       case "send_request":
         return mockSend(args);

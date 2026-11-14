@@ -178,12 +178,13 @@ fn scripts_skipped(request: &Request) -> String {
 async fn run_pre_request(
     request: &Request,
     environment: &HashMap<String, String>,
+    files: &script::ScriptFiles,
 ) -> Result<script::PreRequestResults, ExecError> {
     if request.pre_request_parts().is_empty() {
         return Ok(Default::default());
     }
-    let (request, environment) = (request.clone(), environment.clone());
-    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment))
+    let (request, environment, files) = (request.clone(), environment.clone(), files.clone());
+    tokio::task::spawn_blocking(move || script::run_pre_request_script(&request, &environment, &files))
         .await
         .map_err(|e| ExecError::Other(e.to_string()))?
 }
@@ -198,11 +199,16 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         return Err(ExecError::UntrustedWorkspace);
     }
 
-    let (prepared, ssl, pre) = {
+    let (prepared, ssl, pre, files) = {
         let scope = scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, &out)?;
+        // Script files are read relative to the `.http` file, from inside the workspace.
+        let files = script::ScriptFiles::new(ctx.root.as_deref(), &scope.base_dir);
         // JetBrains order: the pre-request script runs before variables are substituted.
-        let pre =
-            if run_scripts { run_pre_request(&out.request, &scope.environment).await? } else { Default::default() };
+        let pre = if run_scripts {
+            run_pre_request(&out.request, &scope.environment, &files).await?
+        } else {
+            Default::default()
+        };
         let resolver = scope.resolver.with_pre_request_variables(&pre.variables);
         let mut prepared = exec::prepare(&out.request, &resolver, &scope.base_dir, &ctx.settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
@@ -213,7 +219,7 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
         };
-        (prepared, ssl, pre.results)
+        (prepared, ssl, pre.results, files)
     };
 
     // A `# @name` request's exchange becomes its latest, in the Session the send started in.
@@ -230,7 +236,7 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
         let request = out.request.clone();
         let handler_body = body.clone();
         response = tokio::task::spawn_blocking(move || {
-            let results = script::run_response_handler(&request, &response, &handler_body);
+            let results = script::run_response_handler(&request, &response, &handler_body, &files);
             // The pre-request script's tests and logs come first.
             response.tests = pre.tests.into_iter().chain(results.tests).collect();
             response.logs = pre.logs.into_iter().chain(results.logs).collect();
