@@ -53,6 +53,7 @@
       prompts: req ? requestPrompts(req) : [],
       answers: answers.current,
       requestNames: requestNames(doc.file),
+      exchange: (name: string) => app.exchangeShape(tab.path, name),
     };
     return {
       ...makeVarProvider(scope),
@@ -307,7 +308,7 @@
         {:else if section === "body"}
           <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
         {:else}
-          <RequestSettings {req} bind:file={doc.file} {variables} />
+          <RequestSettings {req} bind:file={doc.file} filePath={tab.path} {variables} />
         {/if}
       </div>
     {/if}

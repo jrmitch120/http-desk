@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
-import { addScript, removeScript, requestScripts, scriptBodyProblem, setScriptBody } from "./scripts";
+import { addScript, removeScript, requestScripts, responseRedirects, scriptBodyProblem, setScriptBody } from "./scripts";
 import type { Request } from "./types";
 
 function request(preScript: string | null, responseHandler: string | null): Request {
@@ -27,6 +27,13 @@ describe("a request's scripts", () => {
       },
       { kind: "handler", index: 1, form: "file", path: "./check.js" },
     ]);
+  });
+
+  it("lists its >> and >>! redirects as written, which aren't scripts", () => {
+    const req = request(null, `${MULTI}\n>> ./out.json\n> ./check.js\n>>!  report.json `);
+    expect(responseRedirects(req)).toEqual([">> ./out.json", ">>!  report.json"]);
+    expect(responseRedirects(request("< ./sign.js", "> {% %}"))).toEqual([]);
+    expect(responseRedirects(request(null, null))).toEqual([]);
   });
 
   it("has none when the request has neither", () => {

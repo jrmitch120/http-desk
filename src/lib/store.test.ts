@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { newRequest } from "./http";
 
@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   promptAnswers: vi.fn(),
   answerPrompts: vi.fn(),
   forgetPromptAnswers: vi.fn(),
+  exchangeShape: vi.fn(),
   cancelRequest: vi.fn(),
   runRequests: vi.fn(),
   releaseResponse: vi.fn(),
@@ -2146,6 +2147,37 @@ describe("Prompt variables", () => {
     const before = app.sessionVersion;
     await app.openWorkspace("/other");
     expect(app.sessionVersion).not.toBe(before);
+  });
+});
+
+describe("what Request variable completion reads from the Session", () => {
+  const login = (status: number): ExchangeShape => ({
+    received: "2026-11-13T10:02:03.000Z",
+    status,
+    response: { headers: ["X-Token"], body: { keys: [["token", {}]] } },
+    request: { headers: [], body: null },
+  });
+
+  it("reads a named request's latest exchange once, then again after the Session changes", async () => {
+    api.exchangeShape.mockResolvedValueOnce(null).mockResolvedValueOnce(login(201));
+    api.sendRequest.mockResolvedValue({ id: "r1", status: 201 } as HttpResponse);
+    const f = fileOf(["POST", "Login", "https://api.example.com/login"]);
+    f.requests[0].directives = [{ name: "name", value: "login" }];
+    const [tab] = await openAll(f);
+
+    expect(await app.exchangeShape(PATH, "login")).toBeNull();
+    expect(await app.exchangeShape(PATH, "login")).toBeNull();
+    expect(api.exchangeShape).toHaveBeenCalledTimes(1);
+    expect(api.exchangeShape).toHaveBeenCalledWith(PATH, "login");
+
+    await app.send(tab.id);
+    expect(await app.exchangeShape(PATH, "login")).toMatchObject({ status: 201 });
+    expect(api.exchangeShape).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers nothing when the Session can't be read", async () => {
+    api.exchangeShape.mockRejectedValueOnce("gone");
+    expect(await app.exchangeShape("/ws/unreadable.http", "login")).toBeNull();
   });
 });
 

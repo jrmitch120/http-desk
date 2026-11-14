@@ -77,6 +77,14 @@ export function requestScripts(req: Request): Script[] {
   });
 }
 
+/** The request's JetBrains `>> file` / `>>! file` response redirects, as written. HttpDesk keeps them but never runs them. */
+export function responseRedirects(req: Request): string[] {
+  const text = req.responseHandler ?? "";
+  return spans(text, "handler")
+    .filter((s) => s.form === "redirect")
+    .map((s) => text.slice(s.from, s.to).trim());
+}
+
 /** Replaces `script`'s body (an inline script) with `body`, leaving the rest of the text as it was. */
 export function setScriptBody(req: Request, script: Script, body: string) {
   const key = field(script.kind);

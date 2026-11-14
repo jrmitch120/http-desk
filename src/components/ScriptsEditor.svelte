@@ -1,18 +1,23 @@
 <script lang="ts">
   // Settings → Scripts: the request's JetBrains pre-request scripts and response
   // handlers. Inline ones are edited here; an edit changes only the script's body
-  // (lib/scripts.ts). File references show their path, read-only. HttpDesk never
-  // adds a script itself: only these Add buttons do. Each script says which
-  // editor it breaks in (ADR-0007), always, not once.
+  // (lib/scripts.ts). File references show their path, read-only, with "Open in
+  // default editor", or why they can't run (missing, outside the workspace: the
+  // shell checks). HttpDesk never adds a script itself: only these Add buttons do.
+  // Each script says which editor it breaks in (ADR-0007), always, not once.
+  // `>> file` redirects are listed too, with a note that HttpDesk doesn't run them.
   import { tick } from "svelte";
   import { autocompletion } from "@codemirror/autocomplete";
   import type { Request } from "../lib/types";
-  import { addScript, removeScript, requestScripts, scriptBodyProblem, setScriptBody, type Script, type ScriptKind } from "../lib/scripts";
+  import { addScript, removeScript, requestScripts, responseRedirects, scriptBodyProblem, setScriptBody, type Script, type ScriptKind } from "../lib/scripts";
   import { scriptCompletion } from "../lib/scriptApi";
+  import { api, errorMessage } from "../lib/api";
+  import { app } from "../lib/store.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import Banner from "./Banner.svelte";
 
-  let { req }: { req: Request } = $props();
+  /** `filePath`: the `.http` file the request is in, which its script files are relative to. */
+  let { req, filePath }: { req: Request; filePath: string | null } = $props();
 
   const scripts = $derived(requestScripts(req));
   const LABEL: Record<ScriptKind, string> = { "pre-request": "Pre-request script", handler: "Response handler" };
@@ -30,6 +35,31 @@
   const label = (s: Script) => LABEL[s.kind] + (scripts.filter((o) => o.kind === s.kind).length > 1 ? ` ${s.index + 1}` : "");
 
   let editors = $state<Record<string, Editor | undefined>>({});
+
+  const redirects = $derived(responseRedirects(req));
+  const redirectLabel = (i: number) => "Response redirect" + (redirects.length > 1 ? ` ${i + 1}` : "");
+
+  // Why each file reference can't run, by path: null when it can, absent until checked.
+  let problems = $state<Record<string, string | null>>({});
+  const filePaths = $derived([...new Set(scripts.flatMap((s) => (s.form === "file" ? [s.path] : [])))]);
+  $effect(() => {
+    const from = filePath;
+    for (const path of filePaths) check(from, path);
+  });
+  function check(from: string | null, path: string) {
+    api.checkScriptFile(from, path).then(
+      () => (problems[path] = null),
+      (e) => (problems[path] = errorMessage(e)),
+    );
+  }
+  async function open(path: string) {
+    try {
+      await api.openScriptFile(filePath, path);
+    } catch (e) {
+      app.toast("error", `Couldn't open ${path}: ${errorMessage(e)}`);
+      check(filePath, path);
+    }
+  }
 
   async function add(kind: ScriptKind) {
     addScript(req, kind);
@@ -60,9 +90,24 @@
           <Banner severity="warning" inline>{scriptBodyProblem(s.body)}</Banner>
         {/if}
       {:else}
-        <div class="file"><span class="muted">Script file</span> <code>{s.path}</code></div>
+        <div class="file">
+          <span class="muted">Script file</span> <code>{s.path}</code>
+          {#if problems[s.path] === null}
+            <button class="btn small ghost" onclick={() => open(s.path)}>Open in default editor</button>
+          {/if}
+        </div>
+        {#if problems[s.path]}
+          <Banner severity="warning" inline>{problems[s.path]}</Banner>
+        {/if}
       {/if}
       <p class="note muted">{NOTE[s.kind]}</p>
+    </div>
+  {/each}
+  {#each redirects as redirect, i (i)}
+    <div class="script" role="group" aria-label={redirectLabel(i)}>
+      <div class="head"><span class="name">{redirectLabel(i)}</span></div>
+      <div class="file"><code>{redirect}</code></div>
+      <p class="note muted">Saves the response to a file in Rider. HttpDesk doesn't run it, so the response isn't saved to a file.</p>
     </div>
   {/each}
   <div class="actions">
@@ -109,6 +154,9 @@
     overflow: hidden;
   }
   .file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
   }
   code {
