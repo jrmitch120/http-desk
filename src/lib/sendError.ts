@@ -21,6 +21,7 @@ const HEADINGS: Record<SendErrorKind, string> = {
   unsentRequest: "Request not sent in this Session",
   unmatchedPath: "A Request variable matched nothing",
   file: "Couldn't read a file",
+  untrustedWorkspace: "Scripts aren't trusted here",
   other: "Could not send request",
 };
 
@@ -85,6 +86,7 @@ function hint(err: SendError): string | null {
         .join(" ");
     case "invalidUrl":
     case "file":
+    case "untrustedWorkspace":
       return null;
     case "other":
       return "Check the URL, the selected environment, and that the server is reachable.";

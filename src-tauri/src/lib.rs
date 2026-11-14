@@ -12,6 +12,7 @@ use httpdesk_core::exchange;
 use httpdesk_core::exec::{self, ExecError, ExecSettings, HttpResponse};
 use httpdesk_core::json_filter::{FilterResult, JsonDocument, Shape};
 use httpdesk_core::openapi::{GenerateOptions, OpenApiDoc, SpecSummary};
+use httpdesk_core::script;
 use httpdesk_core::session::Session;
 use httpdesk_core::vars::Resolver;
 use httpdesk_core::workspace::{self, SearchHit, TreeNode, Usage};
@@ -88,6 +89,11 @@ struct AppSettings {
     /// Per workspace: the Environments matrix's column widths, as the user resized them.
     #[serde(deserialize_with = "or_default")]
     env_matrix_widths: HashMap<String, MatrixWidths>,
+    /// Trusted workspaces, by canonical root path: the only ones whose scripts run.
+    /// Only the shell changes this (`trust_workspace`, `revoke_workspace_trust`):
+    /// `save_settings` keeps it as is, so a page saving an older copy can't undo either.
+    #[serde(deserialize_with = "or_default")]
+    trusted_workspaces: Vec<String>,
 }
 
 /// Column widths of the Environments matrix in one workspace, px. Columns not
@@ -172,6 +178,7 @@ impl Default for AppSettings {
             show_resolved: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
+            trusted_workspaces: Vec::new(),
         }
     }
 }
@@ -574,6 +581,9 @@ async fn preview_request<R: tauri::Runtime>(
     .await
 }
 
+/// The warning on a response whose request has a script that was skipped.
+const SCRIPTS_SKIPPED: &str = "Sent without scripts: the response handler didn't run.";
+
 /// Unlike other commands, a failed send is a classified `{ kind, message, details }`
 /// object (see `ExecError`), so the viewer can explain it and offer the fix.
 // Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
@@ -589,10 +599,20 @@ async fn send_request<R: tauri::Runtime>(
     environment: Option<String>,
     request_key: Option<String>,
     request_names: Option<Vec<String>>,
+    skip_scripts: Option<bool>,
 ) -> Result<HttpResponse, ExecError> {
     let root = state.root.lock().unwrap().clone();
-    let settings = state.settings.lock().unwrap().exec.clone();
+    let (settings, trusted) = {
+        let s = state.settings.lock().unwrap();
+        let trusted = root.as_ref().is_some_and(|r| s.trusted_workspaces.contains(&r.to_string_lossy().into_owned()));
+        (s.exec.clone(), trusted)
+    };
     let session = state.session();
+    let has_scripts = script::has_scripts(&request);
+    let run_scripts = has_scripts && !skip_scripts.unwrap_or(false);
+    if run_scripts && !trusted {
+        return Err(ExecError::UntrustedWorkspace);
+    }
 
     let (prepared, ssl) = {
         let scope = request_resolver(
@@ -607,6 +627,9 @@ async fn send_request<R: tauri::Runtime>(
         )?;
         let mut prepared = exec::prepare(&request, &scope.resolver, &scope.base_dir, &settings)?;
         prepared.warnings.splice(0..0, scope.env_warning);
+        if has_scripts && !run_scripts {
+            prepared.warnings.push(SCRIPTS_SKIPPED.into());
+        }
         let ssl = match (&root, &environment) {
             (Some(r), Some(e)) => env::ssl_config(r, &scope.base_dir, e),
             _ => Default::default(),
@@ -620,9 +643,24 @@ async fn send_request<R: tauri::Runtime>(
     let on_progress = move |received| {
         let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    // Each send gets a client no other send is using (see ClientPool).
+    // Each send gets a client no other send is using (see ClientPool), and uses the
+    // cookie jar of the Session it started in.
     let client = state.clients.checkout(&prepared, &settings, &ssl)?;
-    let task = tokio::spawn(async move { exec::execute_on(&client, prepared, &settings, on_progress).await });
+    let jar = session.cookies().clone();
+    let task = tokio::spawn(async move {
+        let mut outcome = exec::execute_on(&client, prepared, &settings, Some(&jar), on_progress).await?;
+        if run_scripts {
+            // Up to the script time limit of CPU work: off the async workers.
+            let handled = tokio::task::spawn_blocking(move || {
+                let results = script::run_response_handler(&request, &outcome.response, &outcome.body);
+                outcome.response.tests = results.tests;
+                outcome.response.logs = results.logs;
+                outcome
+            });
+            outcome = handled.await.map_err(|e| ExecError::Other(e.to_string()))?;
+        }
+        Ok(outcome)
+    });
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
@@ -847,10 +885,46 @@ fn save_settings<R: tauri::Runtime>(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> CmdResult<()> {
+    let mut current = state.settings.lock().unwrap();
+    let settings = AppSettings { trusted_workspaces: current.trusted_workspaces.clone(), ..settings };
     // Applied either way: the UI already shows the new values for this session.
     let saved = persist_settings(&app, &settings);
-    *state.settings.lock().unwrap() = settings;
+    *current = settings;
     saved
+}
+
+/// Makes the open workspace a Trusted workspace, so its scripts run, and
+/// returns every Trusted workspace. Stored in the app settings, never in the workspace.
+#[tauri::command]
+fn trust_workspace<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let root = state.root()?.to_string_lossy().into_owned();
+    update_trust(&app, &state, |trusted| {
+        if !trusted.contains(&root) {
+            trusted.push(root);
+        }
+    })
+}
+
+/// Stops trusting the workspace at `path` (as `trustedWorkspaces` lists it) and
+/// returns the Trusted workspaces left.
+#[tauri::command]
+fn revoke_workspace_trust<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    path: String,
+) -> CmdResult<Vec<String>> {
+    update_trust(&app, &state, |trusted| trusted.retain(|p| *p != path))
+}
+
+fn update_trust<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    change: impl FnOnce(&mut Vec<String>),
+) -> CmdResult<Vec<String>> {
+    let mut settings = state.settings.lock().unwrap();
+    change(&mut settings.trusted_workspaces);
+    persist_settings(app, &settings)?;
+    Ok(settings.trusted_workspaces.clone())
 }
 
 #[tauri::command]
@@ -1052,6 +1126,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             response_shape,
             get_settings,
             save_settings,
+            trust_workspace,
+            revoke_workspace_trust,
             set_unsaved,
             app_info,
             openapi_load,

@@ -255,6 +255,19 @@ export interface HttpResponse {
   timings: Timings;
   /** Every Set-Cookie received, redirect hops first. Shown only; never sent back. */
   cookies: ResponseCookie[];
+  /** The response handler's `client.test`/`client.assert` results and its own
+   *  failure, if any. Empty when no handler ran (`httpdesk_core::script`). */
+  tests: TestResult[];
+  /** What the scripts logged. Empty until `client.log` is implemented. */
+  logs: string[];
+}
+
+/** One `client.test`, top-level `client.assert`, or script error (`script::TestResult`). */
+export interface TestResult {
+  name: string;
+  passed: boolean;
+  /** Why it failed; null when it passed. */
+  message: string | null;
 }
 
 /**
@@ -338,6 +351,8 @@ export type SendError = { message: string } & (
   /** Each chain is the names followed from the reference to the one that repeats: `["a", "b", "a"]`. */
   | { kind: "circularVariable"; details: { chains: string[][] } }
   | { kind: "file"; details: { path: string; reason: string } }
+  /** The request has a script and the workspace isn't a Trusted workspace. */
+  | { kind: "untrustedWorkspace"; details: null }
   /** Request variables read the latest exchange of these named requests, which haven't been sent in this Session. */
   | { kind: "unsentRequest"; details: { names: string[] } }
   /** Request variables whose path reads nothing from their request's latest exchange. */
@@ -413,6 +428,9 @@ export interface AppSettings {
   envView: "matrix" | "list";
   /** Per workspace root: the Environments matrix's column widths, as resized. */
   envMatrixWidths: Record<string, MatrixWidths>;
+  /** Trusted workspaces (canonical roots): the only ones whose scripts run. Only the
+   *  shell changes it (`api.trustWorkspace`/`api.revokeWorkspaceTrust`); a save keeps the shell's. */
+  trustedWorkspaces: string[];
 }
 
 /** Column widths of the Environments matrix in one workspace, px. A column not listed keeps its default width. */

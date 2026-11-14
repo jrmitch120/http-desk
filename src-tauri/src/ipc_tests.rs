@@ -14,6 +14,7 @@ mod preview;
 mod renaming;
 mod reply;
 mod request_variables;
+mod scripts;
 mod session;
 mod usages;
 mod watcher;

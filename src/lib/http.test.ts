@@ -4,6 +4,7 @@ import {
   buildForm,
   buildMultipart,
   composeUrl,
+  hasScripts,
   newRequest,
   parseFileRef,
   parseForm,
@@ -442,5 +443,21 @@ describe("requestNames", () => {
     const req = (title: string, name?: string) => ({ ...newRequest(), name: title, directives: name === undefined ? [] : [{ name: "name", value: name }] });
     const file: HttpFile = { header: { comments: [], variables: [], raw: null }, requests: [req("", "login"), req("only hashes"), req("", " me "), req("", "login"), req("", "")], trailing: "", lineEnding: "lf", bom: false };
     expect(requestNames(file)).toEqual(["login", "me"]);
+  });
+});
+
+describe("hasScripts (the core's script::has_scripts)", () => {
+  const withHandler = (responseHandler: string | null) => ({ ...newRequest("r"), responseHandler });
+
+  it.each([
+    ["> {% client.test('a', () => {}); %}", true],
+    ["> {%\n  client.assert(true);\n%}", true],
+    ["> ./check.js", true],
+    ["> {% client.assert(true); %}\n>> ./out.json", true],
+    [">> ./out.json", false],
+    [">>! ./out.json", false],
+    [null, false],
+  ])("%s → %s", (handler, expected) => {
+    expect(hasScripts(withHandler(handler))).toBe(expected);
   });
 });

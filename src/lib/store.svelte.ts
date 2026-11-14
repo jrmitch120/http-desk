@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorMessage, type RequestArgs } from "./api";
-import { basename, dirname, displayName, fileVariables, getDirective, joinAnd, joinPath, nameError, newRequest, promptMasked, requestNames, requestPrompts, uid } from "./http";
+import { basename, dirname, displayName, fileVariables, getDirective, hasScripts, joinAnd, joinPath, nameError, newRequest, promptMasked, requestNames, requestPrompts, uid } from "./http";
 import { envColor, type EnvColor } from "./envColors";
 import { legacyPaneSizes } from "./panes";
 import { zoomOf } from "./zoom";
@@ -475,6 +475,7 @@ class AppStore {
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
       this.root = info.root;
+      this.scriptsSkippedIn = null;
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
@@ -1142,11 +1143,13 @@ class AppStore {
     }
     const env = this.sentEnvironment(tab.path);
     if (env && this.guardsMethod(env, req.method) && !(await this.confirmProductionSend(tabId, env, req.method))) return;
+    const scripts = hasScripts(req) ? await this.scriptsAllowed(tabId) : "none";
+    if (scripts === "cancel") return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
-      const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc) });
+      const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc), skipScripts: scripts === "skip" });
       // A tab that closed (or a workspace that changed) meanwhile never shows it.
       if (this.runs[tabId]?.runId !== runId) {
         this.releaseResponse(response);
@@ -1161,8 +1164,13 @@ class AppStore {
       if (this.cancelled.delete(runId)) {
         this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous };
       } else {
-        this.runs[tabId] = { runId, loading: false, startedAt: 0, error: toSendError(e) };
+        const error = toSendError(e);
+        this.runs[tabId] = { runId, loading: false, startedAt: 0, error };
         this.releaseResponse(previous);
+        // The shell knows best: trust revoked elsewhere asks again on the next send.
+        if (error.kind === "untrustedWorkspace" && this.settings) {
+          this.settings.trustedWorkspaces = (this.settings.trustedWorkspaces ?? []).filter((p) => p !== this.root);
+        }
       }
     } finally {
       this.cancelled.delete(runId);
@@ -1172,7 +1180,7 @@ class AppStore {
   /**
    * "Send `name` first": opens the request named `name` (`# @name`) in the file of tab
    * `tabId`, whose Request variables read its latest exchange, and sends it the
-   * normal way (prompts and the production confirmation included). Never resends
+   * normal way (prompts, the production confirmation and the trust question included). Never resends
    * the request that asked: the user does that.
    */
   async sendFirst(tabId: string, name: string) {
@@ -1184,7 +1192,62 @@ class AppStore {
     if (this.activeTabId) await this.send(this.activeTabId);
   }
 
-  /** Tabs whose send is waiting on the prompt form or the production confirmation. */
+  /** The workspace whose scripts the user chose to skip ("Send without scripts"), until it's opened again. */
+  private scriptsSkippedIn: string | null = null;
+
+  /** Whether the open workspace is a Trusted workspace (its scripts run). */
+  get trusted(): boolean {
+    return !!this.root && (this.settings?.trustedWorkspaces ?? []).includes(this.root);
+  }
+
+  /**
+   * Whether a send that would run a script runs it ("run"), sends without it
+   * ("skip"), or doesn't send ("cancel"). Asks the first time in a workspace
+   * that isn't trusted; "Trust and run" is stored by the shell, in the app settings.
+   */
+  private async scriptsAllowed(tabId: string): Promise<"run" | "skip" | "cancel"> {
+    if (this.trusted) return "run";
+    if (this.root && this.scriptsSkippedIn === this.root) return "skip";
+    this.confirmingSend.add(tabId);
+    try {
+      const r = await this.choose(
+        "Run this workspace's scripts?",
+        `This request has a response handler script. Scripts in ${this.root} run only if you trust this workspace. Trust it only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
+        [
+          { ...CANCEL, focus: true },
+          { label: "Send without scripts", value: "skip" },
+          { label: "Trust and run", value: "trust", role: "primary" },
+        ],
+      );
+      if (r.button === "skip") {
+        this.scriptsSkippedIn = this.root;
+        return "skip";
+      }
+      if (r.button !== "trust") return "cancel";
+      try {
+        const trusted = await api.trustWorkspace();
+        if (this.settings) this.settings.trustedWorkspaces = trusted;
+        return "run";
+      } catch (e) {
+        this.toast("error", errorMessage(e));
+        return "cancel";
+      }
+    } finally {
+      this.confirmingSend.delete(tabId);
+    }
+  }
+
+  /** Stops trusting the workspace at `path` (Settings → Trusted workspaces). */
+  async revokeTrust(path: string) {
+    try {
+      const trusted = await api.revokeWorkspaceTrust(path);
+      if (this.settings) this.settings.trustedWorkspaces = trusted;
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+    }
+  }
+
+  /** Tabs whose send is waiting on the prompt form, the production confirmation or the trust question. */
   private confirmingSend = new Set<string>();
 
   /** The environment a request in the file at `path` is sent with: the selected one if

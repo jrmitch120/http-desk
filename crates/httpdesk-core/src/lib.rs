@@ -12,6 +12,7 @@ pub mod model;
 pub mod openapi;
 pub mod parser;
 mod query;
+pub mod script;
 pub mod serializer;
 pub mod session;
 mod tls_probe;

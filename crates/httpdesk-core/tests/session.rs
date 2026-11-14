@@ -15,6 +15,11 @@ fn a_new_session_remembers_no_prompt_answers() {
 }
 
 #[test]
+fn a_new_session_has_no_cookies() {
+    assert!(Session::default().cookies().list().is_empty());
+}
+
+#[test]
 fn prompt_answers_are_remembered_per_request() {
     let session = Session::default();
     session.prompt_answers().answer("req-1", answers(&[("otp", "123456")]));

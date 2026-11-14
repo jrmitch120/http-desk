@@ -4,6 +4,7 @@ use httpdesk_core::*;
 
 const JETBRAINS: &str = include_str!("fixtures/jetbrains.http");
 const VSCODE: &str = include_str!("fixtures/vscode.http");
+const HANDLERS: &str = include_str!("fixtures/handlers.http");
 
 /// Strips fields that only exist for lossless round-tripping.
 fn semantic(mut r: Request) -> Request {
@@ -197,13 +198,47 @@ fn plain_comments_are_not_treated_as_disabled_items() {
 
 #[test]
 fn untouched_files_round_trip_byte_for_byte() {
-    for src in [JETBRAINS, VSCODE] {
+    for src in [JETBRAINS, VSCODE, HANDLERS] {
         assert_eq!(serialize(&parse(src)), src);
+        let crlf = src.replace('\n', "\r\n");
+        assert_eq!(serialize(&parse(&crlf)), crlf);
     }
-    let crlf = JETBRAINS.replace('\n', "\r\n");
-    assert_eq!(serialize(&parse(&crlf)), crlf);
     let no_final_newline = "GET https://x\n\n###\nGET https://y";
     assert_eq!(serialize(&parse(no_final_newline)), no_final_newline);
+}
+
+#[test]
+fn response_handlers_parse_into_parts_and_the_file_is_unchanged() {
+    let f = parse(HANDLERS);
+    let parts: Vec<_> = f.requests.iter().map(Request::response_handler_parts).collect();
+    let inline = |source: &str, line| HandlerPart::Inline { source: source.into(), line };
+    assert_eq!(
+        parts[0],
+        [inline(r#" client.test("ok", () => client.assert(response.status === 200, "status")); "#, 1)]
+    );
+    let HandlerPart::Inline { source, line: 1 } = &parts[1][0] else { panic!("{:?}", parts[1]) };
+    assert!(source.starts_with("\n    client.test(\"Request executed successfully\""), "{source}");
+    assert!(source.ends_with("received '${type}'`);\n    });\n"), "{source}");
+    assert_eq!(
+        parts[2],
+        [
+            inline(r#" client.assert(response.body.length > 0, "not empty"); "#, 1),
+            HandlerPart::Redirect { path: "./report.json".into(), overwrite: true },
+        ]
+    );
+    assert_eq!(parts[3], [HandlerPart::File { path: "./check-status.js".into() }]);
+    assert_eq!(parts[4], [HandlerPart::Redirect { path: "./saved.json".into(), overwrite: false }]);
+    let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
+    assert_eq!(runs, [true, true, true, true, false]);
+    assert_eq!(serialize(&f), HANDLERS);
+}
+
+#[test]
+fn editing_a_request_with_a_handler_keeps_the_handler_verbatim() {
+    let mut f = parse(HANDLERS);
+    f.requests[1].url = "https://example.com/signin".into();
+    let out = serialize(&f);
+    assert_eq!(out, HANDLERS.replace("https://example.com/login", "https://example.com/signin"));
 }
 
 #[test]
@@ -242,7 +277,7 @@ fn extracting_a_file_variable_rewrites_only_the_header_and_the_edited_request() 
 
 #[test]
 fn every_fixture_request_is_semantically_stable_when_rerendered() {
-    for src in [JETBRAINS, VSCODE] {
+    for src in [JETBRAINS, VSCODE, HANDLERS] {
         let f = parse(src);
         for r in &f.requests {
             let rendered = render_request(r);
