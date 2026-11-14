@@ -72,6 +72,7 @@ test("every kind of text field opens the app's edit menu, never the webview's", 
   // The .http source is read-only too.
   await page.locator(".btn", { hasText: ".http" }).click();
   await expectMenu(page, page.locator(".source-code .cm-content"), READ_ONLY);
+  await page.locator(".btn", { hasText: ".http" }).click();
 
   // The request body editor.
   await openRequest(page, ["api", "pets.http"], "Create pet");

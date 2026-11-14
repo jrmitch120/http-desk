@@ -4,7 +4,7 @@
 </script>
 
 <script lang="ts">
-  import { onDestroy, tick, untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue } from "../lib/types";
@@ -97,12 +97,8 @@
     }
   });
 
-  // Shown for one tab at a time (the store keeps it, so Request → Show .http Source can
-  // toggle it); hidden again when the tab is switched away from, as before.
-  const showSource = $derived(app.sourceShownFor === tab.id);
-  onDestroy(() => {
-    if (app.sourceShownFor === tab.id) app.sourceShownFor = null;
-  });
+  /** The `.http` source shows in place of the sections; an app setting, so it lasts like Resolved. */
+  const showSource = $derived(app.settings?.showSource === true);
   /** The resolved preview (ResolvedPreview) is shown under the URL bar; an app setting, so it lasts. */
   const resolved = $derived(app.settings?.showResolved === true);
   let source = $state("");
@@ -125,7 +121,9 @@
     if (want?.tabId !== tab.id || !req) return;
     app.fieldWanted = null;
     const field = want.field;
-    app.sourceShownFor = field.kind === "variable" ? tab.id : null;
+    // A request's own `@name` line shows only in its source; every other field only in the sections.
+    const wantSource = field.kind === "variable";
+    if (showSource !== wantSource) void app.updateSettings({ showSource: wantSource });
     if (field.kind === "url") {
       tick().then(() => urlInput?.focus());
       return;
@@ -226,7 +224,7 @@
       >
         <Icon name="eye" size={14} />Resolved
       </button>
-      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource(tab.id)} use:tooltip={"Show the .http source for this request"}>
+      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={"Show the .http source for this request"}>
         <Icon name="code" size={14} />.http
       </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>

@@ -532,6 +532,8 @@ export interface AppSettings {
   splitRatio: Record<AppSettings["layout"], number>;
   /** Show the resolved preview under the URL bar. */
   showResolved: boolean;
+  /** Show the request's `.http` source in place of its sections (the .http button, Request → Show .http Source). */
+  showSource: boolean;
   /** How the Environments modal shows variables: every environment side by side, or one at a time. */
   envView: "matrix" | "list";
   /** Per workspace root: the Environments matrix's column widths, as resized. */

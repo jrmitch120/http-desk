@@ -404,6 +404,7 @@ let settings = {
   zoom: 1,
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
+  showSource: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},

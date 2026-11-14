@@ -89,6 +89,9 @@ struct AppSettings {
     panel_height: f64,
     /// Show the resolved preview under the URL bar.
     show_resolved: bool,
+    /// Show the request's `.http` source in place of its sections.
+    #[serde(deserialize_with = "or_default")]
+    show_source: bool,
     /// How the Environments modal shows variables.
     #[serde(deserialize_with = "or_default")]
     env_view: EnvView,
@@ -197,6 +200,7 @@ impl Default for AppSettings {
             split_ratio: SplitRatio::default(),
             panel_height: 260.0,
             show_resolved: false,
+            show_source: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
             trusted_workspaces: Vec::new(),

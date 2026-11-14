@@ -242,8 +242,8 @@ const COMMANDS: Command[] = [
     id: "show-source",
     label: "Show .http Source",
     enabled: withTab,
-    checked: () => app.activeTabId !== null && app.sourceShownFor === app.activeTabId,
-    run: () => app.activeTabId && app.toggleSource(app.activeTabId),
+    checked: () => app.activeTabId !== null && app.settings?.showSource === true,
+    run: () => app.activeTabId && app.toggleSource(),
   },
   {
     // Hiding never changes the stored width, so showing again restores it.

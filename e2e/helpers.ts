@@ -98,6 +98,7 @@ export interface MockState {
     recentWorkspaces: string[];
     exec: Record<string, unknown>;
     showResolved: boolean;
+    showSource: boolean;
     envView: "matrix" | "list";
     envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
