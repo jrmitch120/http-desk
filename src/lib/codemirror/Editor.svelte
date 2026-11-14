@@ -116,8 +116,17 @@
     requestAnimationFrame(() => {
       docPending = false;
       if (destroyed || !doc) return;
-      const same = keep?.doc === doc;
-      putDoc(v, doc, same ? { selection: keep.selection, effects: [...keep.folds, EditorView.scrollIntoView(keep.top, { y: "start" })] } : undefined);
+      if (keep?.doc !== doc) {
+        putDoc(v, doc);
+        return;
+      }
+      putDoc(v, doc, { selection: keep.selection, effects: keep.folds });
+      // In its own update: CodeMirror clips a scroll target to the document as
+      // it was before the update, which in putDoc's is the one-character
+      // stand-in. Back at the top, with no margin (so the line above doesn't
+      // show and become the top for the next rewrap), and in the middle across,
+      // where it was taken from (a long line unwrapped scrolls across to it).
+      v.dispatch({ effects: EditorView.scrollIntoView(keep.top, { y: "start", yMargin: 0, x: "center" }) });
     });
   }
 
@@ -128,7 +137,8 @@
     foldedRanges(state).between(0, state.doc.length, (from, to) => void folds.push(foldEffect.of({ from, to })));
     const r = v.scrollDOM.getBoundingClientRect();
     const top = v.posAtCoords({ x: r.left + r.width / 2, y: r.top + 1 }, false);
-    const keep = { doc: state.doc, selection: state.selection, folds, top };
+    // The `doc` the view holds, not `state.doc`: putting a document in copies it.
+    const keep = { doc: untrack(() => doc)!, selection: state.selection, folds, top };
     putDoc(v, STAND_IN, { effects: [effects] });
     putDocAfterMeasure(v, keep);
   }
