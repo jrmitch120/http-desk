@@ -482,7 +482,7 @@ function handlerTests(handler: string, filePath: string | null, status: number) 
     try {
       return mockTests(scriptFiles[locateScriptFile(filePath, path)], status);
     } catch (message) {
-      return [{ name: "Response handler", passed: false, message: String(message) }];
+      return [{ name: "Response handler", passed: false, message: String(message), scriptError: true }];
     }
   });
   return [...mockTests(handler, status), ...fromFiles];

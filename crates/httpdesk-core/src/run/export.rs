@@ -5,7 +5,6 @@
 use serde_json::json;
 
 use super::report::{Outcome, RequestReport};
-use crate::script::HANDLER_TEST_NAME;
 
 /// The requests as JSON: a summary, then each request in run order.
 pub fn json(requests: &[RequestReport]) -> String {
@@ -82,7 +81,7 @@ fn test_case(xml: &mut String, file: &str, r: &RequestReport) {
     match (&r.outcome, &r.failure) {
         (Outcome::Failed, _) if r.tests.iter().any(|t| !t.passed) => {
             for t in r.tests.iter().filter(|t| !t.passed) {
-                let kind = if t.name == HANDLER_TEST_NAME { "script" } else { "test" };
+                let kind = if t.script_error { "script" } else { "test" };
                 failure(xml, kind, &super::report::test_failure(t));
             }
         }

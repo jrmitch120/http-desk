@@ -72,6 +72,18 @@ pub struct TestResult {
     pub passed: bool,
     /// Why it failed; `None` when it passed.
     pub message: Option<String>,
+    /// Set on a response handler's own error (it threw, ran out of time or memory,
+    /// or its file couldn't be read), reported under [`HANDLER_TEST_NAME`]: a script
+    /// failure, where every other entry is a test. Left out of JSON when unset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub script_error: bool,
+}
+
+impl TestResult {
+    /// A response handler's own error (see [`TestResult::script_error`]).
+    pub fn handler_error(message: String) -> Self {
+        TestResult { name: HANDLER_TEST_NAME.into(), passed: false, message: Some(message), script_error: true }
+    }
 }
 
 /// What running a request's scripts produced.
@@ -189,19 +201,18 @@ pub fn run_response_handler(
         return results;
     }
     let data = serde_json::json!({ "response": response_data(response, body) });
-    let failed = |message| TestResult { name: HANDLER_TEST_NAME.into(), passed: false, message: Some(message) };
     for part in parts {
         let HandlerPart::Script(source) = part else { continue };
         let script = match Script::load(source, &ctx.files) {
             Ok(script) => script,
             Err(message) => {
-                results.tests.push(failed(message));
+                results.tests.push(TestResult::handler_error(message));
                 continue;
             }
         };
         let mut run = Sandbox::run(&script.source, &data, ctx);
         if let Some(e) = run.error {
-            run.results.tests.push(failed(script.origin.describe(e)));
+            run.results.tests.push(TestResult::handler_error(script.origin.describe(e)));
         }
         results.tests.append(&mut run.results.tests);
         results.logs.append(&mut run.results.logs);
@@ -506,7 +517,7 @@ fn install<'js>(ctx: &Ctx<'js>, data: &serde_json::Value, from: &Host) -> rquick
     host.set(
         "test",
         Function::new(ctx.clone(), move |name: String, passed: bool, message: Option<String>| {
-            tests.borrow_mut().tests.push(TestResult { name, passed, message });
+            tests.borrow_mut().tests.push(TestResult { name, passed, message, script_error: false });
         })?,
     )?;
     // A `client.test` whose function threw `thrown`, described as a script's own
@@ -516,7 +527,12 @@ fn install<'js>(ctx: &Ctx<'js>, data: &serde_json::Value, from: &Host) -> rquick
         "testFailed",
         Function::new(ctx.clone(), move |name: String, thrown: Value<'js>| {
             let message = if exhausted.take() { memory_message() } else { thrown_message(&thrown) };
-            tests.borrow_mut().tests.push(TestResult { name, passed: false, message: Some(message) });
+            tests.borrow_mut().tests.push(TestResult {
+                name,
+                passed: false,
+                message: Some(message),
+                script_error: false,
+            });
         })?,
     )?;
     let set = from.variables.clone();

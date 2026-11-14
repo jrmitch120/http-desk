@@ -109,6 +109,29 @@ async fn the_json_export_lists_every_request_with_its_tests_and_failure_reason()
     assert!(requests[3]["failure"]["message"].as_str().unwrap().contains("nowhere"));
 }
 
+#[tokio::test]
+async fn a_test_the_user_named_response_handler_is_a_test_failure_and_a_handler_error_a_script_one() {
+    let server = ok_server().await;
+    let ws = workspace(&server.uri());
+    let pets = "### Named like the handler\n\
+                GET {{host}}/pets\n\
+                \n\
+                > {% client.test(\"Response handler\", function() { client.assert(false, \"Mine\"); }); %}\n\
+                \n\
+                ### Throws\n\
+                GET {{host}}/pets\n\
+                \n\
+                > {% missing(); %}\n";
+
+    let report = run_files(ws.path(), &[("pets.http", pets)]).await;
+
+    let reasons: Vec<Reason> = report.requests.iter().map(|r| r.failure.as_ref().unwrap().reason).collect();
+    assert_eq!(reasons, [Reason::Test, Reason::Script]);
+    let xml = export::junit(&report.requests);
+    assert!(xml.contains(r#"<failure type="test" message="&quot;Response handler&quot;: Mine">"#), "{xml}");
+    assert!(xml.contains(r#"<failure type="script" message="&quot;Response handler&quot;: ReferenceError"#), "{xml}");
+}
+
 /// Whether `text` holds the Secret, in any encoding (its distinctive parts need none).
 fn leaks_secret(text: &str) -> bool {
     text.contains("s3cr3t") || text.contains("T0ken")
@@ -165,7 +188,12 @@ fn report(file: Option<&str>, name: &str, outcome: Outcome) -> RequestReport {
 }
 
 fn test(name: &str, failure: Option<&str>) -> TestResult {
-    TestResult { name: name.into(), passed: failure.is_none(), message: failure.map(str::to_string) }
+    TestResult {
+        name: name.into(),
+        passed: failure.is_none(),
+        message: failure.map(str::to_string),
+        script_error: false,
+    }
 }
 
 /// One of each outcome and failure reason, across two files and none, with
@@ -178,7 +206,7 @@ fn every_kind_of_result() -> Vec<RequestReport> {
         vec![test("Is OK", None), test("Created", Some("Expected 201\nbut got 200")), test("Id", Some("No id"))];
     failed_test.failure = Some(Failure { reason: Reason::Test, message: "\"Created\": Expected 201".into() });
     let mut script = report(Some("api/pets.http"), "Get pet", Outcome::Failed);
-    script.tests = vec![test("Response handler", Some("ReferenceError: x is not defined\u{1}"))];
+    script.tests = vec![TestResult::handler_error("ReferenceError: x is not defined\u{1}".into())];
     script.failure = Some(Failure { reason: Reason::Script, message: "ReferenceError".into() });
     let mut network = report(Some("other.http"), "Down", Outcome::Failed);
     (network.url, network.status, network.time_ms) = (None, None, None);
