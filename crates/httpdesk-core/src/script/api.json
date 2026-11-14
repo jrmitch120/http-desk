@@ -43,5 +43,20 @@
     "name": "response.contentType.charset",
     "detail": "string | null",
     "info": "The charset from the response's Content-Type, if it has one."
+  },
+  {
+    "name": "request.variables.set",
+    "detail": "(name, value)",
+    "info": "Sets {{name}} for this request only. An object is written as JSON."
+  },
+  {
+    "name": "request.variables.get",
+    "detail": "(name)",
+    "info": "The value request.variables.set gave name, or null."
+  },
+  {
+    "name": "request.environment.get",
+    "detail": "(name)",
+    "info": "The selected environment's value for name, private values included, or null."
   }
 ]
