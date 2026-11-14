@@ -12,9 +12,11 @@
   import Icon from "./Icon.svelte";
   import SegmentedControl from "./SegmentedControl.svelte";
   import SessionPanel from "./SessionPanel.svelte";
+  import RunnerPanel from "./RunnerPanel.svelte";
 
   const PANELS: { value: PanelId; label: string; component: Component; command: CommandId }[] = [
     { value: "session", label: "Session", component: SessionPanel, command: "toggle-session" },
+    { value: "runner", label: "Runner", component: RunnerPanel, command: "toggle-runner" },
   ];
 
   const shown = $derived(PANELS.find((p) => p.value === app.panel) ?? PANELS[0]);
