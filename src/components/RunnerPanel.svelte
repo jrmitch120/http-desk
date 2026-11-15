@@ -209,8 +209,9 @@
     align-items: center;
     gap: 6px;
   }
+  /* As wide as its input and unit: a narrower box lets them spill left over the label. */
   .option :global(.number-field) {
-    width: 92px;
+    flex: none;
   }
   .body {
     flex: 1;

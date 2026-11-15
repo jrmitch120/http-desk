@@ -311,3 +311,19 @@ test("Export is offered once the run ends, and a stopped run exports every reque
     .poll(async () => (await mockState(page, "runExports")).flatMap((e) => e.requests.map((r) => r.outcome)))
     .toEqual(["cancelled", "notRun", "notRun"]);
 });
+
+test("the options' labels sit clear of their controls", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await runFile(page, "api", "pets.http");
+  await expect(runner(page)).toContainText("3 passed · 0 failed");
+
+  const options = runner(page).getByRole("group", { name: "Runner options" });
+  const label = await options.getByText("Delay", { exact: true }).boundingBox();
+  const field = await options.getByRole("textbox", { name: "Delay between requests" }).boundingBox();
+  const unit = await options.getByText("ms", { exact: true }).boundingBox();
+  const toggle = await options.getByText("Stop on first failure").boundingBox();
+  expect(label!.x + label!.width).toBeLessThanOrEqual(field!.x);
+  expect(field!.x + field!.width).toBeLessThanOrEqual(unit!.x);
+  expect(unit!.x + unit!.width).toBeLessThanOrEqual(toggle!.x);
+});
