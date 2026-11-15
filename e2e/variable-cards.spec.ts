@@ -152,6 +152,22 @@ test("an undefined variable, or a dynamic one, has no Edit; only a named one has
   }
 });
 
+test("a dynamic variable's card says what it generates and the arguments it takes", async ({ page }) => {
+  await openSection(page, "Headers");
+  const cell = await headerValue(page, "{{$uuid}} {{$timestamp -1 d}}");
+
+  await cell.locator(".cm-var", { hasText: "{{$uuid}}" }).hover();
+  await expect(card(page).locator(".var-card-value")).toHaveText("Random UUID (v4)");
+  await expect(card(page).locator(".var-card-source")).toHaveText("Dynamic variable: a new value on every send");
+  await expect(card(page).locator(".var-card-args")).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+
+  await cell.locator(".cm-var", { hasText: "{{$timestamp -1 d}}" }).hover();
+  await expect(card(page).locator(".var-card-value")).toHaveText("Unix time in seconds, optionally offset (-1 d)");
+  await expect(card(page).locator(".var-card-args")).toHaveText("$timestamp [offset unit]");
+});
+
 test("autocomplete shows each name's source and value preview, never a Secret's value, then the dynamic variables", async ({ page }) => {
   await openSection(page, "Headers");
   const cell = page.locator(".kv-row").first().locator(".c-value");

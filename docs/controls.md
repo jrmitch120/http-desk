@@ -271,7 +271,9 @@ paths), File variable values and environment values.
   VarField's static rendering's cards are the same `.var-card`.
 - The hover card shows the resolved value and where it comes from ("this file",
   "this request", `environment "staging"`, "shared variables", or a prompt). An
-  unanswered Prompt variable shows "Asked when sent". A Secret, a masked prompted
+  unanswered Prompt variable shows "Asked when sent". A dynamic variable shows its
+  description and, if it takes arguments, how they're written (`dynamicUsage`), from
+  the same `dynamic-variables.json` as autocomplete and the README's table. A Secret, a masked prompted
   value, or a value either went into, is masked until **Reveal**, in that card only. **Edit** opens the
   definition's row when the app has one: a File variable at the top of the file in
   the request's Settings section, one declared in a request block at its line in that

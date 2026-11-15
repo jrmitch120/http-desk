@@ -10,7 +10,7 @@ import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput,
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, segments } from "../http";
-import { MASK, requestVariable, varClass } from "../vars";
+import { dynamicUsage, dynamicVariable, MASK, requestVariable, varClass } from "../vars";
 import type { PathCompletion } from "../requestPaths";
 import {
   Decoration,
@@ -304,8 +304,11 @@ export function varCard(
   const masked = info.state === "ok" && !!info.secret;
   let revealed = false;
   const showValue = () => (body.textContent = masked && !revealed ? `${MASK} (secret)` : info.value || "(empty)");
-  if (info.state === "dyn") body.textContent = "Dynamic variable (generated at send time)";
-  else if (info.state === "bad")
+  const dynamic = info.state === "dyn" ? dynamicVariable(name) : undefined;
+  if (info.state === "dyn") {
+    body.textContent = dynamic?.description ?? "Dynamic variable";
+    body.classList.add("var-card-prose");
+  } else if (info.state === "bad")
     body.textContent = name.startsWith("$")
       ? "Undefined — not a dynamic variable"
       : requestVariable(name)
@@ -318,6 +321,11 @@ export function varCard(
   dom.append(div("var-card-name", name), body);
   const source = info.source ? div("var-card-source", `from ${info.source}`) : null;
   if (source) dom.append(source);
+  if (dynamic) {
+    // Those needing a name read a value; the rest generate one.
+    dom.append(div("var-card-source", `Dynamic variable: ${dynamic.required ? "read when sent" : "a new value on every send"}`));
+    if (dynamic.args) dom.append(div("var-card-args", dynamicUsage(dynamic)));
+  }
   if (info.state === "request" && actions.readRequestVariable) {
     body.classList.add("var-card-long");
     void actions.readRequestVariable(name).then((read) => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import shared from "../../crates/httpdesk-core/tests/fixtures/resolution-cases.json";
 import type { EnvironmentSet, EnvVar, ExchangeShape, Variable } from "./types";
-import { DYNAMIC_VARIABLES, envVariables, makeVarProvider, varSegments } from "./vars";
+import readme from "../../README.md?raw";
+import { DYNAMIC_VARIABLES, dynamicUsage, dynamicVariable, envVariables, makeVarProvider, varSegments } from "./vars";
 import { environmentsFor } from "./envFolders";
 
 type EnvFile = Record<string, Record<string, string>>;
@@ -442,5 +443,38 @@ describe("what autocomplete offers in a Request variable's path", () => {
   it("offers the file's named requests after {{, as requests", () => {
     const names = provider(login).completions().filter((c) => c.source === "request");
     expect(names).toEqual([{ name: "login", source: "request" }]);
+  });
+});
+
+describe("dynamicVariable (which built-in a reference uses, for its hover card)", () => {
+  it.each([
+    ["$uuid", "$uuid"],
+    ["$timestamp -1 d", "$timestamp"],
+    ["$random.integer(1, 10)", "$random.integer"],
+    ["$datetime iso8601", "$datetime"],
+    ["$env.HOME", "$env."],
+    ["$dotenv API_KEY", "$dotenv"],
+  ])("%s is %s", (reference, name) => {
+    expect(dynamicVariable(reference)?.name).toBe(name);
+  });
+
+  it.each(["$uuidd", "$env.", "uuid", "$random"])("%s is none", (reference) => {
+    expect(dynamicVariable(reference)).toBeUndefined();
+  });
+});
+
+describe("the README's table of dynamic variables", () => {
+  it("lists every one the core generates, as the hover card writes it", () => {
+    const table = /<!-- dynamic-variables:.*?-->\n([\s\S]*?)<!-- \/dynamic-variables -->/.exec(readme)?.[1];
+    // A `$name` in a description is code too.
+    const code = (text: string) => text.replace(/\$[\w.]+/g, (m) => `\`${m}\``);
+    const expected = [
+      "| Write | Gives |",
+      "|---|---|",
+      ...DYNAMIC_VARIABLES.map((d) => `| \`{{${dynamicUsage(d)}}}\` | ${code(d.description)} |`),
+      "",
+    ].join("\n");
+    // On a mismatch, paste the expected table between the README's markers.
+    expect(table).toBe(expected);
   });
 });

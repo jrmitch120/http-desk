@@ -1,5 +1,5 @@
 {
-  "about": "Every dynamic variable the core's resolver generates (vars::DYNAMIC_VARIABLES), with what autocomplete shows for it (src/lib/vars.ts). A test in vars.rs fails if the two lists differ. args is the argument hint; required means the variable is nothing without its argument. A name ending in '.' takes a name straight after it.",
+  "about": "Every dynamic variable the core's resolver generates (vars::DYNAMIC_VARIABLES), with what autocomplete, the hover card and the README's table show for it (src/lib/vars.ts). A test in vars.rs fails if the two lists differ, and one in src/lib/vars.test.ts if the README's table is out of date. args is the argument hint; required means the variable is nothing without its argument. A name ending in '.' takes a name straight after it.",
   "variables": [
     { "name": "$uuid", "args": "", "description": "Random UUID (v4)" },
     { "name": "$guid", "args": "", "description": "Random UUID (v4), as $uuid" },

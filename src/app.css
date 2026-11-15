@@ -554,6 +554,17 @@ kbd {
   color: var(--muted);
   margin-top: 3px;
 }
+/* A dynamic variable's description: prose, not a value. */
+.var-card-prose {
+  font-family: var(--font);
+}
+/* A dynamic variable's arguments, as written. */
+.var-card-args {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+}
 /* A Request variable's value can be a whole body: it scrolls past a few lines. */
 .var-card-long {
   max-height: 9em;

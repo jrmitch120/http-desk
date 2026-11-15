@@ -38,9 +38,20 @@ export const SECRET_RE = /(.*?)/s;
  * variable: its name, before `(` or a space, is one the core generates.
  */
 export function isDynamic(reference: string): boolean {
-  if (!reference.startsWith("$")) return false;
+  return dynamicVariable(reference) !== undefined;
+}
+
+/** How `d` is written with its arguments: `$timestamp [offset unit]`, `$random.integer(from, to)`, `$env.NAME`. */
+export function dynamicUsage(d: DynamicVariable): string {
+  const glue = !d.args || d.name.endsWith(".") || d.args.startsWith("(") ? "" : " ";
+  return `${d.name}${glue}${d.args}`;
+}
+
+/** The dynamic variable `{{reference}}` uses (`$timestamp -1 d` is `$timestamp`, `$env.HOME` is `$env.`), if any. */
+export function dynamicVariable(reference: string): DynamicVariable | undefined {
+  if (!reference.startsWith("$")) return undefined;
   const name = reference.includes("(") ? reference.slice(0, reference.indexOf("(")) : reference.split(/\s/, 1)[0];
-  return DYNAMIC_VARIABLES.some((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
+  return DYNAMIC_VARIABLES.find((d) => (d.name.endsWith(".") ? name.length > d.name.length && name.startsWith(d.name) : name === d.name));
 }
 
 /** The env files' key for the shared variables, which stands for them wherever an environment is named. */
