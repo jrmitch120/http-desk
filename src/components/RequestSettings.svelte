@@ -170,7 +170,9 @@
     margin: 2px 0 0;
     line-height: 1.5;
   }
+  /* Fixed, so a long hint beside it wraps instead of squeezing it: every timeout field matches. */
   .num {
+    flex: none;
     width: 110px;
   }
   .narrow {
