@@ -2,7 +2,7 @@
 // until revealed in that card, Edit jumps to the variable's row, and `{{` lists
 // each name with its source and a value preview, then the dynamic variables.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, showEnvironmentMatrix, urlBar } from "./helpers";
+import { mockState, openApp, openRequest, showEnvironmentMatrix, urlBar } from "./helpers";
 
 /** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
 async function openSection(page: Page, section: "Headers" | "Settings"): Promise<void> {
@@ -127,6 +127,8 @@ test("Edit on a File variable declared in a request shows its line in that reque
   await card(page).getByRole("button", { name: "Edit" }).click();
   await expect(page.locator(".source-code")).toContainText("@size = 10");
   await expect.poll(selection).toBe("@size = 10");
+  // The jump turned the source view on, and it's kept like a click on .http.
+  await expect.poll(async () => (await mockState(page, "settings")).showSource).toBe(true);
 
   // Create pet's @kind: its tab comes forward on that line.
   await page.locator(".btn", { hasText: ".http" }).click();
@@ -150,6 +152,30 @@ test("an undefined variable, or a dynamic one, has no Edit; only a named one has
     await page.mouse.move(0, 0);
     await expect(card(page)).toHaveCount(0);
   }
+});
+
+test("a dynamic variable's card says what it generates and the arguments it takes", async ({ page }) => {
+  await openSection(page, "Headers");
+  const cell = await headerValue(page, "{{$uuid}} {{$timestamp -1 d}}");
+
+  await cell.locator(".cm-var", { hasText: "{{$uuid}}" }).hover();
+  await expect(card(page).locator(".var-card-value")).toHaveText("Random UUID (v4)");
+  await expect(card(page).locator(".var-card-kind")).toHaveText("Dynamic variable: a new value on every send");
+  await expect(card(page).locator(".var-card-args")).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+
+  await cell.locator(".cm-var", { hasText: "{{$timestamp -1 d}}" }).hover();
+  await expect(card(page).locator(".var-card-value")).toHaveText("Unix time in seconds, optionally offset (-1 d)");
+  await expect(card(page).locator(".var-card-args")).toHaveText("$timestamp [offset unit]");
+  await page.mouse.move(0, 0);
+  await expect(card(page)).toHaveCount(0);
+
+  // One that reads a value instead of generating one.
+  const reading = await headerValue(page, "{{$processEnv HOME}}");
+  await reading.locator(".cm-var").hover();
+  await expect(card(page).locator(".var-card-kind")).toHaveText("Dynamic variable: reads a value that's already there");
+  await expect(card(page).locator(".var-card-args")).toHaveText("$processEnv NAME");
 });
 
 test("autocomplete shows each name's source and value preview, never a Secret's value, then the dynamic variables", async ({ page }) => {

@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use httpdesk_core::body_format::ResponseKind;
+use httpdesk_core::cookies::CookieJar;
 use httpdesk_core::env::SslConfig;
 use httpdesk_core::exec::{execute, execute_on, prepare, ClientPool, ExecClient, ExecError, ExecSettings};
 use httpdesk_core::vars::Resolver;
@@ -859,7 +860,8 @@ async fn send_with_progress(req: &Request) -> (exec::HttpResponse, Vec<(std::tim
     let prepared = prepare(req, &Resolver::new(HashMap::new()), Path::new("."), &settings).unwrap();
     let mut reports = Vec::new();
     let client = ExecClient::new(&prepared, &settings, &SslConfig::default()).unwrap();
-    let out = execute_on(&client, prepared, &settings, |n| reports.push((std::time::Instant::now(), n))).await.unwrap();
+    let out =
+        execute_on(&client, prepared, &settings, None, |n| reports.push((std::time::Instant::now(), n))).await.unwrap();
     (out.response, reports)
 }
 
@@ -934,10 +936,10 @@ async fn a_second_request_on_the_same_client_reuses_the_connection_and_skips_dns
     let prepared = || prepare(&req, &resolver, Path::new("."), &settings).unwrap();
     let client = ExecClient::new(&prepared(), &settings, &SslConfig::default()).unwrap();
 
-    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    let first = execute_on(&client, prepared(), &settings, None, |_| {}).await.unwrap().response.timings;
     assert!(!first.reused && first.dns.is_some() && first.connect.is_some(), "{first:?}");
 
-    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    let second = execute_on(&client, prepared(), &settings, None, |_| {}).await.unwrap().response.timings;
     assert!(second.reused, "{second:?}");
     assert_eq!((second.dns, second.connect), (None, None));
     assert!(second.ttfb > 0.0, "{second:?}");
@@ -996,7 +998,7 @@ async fn a_redirect_to_another_server_times_the_final_hops_new_connection() {
 // Cookies.
 
 #[tokio::test]
-async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_and_never_sent_back() {
+async fn a_cookie_set_on_a_redirect_hop_is_sent_on_the_next_hop_and_both_responses_cookies_are_listed() {
     let server = MockServer::start().await;
     Mock::given(path("/login"))
         .respond_with(
@@ -1014,8 +1016,8 @@ async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_an
         )
         .mount(&server)
         .await;
-    let req = parse("GET {{base}}/login\n").requests.remove(0);
-    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+    let resp = send_with_jar(&pool, &jar, "GET {{base}}/login\n", &server.uri()).await;
     assert_eq!(resp.status, 200);
 
     let got: Vec<_> = resp.cookies.iter().map(|c| (c.name.as_str(), c.value.as_str(), c.url.as_str())).collect();
@@ -1026,21 +1028,37 @@ async fn cookies_set_on_a_redirect_hop_and_the_final_response_are_both_listed_an
     assert_eq!(resp.cookies[2].raw, "not a cookie");
 
     let hops = server.received_requests().await.unwrap();
-    assert_eq!(hops.len(), 2);
-    assert!(hops.iter().all(|r| r.headers.get("cookie").is_none()), "a cookie was sent back");
+    let sent: Vec<_> = hops.iter().map(|r| header(r, "cookie")).collect();
+    assert_eq!(sent, [None, Some("a=1")]);
+    assert_eq!(shown(&resp.request, "cookie"), Some("a=1"), "the Request tab shows what the jar sent");
 }
 
 #[tokio::test]
-async fn a_cookie_header_the_user_wrote_is_still_sent() {
-    let server = echo_server().await;
-    let req = parse("GET {{base}}/echo\nCookie: mine=1\n").requests.remove(0);
-    let resp = send(&req, env(&[("base", &server.uri())]), Path::new(".")).await.unwrap();
+async fn without_a_jar_no_cookie_is_sent_back() {
+    let server = login_server(&["sid=abc"]).await;
+    let request = |text: &str| parse(&format!("{text}\n")).requests.remove(0);
+    let vars = || env(&[("base", &server.uri())]);
+    let login = send(&request("POST {{base}}/login"), vars(), Path::new(".")).await.unwrap();
+    send(&request("GET {{base}}/me"), vars(), Path::new(".")).await.unwrap();
+    assert_eq!(login.cookies.len(), 1, "still listed");
+    assert_eq!(cookie_sent_to(&server, "/me").await, None);
+}
+
+#[tokio::test]
+async fn a_cookie_header_the_user_wrote_is_sent_instead_of_the_jars() {
+    let server = login_server(&["sid=abc"]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+
+    let resp = send_with_jar(&pool, &jar, "GET {{base}}/me\nCookie: mine=1\n", &server.uri()).await;
     assert!(resp.cookies.is_empty());
-    assert_eq!(header(&last_request(&server).await, "cookie"), Some("mine=1"));
+    assert_eq!(cookie_sent_to(&server, "/me").await.as_deref(), Some("mine=1"));
+    let shown_cookies: Vec<_> = resp.request.headers.iter().filter(|(n, _)| n.eq_ignore_ascii_case("cookie")).collect();
+    assert_eq!(shown_cookies, [&("Cookie".to_string(), "mine=1".to_string())]);
 }
 
 #[tokio::test]
-async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
+async fn sends_on_one_reused_client_each_list_only_their_own_cookies_and_send_back_all_the_jar_kept() {
     let server = MockServer::start().await;
     for (route, cookie) in [("/one", "a=1"), ("/two", "b=2")] {
         Mock::given(path(route))
@@ -1062,25 +1080,247 @@ async fn two_requests_on_one_reused_client_each_list_only_their_own_cookies() {
     let resolver = Resolver::new(env(&[("base", &server.uri())]));
     let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
     let client = ExecClient::new(&prepared("GET {{base}}/one\n"), &settings, &SslConfig::default()).unwrap();
+    let jar = CookieJar::default();
+    let send = |text: &'static str| execute_on(&client, prepared(text), &settings, Some(&jar), |_| {});
 
     let names = |r: &exec::HttpResponse| r.cookies.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
-    let first = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
+    let first = send("GET {{base}}/one\n").await.unwrap().response;
     assert_eq!(names(&first), ["a"]);
-    let second = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
+    let second = send("GET {{base}}/two\n").await.unwrap().response;
     assert_eq!(names(&second), ["b"], "the first request's cookie leaked into the second");
-    let again = execute_on(&client, prepared("GET {{base}}/one\n"), &settings, |_| {}).await.unwrap().response;
+    let again = send("GET {{base}}/one\n").await.unwrap().response;
     assert_eq!(names(&again), ["a"]);
 
-    // A request that fails after a hop set a cookie never takes its cookies;
-    // the next one on the client must not inherit them.
-    let failed = execute_on(&client, prepared("GET {{base}}/broken\n"), &settings, |_| {}).await;
+    // A request that fails after a hop set a cookie never lists its cookies, and
+    // the next one on the client must not inherit them. The jar keeps the cookie,
+    // as a browser would.
+    let failed = send("GET {{base}}/broken\n").await;
     assert!(matches!(failed, Err(ExecError::Refused { .. })), "the redirect target is closed");
-    let after = execute_on(&client, prepared("GET {{base}}/two\n"), &settings, |_| {}).await.unwrap().response;
+    let after = send("GET {{base}}/two\n").await.unwrap().response;
     assert_eq!(names(&after), ["b"], "the failed request's cookie leaked into the next");
 
-    let sent = server.received_requests().await.unwrap();
-    assert_eq!(sent.len(), 5);
-    assert!(sent.iter().all(|r| r.headers.get("cookie").is_none()), "a reused client sent a cookie back");
+    let received = server.received_requests().await.unwrap();
+    let sent: Vec<_> = received.iter().map(|r| header(r, "cookie")).collect();
+    assert_eq!(sent, [None, Some("a=1"), Some("a=1; b=2"), Some("a=1; b=2"), Some("a=1; b=2; c=3")]);
+}
+
+// ---------------------------------------------------------------- the Session's cookie jar
+
+/// Sends `text` through `pool` with `jar` as the Session's cookie jar, `{{base}}`
+/// standing for `base`.
+async fn send_with_jar(pool: &ClientPool, jar: &CookieJar, text: &str, base: &str) -> exec::HttpResponse {
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", base)]));
+    let p = prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
+    let client = pool.checkout(&p, &settings, &SslConfig::default()).unwrap();
+    execute_on(&client, p, &settings, Some(jar), |_| {}).await.unwrap().response
+}
+
+/// A server whose `/login` sets each of `cookies` and whose other paths answer 200.
+async fn login_server(cookies: &[&str]) -> MockServer {
+    let server = MockServer::start().await;
+    let mut login = ResponseTemplate::new(200);
+    for c in cookies {
+        login = login.append_header("set-cookie", *c);
+    }
+    Mock::given(path("/login")).respond_with(login).mount(&server).await;
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    server
+}
+
+/// The Cookie header the server received on its request to `route`, if any.
+async fn cookie_sent_to(server: &MockServer, route: &str) -> Option<String> {
+    let received = server.received_requests().await.unwrap();
+    let r = received.iter().rev().find(|r| r.url.path() == route).unwrap_or_else(|| panic!("no request to {route}"));
+    header(r, "cookie").map(str::to_string)
+}
+
+#[tokio::test]
+async fn a_login_cookie_is_sent_on_the_next_request_to_the_same_host() {
+    let server = login_server(&["sid=abc"]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    let me = send_with_jar(&pool, &jar, "GET {{base}}/me\n", &server.uri()).await;
+
+    assert_eq!(cookie_sent_to(&server, "/me").await.as_deref(), Some("sid=abc"));
+    assert!(me.cookies.is_empty(), "the Cookies tab lists only what this response set");
+}
+
+#[tokio::test]
+async fn a_cookie_is_sent_only_under_its_path() {
+    let server = login_server(&["sid=abc; Path=/api"]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    for route in ["/api", "/api/users", "/apiary", "/other"] {
+        send_with_jar(&pool, &jar, &format!("GET {{{{base}}}}{route}\n"), &server.uri()).await;
+    }
+
+    assert_eq!(cookie_sent_to(&server, "/api").await.as_deref(), Some("sid=abc"));
+    assert_eq!(cookie_sent_to(&server, "/api/users").await.as_deref(), Some("sid=abc"));
+    assert_eq!(cookie_sent_to(&server, "/apiary").await, None, "a path prefix isn't a parent path");
+    assert_eq!(cookie_sent_to(&server, "/other").await, None);
+}
+
+#[tokio::test]
+async fn a_cookie_is_not_sent_to_another_host() {
+    let server = login_server(&["sid=abc"]).await;
+    let other = login_server(&[]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    // Cookies don't tell ports apart, so the other host is the other server by name.
+    let other_host = format!("http://localhost:{}", other.address().port());
+    send_with_jar(&pool, &jar, "GET {{base}}/me\n", &other_host).await;
+
+    assert_eq!(cookie_sent_to(&other, "/me").await, None);
+}
+
+#[tokio::test]
+async fn a_cookie_is_not_sent_after_it_expires_or_the_server_deletes_it() {
+    let server = login_server(&["short=1; Max-Age=1", "sid=abc"]).await;
+    Mock::given(path("/logout"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "sid=; Expires=Thu, 01 Jan 1970 00:00:00 GMT"),
+        )
+        .mount(&server)
+        .await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    send_with_jar(&pool, &jar, "GET {{base}}/fresh\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/fresh").await.as_deref(), Some("short=1; sid=abc"));
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    send_with_jar(&pool, &jar, "GET {{base}}/later\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/later").await.as_deref(), Some("sid=abc"));
+
+    send_with_jar(&pool, &jar, "POST {{base}}/logout\n", &server.uri()).await;
+    send_with_jar(&pool, &jar, "GET {{base}}/after\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/after").await, None);
+    assert!(jar.list().is_empty(), "{:?}", jar.list());
+}
+
+#[tokio::test]
+async fn a_secure_cookie_is_kept_but_not_sent_over_plain_http() {
+    let server = login_server(&["token=t; Secure", "sid=abc"]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    send_with_jar(&pool, &jar, "GET {{base}}/me\n", &server.uri()).await;
+
+    // The server is http://127.0.0.1, which browsers would count as secure.
+    assert_eq!(cookie_sent_to(&server, "/me").await.as_deref(), Some("sid=abc"));
+    assert!(jar.list().iter().any(|c| c.name == "token" && c.secure), "{:?}", jar.list());
+}
+
+#[tokio::test]
+async fn no_cookie_jar_neither_sends_stored_cookies_nor_keeps_new_ones() {
+    let server = login_server(&["sid=abc"]).await;
+    Mock::given(path("/anon-login"))
+        .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", "anon=1"))
+        .mount(&server)
+        .await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+    send_with_jar(&pool, &jar, "# @no-cookie-jar\nGET {{base}}/anon\n", &server.uri()).await;
+    let anon = send_with_jar(&pool, &jar, "// @no-cookie-jar\nPOST {{base}}/anon-login\n", &server.uri()).await;
+    send_with_jar(&pool, &jar, "GET {{base}}/me\n", &server.uri()).await;
+
+    assert_eq!(cookie_sent_to(&server, "/anon").await, None);
+    assert_eq!(cookie_sent_to(&server, "/anon-login").await, None);
+    assert_eq!(anon.cookies.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["anon"], "still listed");
+    assert_eq!(cookie_sent_to(&server, "/me").await.as_deref(), Some("sid=abc"), "anon=1 wasn't kept");
+}
+
+#[tokio::test]
+async fn concurrent_sends_on_different_pooled_clients_share_one_jar() {
+    let server = MockServer::start().await;
+    for (route, cookie) in [("/login-a", "a=1"), ("/login-b", "b=2")] {
+        // Slow enough that both sends are in flight at once.
+        let reply =
+            ResponseTemplate::new(200).insert_header("set-cookie", cookie).set_delay(Duration::from_millis(100));
+        Mock::given(path(route)).respond_with(reply).mount(&server).await;
+    }
+    Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+    let settings = ExecSettings::default();
+    let resolver = Resolver::new(env(&[("base", &server.uri())]));
+    let prepared = |text: &str| prepare(&parse(text).requests.remove(0), &resolver, Path::new("."), &settings).unwrap();
+    let (pool, jar, ssl) = (ClientPool::default(), CookieJar::default(), SslConfig::default());
+    // Both checked out at once, so they are different clients.
+    let one = pool.checkout(&prepared("POST {{base}}/login-a\n"), &settings, &ssl).unwrap();
+    let two = pool.checkout(&prepared("POST {{base}}/login-b\n"), &settings, &ssl).unwrap();
+    let send = |client, text: &'static str| execute_on(client, prepared(text), &settings, Some(&jar), |_| {});
+
+    let (a, b) = tokio::join!(send(&one, "POST {{base}}/login-a\n"), send(&two, "POST {{base}}/login-b\n"));
+    let (a, b) = (a.unwrap().response, b.unwrap().response);
+    assert!(a.time_ms >= 100.0 && b.time_ms >= 100.0);
+    let (x, y) = tokio::join!(send(&one, "GET {{base}}/one\n"), send(&two, "GET {{base}}/two\n"));
+    x.unwrap();
+    y.unwrap();
+
+    let sorted = |v: Option<String>| {
+        let mut pairs: Vec<String> = v.unwrap_or_default().split("; ").map(str::to_string).collect();
+        pairs.sort();
+        pairs
+    };
+    assert_eq!(sorted(cookie_sent_to(&server, "/one").await), ["a=1", "b=2"]);
+    assert_eq!(sorted(cookie_sent_to(&server, "/two").await), ["a=1", "b=2"]);
+}
+
+#[tokio::test]
+async fn the_jar_lists_its_cookies_and_deletes_one_or_all() {
+    let server = login_server(&["sid=abc; HttpOnly; SameSite=Lax", "pref=1; Path=/app; Max-Age=3600; Secure"]).await;
+    let (pool, jar) = (ClientPool::default(), CookieJar::default());
+    send_with_jar(&pool, &jar, "POST {{base}}/login\n", &server.uri()).await;
+
+    let list = jar.list();
+    let names: Vec<_> = list.iter().map(|c| (c.domain.as_str(), c.path.as_str(), c.name.as_str())).collect();
+    assert_eq!(names, [("127.0.0.1", "/", "sid"), ("127.0.0.1", "/app", "pref")], "by domain, then path");
+    let (sid, pref) = (&list[0], &list[1]);
+    assert_eq!(sid.value, "abc");
+    assert!(sid.host_only && sid.http_only && !sid.secure);
+    assert_eq!((sid.expires.as_deref(), sid.same_site.as_deref()), (None, Some("Lax")));
+    assert!(pref.secure && !pref.http_only);
+    let expires = chrono::DateTime::parse_from_rfc3339(pref.expires.as_deref().unwrap()).unwrap();
+    let in_secs = (expires.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds();
+    assert!((3590..=3600).contains(&in_secs), "Max-Age=3600 expires in {in_secs} s");
+
+    assert!(jar.remove("127.0.0.1", "/", "sid"));
+    assert!(!jar.remove("127.0.0.1", "/", "sid"), "already gone");
+    send_with_jar(&pool, &jar, "GET {{base}}/me\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/me").await, None);
+    assert_eq!(jar.list().len(), 1);
+
+    jar.clear();
+    assert!(jar.list().is_empty());
+}
+
+#[tokio::test]
+async fn clearing_the_session_forgets_its_cookies_prompt_answers_and_exchanges_and_it_keeps_working() {
+    let server = login_server(&["sid=abc"]).await;
+    let (pool, session) = (ClientPool::default(), session::Session::default());
+    send_with_jar(&pool, session.cookies(), "POST {{base}}/login\n", &server.uri()).await;
+    session.prompt_answers().answer("req-1", env(&[("otp", "123456")]));
+    let login = exchange::Exchange {
+        request: exchange::Message { headers: vec![], body: Vec::new().into(), content_type: None },
+        shown: exec::HttpResponse { status: 200, ..Default::default() },
+        response_body: Vec::new().into(),
+        received: chrono::Utc::now(),
+    };
+    session.exchanges().record(Path::new("api.http"), "login", login);
+
+    session.clear();
+
+    assert!(session.cookies().list().is_empty());
+    assert_eq!(session.prompt_answers().get("req-1"), HashMap::new());
+    assert!(session.exchanges().latest(Path::new("api.http"), "login").is_none());
+    send_with_jar(&pool, session.cookies(), "GET {{base}}/me\n", &server.uri()).await;
+    assert_eq!(cookie_sent_to(&server, "/me").await, None);
+    send_with_jar(&pool, session.cookies(), "POST {{base}}/login\n", &server.uri()).await;
+    assert_eq!(session.cookies().list().len(), 1, "a cleared Session keeps cookies set afterwards");
 }
 
 // ---------------------------------------------------------------- the final request after redirects
@@ -1194,10 +1434,10 @@ async fn a_second_send_through_the_pool_reuses_the_connection() {
     let ssl = SslConfig::default();
 
     let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
-    let first = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    let first = execute_on(&client, prepared(), &settings, None, |_| {}).await.unwrap().response.timings;
     drop(client);
     let client = pool.checkout(&prepared(), &settings, &ssl).unwrap();
-    let second = execute_on(&client, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    let second = execute_on(&client, prepared(), &settings, None, |_| {}).await.unwrap().response.timings;
 
     assert!(!first.reused, "{first:?}");
     assert!(second.reused, "{second:?}");
@@ -1214,10 +1454,10 @@ async fn a_client_in_use_is_never_handed_out_twice() {
     let ssl = SslConfig::default();
 
     let warm = pool.checkout(&prepared(), &settings, &ssl).unwrap();
-    execute_on(&warm, prepared(), &settings, |_| {}).await.unwrap();
+    execute_on(&warm, prepared(), &settings, None, |_| {}).await.unwrap();
     // `warm` is still checked out (a send in flight), so this gets a new client.
     let other = pool.checkout(&prepared(), &settings, &ssl).unwrap();
-    let timings = execute_on(&other, prepared(), &settings, |_| {}).await.unwrap().response.timings;
+    let timings = execute_on(&other, prepared(), &settings, None, |_| {}).await.unwrap().response.timings;
     assert!(!timings.reused, "{timings:?}");
 }
 
@@ -1232,7 +1472,7 @@ async fn sends_with_different_client_settings_get_different_clients() {
         async move {
             let p = prepare(&parse(text).requests.remove(0), resolver, Path::new("."), &settings).unwrap();
             let client = pool.checkout(&p, &settings, ssl).unwrap();
-            execute_on(&client, p, &settings, |_| {}).await.unwrap().response.timings.reused
+            execute_on(&client, p, &settings, None, |_| {}).await.unwrap().response.timings.reused
         }
     };
 

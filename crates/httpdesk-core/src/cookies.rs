@@ -1,7 +1,7 @@
-//! Cookies a response set, for the response viewer's Cookies tab. Display only:
-//! nothing here sends a cookie back (a replaying jar is a separate feature).
+//! Cookies: the ones a response set, for the response viewer's Cookies tab, and
+//! the Session's cookie jar, which keeps them and sends them on later requests.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use reqwest::header::HeaderValue;
 use serde::{Deserialize, Serialize};
@@ -73,29 +73,157 @@ pub fn parse_set_cookie(raw: &str, url: &str) -> ResponseCookie {
     out
 }
 
-/// A reqwest cookie store that only writes things down. reqwest calls it for
-/// every response, redirect hops included (the redirect-following layer sits
-/// outside it), which is the only place a cookie set on a `302` is visible.
-/// It never returns a cookie, so nothing is replayed; a `Cookie` header the
-/// user wrote is sent as is.
+/// The Session's cookie jar: the cookies responses have set, sent on later
+/// requests they match, by RFC 6265's domain, path and expiry rules. A `Secure`
+/// cookie goes over https only. The jar isn't scoped by environment; domain
+/// matching keeps hosts apart. It's never written to disk.
+///
+/// Every send that belongs to a Session uses its jar, whichever pooled client it
+/// goes out on (see [`crate::exec::execute_on`]). Cloning shares the jar.
+#[derive(Debug, Clone, Default)]
+pub struct CookieJar(Arc<Mutex<cookie_store::CookieStore>>);
+
+/// A cookie in a [`CookieJar`]. A cookie is identified by its `domain`, `path`
+/// and `name`: a response setting one with the same three replaces it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCookie {
+    pub name: String,
+    pub value: String,
+    /// The host it is sent to, without a leading dot; its subdomains too unless
+    /// `host_only`.
+    pub domain: String,
+    /// Set without a `Domain` attribute, so sent to exactly `domain`.
+    pub host_only: bool,
+    /// The path it is sent under: its `Path` attribute, or else the directory of
+    /// the URL that set it.
+    pub path: String,
+    /// When it expires, as RFC 3339 UTC, from `Max-Age` or `Expires`; absent for a
+    /// cookie that lasts until the Session ends.
+    pub expires: Option<String>,
+    pub secure: bool,
+    pub http_only: bool,
+    /// `Strict`, `Lax` or `None`; absent when missing or not one of those.
+    pub same_site: Option<String>,
+}
+
+impl CookieJar {
+    /// The unexpired cookies, by domain, then path, then name.
+    pub fn list(&self) -> Vec<StoredCookie> {
+        let mut out: Vec<StoredCookie> = self.lock().iter_unexpired().map(stored).collect();
+        out.sort_by(|a, b| (&a.domain, &a.path, &a.name).cmp(&(&b.domain, &b.path, &b.name)));
+        out
+    }
+
+    /// Deletes the cookie with this domain, path and name (as [`list`] gives
+    /// them). False if there was none.
+    ///
+    /// [`list`]: CookieJar::list
+    pub fn remove(&self, domain: &str, path: &str, name: &str) -> bool {
+        self.lock().remove(domain, path, name).is_some()
+    }
+
+    /// Deletes every cookie.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
+    /// The `Cookie` header value for a request to `url`, if any cookie matches:
+    /// longer paths first, then in the order they were first set.
+    fn header(&self, url: &url::Url) -> Option<String> {
+        let store = self.lock();
+        let mut matching = store.matches(url);
+        // cookie_store counts http://localhost as secure, as browsers do; the
+        // JetBrains client and REST Client don't, and neither does HttpDesk.
+        matching.retain(|c| url.scheme() == "https" || !c.secure().unwrap_or(false));
+        matching.sort_by_key(|c| std::cmp::Reverse(String::from(&c.path).len()));
+        let pairs: Vec<String> = matching.iter().map(|c| format!("{}={}", c.name(), c.value())).collect();
+        (!pairs.is_empty()).then(|| pairs.join("; "))
+    }
+
+    fn store(&self, cookies: Vec<cookie::Cookie<'static>>, url: &url::Url) {
+        self.lock().store_response_cookies(cookies.into_iter(), url);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, cookie_store::CookieStore> {
+        lock(&self.0)
+    }
+}
+
+fn stored(c: &cookie_store::Cookie<'static>) -> StoredCookie {
+    let (domain, host_only) = match &c.domain {
+        cookie_store::CookieDomain::HostOnly(h) => (h.clone(), true),
+        other => (String::from(other), false),
+    };
+    let expires = match &c.expires {
+        cookie_store::CookieExpiration::AtUtc(t) => chrono::DateTime::from_timestamp(t.unix_timestamp(), 0)
+            .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        cookie_store::CookieExpiration::SessionEnd => None,
+    };
+    StoredCookie {
+        name: c.name().to_string(),
+        value: c.value().to_string(),
+        domain,
+        host_only,
+        path: String::from(&c.path),
+        expires,
+        secure: c.secure().unwrap_or(false),
+        http_only: c.http_only().unwrap_or(false),
+        same_site: c.same_site().map(|s| s.to_string()),
+    }
+}
+
+/// The cookie store reqwest gets for one client. Per send it records every
+/// `Set-Cookie` received, for the Cookies tab: reqwest calls it for every
+/// response, redirect hops included (the redirect-following layer sits outside
+/// it), which is the only place a cookie set on a `302` is visible. It also
+/// keeps them in, and sends them from, the jar the send uses, if any; with none
+/// it sends and stores nothing. A `Cookie` header the user wrote is sent as is,
+/// instead of the jar's: reqwest asks the store only when there is none.
 #[derive(Debug, Default)]
-pub(crate) struct Recorder(Mutex<Vec<ResponseCookie>>);
+pub(crate) struct Recorder {
+    received: Mutex<Vec<ResponseCookie>>,
+    /// The `Cookie` header the jar gave the latest hop.
+    sent: Mutex<Option<String>>,
+    jar: Mutex<Option<CookieJar>>,
+}
 
 impl Recorder {
-    /// Everything recorded so far, in the order it was received.
-    pub(crate) fn take(&self) -> Vec<ResponseCookie> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
+    /// Starts a send that uses `jar` (or none), forgetting anything an earlier
+    /// send on this client left behind.
+    pub(crate) fn start(&self, jar: Option<CookieJar>) {
+        lock(&self.received).clear();
+        *lock(&self.sent) = None;
+        *lock(&self.jar) = jar;
     }
+
+    /// Ends the send: the cookies its responses set, in the order received, and
+    /// the `Cookie` header the jar gave its final hop. Also called when a send
+    /// fails or is dropped, so an idle client holds on to no Session's jar.
+    pub(crate) fn finish(&self) -> (Vec<ResponseCookie>, Option<String>) {
+        *lock(&self.jar) = None;
+        (std::mem::take(&mut *lock(&self.received)), lock(&self.sent).take())
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl reqwest::cookie::CookieStore for Recorder {
     fn set_cookies(&self, headers: &mut dyn Iterator<Item = &HeaderValue>, url: &url::Url) {
-        let mut list = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        list.extend(headers.map(|h| parse_set_cookie(&String::from_utf8_lossy(h.as_bytes()), url.as_str())));
+        let raw: Vec<String> = headers.map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned()).collect();
+        lock(&self.received).extend(raw.iter().map(|r| parse_set_cookie(r, url.as_str())));
+        if let Some(jar) = lock(&self.jar).as_ref() {
+            jar.store(raw.into_iter().filter_map(|r| cookie::Cookie::parse(r).ok()).collect(), url);
+        }
     }
 
-    fn cookies(&self, _url: &url::Url) -> Option<HeaderValue> {
-        None
+    fn cookies(&self, url: &url::Url) -> Option<HeaderValue> {
+        let header = lock(&self.jar).as_ref().and_then(|jar| jar.header(url));
+        let value = header.as_ref().and_then(|h| HeaderValue::from_bytes(h.as_bytes()).ok());
+        *lock(&self.sent) = header.filter(|_| value.is_some());
+        value
     }
 }
 

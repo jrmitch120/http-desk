@@ -3,6 +3,7 @@
 // are chosen here, by kind.
 
 import { errorMessage } from "./api";
+import { joinAnd } from "./http";
 import type { app } from "./store.svelte";
 import type { SendError, SendErrorKind, TlsReason } from "./types";
 
@@ -17,7 +18,11 @@ const HEADINGS: Record<SendErrorKind, string> = {
   invalidUrl: "Invalid URL",
   unresolvedVariable: "Undefined variables in the URL",
   circularVariable: "Circular variable in the URL",
+  unsentRequest: "Request not sent in this Session",
+  unmatchedPath: "A Request variable matched nothing",
   file: "Couldn't read a file",
+  untrustedWorkspace: "Scripts aren't trusted here",
+  preRequestScript: "Pre-request script failed",
   other: "Could not send request",
 };
 
@@ -66,8 +71,27 @@ function hint(err: SendError): string | null {
       return err.details.chains
         .map((chain) => `Change a value in ${chain.join(" → ")} so the chain doesn't come back to ${chain[chain.length - 1]}.`)
         .join(" ");
+    case "preRequestScript":
+      return err.details.line === null
+        ? "Nothing was sent."
+        : `Nothing was sent. The error is at line ${err.details.line} of the pre-request script.`;
+    case "unsentRequest": {
+      const names = err.details.names.map((n) => `\`${n}\``);
+      return names.length === 1
+        ? `This request reads the response of ${names[0]}, so send ${names[0]} first. Nothing is sent on its own.`
+        : `This request reads the responses of ${joinAnd(names)}, so send them first. Nothing is sent on its own.`;
+    }
+    case "unmatchedPath":
+      return err.details.paths
+        .filter((p, i, all) => all.findIndex((q) => q.request === p.request) === i)
+        .map((p) => {
+          const at = new Date(p.received).toLocaleTimeString();
+          return `Looked in the latest exchange of \`${p.request}\`, received at ${at}. Check the path, or send \`${p.request}\` again if its response has changed.`;
+        })
+        .join(" ");
     case "invalidUrl":
     case "file":
+    case "untrustedWorkspace":
       return null;
     case "other":
       return "Check the URL, the selected environment, and that the server is reachable.";
@@ -80,7 +104,7 @@ export function describeSendError(err: SendError): { heading: string; hint: stri
 }
 
 /** The store actions a fix-it button can take. */
-export type FixActions = Pick<typeof app, "openSettings" | "showRequestSettings" | "chooseEnvironment">;
+export type FixActions = Pick<typeof app, "openSettings" | "showRequestSettings" | "chooseEnvironment" | "sendFirst">;
 
 /** A fix-it button: its label, and what clicking it does for the editor tab `tabId`. */
 export interface SendErrorFix {
@@ -102,6 +126,11 @@ export function sendErrorFix(err: SendError): SendErrorFix | null {
       return { label: "Open request Settings", run: (actions, tabId) => actions.showRequestSettings(tabId) };
     case "unresolvedVariable":
       return { label: "Choose environment", run: (actions) => actions.chooseEnvironment() };
+    case "unsentRequest": {
+      // One at a time: the report comes back naming the next until none is left.
+      const name = err.details.names[0];
+      return { label: `Send \`${name}\` first`, run: (actions, tabId) => actions.sendFirst(tabId, name) };
+    }
     default:
       return null;
   }

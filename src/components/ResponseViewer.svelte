@@ -12,7 +12,7 @@
   // tab's state lives in a BodyView so it outlives a switch to another tab.
   import { untrack } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
-  import { app, CANCEL, type Tab } from "../lib/store.svelte";
+  import { app, CANCEL, type RunState, type Tab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
   import { formatBytes, formatDuration } from "../lib/http";
   import { explainStatus } from "../lib/status";
@@ -24,27 +24,32 @@
   import HeadersPanel from "./HeadersPanel.svelte";
   import CookiesPanel from "./CookiesPanel.svelte";
   import TimingPanel from "./TimingPanel.svelte";
+  import TestsPanel from "./TestsPanel.svelte";
   import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
 
-  let { tab }: { tab: Tab } = $props();
+  // A tab's response (its latest send), or a run's `result` (the Runner panel), which
+  // has no tab to cancel or retry in. `result.id` stands in for the tab id that
+  // remembers the viewer's choices and keeps the body's documents.
+  let { tab, result }: { tab: Tab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
+  const viewId = untrack(() => tab?.id ?? result!.id);
 
-  const run = $derived(app.runs[tab.id]);
+  const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
 
-  const saved = untrack(() => viewByTab.get(tab.id));
+  const saved = untrack(() => viewByTab.get(viewId));
   let viewerTab = $state(saved?.tab ?? "body");
   let mode = $state<BodyMode>(saved?.mode ?? "pretty");
   let wrap = $state(saved?.wrap ?? false);
   let filter = $state(saved?.filter ?? "");
   $effect(() => {
-    viewByTab.set(tab.id, { tab: viewerTab, mode, wrap, filter });
+    viewByTab.set(viewId, { tab: viewerTab, mode, wrap, filter });
   });
 
-  const body = new BodyView(() => ({ tabId: tab.id, res, mode, filter }));
+  const body = new BodyView(() => ({ tabId: viewId, res, mode, filter }));
   const isBinary = $derived(body.isBinary);
   const filtered = $derived(body.filtered);
 
@@ -104,6 +109,8 @@
     { value: "cookies", label: "Cookies", count: res?.cookies.length || undefined },
     { value: "timing", label: "Timing" },
     { value: "request", label: "Request" },
+    // Only when the response's scripts reported or logged something.
+    ...(res?.tests?.length || res?.logs?.length ? [{ value: "tests", label: "Tests", count: res.tests.length || undefined }] : []),
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
   const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
@@ -138,7 +145,7 @@
           {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
         </span>
         <span class="spacer"></span>
-        <button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>
+        {#if tab}<button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>{/if}
       {:else if run.cancelled && !res}
         <Badge size="md">Cancelled</Badge>
       {:else if res}
@@ -157,7 +164,7 @@
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
-      <SendErrorPanel error={run.error} tabId={tab.id} onretry={() => app.send(tab.id)} />
+      <SendErrorPanel error={run.error} tabId={tab?.id} onretry={tab && (() => app.send(tab.id))} />
     {:else if res}
       {#if res.warnings.length || res.truncated}
         <Banner severity="warning">
@@ -176,6 +183,8 @@
         <CookiesPanel cookies={res.cookies} url={res.url} />
       {:else if current === "timing"}
         <TimingPanel {res} />
+      {:else if current === "tests"}
+        <TestsPanel tests={res.tests} logs={res.logs ?? []} />
       {:else}
         <RequestPanel {res} />
       {/if}

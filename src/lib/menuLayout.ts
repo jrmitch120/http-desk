@@ -81,6 +81,8 @@ export function menuLayout(os: OS): TopMenu[] {
       : [native("undo"), native("redo"), SEP, native("cut"), native("copy"), native("paste"), native("selectAll")];
   const view: MenuEntry[] = [
     cmd("toggle-sidebar"),
+    cmd("toggle-session"),
+    cmd("toggle-runner"),
     SEP,
     cmd("zoom-in"),
     cmd("zoom-out"),
@@ -90,7 +92,7 @@ export function menuLayout(os: OS): TopMenu[] {
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];
   const help: MenuEntry[] = [cmd("documentation"), cmd("release-notes"), SEP, cmd("report-issue")];
-  const request: MenuEntry[] = [cmd("send"), cmd("cancel"), SEP, cmd("save"), cmd("duplicate-request"), cmd("rename-request"), SEP, cmd("show-source")];
+  const request: MenuEntry[] = [cmd("send"), cmd("cancel"), SEP, cmd("run-file"), cmd("stop-run"), SEP, cmd("save"), cmd("duplicate-request"), cmd("rename-request"), SEP, cmd("show-source"), SEP, cmd("clear-session")];
 
   if (mac) {
     return [

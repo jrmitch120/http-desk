@@ -51,6 +51,12 @@ describe("commandForKey", () => {
     expect(on("mac", press("b", { ctrlKey: true }))).toBeUndefined();
   });
 
+  it("shows the Session panel with ⌘J on macOS and Ctrl+J elsewhere", () => {
+    expect(on("mac", press("j", { metaKey: true }))).toBe("toggle-session");
+    expect(on("windows", press("j", { ctrlKey: true }))).toBe("toggle-session");
+    expect(on("mac", press("j", { ctrlKey: true }))).toBeUndefined();
+  });
+
   it("zooms with ⌘= / ⌘- / ⌘0 on macOS and Ctrl elsewhere", () => {
     expect(on("mac", press("=", { metaKey: true }))).toBe("zoom-in");
     expect(on("mac", press("-", { metaKey: true }))).toBe("zoom-out");

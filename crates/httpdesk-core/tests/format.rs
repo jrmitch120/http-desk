@@ -4,6 +4,7 @@ use httpdesk_core::*;
 
 const JETBRAINS: &str = include_str!("fixtures/jetbrains.http");
 const VSCODE: &str = include_str!("fixtures/vscode.http");
+const HANDLERS: &str = include_str!("fixtures/handlers.http");
 
 /// Strips fields that only exist for lossless round-tripping.
 fn semantic(mut r: Request) -> Request {
@@ -29,7 +30,10 @@ fn parses_jetbrains_fixture() {
             "Post with JSON body",
             "Multi-line query",
             "Basic auth",
-            "Send a form with the text and file fields"
+            "Send a form with the text and file fields",
+            "Per-request variable from a pre-request script",
+            "Signed with a pre-request script",
+            "Pre-request script file",
         ]
     );
 
@@ -95,6 +99,21 @@ fn parses_vscode_fixture() {
     let patch = &f.requests[3];
     assert_eq!(patch.method, "PATCH");
     assert_eq!(patch.body.mode, BodyMode::File);
+
+    // REST Client's Request variables example: File variables holding Request variables.
+    let comment = &f.requests[4];
+    assert_eq!(comment.request_name(), Some("createComment"));
+    assert_eq!(
+        comment.variables,
+        [Variable { name: "authToken".into(), value: "{{login.response.headers.X-AuthToken}}".into() }]
+    );
+    let created = &f.requests[5];
+    assert_eq!(
+        created.variables,
+        [Variable { name: "commentId".into(), value: "{{createComment.response.body.$.id}}".into() }]
+    );
+    assert_eq!(created.url, "{{baseUrl}}/comments/{{commentId}}");
+    assert_eq!(f.request_names(), ["login", "getProfile", "createComment", "getCreatedComment"]);
 }
 
 #[test]
@@ -182,13 +201,79 @@ fn plain_comments_are_not_treated_as_disabled_items() {
 
 #[test]
 fn untouched_files_round_trip_byte_for_byte() {
-    for src in [JETBRAINS, VSCODE] {
+    for src in [JETBRAINS, VSCODE, HANDLERS] {
         assert_eq!(serialize(&parse(src)), src);
+        let crlf = src.replace('\n', "\r\n");
+        assert_eq!(serialize(&parse(&crlf)), crlf);
     }
-    let crlf = JETBRAINS.replace('\n', "\r\n");
-    assert_eq!(serialize(&parse(&crlf)), crlf);
     let no_final_newline = "GET https://x\n\n###\nGET https://y";
     assert_eq!(serialize(&parse(no_final_newline)), no_final_newline);
+}
+
+#[test]
+fn response_handlers_parse_into_parts_and_the_file_is_unchanged() {
+    let f = parse(HANDLERS);
+    let parts: Vec<_> = f.requests.iter().map(Request::response_handler_parts).collect();
+    let inline = |source: &str, line| HandlerPart::Script(ScriptSource::Inline { source: source.into(), line });
+    assert_eq!(
+        parts[0],
+        [inline(r#" client.test("ok", () => client.assert(response.status === 200, "status")); "#, 1)]
+    );
+    let HandlerPart::Script(ScriptSource::Inline { source, line: 1 }) = &parts[1][0] else { panic!("{:?}", parts[1]) };
+    assert!(source.starts_with("\n    client.test(\"Request executed successfully\""), "{source}");
+    assert!(source.ends_with("received '${type}'`);\n    });\n"), "{source}");
+    assert_eq!(
+        parts[2],
+        [
+            inline(r#" client.assert(response.body.length > 0, "not empty"); "#, 1),
+            HandlerPart::Redirect { path: "./report.json".into(), overwrite: true },
+        ]
+    );
+    assert_eq!(parts[3], [HandlerPart::Script(ScriptSource::File { path: "./check-status.js".into() })]);
+    assert_eq!(parts[4], [HandlerPart::Redirect { path: "./saved.json".into(), overwrite: false }]);
+    let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
+    assert_eq!(runs, [true, true, true, true, false]);
+    assert_eq!(serialize(&f), HANDLERS);
+}
+
+#[test]
+fn pre_request_scripts_parse_into_parts_and_the_file_is_unchanged() {
+    let f = parse(JETBRAINS);
+    let parts: Vec<_> = f.requests[5..].iter().map(Request::pre_request_parts).collect();
+    assert_eq!(
+        parts[0],
+        [PreRequestPart::Inline { source: r#" request.variables.set("firstname", "John") "#.into(), line: 1 }]
+    );
+    let PreRequestPart::Inline { source, line: 1 } = &parts[1][0] else { panic!("{:?}", parts[1]) };
+    assert!(source.starts_with("\nconst signature = crypto.hmac.sha256()\n"), "{source}");
+    assert!(source.ends_with("request.variables.set(\"hash\", hash)\n"), "{source}");
+    assert_eq!(parts[2], [PreRequestPart::File { path: "scripts/my-script.js".into() }]);
+    assert!(f.requests[..5].iter().all(|r| r.pre_request_parts().is_empty()));
+
+    let runs: Vec<bool> = f.requests.iter().map(script::has_scripts).collect();
+    assert_eq!(runs, [false, true, false, false, false, true, true, true], "a pre-request script needs trust too");
+    assert_eq!(serialize(&f), JETBRAINS);
+}
+
+#[test]
+fn several_pre_request_blocks_each_count_lines_from_the_whole_script() {
+    let req = parse("< {% a(); %}\n< {%\n  b();\n%}\n< ./c.js\nGET https://x\n").requests.remove(0);
+    assert_eq!(
+        req.pre_request_parts(),
+        [
+            PreRequestPart::Inline { source: " a(); ".into(), line: 1 },
+            PreRequestPart::Inline { source: "\n  b();\n".into(), line: 2 },
+            PreRequestPart::File { path: "./c.js".into() },
+        ]
+    );
+}
+
+#[test]
+fn editing_a_request_with_a_handler_keeps_the_handler_verbatim() {
+    let mut f = parse(HANDLERS);
+    f.requests[1].url = "https://example.com/signin".into();
+    let out = serialize(&f);
+    assert_eq!(out, HANDLERS.replace("https://example.com/login", "https://example.com/signin"));
 }
 
 #[test]
@@ -227,7 +312,7 @@ fn extracting_a_file_variable_rewrites_only_the_header_and_the_edited_request() 
 
 #[test]
 fn every_fixture_request_is_semantically_stable_when_rerendered() {
-    for src in [JETBRAINS, VSCODE] {
+    for src in [JETBRAINS, VSCODE, HANDLERS] {
         let f = parse(src);
         for r in &f.requests {
             let rendered = render_request(r);
@@ -546,9 +631,9 @@ fn added_and_removed_requests_serialize_cleanly() {
     f.requests.push(Request { name: "New".into(), url: "https://new".into(), ..Default::default() });
     let out = serialize(&f);
     assert!(!out.contains("Multi-line query"));
-    assert!(out.ends_with(">> response.json\n\n### New\nGET https://new\n"), "{out}");
+    assert!(out.ends_with("GET https://example.org/pets\n\n### New\nGET https://new\n"), "{out}");
     let back = parse(&out);
-    assert_eq!(back.requests.len(), 5);
+    assert_eq!(back.requests.len(), 8);
 }
 
 #[test]
@@ -1026,4 +1111,98 @@ fn save_refuses_names_that_would_read_back_as_something_else() {
     assert_eq!(back.headers.items[0].name, "{{headerName}}");
     assert_eq!(back.headers.items[1], KeyValue::disabled("X-Ok!", "1"));
     assert_eq!(back.query.items[1].name, "a:b", "a ':' is fine in a param without a description");
+}
+
+// ---------------------------------------------------------------- scripts edited in Settings (#141)
+
+/// A request the canonical renderer would rewrite (`//` comment, a header
+/// without a space), so only an edit made in place keeps the rest of it.
+const HAND_WRITTEN: &str = "### Login
+// signs in
+POST https://example.com/login
+Content-Type:application/json
+
+{\"user\": \"ada\"}
+
+> {%
+    client.test(\"status\", function () {
+        client.assert(response.status === 200, \"Response status is not 200\");
+    });
+%}
+>> ./login.json
+
+### Next
+GET https://example.com/next
+";
+
+#[test]
+fn editing_a_handler_script_changes_only_its_body() {
+    let mut f = parse(HAND_WRITTEN);
+    let handler = f.requests[0].response_handler.clone().unwrap();
+    f.requests[0].response_handler = Some(handler.replace("=== 200", "=== 201"));
+    assert_eq!(try_serialize(&f).unwrap(), HAND_WRITTEN.replace("=== 200", "=== 201"));
+}
+
+const ADDED_HANDLER: &str = "> {%\n    client.test(\"ok\", function () {});\n%}";
+const ADDED_PRE_SCRIPT: &str = "< {%\n    request.variables.set(\"id\", \"7\");\n%}";
+
+#[test]
+fn an_added_handler_goes_after_the_body_as_jetbrains_writes_it() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[1].response_handler = Some(ADDED_HANDLER.into());
+    let out = try_serialize(&f).unwrap();
+    let next = "GET https://example.com/next\n";
+    assert_eq!(out, HAND_WRITTEN.replace(next, &format!("{next}\n{ADDED_HANDLER}\n")));
+    let inline = HandlerPart::Script(ScriptSource::Inline {
+        source: "\n    client.test(\"ok\", function () {});\n".into(),
+        line: 1,
+    });
+    assert_eq!(parse(&out).requests[1].response_handler_parts(), [inline]);
+}
+
+#[test]
+fn a_removed_handler_takes_its_blank_line_along() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].response_handler = None;
+    let out = try_serialize(&f).unwrap();
+    let handler = HAND_WRITTEN.split_once("> {%").unwrap().1.split_once("\n\n###").unwrap().0;
+    assert_eq!(out, HAND_WRITTEN.replace(&format!("\n\n> {{%{handler}"), ""));
+    assert_eq!(parse(&out).requests[0].response_handler, None);
+}
+
+#[test]
+fn an_added_pre_request_script_goes_above_the_request_line() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].pre_script = Some(ADDED_PRE_SCRIPT.into());
+    let out = try_serialize(&f).unwrap();
+    let line = "POST https://example.com/login\n";
+    assert_eq!(out, HAND_WRITTEN.replace(line, &format!("{ADDED_PRE_SCRIPT}\n{line}")));
+    assert_eq!(parse(&out).requests[0].pre_script.as_deref(), Some(ADDED_PRE_SCRIPT));
+}
+
+#[test]
+fn editing_or_removing_a_pre_request_script_changes_only_its_lines() {
+    let line = "POST https://example.com/login\n";
+    let with_script = HAND_WRITTEN.replace(line, &format!("{ADDED_PRE_SCRIPT}\n{line}"));
+
+    let mut f = parse(&with_script);
+    f.requests[0].pre_script = Some(ADDED_PRE_SCRIPT.replace("\"7\"", "\"8\""));
+    assert_eq!(try_serialize(&f).unwrap(), with_script.replace("\"7\"", "\"8\""));
+
+    let mut f = parse(&with_script);
+    f.requests[0].pre_script = None;
+    assert_eq!(try_serialize(&f).unwrap(), HAND_WRITTEN);
+}
+
+#[test]
+fn a_script_edit_alongside_another_edit_rewrites_the_request() {
+    let mut f = parse(HAND_WRITTEN);
+    f.requests[0].response_handler = Some(ADDED_HANDLER.into());
+    f.requests[0].url = "https://example.com/signin".into();
+    let out = try_serialize(&f).unwrap();
+    assert!(
+        out.starts_with("### Login\n# signs in\nPOST https://example.com/signin\nContent-Type: application/json"),
+        "{out}"
+    );
+    assert_eq!(parse(&out).requests[0].response_handler.as_deref(), Some(ADDED_HANDLER));
 }

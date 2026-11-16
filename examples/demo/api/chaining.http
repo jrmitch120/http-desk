@@ -1,0 +1,127 @@
+# Request chaining, cookies and tests, against httpbin.org.
+# Run the whole file (Run file) to see every test in the Runner, or send the
+# requests one by one from the top. Scripts run only once the workspace is
+# trusted; HttpDesk asks the first time.
+#
+# It mixes both editors' syntaxes to show them side by side, so only HttpDesk runs
+# all of it: Rider won't send a request using {{name.response…}}, and REST Client
+# sends a > {% %} handler as body text, which a GET can't carry.
+
+@user = ada
+
+### Log in
+# httpbin echoes the JSON it is sent, so the "token" comes back under json.
+# @name login
+POST https://httpbin.org/anything/login
+Content-Type: application/json
+
+{
+  "user": "{{user}}",
+  "token": "{{$uuid}}"
+}
+
+> {%
+    client.test("Logged in", function () {
+        client.assert(response.status === 200, "Expected 200 but got " + response.status);
+    });
+    client.global.set("sessionToken", response.body.json.token);
+    client.log("token " + response.body.json.token);
+%}
+
+### Use the token: Request variable (REST Client syntax)
+# {{login.response.body.$.json.token}} reads the latest "Log in" exchange.
+# Send this before "Log in" and HttpDesk stops it with "Send login first".
+GET https://httpbin.org/bearer
+Authorization: Bearer {{login.response.body.$.json.token}}
+
+> {%
+    client.test("Bearer accepted", function () {
+        client.assert(response.status === 200, "Expected 200 but got " + response.status);
+        client.assert(response.body.authenticated === true, "Not authenticated");
+    });
+%}
+
+### Use the token: Global variable (JetBrains syntax)
+# "Log in" stored sessionToken with client.global.set; see it in the Session panel (⌘J).
+GET https://httpbin.org/bearer
+Authorization: Bearer {{sessionToken}}
+
+> {%
+    client.test("Same token as the Request variable", function () {
+        client.assert(response.body.token === client.global.get("sessionToken"), "Token differs");
+    });
+%}
+
+### Read a response header and the request that was sent
+GET https://httpbin.org/anything/echo
+X-Sent-By: {{login.request.headers.Content-Type}}
+X-Login-Reply: {{login.response.headers.Content-Type}}
+
+> {%
+    client.test("Headers came from the login exchange", function () {
+        client.assert(response.body.headers["X-Sent-By"] === "application/json", "Wrong X-Sent-By");
+        client.assert(response.body.headers["X-Login-Reply"] === "application/json", "Wrong X-Login-Reply");
+    });
+%}
+
+### Pre-request script
+# Sets {{requestedAt}} for this request only, just before it is sent.
+< {%
+    request.variables.set("requestedAt", new Date().toISOString());
+%}
+POST https://httpbin.org/anything/orders
+Content-Type: application/json
+
+{
+  "orderId": "{{$uuid}}",
+  "requestedAt": "{{requestedAt}}",
+  "by": "{{user}}"
+}
+
+> {%
+    client.test("Pre-request value was sent", function () {
+        client.assert(/^\d{4}-\d\d-\d\dT/.test(response.body.json.requestedAt), "No timestamp");
+    });
+%}
+
+### XML: XPath Request variable
+# @name slides
+GET https://httpbin.org/xml
+
+### Use a value read with XPath
+POST https://httpbin.org/anything/slides
+Content-Type: application/json
+
+{
+  "title": "{{slides.response.body.//slideshow/@title}}",
+  "author": "{{slides.response.body.//slideshow/@author}}"
+}
+
+> {%
+    client.test("XPath read the title", function () {
+        client.assert(response.body.json.title === "Sample Slide Show", "Got " + response.body.json.title);
+    });
+%}
+
+### Set a cookie
+# The jar keeps the cookie from the redirect, and later requests send it.
+GET https://httpbin.org/cookies/set?flavour=oatmeal
+
+### Cookie is sent back
+GET https://httpbin.org/cookies
+
+> {%
+    client.test("Jar sent the cookie", function () {
+        client.assert(response.body.cookies.flavour === "oatmeal", "No cookie");
+    });
+%}
+
+### Without the jar
+# @no-cookie-jar
+GET https://httpbin.org/cookies
+
+> {%
+    client.test("No cookie sent", function () {
+        client.assert(response.body.cookies.flavour === undefined, "Cookie was sent");
+    });
+%}

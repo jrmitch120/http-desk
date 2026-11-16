@@ -4,8 +4,9 @@
 // (`makeVarProvider`), which gives the core's answers, so they follow every edit.
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
-import { variableNameError } from "./http";
+import { getDirective, segments, variableNameError } from "./http";
 import type { Auth, Body, EnvironmentSet, Request } from "./types";
+import { requestVariable } from "./vars";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
 export type Section = "url" | "params" | "headers" | "auth" | "body";
@@ -19,25 +20,46 @@ export interface UndefinedVariable {
 }
 
 /**
- * One entry of the strip. Each kind is a problem the request would be sent with;
- * the strip renders each kind its own way, so a new kind of check adds a variant
- * here, adds its entries in `requestChecks`, and a branch in CheckStrip.svelte.
+ * One entry of the strip. Each kind is a problem the request would be sent with, or
+ * (`riderRefuses`) a note about the file; the strip renders each kind its own way, so
+ * a new kind of check adds a variant here, adds its entries in `requestChecks`, and a
+ * branch in CheckStrip.svelte.
  */
 export type Check =
   | { kind: "undefined"; name: string; sections: Section[]; fixes: QuickFix[] }
   /** The selected environment `env` isn't defined for the request's folder `dir`, so it's sent with none (ADR-0004). */
-  | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] };
+  | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] }
+  /**
+   * The request's `# @name` is also that of `others` other requests in its file, so its
+   * Request variables read whichever of them was sent last. It never blocks the send.
+   */
+  | { kind: "duplicateName"; name: string; others: number }
+  /**
+   * The request has a Request variable (the first reads `name`'s exchange), which Rider
+   * refuses to send (IJPL-253135, ADR-0007). A note, always there while it has one, not
+   * a problem: HttpDesk sends it.
+   */
+  | { kind: "riderRefuses"; name: string };
+
+/** Whether `check` is only a note, not a problem with the send. */
+export const isNote = (check: Check) => check.kind === "riderRefuses";
 
 /**
- * Everything the strip lists for a request, in order. Empty: the strip is hidden.
- * `set` is the request's own environments (its folder's) and `dir` its folder,
- * relative to the workspace root.
+ * Everything the strip lists for a request, in order: problems first, then notes.
+ * Empty: the strip is hidden. `set` is the request's own environments (its folder's)
+ * and `dir` its folder, relative to the workspace root. `file` is every request of the
+ * request's file (it included), whose `# @name`s it may share.
  */
-export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = ""): Check[] {
+export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = "", file: Request[] = []): Check[] {
   const missing = !!envName && !set?.environments.some((e) => e.name === envName);
   const checks: Check[] = missing ? [{ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] }] : [];
+  const name = getDirective(req, "name")?.trim();
+  const others = name ? file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length : 0;
+  if (name && others) checks.push({ kind: "duplicateName", name, others });
   const env = missing ? null : envName;
   for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, env) });
+  const [read] = requestVariableReads(req);
+  if (read) checks.push({ kind: "riderRefuses", name: read });
   return checks;
 }
 
@@ -101,6 +123,17 @@ export function undefinedVariables(req: Request, variables: VarProvider): Undefi
     }
   }
   return [...found].map(([name, sections]) => ({ name, sections }));
+}
+
+/**
+ * The named requests whose exchanges `req`'s Request variables read, each once, in the
+ * order first written: only references written in what is sent, as the core's
+ * `exec::check_request_variables` reads them before the pre-request script. Names the
+ * file has no `# @name` for are left in: they are Undefined variables, not reads.
+ */
+export function requestVariableReads(req: Request): string[] {
+  const names = sentTexts(req).flatMap(([, texts]) => texts.flatMap((text) => segments(text).flatMap(({ ref }) => requestVariable(ref ?? "")?.name ?? [])));
+  return [...new Set(names)];
 }
 
 /**

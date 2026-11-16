@@ -3,11 +3,12 @@
   // as it will be sent (active environment and File variables applied), asked of
   // the shell's `preview_request`, which runs the same preparation as a send.
   // Dynamic variables that generate a new value on every send stay as written, and
-  // so do Prompt variables not answered yet. Remembered prompted values are shown
-  // (masked ones masked by the shell) and can be forgotten here.
+  // so do Prompt variables not answered yet. Values the Session remembers for them
+  // are shown (masked ones masked by the shell) and can be forgotten here.
   import { app, type Tab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
-  import { fileVariables, methodClass, requestPrompts } from "../lib/http";
+  import { promptAnswersOf } from "../lib/promptAnswers.svelte";
+  import { fileVariables, methodClass, requestNames, requestPrompts } from "../lib/http";
   import { isDynamic, MASK, SECRET_OPEN, SECRET_RE } from "../lib/vars";
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -26,7 +27,7 @@
     const req = app.requestFor(tab);
     const doc = app.docs[tab.path];
     if (!show || !req || !doc) return null;
-    return JSON.stringify([req, fileVariables(doc.file), app.envName, app.envSetFor(tab.path), app.promptAnswers(tab)]);
+    return JSON.stringify([req, fileVariables(doc.file), requestNames(doc.file), app.envName, app.envSetFor(tab.path), app.sessionVersion]);
   });
   let asked = 0;
   $effect(() => {
@@ -43,10 +44,11 @@
     return () => clearTimeout(t);
   });
 
+  const remembered = promptAnswersOf(() => tab);
   /** The request's prompts that have a remembered value, and those asked when sent. */
   const prompts = $derived.by(() => {
     const req = app.requestFor(tab);
-    const answers = app.promptAnswers(tab);
+    const answers = remembered.current;
     const all = req ? requestPrompts(req).map((p) => p.name) : [];
     return { remembered: all.filter((n) => Object.hasOwn(answers, n)), asked: new Set(all.filter((n) => !Object.hasOwn(answers, n))) };
   });

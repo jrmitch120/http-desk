@@ -1,0 +1,17 @@
+# Scripts run in embedded QuickJS, sandboxed and limited
+
+JetBrains scripts (`> {% %}` response handlers now, `< {% %}` pre-request scripts next) run in QuickJS embedded in the core through `rquickjs` (`httpdesk_core::script`). Each script gets a fresh runtime and context, with fixed limits of 5 s and 64 MB (the response body the script reads counts towards the 64 MB), and no setting for either. QuickJS has no filesystem, network or process APIs unless they're added: we don't load its `std`/`os` modules, set no module loader, and define no `require`, `fetch` or timers. The only API is a small JS prelude (`script/prelude.js`) that builds the JetBrains `client`, `response` and `request` objects on a few Rust functions. Every JetBrains API we don't implement throws "`<api>` isn't supported in HttpDesk" rather than doing nothing, so a file never silently behaves differently from Rider. Scripts come from files other people wrote (ADR-0007), so a response handler never fails the send: a throw, the time limit or the memory limit keeps the response and becomes a failed test with its line and message. A pre-request script runs before anything is sent, so the same failures block the send instead, with its line and message, and nothing is sent. Scripts run only in a Trusted workspace.
+
+We chose QuickJS because it was built to be embedded with exactly these controls: a memory limit enforced by its allocator, an interrupt handler polled by the interpreter (so a `while (true) {}` stops, and the interruption can't be caught by the script), and a context that starts in well under a millisecond. It implements ES2023, so modern handler code (arrow functions, template literals, `const`) runs as written. It adds about 1 MB to the binary and needs a C compiler at build time, which every CI platform already has for other crates.
+
+## Considered options
+
+- **Boa (pure Rust).** No C toolchain, and memory safety in the engine itself. Rejected for now: it has no allocation limit we could enforce without wrapping the global allocator, its runtime limits (loop iterations, recursion) bound work done rather than time taken, and it is noticeably slower and larger. Worth revisiting if its limits mature; the prelude and the Rust bindings would carry over, since only the engine glue in `script.rs` touches the engine.
+- **The webview's JavaScript engine.** Already present and fast, but it shares a process with the UI, has `fetch` and the Tauri IPC within reach, and can't be stopped or limited from outside. A runaway script would freeze the window. Rejected.
+- **A Node or Deno subprocess.** Full compatibility, but a runtime to ship or require, process and filesystem access to take away rather than add, and startup measured in tens of milliseconds per send. Rejected.
+
+## Consequences
+
+- A large enough response body can't be read by a handler: its text and, for JSON, its parsed form count against the 64 MB. The handler then fails at the memory limit and the response is still shown.
+- Adding a JetBrains API (`client.global`, `client.log`, `request.variables`) is a Rust function on the prelude's `host` object plus the JS that calls it, and taking its name out of the unsupported list.
+- QuickJS is C. A bug in it is a memory-safety bug in the app; the limits, the fresh runtime per script and Trusted workspaces narrow what reaches it, and `rquickjs` updates should be taken promptly.

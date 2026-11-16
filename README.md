@@ -93,6 +93,36 @@ Try it with `examples/demo`: open the folder, pick the `petstore` environment
 [Swagger Petstore](https://petstore3.swagger.io) and `httpbin.org`, so no account
 or token is needed. To try the importer, use `examples/petstore-openapi.yaml`.
 
+## Dynamic variables
+
+Values HttpDesk makes up when you send, such as `{{$uuid}}` or
+`{{$timestamp -1 d}}`. Typing `{{$` in any field lists them, and hovering one
+says what it gives. Both the VS Code REST Client spellings (arguments after a
+space) and the JetBrains ones (arguments in brackets) work. Every argument is
+optional except `NAME`.
+
+<!-- dynamic-variables: generated from crates/httpdesk-core/dynamic-variables.json; src/lib/vars.test.ts checks it -->
+| Write | Gives |
+|---|---|
+| `{{$uuid}}` | Random UUID (v4) |
+| `{{$guid}}` | Random UUID (v4), as `$uuid` |
+| `{{$random.uuid}}` | Random UUID (v4), as `$uuid` |
+| `{{$timestamp [offset unit]}}` | Unix time in seconds, optionally offset (-1 d) |
+| `{{$isoTimestamp}}` | Current UTC time in ISO 8601 |
+| `{{$randomInt [min max]}}` | Random integer, min ≤ n < max (0, 1000) |
+| `{{$random.integer(from, to)}}` | Random integer, from ≤ n < to (0, 1000) |
+| `{{$random.float(from, to)}}` | Random number, from ≤ n ≤ to (0, 1000) |
+| `{{$random.alphabetic(length)}}` | Random letters (10 by default) |
+| `{{$random.alphanumeric(length)}}` | Random letters and digits (10 by default) |
+| `{{$random.hexadecimal(length)}}` | Random hex digits (10 by default) |
+| `{{$random.email}}` | Random email address |
+| `{{$datetime [format [offset unit]]}}` | Current UTC time: rfc1123, iso8601 or a pattern |
+| `{{$localDatetime [format [offset unit]]}}` | Current local time, formatted as `$datetime` |
+| `{{$processEnv NAME}}` | An environment variable of HttpDesk's process |
+| `{{$dotenv NAME}}` | A value from the .env file beside the .http file |
+| `{{$env.NAME}}` | An environment variable, as `$processEnv` |
+<!-- /dynamic-variables -->
+
 ## Development
 
 Prerequisites: Rust (stable), Node 22.12+, pnpm, and the

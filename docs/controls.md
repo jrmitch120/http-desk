@@ -271,7 +271,11 @@ paths), File variable values and environment values.
   VarField's static rendering's cards are the same `.var-card`.
 - The hover card shows the resolved value and where it comes from ("this file",
   "this request", `environment "staging"`, "shared variables", or a prompt). An
-  unanswered Prompt variable shows "Asked when sent". A Secret, a masked prompted
+  unanswered Prompt variable shows "Asked when sent". A dynamic variable shows its
+  description, whether it generates a new value on every send or reads one that's
+  already there (`reads`), and, if it takes arguments, how they're written
+  (`dynamicUsage`), all from the same `dynamic-variables.json` as autocomplete and the
+  README's table. A Secret, a masked prompted
   value, or a value either went into, is masked until **Reveal**, in that card only. **Edit** opens the
   definition's row when the app has one: a File variable at the top of the file in
   the request's Settings section, one declared in a request block at its line in that
@@ -292,7 +296,8 @@ paths), File variable values and environment values.
   shared, prompt; a Prompt variable takes the entry of a name it overrides) and a short preview of its resolved value ("secret" instead of a Secret's),
   then every dynamic variable with its argument hint and a description. The list is
   `crates/httpdesk-core/dynamic-variables.json`, which a core test keeps equal to what
-  the core generates. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
+  the core generates (and its `reads` flags to `vars::READING`); `src/lib/vars.test.ts`
+  fails when the README's table of them is out of date. One that needs its argument (`$processEnv`, `$dotenv`, `$env.`)
   leaves the caret before `}}`.
 - **Extract to variable**: with text selected, ⌘⌥V (macOS) / Ctrl+Alt+V (Windows,
   Linux, as in JetBrains), or "Extract to variable…" in the [edit menu](#the-edit-menu)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { quickFixes, requestChecks, undefinedVariables } from "./checks";
+import { isNote, quickFixes, requestChecks, undefinedVariables } from "./checks";
 import type { EnvironmentSet, Request } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
@@ -142,5 +142,51 @@ describe("an environment the request's folder doesn't define", () => {
   it("isn't listed when the folder defines it or no environment is selected", () => {
     expect(checks("local").map((c) => c.kind)).toEqual(["undefined"]);
     expect(checks(null).map((c) => c.kind)).toEqual(["undefined"]);
+  });
+});
+
+describe("a # @name another request in the file also has", () => {
+  const named = (name: string) => request((r) => r.directives.push({ name: "name", value: name }));
+  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), null, null, "", file).filter((c) => c.kind === "duplicateName");
+
+  it("is flagged on each of them, naming it and counting the others", () => {
+    const [a, b, c] = [named("login"), named(" login "), named("me")];
+    expect(checks(a, [a, b, c])).toEqual([{ kind: "duplicateName", name: "login", others: 1 }]);
+    expect(checks(b, [a, b, c])).toEqual([{ kind: "duplicateName", name: "login", others: 1 }]);
+    expect(checks(c, [a, b, c])).toEqual([]);
+    expect(checks(a, [a, b, named("login")])).toEqual([{ kind: "duplicateName", name: "login", others: 2 }]);
+  });
+
+  it("isn't flagged for an unnamed request, or a name given only by ###", () => {
+    const unnamed = request(() => {});
+    const titled = request((r) => (r.name = "login"));
+    expect(checks(unnamed, [unnamed, request(() => {})])).toEqual([]);
+    expect(checks(titled, [titled, named("login")])).toEqual([]);
+  });
+});
+
+describe("the note that Rider refuses a Request variable", () => {
+  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })), null, null);
+  const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "riderRefuses");
+
+  it("is there whenever a request sends one, naming the first request read", () => {
+    const req = request((r) => {
+      r.url = "https://example.com/{{me.response.body.$.id}}";
+      r.headers.items.push({ enabled: true, name: "Authorization", value: "Bearer {{login.response.body.$.token}}" });
+    });
+    expect(notes(req)).toEqual([{ kind: "riderRefuses", name: "me" }]);
+  });
+
+  it("isn't there for a request with none, or with one only in a disabled header", () => {
+    expect(notes(request((r) => (r.url = "https://example.com/{{login}}")))).toEqual([]);
+    expect(notes(request((r) => r.headers.items.push({ enabled: false, name: "X", value: "{{login.response.body.$.token}}" })))).toEqual([]);
+  });
+
+  it("is a note, listed after the problems", () => {
+    const req = request((r) => (r.url = "{{base}}/{{login.response.body.$.id}}"));
+    expect(checksOf(req).map((c) => [c.kind, isNote(c)])).toEqual([
+      ["undefined", false],
+      ["riderRefuses", true],
+    ]);
   });
 });

@@ -6,6 +6,7 @@ import type {
   BodyKind,
   FilterResult,
   FormatMode,
+  ExchangeShape,
   JsonShape,
   EnvironmentSet,
   FolderEnvironments,
@@ -14,10 +15,15 @@ import type {
   HttpFile,
   Usage,
   HttpResponse,
+  NamedExchange,
   Request,
   RequestPreview,
+  RequestVariableReading,
+  RunRequestReport,
   SearchHit,
   SpecSummary,
+  StoredCookie,
+  GlobalVariable,
   TreeNode,
   Variable,
   WorkspaceInfo,
@@ -30,9 +36,30 @@ export type RequestArgs = {
   filePath: string | null;
   fileVariables: Variable[];
   environment: string | null;
-  /** Values remembered for the request's Prompt variables, by name. Never written anywhere. */
-  promptValues: Record<string, string>;
+  /** The request's key (`_key`): its Prompt variables take the answers the Session holds for it. */
+  requestKey: string;
+  /** The `# @name`s of the file's requests (`requestNames`): its Request variables read their latest exchanges in the Session. */
+  requestNames: string[];
 };
+
+/** What a run sends (`RunSelection` in src-tauri/src/lib.rs): its requests in order,
+ *  each as `send_request` takes it, and the environment they're all sent with. Run
+ *  file, folder and selection differ only in which requests are listed. */
+export type RunSelection = {
+  requests: Omit<RequestArgs, "environment">[];
+  environment: string | null;
+};
+
+/** How a run goes (`RunOptions`): `skipScripts` runs it without scripts ("Run without scripts"),
+ *  with `delayMs` between requests, ending at its first failure with `stopOnFailure`. */
+export type RunOptions = { skipScripts?: boolean; delayMs?: number; stopOnFailure?: boolean };
+
+/** What `run_requests` resolves with (`RunSummary`): whether it was stopped, and each
+ *  request as an export shows it, those it never reached included. */
+export type RunSummary = { cancelled: boolean; requests: RunRequestReport[] };
+
+/** The formats a run's results export as. */
+export type RunExportFormat = "junit" | "json";
 
 /** Which form of a stored response body `api.responseBody` fetches. */
 export type BodyFetchView = "raw" | "pretty" | "bytes";
@@ -63,10 +90,58 @@ export const api = {
   /** Saves `set` as folder `dir`'s own pair of env files (the root's by default). */
   saveEnvironments: (set: EnvironmentSet, dir = "") => invoke<{ gitignoreUpdated: boolean }>("save_environments", { set, dir }),
 
-  sendRequest: (args: RequestArgs & { runId: string }) => invoke<HttpResponse>("send_request", args),
+  /** Sends the request, then runs its response handler unless `skipScripts`. A request
+   *  with a script in a workspace that isn't trusted fails `untrustedWorkspace`, unsent. */
+  sendRequest: (args: RequestArgs & { runId: string; skipScripts?: boolean }) => invoke<HttpResponse>("send_request", args),
   /** What `sendRequest` with the same arguments would send, without sending it. */
   previewRequest: (args: RequestArgs) => invoke<RequestPreview>("preview_request", args),
+  /** Cancels a send, or stops a run (its request in flight included), by its run id. */
   cancelRequest: (runId: string) => invoke<void>("cancel_request", { runId }),
+  /** Rejects with why a script file reference (`path`, written in the file at `filePath`) can't run: missing, or outside the workspace. */
+  checkScriptFile: (filePath: string | null, path: string) => invoke<void>("check_script_file", { filePath, path }),
+  /** Opens a script file reference in the default editor (a `.js` file inside the workspace only). */
+  openScriptFile: (filePath: string | null, path: string) => invoke<void>("open_script_file", { filePath, path }),
+  /** Sends the selection's requests in order, the way `sendRequest` sends each, reporting
+   *  them as `run-progress` events (`RunProgress`). Resolves when the run ends. */
+  runRequests: (args: { runId: string; selection: RunSelection; options: RunOptions }) =>
+    invoke<RunSummary>("run_requests", args),
+  /** Writes a run's results (`RunSummary.requests`) to `path`, picked in the save dialog, as JUnit XML or JSON. */
+  exportRun: (requests: RunRequestReport[], format: RunExportFormat, path: string) => invoke<void>("export_run", { requests, format, path }),
+  /** The answers the workspace's Session holds for a request's Prompt variables, by name. */
+  promptAnswers: (requestKey: string) => invoke<Record<string, string>>("prompt_answers", { requestKey }),
+  /** Has the Session remember answers to a request's Prompt variables (in memory only). */
+  answerPrompts: (requestKey: string, answers: Record<string, string>) => invoke<void>("answer_prompts", { requestKey, answers }),
+  /** Forgets a request's Prompt variable answers, so its next send asks again. */
+  forgetPromptAnswers: (requestKey: string) => invoke<void>("forget_prompt_answers", { requestKey }),
+  /** The shape of the latest exchange of the request named `name` in `filePath`, in the Session; null if it hasn't been sent. */
+  exchangeShape: (filePath: string, name: string) => invoke<ExchangeShape | null>("exchange_shape", { filePath, name }),
+  /** The cookies in the Session's jar: unexpired ones, by domain, then path, then name. */
+  sessionCookies: () => invoke<StoredCookie[]>("session_cookies"),
+  /** Deletes one cookie from the Session's jar. False if there was none. */
+  deleteCookie: (domain: string, path: string, name: string) => invoke<boolean>("delete_cookie", { domain, path, name }),
+  /** Deletes every cookie in the Session's jar. */
+  clearCookies: () => invoke<void>("clear_cookies"),
+  /** The Session's Global variables, by name. */
+  sessionGlobals: () => invoke<GlobalVariable[]>("session_globals"),
+  /** Deletes one Global variable. False if it wasn't set. */
+  deleteGlobal: (name: string) => invoke<boolean>("delete_global", { name }),
+  /** Deletes every Global variable. */
+  clearGlobals: () => invoke<void>("clear_globals"),
+  /** Empties the whole Session: cookies, Global variables, prompt answers and every other section. */
+  clearSession: () => invoke<void>("clear_session"),
+  /** Each named request with a latest exchange in the Session, by file, then name. */
+  namedExchanges: () => invoke<NamedExchange[]>("named_exchanges"),
+  /** Forgets one named request's latest exchange, so its Request variables read as unsent. False if there was none. */
+  removeNamedExchange: (filePath: string, name: string) => invoke<boolean>("remove_named_exchange", { filePath, name }),
+  /** Forgets every named request's latest exchange. */
+  clearNamedExchanges: () => invoke<void>("clear_named_exchanges"),
+  /**
+   * A named request's latest exchange as a response to show again: a new id whose
+   * body is kept until released, like any response's. Rejects when there is none.
+   */
+  openExchange: (filePath: string, name: string) => invoke<HttpResponse>("open_exchange", { filePath, name }),
+  /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */
+  requestVariable: (filePath: string, reference: string) => invoke<RequestVariableReading | null>("request_variable", { filePath, reference }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
   /**
    * Lets the shell drop a response's body and everything cached from it, once no
@@ -105,7 +180,12 @@ export const api = {
   responseShape: (responseId: string) => invoke<JsonShape>("response_shape", { responseId }),
 
   getSettings: () => invoke<AppSettings>("get_settings"),
+  /** Saves the settings; `trustedWorkspaces` is the shell's and stays as it is. */
   saveSettings: (settings: AppSettings) => invoke<void>("save_settings", { settings }),
+  /** Makes the open workspace a Trusted workspace; returns every Trusted workspace. */
+  trustWorkspace: () => invoke<string[]>("trust_workspace"),
+  /** Stops trusting the workspace at `path`; returns the Trusted workspaces left. */
+  revokeWorkspaceTrust: (path: string) => invoke<string[]>("revoke_workspace_trust", { path }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 

@@ -1,6 +1,7 @@
-// Display helpers for the response viewer's Cookies tab. The parsing itself is
-// in the core (httpdesk_core::cookies); this only turns fields into words.
-import type { ResponseCookie } from "./types";
+// Display helpers for cookie tables: the response viewer's Cookies tab and the
+// Session panel's Cookies section. The parsing itself is in the core
+// (httpdesk_core::cookies); this only turns fields into words.
+import type { ResponseCookie, StoredCookie } from "./types";
 
 const UNITS: [seconds: number, unit: string][] = [
   [86400, "d"],
@@ -22,4 +23,58 @@ export function cookieExpiry(c: ResponseCookie): string {
   }
   if (c.expires !== null) return new Date(c.expires).toUTCString();
   return "Session";
+}
+
+/** When a cookie in the Session's jar expires, as an HTTP date in GMT, else "Session". */
+export function storedCookieExpiry(c: StoredCookie): string {
+  return c.expires ? new Date(c.expires).toUTCString() : "Session";
+}
+
+/** One row of a cookie table (`CookieTable.svelte`), its attributes in words. */
+export interface CookieRow {
+  name: string;
+  value: string;
+  /** The host it is sent to: the Domain attribute, or for a host-only cookie the host that set it. */
+  domain: string;
+  /** Set without a Domain attribute: sent back only to `domain`. */
+  hostOnly: boolean;
+  path: string;
+  expiry: string;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: string | null;
+  /** The Set-Cookie header as received, if known (a tooltip on the name). */
+  raw?: string;
+  /** Why the Set-Cookie couldn't be read as a cookie; the row then shows `raw` instead. */
+  parseError?: string | null;
+}
+
+/** A Set-Cookie a response carried, as a cookie table row. */
+export function responseCookieRow(c: ResponseCookie): CookieRow {
+  return {
+    name: c.name,
+    value: c.value,
+    domain: c.domain ?? hostOf(c.url),
+    hostOnly: c.domain === null,
+    path: c.path ?? "",
+    expiry: cookieExpiry(c),
+    secure: c.secure,
+    httpOnly: c.httpOnly,
+    sameSite: c.sameSite,
+    raw: c.raw,
+    parseError: c.parseError,
+  };
+}
+
+/** A cookie in the Session's jar, as a cookie table row. */
+export function storedCookieRow(c: StoredCookie): CookieRow {
+  return { ...c, expiry: storedCookieExpiry(c) };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }

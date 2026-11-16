@@ -1,5 +1,5 @@
-// Sizes of the two split panes (sidebar, request/response), stored in AppSettings.
-// The defaults must match `AppSettings::default()` in src-tauri/src/lib.rs
+// Sizes of the split panes (sidebar, request/response, panel area), stored in
+// AppSettings. The defaults must match `AppSettings::default()` in src-tauri/src/lib.rs
 // (panes.test.ts checks).
 import type { AppSettings } from "./types";
 
@@ -16,6 +16,8 @@ export interface PaneLimits {
 export const SIDEBAR: PaneLimits = { min: 200, max: 560, initial: 280, step: 16 };
 /** Request pane's share of the request/response split. */
 export const SPLIT: PaneLimits = { min: 0.2, max: 0.8, initial: 0.5, step: 0.05 };
+/** Height of the panel area below the requests (the Session panel), px. */
+export const PANEL: PaneLimits = { min: 120, max: 640, initial: 260, step: 16 };
 
 /** `v` kept within `limits`; anything that isn't a finite number gives the default. */
 export function clampPane(v: unknown, limits: PaneLimits): number {

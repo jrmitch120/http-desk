@@ -1,8 +1,10 @@
 # Comment and `# @tag` compatibility: JetBrains HTTP Client vs VS Code REST Client
 
 Research for storing per-query-parameter and per-header documentation in `.http`
-comments without breaking either tool. This file records facts only. It does not
-propose a design.
+comments without breaking either tool. Q6 and Q7 extend it for request chaining
+(#107): variable precedence measured with `ijhttp` (#129), and what each tool does
+with the other's chaining syntax, cookies and Global variables. This file records
+facts only. It does not propose a design.
 
 ## Sources read (versions)
 
@@ -13,6 +15,8 @@ propose a design.
 | JetBrains HTTP Client plugin binary (closed source) | `restClient.jar` bundled with JetBrains Rider 2026.2, build `262.8665.328` (`~/Applications/Rider.app/Contents/plugins/restClient/lib/restClient.jar`) | Static inspection only: class/resource names and constant-pool strings. Nothing was executed. |
 | JetBrains YouTrack (first-party issue tracker) | read through `https://youtrack.jetbrains.com/api/issues/...` on 2026-11-04 | These are bug reports and staff comments. They tell you how the tool behaved in the affected version, not what the current spec says. |
 | VS Code REST Client `Huachao/vscode-restclient` | commit `0773d56b65d9e7033259519e99eef8f752f6ba6e` (2026-01-30, `master`), `package.json` version `0.26.0` | Source is authoritative here and is preferred over the README. |
+| JetBrains HTTP Client CLI (`ijhttp`), ZIP distribution | *IntelliJ HTTP Client 2026.1, build 261.25134.95*, from `https://jb.gg/ijhttp/latest` (redirects to `https://download.jetbrains.com/resources/intellij/http-client/261.25134.95/intellij-http-client.zip`, SHA-256 `4656e9c1e2c798fbe7fd78ed8fc124bc071ebb46e02770e198a562689da32c9d`), downloaded 2026-11-14 | Run on Eclipse Temurin JDK `25.0.5+8` (macOS aarch64), the minimum the [CLI docs](https://www.jetbrains.com/help/idea/http-client-cli.html) allow ("The ZIP distribution requires JDK 25 or newer"). Used for Q6 and Q7. Deleted afterwards. |
+| JetBrains docs (IntelliJ IDEA 2026.3 Help): [http-client-variables](https://www.jetbrains.com/help/idea/http-client-variables.html), [http-client-in-product-code-editor](https://www.jetbrains.com/help/idea/http-client-in-product-code-editor.html), [http-client-reference](https://www.jetbrains.com/help/idea/http-client-reference.html), [http-client-cli](https://www.jetbrains.com/help/idea/http-client-cli.html) | read 2026-11-14 | Used for Q6 and Q7. |
 
 Permalink bases used below:
 
@@ -25,7 +29,8 @@ I tried to confirm JetBrains behaviour by running the official HTTP Client CLI (
 policy blocked running the downloaded binary. JetBrains verdicts below therefore rest on
 the spec, the docs, static inspection of the plugin jar, and YouTrack. Where those leave a
 question open, it is marked **Unknown**. Appendix A has a ready-made test file for
-confirming these verdicts later.
+confirming these verdicts later. (Later runs did execute the CLI: Appendix B and C
+used the Docker image, and Q6 and Q7 the ZIP distribution.)
 
 ---
 
@@ -167,6 +172,109 @@ Legend: **Safe**: documented or verified in source, no effect on the sent reques
   - REST Client: `^#{3,}`.
 - **Leading indentation**: REST Client's comment regex allows leading whitespace (`^\s*`). Its delimiter regex does not (`^#{3,}`), so `    ###` is a comment there, not a delimiter. JetBrains handling of indented `###`: **Unknown**.
 - **`@name` value syntax differs**: JetBrains accepts `# @name foo` and `# @name = foo`. REST Client's regex `@([\w-]+)(?:\s+(.*?))?` would read `# @name = foo` as the name `= foo`, and its request-variable regex needs `\w+`, so `= foo` does not match. Not directly relevant to docs, but it shows that tag *values* are parsed differently by the two tools.
+
+---
+
+## Q6. Which definition of `{{name}}` wins? (measured with `ijhttp`, #129)
+
+Run on 2026-11-14 with `ijhttp` 2026.1 (build 261.25134.95) on Temurin JDK 25.0.5+8, against a local echo server that logs the query string and an `X-V` header exactly as received. Appendix D has the files and the command.
+
+The same name `v` was defined in every combination of these six places, one `ijhttp` run per combination (63 runs, so every pair and the all-at-once case are covered). Each place gives `v` a value naming it:
+
+| Place | Value |
+|---|---|
+| Public environment file (`http-client.env.json`, environment `dev`, selected with `-e dev`) | `env-public` |
+| Private environment file (`http-client.private.env.json`) | `env-private` |
+| Global variable, set by `client.global.set("v", "global")` in the response handler of an earlier request in the same file | `global` |
+| In-place variable, `@v = in-place` at the top of the file | `in-place` |
+| `request.variables.set("v", "per-request")` in the request's pre-request script | `per-request` |
+| `# @prompt v` above the request | (none: `ijhttp` has no way to answer a prompt) |
+
+### Observed order (highest first)
+
+1. `request.variables.set` in the pre-request script
+2. In-place `@v = …` (declared once in the file; see the duplicate rule below)
+3. Global variable (`client.global.set`)
+4. Private environment file
+5. Public environment file
+
+`# @prompt` has no effect in `ijhttp`. It is not measurable there.
+
+All 63 runs fit this one order. Each pair, as received by the server:
+
+| Defined in | Sent |
+|---|---|
+| public + private | `env-private` |
+| public + global, private + global | `global` |
+| public + in-place, private + in-place, global + in-place | `in-place` |
+| public, private, global or in-place, + `request.variables.set` | `per-request` |
+| any of the above + `# @prompt v` | the same value as without the prompt line |
+| `# @prompt v` alone | `{{v}}`, literally (`?v=%7B%7Bv%7D%7D`), and the run still reports success |
+| all six at once | `per-request` |
+
+The per-scenario log is reproducible with Appendix D. A second run of all 63 with `--js rhino` instead of the default engine (unnamed in `--help`) gave identical results.
+
+### Duplicate in-place declarations
+
+A name declared with `@` twice in the same file is not an in-place variable at all. Both declarations are ignored and the name falls through to the next place in the order:
+
+| File | Sent |
+|---|---|
+| `@v = file-top` at the top; a Global `v` set by an earlier request | `file-top` |
+| `@v = in-request` between `### probe` and the method line; a Global `v` | `in-request` (one declaration counts wherever it is) |
+| `@v = file-top` at the top and `@v = in-request` above the request; no other `v` | `{{v}}`, literally |
+| the same, with a Global `v` | `global` |
+| the same, with `v` in the public environment (no Global) | `env-public` |
+| `@v = file-top` and `@v = file-top-2`, both at the top; a Global `v` | `global` |
+
+An `@v = …` line after a request's headers and blank line is that request's body, not a declaration (it did not define `v` for the next request).
+
+### Where this differs from the JetBrains docs
+
+- **The docs give the reverse order.** [http-client-variables, "Variable types"](https://www.jetbrains.com/help/idea/http-client-variables.html) (2026.3 Help): "if variable names conflict, the value of the variable higher on the list will be used", and the list is environment, global, in-place, per-request. `ijhttp` uses per-request, in-place, global, environment.
+- **The docs contradict themselves on public and private.** The same list says "In case of a name conflict, public variables take precedence over private ones". The "Define environment variables" section of the same page says "The values of variables that are specified in the `http-client.private.env.json` file override the values in the public environment file". `ijhttp` follows the second: private wins.
+- [IJPL-187599](https://youtrack.jetbrains.com/issue/IJPL-187599) "HTTP Client environment variables have incorrect precedence when running" (affected 2024.3.4.1, **Open**; a comment on it says it was reproduced and escalated to engineering): an in-place `@url` beats the selected environment's `url`. Confirmed: in-place beats both environment files.
+- [IJPL-67285](https://youtrack.jetbrains.com/issue/IJPL-67285) "HTTP client: add mechanism for clearing all client.global variables" (**Shelved**): a comment's workaround calls `client.global.clearAll()` so that a later request gets `myId` from the environment instead of the Global variable, or copies the environment value into `request.variables` in a pre-request script so that it wins over the Global. Both imply Global over environment and `request.variables` over Global. Confirmed.
+- The docs don't mention duplicate in-place declarations or `# @prompt`.
+
+### Limits of this measurement
+
+- It is the CLI, not the Rider editor. The CLI build (261) is older than the Rider 2026.2 jar inspected above (262) and the Docker image used in Appendix B (263). The order in the Rider editor was not measured. IJPL-187599 and IJPL-67285 describe the editor, and they agree with the CLI.
+- `# @prompt` is a REST Client tag. Rider 2026.2's `HttpDocCommentTags` doesn't list it (Q2), and the CLI treats it as an unknown tag, so there is no JetBrains prompt to rank.
+- `client.global.set` was called in a response handler only, and `request.variables.set` in a pre-request script only, as the ticket asked. Command-line variables (`-V`, `-P`) were not tested.
+
+### HttpDesk today
+
+HttpDesk (#139, `Scopes::lookup` in `crates/httpdesk-core/src/vars.rs`, and `makeVarProvider` in `src/lib/vars.ts`) now matches the measured order: `request.variables.set`, then in-place, then Global variables, then the private and then the public environment file. Each pair above is a case in `crates/httpdesk-core/tests/fixtures/resolution-cases.json`, which both resolvers run, and `crates/httpdesk-core/tests/global_variables.rs` sends every pair against a mock server. Two rules are HttpDesk's own, from the GLOSSARY: an answered Prompt variable wins over everything, and a name declared with `@` twice is not ignored: the request's own declaration beats one elsewhere in the file.
+
+---
+
+## Q7. Chaining, cookies and Global variables across the two tools
+
+### Unsent Request variables (REST Client)
+
+- **REST Client never sends a dependency on its own.** A send runs only the request under the cursor (`RequestController.run` → `runCore`, which sends that one request, [requestController.ts L34, L92-102](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/controllers/requestController.ts#L92-L102)). Its response is cached for `{{name.…}}` references only if it has a `# @name` (L111-113).
+- **It sends the literal text instead.** For a name whose request hasn't been sent, `RequestVariableProvider.get` returns a warning, `Request variable has not been sent`, rather than a value ([requestVariableProvider.ts L39-43](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/httpVariableProviders/requestVariableProvider.ts#L39-L43); [httpVariableResolveResult.ts L21](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/models/httpVariableResolveResult.ts#L21)). On a warning or error, `processRawRequest` stops looking and writes `{{name}}` back unchanged ([variableProcessor.ts L36-50](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/variableProcessor.ts#L36-L50)), and the request goes out with it.
+- **The warning is in the editor.** The diagnostics provider marks each such reference `Request '<name>' has not been sent`, with Information severity ([customVariableDiagnosticsProvider.ts L107-118](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/providers/customVariableDiagnosticsProvider.ts#L107-L118)). A path that matches nothing in a sent request gets a Warning (L120-138), and the text is sent the same way.
+
+### Cookies
+
+- **REST Client: one jar on disk, shared by every workspace.**
+  - The jar is a `tough-cookie-file-store` file, `cookie.json`, in REST Client's user data folder: `$VSC_REST_CLIENT_HOME`, else `~/.rest-client` if it exists, else `$XDG_CACHE_HOME/rest-client` ([userDataManager.ts L7-21, L43-45](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/userDataManager.ts#L7-L45)). The path doesn't depend on the workspace, and every `HttpClient` opens the same file ([httpClient.ts L24, L33-39](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/httpClient.ts#L24-L39)).
+  - It's on by default: `rest-client.rememberCookiesForSubsequentRequests` defaults to `true` ([package.json L385-389](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/package.json#L385-L389)).
+  - **`# @no-cookie-jar` stops both sending and saving.** It sets `rememberCookiesForSubsequentRequests` to `false` for the request ([configurationSettings.ts L332-336](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/models/configurationSettings.ts#L332-L336)), and then no `cookieJar` is passed to `got` ([httpClient.ts L149-151](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/httpClient.ts#L149-L151)), so `got` neither adds stored cookies nor stores new ones. (With `# @no-redirect` on the same request it is ignored; see Q2's side note.)
+- **JetBrains: one cookie file per project.** "The cookies received through a response are automatically saved into the dedicated `http-client.cookies` file under the `.idea/httpRequests/` directory. The number of cookies that can be saved is limited to 300." `# @no-cookie-jar` is documented only as preventing saving ("You can prevent saving the received cookie to the cookie jar…") ([http-client-in-product-code-editor, "Manage cookies"](https://www.jetbrains.com/help/idea/http-client-in-product-code-editor.html)). `.idea/` is the project's own folder.
+
+### Global variables (JetBrains)
+
+- **`client.global` lasts until the IDE closes.** "The client state is preserved until you close IntelliJ IDEA. Every variable saved in `client.global` as `variable_name` is accessible to subsequent HTTP requests as `{{variable_name}}`" ([http-client-in-product-code-editor](https://www.jetbrains.com/help/idea/http-client-in-product-code-editor.html)). "The object is reinitialized every time IntelliJ IDEA starts, without preserving data between IntelliJ IDEA restarts" ([http-client-reference, `client`](https://www.jetbrains.com/help/idea/http-client-reference.html)). In `ijhttp` it lasts for one run: each of Q6's runs started with no Global variables.
+- There is no UI to clear them; [IJPL-67285](https://youtrack.jetbrains.com/issue/IJPL-67285) asks for one and is Shelved. The workaround is a script calling `client.global.clearAll()`.
+
+### Each tool's chaining syntax in the other
+
+- **REST Client sends a JetBrains response handler as body text.** REST Client has no `{% %}` handling (the string occurs nowhere in `src/` at `0773d56`). Comment lines are removed first ([selector.ts L66](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/selector.ts#L66)). Everything after the blank line that ends the headers is body ([httpRequestParser.ts L41-73](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/httpRequestParser.ts#L41-L73)), so `> {%`, the script and `%}` become the body, or the end of it. On a GET this fails before sending: `got` 11 (`package.json` pins `^11.8.6`) throws "The `GET` method cannot be used with a body" unless `allowGetBody` is set ([got v11.8.6 source/core/index.ts L1900-1916](https://github.com/sindresorhus/got/blob/v11.8.6/source/core/index.ts#L1900-L1916)), and REST Client doesn't set it (`httpClient.ts`). Not run in VS Code.
+- **REST Client breaks on a JetBrains pre-request script.** `getRequestRanges` starts a request at the first line that isn't a comment, blank or file variable ([selector.ts L115-158](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/selector.ts#L115-L158)), so `< {%` above the method line becomes the request line. It doesn't start with a method, so the method defaults to GET and the URL is `< {%` ([httpRequestParser.ts L149-171](https://github.com/Huachao/vscode-restclient/blob/0773d56b65d9e7033259519e99eef8f752f6ba6e/src/utils/httpRequestParser.ts#L149-L171)). The script lines and the real method line are then parsed as headers. Not run in VS Code.
+- **Rider refuses `{{name.response…}}`.** [IJPL-253135](https://youtrack.jetbrains.com/issue/IJPL-253135) ".http Client: Inline request-variable references not resolved in headers/URL" (**Open**): running the request "throws `Invalid request because of unsubstituted variable 'requestToken.response.body.$.access_token'`, even though requestToken already ran successfully". The CLI behaves differently: `ijhttp` 2026.1 sent `{{login.response.body.$.case}}` literally in the header and URL-encoded in the query, after `# @name login` had run, and reported success (Appendix D). The same happens for any undefined name (Q6, `# @prompt v` alone). The refusal in the Rider editor was not measured.
 
 ---
 
@@ -371,3 +479,187 @@ A file written by HttpDesk's serializer, with disabled form fields in the body a
 | S2 | Form: `a` on, `b` off | `a=1` |
 | S3 | Multipart: `a` off, `b` on, `c` off (`#~=` lines in the header area) | Only part `b` |
 | S4 | Multipart with part `b` off and the whole body off (`#~|` lines, the disabled part nested as `#~| #~`) | empty (`content-length: 0`) |
+
+---
+
+## Appendix D: reproduction files for Q6 and Q7
+
+Everything below ran on macOS (arm64) with `ijhttp` 2026.1 (build 261.25134.95) and Temurin JDK 25.0.5+8, with nothing installed system-wide: `JAVA_HOME` and `PATH` were set for each command only.
+
+### Echo server
+
+`python3 echo.py server.log` listens on `127.0.0.1:18766`, logs `X-Case`, the path with its query, and `X-V` for each request, and answers with the same as JSON.
+
+```python
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+LOG = open(sys.argv[1], "a", buffering=1)
+
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        case = self.headers.get("X-Case", "")
+        v = self.headers.get("X-V", "")
+        LOG.write(f"{case}\t{self.path}\t{v}\n")
+        body = json.dumps({"case": case, "path": self.path, "v": v}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+ThreadingHTTPServer(("127.0.0.1", 18766), H).serve_forever()
+```
+
+### The 63 precedence scenarios (Q6)
+
+`python3 gen.py scen` writes one directory per non-empty combination of the six places, named after it (`public+inplace`, …), each holding `test.http` and both environment files.
+
+```python
+"""Writes one directory per scenario: the .http file and both env files."""
+import itertools, json, os, sys
+
+OUT = sys.argv[1]
+URL = "http://127.0.0.1:18766"
+SOURCES = ["public", "private", "global", "inplace", "prevar", "prompt"]
+
+
+def http_file(name, s):
+    out = []
+    if "inplace" in s:
+        out += ["@v = in-place", ""]
+    out += ["### setup", f"GET {URL}/setup", f"X-Case: {name}", ""]
+    if "global" in s:
+        out += ["> {%", '    client.global.set("v", "global");', "%}", ""]
+    out += ["### probe"]
+    if "prompt" in s:
+        out += ["# @prompt v"]
+    if "prevar" in s:
+        out += ["< {%", '    request.variables.set("v", "per-request");', "%}"]
+    out += [f"GET {URL}/probe?v={{{{v}}}}", f"X-Case: {name}", "X-V: {{v}}", ""]
+    return "\n".join(out)
+
+
+def write(name, s):
+    d = os.path.join(OUT, name)
+    os.makedirs(d)
+    pub = {"dev": {"v": "env-public"} if "public" in s else {"unused": "unused-public"}}
+    priv = {"dev": {"v": "env-private"} if "private" in s else {"unused": "unused-private"}}
+    with open(os.path.join(d, "http-client.env.json"), "w") as f:
+        f.write(json.dumps(pub, indent=2) + "\n")
+    with open(os.path.join(d, "http-client.private.env.json"), "w") as f:
+        f.write(json.dumps(priv, indent=2) + "\n")
+    with open(os.path.join(d, "test.http"), "w") as f:
+        f.write(http_file(name, s))
+
+
+for k in range(1, len(SOURCES) + 1):
+    for s in itertools.combinations(SOURCES, k):
+        write("+".join(s), set(s))
+```
+
+For example, the all-at-once scenario `public+private+global+inplace+prevar+prompt/test.http`:
+
+```http
+@v = in-place
+
+### setup
+GET http://127.0.0.1:18766/setup
+X-Case: public+private+global+inplace+prevar+prompt
+
+> {%
+    client.global.set("v", "global");
+%}
+
+### probe
+# @prompt v
+< {%
+    request.variables.set("v", "per-request");
+%}
+GET http://127.0.0.1:18766/probe?v={{v}}
+X-Case: public+private+global+inplace+prevar+prompt
+X-V: {{v}}
+```
+
+with `http-client.env.json` `{"dev": {"v": "env-public"}}` and `http-client.private.env.json` `{"dev": {"v": "env-private"}}`. A scenario without `public` or `private` gets `{"dev": {"unused": "unused-public"}}` or `{"dev": {"unused": "unused-private"}}` instead, so `-e dev` always names an environment.
+
+Each directory was run on its own, so every run starts with no Global variables:
+
+```sh
+for d in scen/*/; do
+  (cd "$d" && "$IJHTTP" --no-progress -L HEADERS -e dev \
+    -v http-client.env.json -p http-client.private.env.json test.http)
+done
+```
+
+The same loop with `--js rhino` added gave the same 63 results. The probe line of `server.log` is the result for each scenario.
+
+### Duplicate in-place declarations (Q6)
+
+Each file was run alone with `"$IJHTTP" --no-progress test.http`, except the last, which also had `http-client.env.json` `{"dev": {"v": "env-public"}}` and was run with `-e dev -v http-client.env.json`.
+
+```http
+@v = file-top
+
+### setup
+GET http://127.0.0.1:18766/setup
+X-Case: p1-top+global
+
+> {%
+    client.global.set("v", "global");
+%}
+
+### probe
+GET http://127.0.0.1:18766/probe?v={{v}}
+X-Case: p1-top+global
+```
+
+Sent `file-top`. The other files change only these parts:
+
+| Case | Top of file | `setup` handler | Between `### probe` and `GET` | Sent |
+|---|---|---|---|---|
+| p1 (above) | `@v = file-top` | `client.global.set` | (nothing) | `file-top` |
+| p2 | (nothing) | `client.global.set` | `@v = in-request` | `in-request` |
+| p3 | `@v = file-top` | (none) | `@v = in-request` | `{{v}}` |
+| p4 | `@v = file-top` | `client.global.set` | `@v = in-request` | `global` |
+| p6 | `@v = file-top` / `@v = file-top-2` | `client.global.set` | (nothing) | `global` |
+| p8 | `@v = file-top`, environment `dev` has `v` | (none) | `@v = in-request` | `env-public` |
+
+The body case (`@v = …` after a request's headers is body, not a declaration):
+
+```http
+### setup
+GET http://127.0.0.1:18766/setup
+X-Case: p7-between
+
+
+@v = between
+
+### probe
+GET http://127.0.0.1:18766/probe?v={{v}}
+X-Case: p7-between
+```
+
+Sent `{{v}}`.
+
+### A Request variable in `ijhttp` (Q7)
+
+Run with `"$IJHTTP" --no-progress -L HEADERS test.http`:
+
+```http
+# @name login
+GET http://127.0.0.1:18766/login
+X-Case: reqvar
+
+###
+GET http://127.0.0.1:18766/probe?v={{login.response.body.$.case}}
+X-Case: reqvar
+X-V: {{login.response.body.$.case}}
+```
+
+The server received `/probe?v=%7B%7Blogin.response.body.%24.case%7D%7D` with `X-V: {{login.response.body.$.case}}`, and the run ended `2 requests completed, 0 have failed tests` / `RUN SUCCESSFUL`.

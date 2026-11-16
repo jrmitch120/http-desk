@@ -92,6 +92,21 @@ impl JsonDocument {
         text.push_str(if located.is_empty() { "]" } else { "\n]" });
         Ok(FilterResult { matches: located.len(), text })
     }
+
+    /// The first value the JSONPath `expression` matches, as a Request variable inserts
+    /// it: a string's contents, anything else as its JSON text exactly as in the body.
+    /// `None` when nothing matches.
+    pub fn first(&self, expression: &str) -> Result<Option<String>, FilterError> {
+        let path = JsonPath::parse(expression.trim())
+            .map_err(|e| FilterError(format!("Invalid JSONPath at position {}: {}", e.position(), e.message())))?;
+        let located = path.query_located(&self.root).all();
+        let Some(node) = located.first() else { return Ok(None) };
+        if let Value::String(s) = node.node() {
+            return Ok(Some(s.clone()));
+        }
+        let span = source_spans(&self.text, &[node.location()]).remove(0);
+        Ok(Some(self.text[span].to_string()))
+    }
 }
 
 /// At most this many keys are kept per place in a [`Shape`]. Objects used as

@@ -16,8 +16,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::body_format::{self, ResponseKind};
-use crate::cookies::{self, ResponseCookie};
+use crate::cookies::{self, CookieJar, ResponseCookie};
 use crate::env::SslConfig;
+use crate::exchange::UnmatchedPath;
 use crate::model::*;
 use crate::parser::DISABLED_MARKER;
 use crate::query::{self, Part};
@@ -66,6 +67,34 @@ pub enum ExecError {
     CircularHost(Vec<Vec<String>>),
     #[error("{}", .0.join("\n"))]
     DynamicVariable(Vec<String>),
+    /// The request has a script, and the workspace isn't a Trusted workspace.
+    #[error("This request has a script, and this workspace isn't trusted to run scripts. Trust it, or send without scripts.")]
+    UntrustedWorkspace,
+    /// The pre-request script threw, ran out of time or memory, or couldn't run,
+    /// so nothing was sent. `line` is the pre-request script's line (1-based,
+    /// counted from its first `<` line), when the error has one.
+    #[error("{message}{}", line.map(|l| format!(" (line {l})")).unwrap_or_default())]
+    PreRequestScript { message: String, line: Option<usize> },
+    /// Request variables read the latest exchange of these named requests, which
+    /// haven't been sent in this Session. Nothing is sent on its own.
+    #[error("{}", unsent_text(.0))]
+    UnsentRequest(Vec<String>),
+    /// Request variables whose path reads nothing from their request's latest exchange.
+    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
+    UnmatchedPath(Vec<UnmatchedPath>),
+}
+
+/// "… `login` hasn't been sent …", naming each request.
+fn unsent_text(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.as_slice() {
+        [one] => format!("This request reads the latest exchange of {one}, which hasn't been sent in this Session. Send {one} first."),
+        [rest @ .., last] => format!(
+            "This request reads the latest exchanges of {} and {last}, which haven't been sent in this Session. Send them first.",
+            rest.join(", ")
+        ),
+        [] => String::new(),
+    }
 }
 
 /// `a → b → a`, chains separated by `; `.
@@ -96,7 +125,11 @@ pub enum ErrorKind {
     InvalidUrl,
     UnresolvedVariable,
     CircularVariable,
+    UnsentRequest,
+    UnmatchedPath,
     File,
+    UntrustedWorkspace,
+    PreRequestScript,
     Other,
 }
 
@@ -112,7 +145,11 @@ impl ExecError {
             ExecError::InvalidUrl { .. } => ErrorKind::InvalidUrl,
             ExecError::UnresolvedHost(_) => ErrorKind::UnresolvedVariable,
             ExecError::CircularHost(_) => ErrorKind::CircularVariable,
+            ExecError::UnsentRequest(_) => ErrorKind::UnsentRequest,
+            ExecError::UnmatchedPath(_) => ErrorKind::UnmatchedPath,
             ExecError::File { .. } => ErrorKind::File,
+            ExecError::UntrustedWorkspace => ErrorKind::UntrustedWorkspace,
+            ExecError::PreRequestScript { .. } => ErrorKind::PreRequestScript,
             ExecError::Tls(_) | ExecError::TlsHandshake { .. } => ErrorKind::Tls,
             ExecError::InvalidMethod(_)
             | ExecError::InvalidHeader(_)
@@ -135,7 +172,17 @@ impl ExecError {
             ExecError::InvalidUrl { url, reason } => json!({ "url": url, "reason": reason }),
             ExecError::UnresolvedHost(names) => json!({ "names": names }),
             ExecError::CircularHost(chains) => json!({ "chains": chains }),
+            ExecError::UnsentRequest(names) => json!({ "names": names }),
+            ExecError::UnmatchedPath(paths) => json!({
+                "paths": paths.iter().map(|p| json!({
+                    "reference": p.reference,
+                    "request": p.request,
+                    "received": p.received.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "reason": p.reason,
+                })).collect::<Vec<_>>()
+            }),
             ExecError::File { path, reason } => json!({ "path": path, "reason": reason }),
+            ExecError::PreRequestScript { line, .. } => json!({ "line": line }),
             _ => serde_json::Value::Null,
         }
     }
@@ -213,6 +260,10 @@ pub struct PreparedRequest {
     pub follow_redirects: bool,
     pub timeout_ms: u64,
     pub connect_timeout_ms: u64,
+    /// `# @no-cookie-jar`: the send neither sends the Session's cookies nor
+    /// keeps the ones it receives.
+    #[serde(default)]
+    pub no_cookie_jar: bool,
     pub warnings: Vec<String>,
 }
 
@@ -312,6 +363,32 @@ fn default_content_type(mode: BodyMode) -> Option<&'static str> {
         BodyMode::FormUrlEncoded => Some("application/x-www-form-urlencoded"),
         _ => None,
     }
+}
+
+/// Request variables that block the send: ones whose request hasn't been sent in
+/// this Session, then ones whose path reads nothing from its latest exchange.
+fn request_variable_errors(resolver: &Resolver) -> Result<(), ExecError> {
+    let unsent = resolver.unsent();
+    if !unsent.is_empty() {
+        return Err(ExecError::UnsentRequest(unsent));
+    }
+    let unmatched = resolver.unmatched();
+    if !unmatched.is_empty() {
+        return Err(ExecError::UnmatchedPath(unmatched));
+    }
+    Ok(())
+}
+
+/// Fails when a Request variable written in `req` blocks its send (see
+/// [`request_variable_errors`]): the check a send makes before its pre-request script
+/// runs. Only these count, because a script can't define them, so the script can't
+/// change the answer. Every other reference, Request variables inside other
+/// variables' values included, is checked by [`prepare`], after the script.
+pub fn check_request_variables(req: &Request, resolver: &Resolver) -> Result<(), ExecError> {
+    let only = resolver.request_variables_only();
+    let _ = head(req, &only);
+    let _ = build_body(&req.body, &only, &|_| Ok(Vec::new()));
+    request_variable_errors(&only)
 }
 
 fn dynamic_errors(resolver: &Resolver) -> Result<(), ExecError> {
@@ -525,7 +602,18 @@ fn warnings(req: &Request, resolver: &Resolver, headers: &[(String, String)]) ->
             warnings.push("Multipart body without a boundary in Content-Type".into());
         }
     }
+    warnings.extend(req.response_handler_parts().into_iter().filter_map(|part| match part {
+        HandlerPart::Redirect { path, overwrite } => Some(redirect_not_run(&path, overwrite)),
+        _ => None,
+    }));
     warnings
+}
+
+/// The note on a request with a JetBrains `>> file` / `>>! file` response
+/// redirect, which is kept in the file but never run (nothing is written).
+pub fn redirect_not_run(path: &str, overwrite: bool) -> String {
+    let bang = if overwrite { "!" } else { "" };
+    format!("HttpDesk doesn't run response redirects: >>{bang} {path} doesn't save the response to a file.")
 }
 
 /// Resolves variables and applies enablement. Disabled components are never included.
@@ -540,12 +628,14 @@ pub fn prepare(
         return Err(e);
     }
     dynamic_errors(resolver)?;
+    request_variable_errors(resolver)?;
     if let Some(e) = url_error(&url, resolver) {
         return Err(e);
     }
 
     let body = build_body(&req.body, resolver, &|path| read_file(base_dir, path))?;
     dynamic_errors(resolver)?;
+    request_variable_errors(resolver)?;
     add_default_headers(&req.body, &mut headers);
     let warnings = warnings(req, resolver, &headers);
 
@@ -553,8 +643,19 @@ pub fn prepare(
     let connect_timeout_ms =
         req.directive("connection-timeout").and_then(parse_duration_ms).unwrap_or(settings.connect_timeout_ms);
     let follow_redirects = settings.follow_redirects && req.directive("no-redirect").is_none();
+    let no_cookie_jar = req.directive("no-cookie-jar").is_some();
 
-    Ok(PreparedRequest { method, url, headers, body, follow_redirects, timeout_ms, connect_timeout_ms, warnings })
+    Ok(PreparedRequest {
+        method,
+        url,
+        headers,
+        body,
+        follow_redirects,
+        timeout_ms,
+        connect_timeout_ms,
+        no_cookie_jar,
+        warnings,
+    })
 }
 
 /// What [`preview`] shows: the method, URL and headers a send would produce.
@@ -585,34 +686,46 @@ fn auth_fields(auth: &Auth, resolver: &Resolver) -> Vec<(String, String)> {
     fields.iter().map(|(label, text)| (label.to_string(), resolve(label, text))).collect()
 }
 
+/// The preview's warning for a request with a pre-request script, which it never runs.
+pub const PRE_REQUEST_NOT_PREVIEWED: &str =
+    "The pre-request script runs only when the request is sent, so values it sets aren't shown here.";
+
 /// The request as [`prepare`] would make it, without sending it. Dynamic variables
 /// that generate a new value on every send are shown as written, not generated.
 /// Each value a Secret went into is between [`crate::vars::SECRET_MARKS`], for the UI
 /// to mask (never in `error`, which masks it). The body isn't shown and no file is
-/// read, but the Content-Type it implies is.
+/// read, but the Content-Type it implies is. Scripts never run here.
 pub fn preview(req: &Request, resolver: Resolver) -> RequestPreview {
     let resolver = resolver.previewing();
     let Head { method, url, mut headers, error } = head(req, &resolver);
+    // Built only so its undefined variables are reported as at send; files read as empty.
+    let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
     // A placeholder stands for a plain value, so check the URL with one in its place.
     let checked = resolver.unmarked(&resolver.replace_placeholders(&url, |_| "0".into()));
     // The message names the URL as shown, with any Secret in it masked.
-    let error = error.or_else(|| url_error(&checked, &resolver)).map(|e| match e {
-        ExecError::InvalidUrl { reason, .. } => {
-            ExecError::InvalidUrl { url: resolver.masked(&resolver.shown(&url)), reason }
-        }
-        e => e,
-    });
-    // Built only so its undefined variables are reported as at send; files read as empty.
-    let _ = build_body(&req.body, &resolver, &|_| Ok(Vec::new()));
+    let error = error
+        .or_else(|| request_variable_errors(&resolver).err())
+        .or_else(|| url_error(&checked, &resolver))
+        .map(|e| match e {
+            ExecError::InvalidUrl { reason, .. } => {
+                ExecError::InvalidUrl { url: resolver.masked(&resolver.shown(&url)), reason }
+            }
+            e => e,
+        });
     add_default_headers(&req.body, &mut headers);
     let auth = auth_fields(&req.auth, &resolver);
-    let warnings = warnings(req, &resolver, &headers);
+    let mut warnings = warnings(req, &resolver, &headers);
+    // Scripts only run on a send: the preview is redrawn as you type, and a
+    // script's effects (and the trust it needs) belong to the send.
+    if !req.pre_request_parts().is_empty() {
+        warnings.push(PRE_REQUEST_NOT_PREVIEWED.into());
+    }
     let shown =
         |pairs: &[(String, String)]| pairs.iter().map(|(n, v)| (resolver.shown(n), resolver.shown(v))).collect();
     RequestPreview { method, url: resolver.shown(&url), headers: shown(&headers), auth: shown(&auth), warnings, error }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SentRequest {
     pub method: String,
@@ -622,7 +735,7 @@ pub struct SentRequest {
     pub body_size: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponse {
     pub id: String,
@@ -654,8 +767,18 @@ pub struct HttpResponse {
     #[serde(default)]
     pub timings: Timings,
     /// Every `Set-Cookie` received, redirect hops first, each with the URL
-    /// that set it. Shown only; never sent back.
+    /// that set it: what the Cookies tab shows. The Session's cookie jar keeps
+    /// them apart from this (see [`crate::cookies::CookieJar`]).
     pub cookies: Vec<ResponseCookie>,
+    /// The pre-request script's, then the response handler's, `client.test` and
+    /// `client.assert` results, and the handler's own failure, if any (see
+    /// [`crate::script`]). Empty when no script ran.
+    #[serde(default)]
+    pub tests: Vec<crate::script::TestResult>,
+    /// What the pre-request script, then the response handler, logged with
+    /// `client.log`, at most [`crate::script::LOG_LIMIT`] per script.
+    #[serde(default)]
+    pub logs: Vec<String>,
 }
 
 pub struct ExecOutcome {
@@ -755,14 +878,33 @@ async fn classify(e: reqwest::Error, p: &PreparedRequest) -> ExecError {
 /// A reqwest client set up for one prepared request (redirects, timeouts, TLS),
 /// with the hooks that time its phases and record the cookies its responses
 /// set. [`execute`] builds one per send; [`execute_on`] reuses one, which lets
-/// a later request go over a connection that is still open.
+/// a later request go over a connection that is still open. A client belongs to
+/// no Session: each send tells it which cookie jar to use.
 ///
 /// It times and records one request at a time: concurrent sends on one client
-/// would mix their phases and cookies. [`ClientPool`] keeps to that.
+/// would mix their phases, cookies and jars. [`ClientPool`] keeps to that.
 pub struct ExecClient {
     http: reqwest::Client,
     timing: timing::Recorder,
     cookies: Arc<cookies::Recorder>,
+}
+
+/// One send's use of its client's cookie store. Dropping it, however the send
+/// ends (finished, failed or cancelled), lets go of the send's jar.
+struct CookieSend<'a>(&'a cookies::Recorder);
+
+impl CookieSend<'_> {
+    /// The cookies the send's responses set, and the `Cookie` header the jar
+    /// gave its final hop.
+    fn finish(self) -> (Vec<ResponseCookie>, Option<String>) {
+        self.0.finish()
+    }
+}
+
+impl Drop for CookieSend<'_> {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
 }
 
 impl ExecClient {
@@ -966,6 +1108,12 @@ pub fn decode_text(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
     }
 }
 
+/// A body as text whatever it is: as [`decode_text`] decodes it, else as UTF-8 with
+/// invalid bytes replaced. What scripts and Request variables read.
+pub fn text_lossy(bytes: &[u8], content_type: Option<&str>) -> String {
+    decode_text(bytes, content_type).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
 /// What the viewer treats a received body as (see [`body_format::response_kind`]).
 /// Bytes kept `as_received`, because their Content-Encoding couldn't be undone,
 /// are binary whatever the content type says, as is a body with no text for a
@@ -1058,10 +1206,10 @@ fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> 
     }
 }
 
-/// Sends `p` on a new [`ExecClient`] built for it.
+/// Sends `p` on a new [`ExecClient`] built for it, with no cookie jar.
 pub async fn execute(p: PreparedRequest, settings: &ExecSettings, ssl: &SslConfig) -> Result<ExecOutcome, ExecError> {
     let client = ExecClient::new(&p, settings, ssl)?;
-    execute_on(&client, p, settings, |_| {}).await
+    execute_on(&client, p, settings, None, |_| {}).await
 }
 
 /// The shortest gap between two progress reports, so a body arriving in many
@@ -1073,10 +1221,16 @@ pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 /// downloads, `on_progress` gets the body bytes received on the wire so far:
 /// at most once per [`PROGRESS_INTERVAL`], each larger than the last, and none
 /// after the function returns.
+///
+/// `jar` is the cookie jar of the Session the send belongs to: its matching
+/// cookies are sent, on every redirect hop, and the cookies each hop sets are
+/// kept in it. With none, or with `# @no-cookie-jar`, no cookie is sent or kept.
+/// Either way the response lists the cookies it set.
 pub async fn execute_on(
     client: &ExecClient,
     p: PreparedRequest,
     settings: &ExecSettings,
+    jar: Option<&CookieJar>,
     mut on_progress: impl FnMut(usize) + Send,
 ) -> Result<ExecOutcome, ExecError> {
     let method =
@@ -1094,10 +1248,10 @@ pub async fn execute_on(
     }
 
     client.timing.reset();
-    // Drop anything an earlier request on this client left behind (one that
-    // failed part-way never took its cookies), so this response lists only
-    // the cookies set while it was being fetched.
-    client.cookies.take();
+    // This response lists only the cookies set while it was being fetched, and
+    // the client lets go of the jar however the send ends.
+    client.cookies.start(jar.filter(|_| !p.no_cookie_jar).cloned());
+    let cookies = CookieSend(&client.cookies);
     let start = Instant::now();
     let mut resp = match builder.send().await {
         Ok(resp) => resp,
@@ -1148,8 +1302,11 @@ pub async fn execute_on(
     let end = Instant::now();
     let elapsed = end - start;
     let timings = client.timing.timings(start, headers_at, end);
-    let cookies = client.cookies.take();
-    let request = final_request(&p, &client.timing.hops(), &final_url);
+    let (cookies, jar_cookie) = cookies.finish();
+    let mut request = final_request(&p, &client.timing.hops(), &final_url);
+    if let Some(value) = jar_cookie {
+        request.headers.push(("Cookie".into(), value));
+    }
     let mut warnings = p.warnings;
     warnings.extend(unsupported);
     warnings.extend(decode_failure);
@@ -1177,6 +1334,8 @@ pub async fn execute_on(
             warnings,
             timings,
             cookies,
+            tests: Vec::new(),
+            logs: Vec::new(),
         },
         body,
     })

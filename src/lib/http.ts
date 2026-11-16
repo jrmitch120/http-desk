@@ -44,6 +44,9 @@ export function newRequest(name = "New request"): Request {
   };
 }
 
+/** The method as sent: upper-cased, GET when blank. */
+export const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
+
 export function displayName(req: Request): string {
   if (req.name.trim()) return req.name.trim();
   const n = req.directives.find((d) => d.name === "name")?.value;
@@ -563,6 +566,15 @@ export function fileVariables(file: HttpFile): Variable[] {
   return [...file.header.variables, ...file.requests.flatMap((r) => r.variables)];
 }
 
+/**
+ * The `# @name`s of the file's requests, in order, each once: what its Request
+ * variables can read (the core's `HttpFile::request_names`). `###` text never counts.
+ */
+export function requestNames(file: HttpFile): string[] {
+  const names = file.requests.map((r) => getDirective(r, "name")?.trim()).filter((n): n is string => !!n);
+  return [...new Set(names)];
+}
+
 // ------------------------------------------------------------------ formatting
 
 /** "A", "A and B", "A, B and C". */
@@ -632,6 +644,17 @@ export interface BodySyntaxWarning {
   /** 1-based line number. */
   line: number;
   message: string;
+}
+
+/**
+ * Whether sending the request would run a script, which only a Trusted workspace
+ * may do: a `< {% %}` or `< file.js` pre-request script line, or a `> {% %}` or
+ * `> file.js` response handler line. `>>` output redirects aren't scripts.
+ * Mirrors the core's `script::has_scripts`.
+ */
+export function hasScripts(req: Request): boolean {
+  const pre = (req.preScript ?? "").split("\n").some((l) => l.trimStart().startsWith("<") && l.trimStart().slice(1).trim() !== "");
+  return pre || (req.responseHandler ?? "").split("\n").some((l) => l.startsWith(">") && !l.startsWith(">>") && l.slice(1).trim() !== "");
 }
 
 /** Response handler or output redirect at column 0, the same rule as the parser. */

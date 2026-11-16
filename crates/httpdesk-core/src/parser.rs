@@ -218,6 +218,76 @@ pub(crate) fn is_handler_start(line: &str) -> bool {
     false
 }
 
+/// Splits a verbatim response handler into its parts. `> {%` takes everything up
+/// to the next `%}` (on the same line or a later one) as its script; lines
+/// outside any part are ignored.
+pub(crate) fn handler_parts(text: &str) -> Vec<HandlerPart> {
+    let mut parts = Vec::new();
+    let mut lines = text.split('\n').enumerate();
+    while let Some((i, line)) = lines.next() {
+        if let Some(rest) = line.strip_prefix(">>") {
+            let (overwrite, path) = match rest.strip_prefix('!') {
+                Some(p) => (true, p),
+                None => (false, rest),
+            };
+            parts.push(HandlerPart::Redirect { path: path.trim().to_string(), overwrite });
+        } else if let Some(rest) = line.strip_prefix('>') {
+            parts.extend(script_source(rest, i, &mut lines).map(HandlerPart::Script));
+        }
+    }
+    parts
+}
+
+/// Splits a verbatim pre-request script into its parts: `< {%` takes everything
+/// up to the next `%}` as its script, `< path` is a script file.
+pub(crate) fn pre_request_parts(text: &str) -> Vec<PreRequestPart> {
+    let mut parts = Vec::new();
+    let mut lines = text.split('\n').enumerate();
+    while let Some((i, line)) = lines.next() {
+        let Some(rest) = line.trim_start().strip_prefix('<') else { continue };
+        parts.extend(script_source(rest, i, &mut lines));
+    }
+    parts
+}
+
+/// The script written after a `<` or `>` on line `i` (0-based): `rest` is the rest
+/// of that line. `{%` starts an inline script, up to the next `%}` (from `lines` as
+/// needed); anything else names a script file. `None` when nothing is written.
+fn script_source<'a>(
+    rest: &'a str,
+    i: usize,
+    lines: &mut impl Iterator<Item = (usize, &'a str)>,
+) -> Option<ScriptSource> {
+    let rest = rest.trim_start();
+    match rest.strip_prefix("{%") {
+        Some(script) => Some(ScriptSource::Inline { source: inline_script(script, lines), line: i + 1 }),
+        None if !rest.trim().is_empty() => Some(ScriptSource::File { path: rest.trim().to_string() }),
+        None => None,
+    }
+}
+
+/// The text of an inline `{% … %}` script that starts with `first` (just after
+/// `{%`): up to the next `%}`, taking further lines from `lines` as needed.
+fn inline_script<'a>(first: &'a str, lines: &mut impl Iterator<Item = (usize, &'a str)>) -> String {
+    let mut source = String::new();
+    let mut current = first;
+    loop {
+        if let Some(end) = current.find("%}") {
+            source.push_str(&current[..end]);
+            break;
+        }
+        source.push_str(current);
+        match lines.next() {
+            Some((_, next)) => {
+                source.push('\n');
+                current = next;
+            }
+            None => break,
+        }
+    }
+    source
+}
+
 fn trim_blank_lines<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {
     let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
     let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(start, |e| e + 1);
@@ -226,6 +296,11 @@ fn trim_blank_lines<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {
 
 /// Parses a single block. Returns `None` if it contains no request line.
 pub(crate) fn parse_block(raw: &str) -> Option<Request> {
+    parse_block_at(raw).map(|(req, _)| req)
+}
+
+/// [`parse_block`], and which of the block's lines (0-based) is its request line.
+pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     let lines: Vec<&str> = raw.lines().collect();
     let mut idx = 0;
     let mut req = Request::default();
@@ -314,6 +389,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         }
         break t;
     };
+    let request_line_at = idx - 1;
 
     let (method, mut url, version) = parse_request_line(request_line);
     req.method = method;
@@ -470,7 +546,7 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
         }
     }
 
-    Some(req)
+    Some((req, request_line_at))
 }
 
 /// Puts disabled part lines before the closing `--boundary--` line, or at the end.

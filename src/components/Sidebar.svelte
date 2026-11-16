@@ -95,7 +95,15 @@
     return () => observer.disconnect();
   });
 
-  /** Up/Down/Home/End move; Right expands, then enters; Left collapses, then goes to the parent. */
+  /** The request a row shows, if it's a request row. */
+  const requestOf = (row: HTMLElement | undefined) =>
+    row?.dataset.file && row.dataset.key ? { path: row.dataset.file, key: row.dataset.key } : undefined;
+
+  /**
+   * Up/Down/Home/End move; Right expands, then enters; Left collapses, then goes to the
+   * parent. On requests, Space toggles one in the selection, Shift+Up/Down extend it,
+   * and Escape goes back to just the open request.
+   */
   function onTreeKey(e: KeyboardEvent) {
     const row = e.target;
     if (!isRow(row)) return;
@@ -103,8 +111,17 @@
     const i = all.indexOf(row);
     const expanded = row.getAttribute("aria-expanded");
     const path = row.dataset.path;
+    const request = requestOf(row);
     let to: HTMLElement | undefined;
-    if (e.key === "ArrowDown") to = all[i + 1];
+    if (e.key === " " && request) {
+      app.selectRequest(request.path, request.key, "toggle");
+    } else if (e.key === "Escape" && app.treeSelection.length) {
+      app.clearTreeSelection();
+    } else if (e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      to = all[i + (e.key === "ArrowDown" ? 1 : -1)];
+      const next = requestOf(to);
+      if (next) app.selectRequest(next.path, next.key, "range", request);
+    } else if (e.key === "ArrowDown") to = all[i + 1];
     else if (e.key === "ArrowUp") to = all[i - 1];
     else if (e.key === "Home") to = all[0];
     else if (e.key === "End") to = all[all.length - 1];
@@ -202,6 +219,7 @@
         bind:this={treeEl}
         role="tree"
         aria-label="Explorer"
+        aria-multiselectable="true"
         tabindex="-1"
         onkeydown={onTreeKey}
         onfocusin={(e) => isRow(e.target) && makeCurrent(e.target)}
