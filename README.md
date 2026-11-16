@@ -98,8 +98,8 @@ or token is needed. To try the importer, use `examples/petstore-openapi.yaml`.
 Values HttpDesk makes up when you send, such as `{{$uuid}}` or
 `{{$timestamp -1 d}}`. Typing `{{$` in any field lists them, and hovering one
 says what it gives. Both the VS Code REST Client spellings (arguments after a
-space) and the JetBrains ones (arguments in brackets) work. `[ ]` marks an
-optional argument.
+space) and the JetBrains ones (arguments in brackets) work. Every argument is
+optional except `NAME`.
 
 <!-- dynamic-variables: generated from crates/httpdesk-core/dynamic-variables.json; src/lib/vars.test.ts checks it -->
 | Write | Gives |
@@ -116,8 +116,8 @@ optional argument.
 | `{{$random.alphanumeric(length)}}` | Random letters and digits (10 by default) |
 | `{{$random.hexadecimal(length)}}` | Random hex digits (10 by default) |
 | `{{$random.email}}` | Random email address |
-| `{{$datetime [format] [offset unit]}}` | Current UTC time: rfc1123, iso8601 or a pattern |
-| `{{$localDatetime [format] [offset unit]}}` | Current local time, formatted as `$datetime` |
+| `{{$datetime [format [offset unit]]}}` | Current UTC time: rfc1123, iso8601 or a pattern |
+| `{{$localDatetime [format [offset unit]]}}` | Current local time, formatted as `$datetime` |
 | `{{$processEnv NAME}}` | An environment variable of HttpDesk's process |
 | `{{$dotenv NAME}}` | A value from the .env file beside the .http file |
 | `{{$env.NAME}}` | An environment variable, as `$processEnv` |

@@ -788,6 +788,26 @@ mod tests {
         assert_eq!(listed, generated);
     }
 
+    /// The hover card says which dynamic variables read a value rather than generate
+    /// one from `dynamic-variables.json`'s `reads`: exactly those in `READING`.
+    #[test]
+    fn the_catalogue_marks_exactly_the_reading_dynamic_variables() {
+        #[derive(serde::Deserialize)]
+        struct Catalogue {
+            variables: Vec<Entry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            name: String,
+            #[serde(default)]
+            reads: bool,
+        }
+        let listed: Catalogue = serde_json::from_str(include_str!("../dynamic-variables.json")).unwrap();
+        let reads: Vec<String> = listed.variables.into_iter().filter(|e| e.reads).map(|e| e.name).collect();
+        let reading: Vec<String> = READING.iter().map(|n| format!("${n}")).collect();
+        assert_eq!(reads, reading);
+    }
+
     #[test]
     fn the_resolver_generates_every_listed_dynamic_variable_and_nothing_else() {
         std::env::set_var("HTTPDESK_LISTED_VAR", "yes");

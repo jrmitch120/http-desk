@@ -2,6 +2,10 @@
 # Run the whole file (Run file) to see every test in the Runner, or send the
 # requests one by one from the top. Scripts run only once the workspace is
 # trusted; HttpDesk asks the first time.
+#
+# It mixes both editors' syntaxes to show them side by side, so only HttpDesk runs
+# all of it: Rider won't send a request using {{name.response…}}, and REST Client
+# sends a > {% %} handler as body text, which a GET can't carry.
 
 @user = ada
 
@@ -21,7 +25,7 @@ Content-Type: application/json
         client.assert(response.status === 200, "Expected 200 but got " + response.status);
     });
     client.global.set("sessionToken", response.body.json.token);
-    client.log("token", response.body.json.token);
+    client.log("token " + response.body.json.token);
 %}
 
 ### Use the token: Request variable (REST Client syntax)

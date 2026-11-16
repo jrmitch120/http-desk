@@ -224,7 +224,7 @@
       >
         <Icon name="eye" size={14} />Resolved
       </button>
-      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={"Show the .http source for this request"}>
+      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={showSource ? "Hide the .http source" : "Show each request's .http source in place of its sections"}>
         <Icon name="code" size={14} />.http
       </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>

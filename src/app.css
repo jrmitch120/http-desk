@@ -550,7 +550,10 @@ kbd {
   overflow-wrap: anywhere;
   color: var(--text-2);
 }
-.var-card-source {
+/* Where a value comes from; for a dynamic variable, what kind it is and how its arguments are written. */
+.var-card-source,
+.var-card-kind,
+.var-card-args {
   color: var(--muted);
   margin-top: 3px;
 }
@@ -558,12 +561,9 @@ kbd {
 .var-card-prose {
   font-family: var(--font);
 }
-/* A dynamic variable's arguments, as written. */
 .var-card-args {
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--muted);
-  margin-top: 3px;
 }
 /* A Request variable's value can be a whole body: it scrolls past a few lines. */
 .var-card-long {

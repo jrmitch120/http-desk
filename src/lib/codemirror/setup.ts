@@ -322,8 +322,7 @@ export function varCard(
   const source = info.source ? div("var-card-source", `from ${info.source}`) : null;
   if (source) dom.append(source);
   if (dynamic) {
-    // Those needing a name read a value; the rest generate one.
-    dom.append(div("var-card-source", `Dynamic variable: ${dynamic.required ? "read when sent" : "a new value on every send"}`));
+    dom.append(div("var-card-kind", `Dynamic variable: ${dynamic.reads ? "reads a value that's already there" : "a new value on every send"}`));
     if (dynamic.args) dom.append(div("var-card-args", dynamicUsage(dynamic)));
   }
   if (info.state === "request" && actions.readRequestVariable) {

@@ -1,5 +1,5 @@
 {
-  "about": "Every dynamic variable the core's resolver generates (vars::DYNAMIC_VARIABLES), with what autocomplete, the hover card and the README's table show for it (src/lib/vars.ts). A test in vars.rs fails if the two lists differ, and one in src/lib/vars.test.ts if the README's table is out of date. args is the argument hint; required means the variable is nothing without its argument. A name ending in '.' takes a name straight after it.",
+  "about": "Every dynamic variable the core's resolver generates (vars::DYNAMIC_VARIABLES), with what autocomplete, the hover card and the README's table show for it (src/lib/vars.ts). A test in vars.rs fails if the two lists differ, and one in src/lib/vars.test.ts if the README's table is out of date. args is the argument hint; required means the variable is nothing without its argument; reads means it reads a value that's already there instead of generating a new one on every send (vars::READING; a test checks). A name ending in '.' takes a name straight after it.",
   "variables": [
     { "name": "$uuid", "args": "", "description": "Random UUID (v4)" },
     { "name": "$guid", "args": "", "description": "Random UUID (v4), as $uuid" },
@@ -13,10 +13,10 @@
     { "name": "$random.alphanumeric", "args": "(length)", "description": "Random letters and digits (10 by default)" },
     { "name": "$random.hexadecimal", "args": "(length)", "description": "Random hex digits (10 by default)" },
     { "name": "$random.email", "args": "", "description": "Random email address" },
-    { "name": "$datetime", "args": "[format] [offset unit]", "description": "Current UTC time: rfc1123, iso8601 or a pattern" },
-    { "name": "$localDatetime", "args": "[format] [offset unit]", "description": "Current local time, formatted as $datetime" },
-    { "name": "$processEnv", "args": "NAME", "required": true, "description": "An environment variable of HttpDesk's process" },
-    { "name": "$dotenv", "args": "NAME", "required": true, "description": "A value from the .env file beside the .http file" },
-    { "name": "$env.", "args": "NAME", "required": true, "description": "An environment variable, as $processEnv" }
+    { "name": "$datetime", "args": "[format [offset unit]]", "description": "Current UTC time: rfc1123, iso8601 or a pattern" },
+    { "name": "$localDatetime", "args": "[format [offset unit]]", "description": "Current local time, formatted as $datetime" },
+    { "name": "$processEnv", "args": "NAME", "required": true, "reads": true, "description": "An environment variable of HttpDesk's process" },
+    { "name": "$dotenv", "args": "NAME", "required": true, "reads": true, "description": "A value from the .env file beside the .http file" },
+    { "name": "$env.", "args": "NAME", "required": true, "reads": true, "description": "An environment variable, as $processEnv" }
   ]
 }

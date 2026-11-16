@@ -20,6 +20,8 @@ export interface DynamicVariable {
   description: string;
   /** Nothing is generated without the argument. */
   required?: boolean;
+  /** It reads a value that's already there (`$processEnv`, `$dotenv`, `$env.`) instead of generating a new one on every send. */
+  reads?: boolean;
 }
 
 export const DYNAMIC_VARIABLES: DynamicVariable[] = catalogue.variables;
