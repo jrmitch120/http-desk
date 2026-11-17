@@ -171,6 +171,9 @@ const ensureKey = (r: Request) => {
   return r._key;
 };
 
+/** How many closed tabs Reopen Closed Tab remembers. */
+const CLOSED_TABS_KEPT = 20;
+
 /** A request in the explorer: its file and its key (`_key`). */
 export interface RequestRef {
   path: string;
@@ -476,6 +479,7 @@ class AppStore {
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
+      this.closed = [];
       for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
       this.runs = {};
       this.runnerStore.reset();
@@ -880,6 +884,8 @@ class AppStore {
       if (r.button === "save" && !(await this.saveTab(tab))) return false;
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
+    const index = this.tabs.indexOf(tab);
+    if (index >= 0) this.closed = [{ path: tab.path, key: tab.key, index }, ...this.closed].slice(0, CLOSED_TABS_KEPT);
     this.removeTab(id);
     return true;
   }
@@ -889,6 +895,37 @@ class AppStore {
   async closeTabs(ids: string[]): Promise<boolean> {
     for (const id of ids) if (!(await this.closeTab(id))) return false;
     return true;
+  }
+
+  /** The tabs the user closed in this workspace, the last closed first: each one's
+   *  request and where it sat in the tab bar. In memory only. */
+  private closed = $state<(RequestRef & { index: number })[]>([]);
+
+  /** Whether Reopen Closed Tab has a tab to reopen. */
+  get canReopenTab(): boolean {
+    return this.closed.length > 0;
+  }
+
+  /**
+   * Reopens the last closed tab where it sat, at the request it was on, made
+   * active. One whose request is gone from its file is skipped, and the one
+   * closed before it reopens instead. A reopened tab comes back without a
+   * response: closing released it (ADR-0006).
+   */
+  reopenClosedTab() {
+    while (this.closed.length) {
+      const [{ path, key, index }, ...rest] = this.closed;
+      this.closed = rest;
+      const doc = this.docs[path];
+      if (!doc || doc.missing || !doc.file.requests.some((r) => r._key === key)) continue;
+      let tab = this.tabs.find((t) => t.path === path && t.key === key);
+      if (!tab) {
+        tab = { id: uid(), path, key, ...newTabView() };
+        this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
+      }
+      this.activeTabId = tab.id;
+      return;
+    }
   }
 
   revertRequest(path: string, key: string) {
@@ -1026,7 +1063,7 @@ class AppStore {
       docs[d.path] = d;
     }
     this.docs = docs;
-    for (const t of this.tabs) t.path = remap(t.path);
+    for (const t of [...this.tabs, ...this.closed]) t.path = remap(t.path);
     if (this.expanded[from]) this.expanded[to] = true;
     await this.refreshTree();
     await this.reloadFolderEnvironments(from);

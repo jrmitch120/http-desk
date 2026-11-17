@@ -427,6 +427,52 @@ describe("a tab's request section and response view", () => {
   });
 });
 
+describe("Reopen Closed Tab", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed: what's left of them reopens, then goes.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const names = () => app.tabs.map((t) => app.requestFor(t)!.name);
+
+  it("remembers the last 20 closed tabs", async () => {
+    const all = Array.from({ length: 21 }, (_, i) => `R${i + 1}`);
+    const tabs = await openAll(file(...all));
+    for (const tab of tabs) await app.closeTab(tab.id);
+
+    for (let i = 0; i < 20; i++) expect(runCommand("reopen-tab")).toBe(true);
+
+    expect(names()).toEqual(all.slice(1));
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+
+  it("reopens a tab whose file was renamed in the app after it closed", async () => {
+    const [tab] = await openAll(file("List"));
+    await app.closeTab(tab.id);
+    await app.movePath(PATH, "/ws/api/library.http");
+
+    runCommand("reopen-tab");
+
+    expect(app.activeTab).toMatchObject({ path: "/ws/api/library.http", key: tab.key });
+    expect(names()).toEqual(["List"]);
+  });
+
+  it("skips a tab whose request another editor removed from the file", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    await app.closeTab(list.id);
+    await app.closeTab(create.id);
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    runCommand("reopen-tab");
+
+    expect(names()).toEqual(["List"]);
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+});
+
 describe("cancelling a request", () => {
   it("shows a neutral Cancelled state and keeps the previous response", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
