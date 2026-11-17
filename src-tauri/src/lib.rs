@@ -610,6 +610,8 @@ async fn send_request<R: tauri::Runtime>(
         let _ = emitter.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
     let pending = history::Pending::begin(ctx.root.as_deref(), &out);
+    // What to mask in its entry, read as the send will read it, before it goes.
+    let masking = pending.as_ref().map(|_| history::Masking::for_send(&ctx, &out)).unwrap_or_default();
     let attempt = Arc::new(send::Attempt::default());
     let task = {
         let attempt = attempt.clone();
@@ -625,7 +627,7 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
         Err(_) => None,
     };
-    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &history::Masking::default())) {
+    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking)) {
         state.history.record(|| history_path(&app), entry);
     }
 

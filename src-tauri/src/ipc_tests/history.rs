@@ -1,6 +1,7 @@
 //! History (#151, ADR-0009): a send from a tab is recorded, with the request as sent
-//! (credential headers masked), its source text, the response as received and its
-//! tests, in a store under the config folder, per workspace. A Run's sends and sends
+//! (credential headers, Secret values and prompt answers masked: #153), its source
+//! text, the response as received and its tests, in a store under the config folder,
+//! per workspace. A Run's sends and sends
 //! blocked before anything went out aren't recorded. An entry opens as a response
 //! of its own, whose body is kept by id until released (ADR-0006).
 
@@ -270,4 +271,75 @@ fn a_runs_sends_and_sends_blocked_before_anything_went_out_are_not_recorded() {
     assert_eq!(err["kind"], "untrustedWorkspace", "{err}");
 
     assert_eq!(all_history(&h), Vec::<Value>::new());
+}
+
+/// What the History store's files hold, as text, read after every write has landed.
+fn store_text(h: &Harness) -> String {
+    all_history(h);
+    let mut text = String::new();
+    for entry in std::fs::read_dir(h.config_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if is_store(&path) {
+            text.push_str(&String::from_utf8_lossy(&std::fs::read(&path).unwrap()));
+        }
+    }
+    assert!(!text.is_empty(), "no History store in the config folder");
+    text
+}
+
+/// The send of `request` from a tab with `environment` selected, as the webview makes it.
+fn send_in(root: &Path, request: &Value, environment: &str) -> Value {
+    let mut args = send_args(root, request);
+    args["environment"] = json!(environment);
+    args
+}
+
+/// The one entry of the open workspace, opened.
+fn the_entry(h: &Harness) -> Value {
+    let entries = all_history(h);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    h.ok("open_history_entry", json!({ "id": entries[0]["id"] }))
+}
+
+#[test]
+fn a_secret_is_masked_in_the_recorded_url_headers_and_body_and_is_nowhere_in_the_store() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 200 OK\r\ncontent-type: text/plain", "ok");
+    let text = format!(
+        "POST {url}/items?key={{{{token}}}}&q=a\nX-Api-Key: {{{{token}}}}\nContent-Type: application/json\n\n{{\"token\":\"{{{{token}}}}\"}}\n"
+    );
+    let (_ws, root) = workspace(&h, &text);
+    std::fs::write(root.join("http-client.env.json"), json!({ "local": { "token": "" } }).to_string()).unwrap();
+    std::fs::write(root.join("http-client.private.env.json"), json!({ "local": { "token": "tok-7Qz9" } }).to_string())
+        .unwrap();
+    h.ok("send_request", send_in(&root, &request(&h, &root, 0), "local"));
+
+    let opened = the_entry(&h);
+    for request in [&opened["request"], &opened["response"]["request"]] {
+        assert_eq!(request["url"], format!("{url}/items?key=••••••••&q=a"));
+        assert!(request["headers"].as_array().unwrap().contains(&json!(["X-Api-Key", "••••••••"])), "{request}");
+        assert_eq!(request["bodyPreview"], r#"{"token":"••••••••"}"#);
+    }
+    assert!(!store_text(&h).contains("tok-7Qz9"), "the store holds the Secret's value");
+}
+
+#[test]
+fn prompt_answers_are_masked_in_the_recorded_request_and_are_nowhere_in_the_store() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 200 OK\r\ncontent-type: text/plain", "ok");
+    let text = format!(
+        "# @prompt otp\n# @prompt password\nPOST {url}/login?otp={{{{otp}}}}\nX-Pass: {{{{password}}}}\n\notp={{{{otp}}}}&password={{{{password}}}}\n"
+    );
+    let (_ws, root) = workspace(&h, &text);
+    h.ok("answer_prompts", json!({ "requestKey": "k1", "answers": { "otp": "842913", "password": "hunter two" } }));
+    h.ok("send_request", send_args(&root, &request(&h, &root, 0)));
+
+    let opened = the_entry(&h);
+    for request in [&opened["request"], &opened["response"]["request"]] {
+        assert_eq!(request["url"], format!("{url}/login?otp=••••••••"));
+        assert!(request["headers"].as_array().unwrap().contains(&json!(["X-Pass", "••••••••"])), "{request}");
+        assert_eq!(request["bodyPreview"], "otp=••••••••&password=••••••••");
+    }
+    let store = store_text(&h);
+    assert!(!store.contains("842913") && !store.contains("hunter two"), "the store holds a prompt answer");
 }

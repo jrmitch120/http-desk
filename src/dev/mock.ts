@@ -271,9 +271,10 @@ type PreviewArgs = {
  * through the frontend's resolver (`makeVarProvider`, kept in step with the core's):
  * dynamic variables kept as written; each value a Secret went into between the Secret
  * marks; a masked prompted value masked, unanswered ones kept as written; query values
- * percent-encoded; the Content-Type the body implies; the default headers.
+ * percent-encoded; the Content-Type the body implies; the default headers. `sending`:
+ * as it goes out instead, every prompted value in clear, with its body resolved too.
  */
-function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs, sending = false) {
   const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
@@ -286,7 +287,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     segments(text)
       .map(({ text: whole, ref }) => {
         if (ref === undefined) return whole;
-        if (prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
+        if (!sending && prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
         const res = vars.resolve(whole);
         res.undefined.forEach((n) => undefinedNames.add(n));
         circular.push(...res.circular);
@@ -325,7 +326,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
   if (r.body.enabled && r.body.text.trim() && implied[r.body.mode] && !has("content-type")) headers.push(["Content-Type", implied[r.body.mode]]);
   if (!has("user-agent")) headers.push(["User-Agent", "HttpDesk/0.1.0"]);
   if (!has("accept-encoding")) headers.push(["Accept-Encoding", "gzip, deflate, br, zstd"]);
-  if (r.body.enabled) resolve(r.body.text);
+  const body = r.body.enabled ? resolve(r.body.text) : null;
   const hostVars = [...url.split(/[/?#]/, url.includes("://") ? 3 : 1).join("/").matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((m) => m[1]);
   const error = hostVars.length
     ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
@@ -337,7 +338,20 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     warnings.unshift(environmentMissing(environment, dir || "the workspace root"));
   }
   warnings.push(...redirectNotes(r));
-  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
+  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error, ...(sending ? { body } : {}) };
+}
+// `?asSent=1`: a response carries the tab's request as it went out (resolved, Secret
+// values and prompt answers in clear), as the shell's does, not the canned one.
+const asSent = new URLSearchParams(location.search).has("asSent");
+/** The request `args` sends, as a response reports it (`?asSent=1`). */
+function sentRequest(args: PreviewArgs): SentRequest {
+  const sent = previewRequest(args, true);
+  const clear = (text: string) => text.replaceAll(SECRET_OPEN, "").replaceAll(SECRET_CLOSE, "");
+  const body = sent.body ? clear(sent.body) : null;
+  return {
+    method: sent.method, url: clear(sent.url), headers: sent.headers.map(([n, v]) => [clear(n), clear(v)]),
+    bodyPreview: body, bodySize: body?.length ?? 0,
+  };
 }
 /**
  * A rough stand-in for the core's `workspace::usages` (tested for real in Rust):
@@ -827,9 +841,28 @@ const RECORDED_ERRORS = new Set<string>(["dns", "refused", "reset", "tls", "time
 const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
 /** Request headers whose values History masks. */
 const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
-const maskCredentials = (request: SentRequest): SentRequest => ({
+/**
+ * The values History masks wherever they show in a send's request (like
+ * `history::Masking::for_send`): its environment's Secrets' and its prompt answers.
+ */
+function maskedValues(args: any): string[] {
+  const set = envSetFor(args.filePath) as EnvironmentSet;
+  const env = set.environments.find((e) => e.name === args.environment);
+  const secrets = [...set.shared, ...(env?.variables ?? [])].filter((v) => v.secret).map((v) => v.value);
+  const answers = promptAnswers(args.requestKey);
+  const prompted = requestPrompts(args.request).map((p) => answers[p.name]);
+  // A longer value first, so one containing another is masked whole.
+  return [...secrets, ...prompted].filter((v): v is string => !!v).sort((a, b) => b.length - a.length);
+}
+/** `text` with each of `values` in it, as written or percent-encoded, masked. */
+const maskValues = (text: string, values: string[]) =>
+  values.reduce((t, v) => t.replaceAll(v, MASK).replaceAll(encodeURIComponent(v), MASK), text);
+/** `request` as History records it: its credential headers and `values` masked. */
+const masked = (request: SentRequest, values: string[]): SentRequest => ({
   ...request,
-  headers: request.headers.map(([n, v]) => [n, CREDENTIAL_HEADERS.includes(n.toLowerCase()) ? MASK : v]),
+  url: maskValues(request.url, values),
+  headers: request.headers.map(([n, v]) => [n, CREDENTIAL_HEADERS.includes(n.toLowerCase()) ? MASK : maskValues(v, values)]),
+  bodyPreview: request.bodyPreview === null ? null : maskValues(request.bodyPreview, values),
 });
 
 /** A request's text, as the mock renders it (it has no serializer). */
@@ -842,17 +875,18 @@ function requestText(r: any): string {
 async function sendFromTab(args: any): Promise<HttpResponse> {
   const r = args.request;
   const started = performance.now();
+  const values = maskedValues(args);
   const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled">) => {
     const response = outcome.response;
     historyEntries.push({
       id: ++historyIds, workspace: ROOT, time: new Date().toISOString(),
       file: args.filePath?.startsWith(`${ROOT}/`) ? args.filePath.slice(ROOT.length + 1) : args.filePath,
       name: r.directives.find((d: { name: string }) => d.name === "name")?.value.trim() || null,
-      writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: outcome.request.url,
+      writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: maskValues(outcome.request.url, values),
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
       error: outcome.sendError?.message ?? null, source: requestText(r), ...outcome,
-      request: maskCredentials(outcome.request),
+      request: masked(outcome.request, values),
     });
     try {
       sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
@@ -880,7 +914,8 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
   // and a measured send does no extra work: their entries open without a body.
   const kept = !perf && response.bodySize <= MOCK_HISTORY_BODY_BYTES;
   const body = !kept ? null : text ? { text: text.body, kind: text.kind } : bytes ? { base64: toBase64(bytes) } : null;
-  record({ request: response.request, response: { ...clone(stored), request: maskCredentials(response.request) }, sendError: null, body, cancelled: false });
+  const recorded = { ...clone(stored), url: maskValues(stored.url, values), request: masked(response.request, values) };
+  record({ request: response.request, response: recorded, sendError: null, body, cancelled: false });
   return response;
 }
 
@@ -1436,7 +1471,7 @@ async function mockSend(args: any) {
     headers,
     timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
     truncated: responseKind === "truncated",
-    request: {
+    request: asSent ? sentRequest(args) : {
       method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
       headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
     },
