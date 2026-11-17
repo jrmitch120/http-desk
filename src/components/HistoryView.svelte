@@ -5,12 +5,16 @@
   again after each send (keeping as many as it showed) and when the workspace changes.
   Used by the sidebar's History (the workspace's) and the response pane's (the request's).
   Compare's selection, the context menu and row actions pass through to HistoryList.
+  Clear workspace history (whichever view it's in) and Delete on a row ask first
+  (`app.history.clearWorkspace`, `app.history.delete`).
 -->
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
   import { app } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
   import { HISTORY_PAGE } from "../lib/history.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
+  import Icon from "./Icon.svelte";
   import type { HistoryLink, HistoryQuery, HistoryStatusClass, HistorySummary } from "../lib/types";
   import HistoryList from "./HistoryList.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
@@ -130,12 +134,15 @@
 <div class="history-view" class:narrow>
   <div class="filters">
     <SegmentedControl label="Status class" options={STATUSES} value={status} onchange={(s) => (status = s)} />
-    <div class="text"><FilterField label="Filter History" placeholder="Filter by URL, method, file or name" value={typed} oninput={onTextInput} /></div>
+    <div class="text">
+      <FilterField label="Filter History" placeholder="Filter by URL, method, file or name" value={typed} oninput={onTextInput} />
+      <button class="icon-btn" aria-label="Clear workspace history" use:tooltip={"Clear workspace history: delete every entry of this workspace"} disabled={entries?.length === 0 && !filtered} onclick={() => app.history.clearWorkspace()}><Icon name="trash" /></button>
+    </div>
   </div>
   {#if entries?.length === 0}
     <div class="empty-state small">{filtered ? "No History entries match" : empty}</div>
   {:else if entries}
-    <HistoryList {entries} {onopen} {current} {file} {narrow} {selected} {onselect} {onmenu} {start} {end} footer={more ? showMoreButton : undefined} />
+    <HistoryList {entries} {onopen} {current} {file} {narrow} {selected} {onselect} {onmenu} ondelete={(e) => app.history.delete(e)} {start} {end} footer={more ? showMoreButton : undefined} />
   {/if}
 </div>
 
@@ -165,6 +172,8 @@
   }
   .text {
     display: flex;
+    align-items: center;
+    gap: 4px;
     flex: 1;
     min-width: 160px;
   }

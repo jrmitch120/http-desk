@@ -205,6 +205,8 @@ export interface SentRequest {
   url: string;
   headers: [string, string][];
   bodyPreview: string | null;
+  /** Set on a History entry's request whose body was cut off at 10 MB (`HISTORY_BODY_CAP`). */
+  bodyTruncated?: boolean;
   bodySize: number;
 }
 
@@ -271,7 +273,12 @@ export interface HistoryEntry extends HistorySummary {
   response: HttpResponse | null;
   /** Why no response came back. */
   sendError: SendError | null;
+  /** How much of the response body History kept: over 10 MB, a text body is cut off and a binary one isn't kept. */
+  bodyKept: HistoryBodyKept;
 }
+
+/** How much of a response body a History entry kept (core `history::BodyKept`). */
+export type HistoryBodyKept = "whole" | "truncated" | "headersOnly";
 
 /**
  * The resolved preview (`preview_request`, core `exec::RequestPreview`): what a
@@ -616,6 +623,12 @@ export interface AppSettings {
 export interface HistorySettings {
   /** The History switch: while off, no send is recorded. On by default. */
   enabled: boolean;
+  /** Retention: the most entries each request keeps, in its workspace. */
+  maxPerRequest: number;
+  /** Retention: how many days an entry is kept. */
+  maxAgeDays: number;
+  /** Retention: the most megabytes all History takes, every workspace together; the oldest entries go first. */
+  maxSizeMb: number;
 }
 
 /** The Runner's options in one workspace (`RunnerOptions` in src-tauri/src/lib.rs). */

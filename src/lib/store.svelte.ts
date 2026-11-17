@@ -35,6 +35,7 @@ import type {
   MatrixWidths,
   RunnerOptions,
   FolderEnvironments,
+  HistoryBodyKept,
   HttpFile,
   HttpResponse,
   NamedExchange,
@@ -85,6 +86,8 @@ export interface RunState {
   cancelled?: boolean;
   /** Body bytes received on the wire so far, while loading (`send-progress` events). */
   received?: number;
+  /** For a History entry's response: how much of its body History kept. */
+  bodyKept?: HistoryBodyKept;
 }
 
 export type { Runner, RunItem, RunItemState } from "./runner.svelte";

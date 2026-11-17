@@ -15,7 +15,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryEntry, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -450,7 +450,7 @@ let settings = {
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
   trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
   runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
-  history: { enabled: true },
+  history: { enabled: true, maxPerRequest: 50, maxAgeDays: 30, maxSizeMb: 200 },
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -838,6 +838,8 @@ type MockHistoryEntry = HistorySummary & {
   response: Omit<HttpResponse, "id"> | null;
   sendError: SendError | null;
   body: { text: string; kind: ResponseKind } | { base64: string } | null;
+  /** How much of the response body was kept ("whole" when left out). */
+  bodyKept?: HistoryBodyKept;
 };
 // History survives a reload of the page, as it does a restart. Each test gets a
 // fresh page, so it starts with none.
@@ -848,6 +850,14 @@ let historyIds = Math.max(0, ...historyEntries.map((e) => e.id));
 const RECORDED_ERRORS = new Set<string>(["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"]);
 /** The largest body the mock keeps with a History entry. */
 const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
+/**
+ * History's body cap (`history::BODY_CAP`, 10 MB): a text body over it is kept cut off,
+ * a binary one not at all. `?historyCap=<bytes>` lowers it, so a test needn't send 10 MB.
+ */
+const HISTORY_CAP = Number(new URLSearchParams(location.search).get("historyCap")) || 10 * 1024 * 1024;
+/** `request` with its body cut off at the cap, marked, as History keeps it. */
+const capRequest = (request: SentRequest): SentRequest =>
+  request.bodyPreview !== null && request.bodySize > HISTORY_CAP ? { ...request, bodyPreview: request.bodyPreview.slice(0, HISTORY_CAP), bodyTruncated: true } : request;
 /** Request headers whose values History masks. */
 const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
 /**
@@ -892,7 +902,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
   const started = performance.now();
   const values = maskedValues(args);
   const noLog = r.directives.some((d: { name: string }) => d.name.toLowerCase() === "no-log");
-  const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled">) => {
+  const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled" | "bodyKept">) => {
     if (noLog || !settings.history?.enabled) return;
     const response = outcome.response;
     historyEntries.push({
@@ -903,7 +913,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
       error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
-      request: masked(outcome.request, values),
+      request: masked(capRequest(outcome.request), values),
     });
     try {
       sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
@@ -930,9 +940,14 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
   // Large bodies (the perf test's, `?bigBinary`) aren't kept, so sessionStorage stays small
   // and a measured send does no extra work: their entries open without a body.
   const kept = !perf && response.bodySize <= MOCK_HISTORY_BODY_BYTES;
-  const body = !kept ? null : text ? { text: text.body, kind: text.kind } : bytes ? { base64: toBase64(bytes) } : null;
-  const recorded = { ...clone(stored), url: maskValues(stored.url, values), request: masked(response.request, values) };
-  record({ request: response.request, response: recorded, sendError: null, body, cancelled: false });
+  let body: MockHistoryEntry["body"] = !kept ? null : text ? { text: text.body, kind: text.kind } : bytes ? { base64: toBase64(bytes) } : null;
+  let bodyKept: HistoryBodyKept = "whole";
+  if (response.bodySize > HISTORY_CAP) {
+    bodyKept = text ? "truncated" : "headersOnly";
+    body = text && !perf ? { text: text.body.slice(0, HISTORY_CAP), kind: text.kind } : null;
+  }
+  const recorded = { ...clone(stored), url: maskValues(stored.url, values), request: masked(capRequest(response.request), values) };
+  record({ request: response.request, response: recorded, sendError: null, body, cancelled: false, bodyKept });
   return response;
 }
 
@@ -960,12 +975,17 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
 function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
-  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, ...entry } = clone(e);
-  if (!response) return { ...entry, response: null };
+  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
+  if (!response) return { ...entry, response: null, bodyKept };
   const responseId = `h-${++responseCount}`;
   if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
   if (body && "base64" in body) binaryBodies.set(responseId, Uint8Array.from(atob(body.base64), (c) => c.charCodeAt(0)));
-  return { ...entry, response: { ...response, id: responseId } };
+  return { ...entry, response: { ...response, id: responseId }, bodyKept };
+}
+
+/** Saves the mock's History, like a write to the store. */
+function saveHistory() {
+  sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
 }
 
 /** Forgets one named request's latest exchange (or, without a key, every one), like `Exchanges::remove` and `clear`. */
@@ -1750,6 +1770,16 @@ mockIPC(
       case "clear_all_history":
         historyEntries.length = 0;
         sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+        return null;
+      case "delete_history_entry": {
+        const i = historyEntries.findIndex((e) => e.id === args.id && e.workspace === ROOT);
+        if (i >= 0) historyEntries.splice(i, 1);
+        saveHistory();
+        return null;
+      }
+      case "clear_workspace_history":
+        historyEntries.splice(0, historyEntries.length, ...historyEntries.filter((e) => e.workspace !== ROOT));
+        saveHistory();
         return null;
       case "history_location":
         return MOCK_HISTORY_LOCATION;

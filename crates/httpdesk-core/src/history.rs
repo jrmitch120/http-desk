@@ -37,6 +37,36 @@ const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "proxy-authorization", "
 /// The most entries one list returns when the query doesn't say.
 const DEFAULT_LIMIT: u32 = 200;
 
+/// The most of a body an entry keeps, the request's and the response's: 10 MB. A
+/// text body over it is kept cut off; a binary response body over it isn't kept.
+pub const BODY_CAP: usize = 10 * 1024 * 1024;
+
+/// How much of its response body an entry kept (see [`BODY_CAP`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BodyKept {
+    /// All of it (or there's no response).
+    #[default]
+    Whole,
+    /// A text body over the cap: its first [`BODY_CAP`] bytes.
+    Truncated,
+    /// A binary body over the cap: none of it, only the response's headers and size.
+    HeadersOnly,
+}
+
+/// The first [`BODY_CAP`] bytes of `body`, cut back to the start of a UTF-8
+/// character so a text body doesn't end in half of one.
+fn capped(body: &[u8]) -> &[u8] {
+    if body.len() <= BODY_CAP {
+        return body;
+    }
+    let mut end = BODY_CAP;
+    while end > BODY_CAP - 3 && body[end] & 0xC0 == 0x80 {
+        end -= 1;
+    }
+    &body[..end]
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
     #[error("History: {0}")]
@@ -140,15 +170,25 @@ impl Pending {
     }
 
     /// The entry for the send once it has `finished`, with what `attempt` saw go out,
-    /// masked by `masking`. `None` when nothing went out: the send was blocked.
+    /// masked by `masking`. `None` when nothing went out: the send was blocked. The
+    /// request keeps its body up to [`BODY_CAP`], more than the request as sent shows.
     pub fn finish(self, attempt: &Attempt, finished: Finished<'_>, masking: &Masking) -> Option<NewEntry> {
         let elapsed = self.started.elapsed();
+        let body = attempt.take_body();
+        let request = |mut request: SentRequest| {
+            if let (Some(_), Some(body)) = (&request.body_preview, &body) {
+                let kept = capped(body);
+                request.body_truncated = kept.len() < request.body_size;
+                request.body_preview = Some(String::from_utf8_lossy(kept).into_owned());
+            }
+            masking.request(request)
+        };
         let outcome = match finished {
             Finished::Sent(sent) => {
                 // The response carries the request too, and the URL it was sent to:
                 // masked there as well.
                 let mut response = sent.response.clone();
-                response.request = masking.request(response.request);
+                response.request = request(response.request);
                 response.url = masking.values.mask(&response.url);
                 return Some(NewEntry {
                     pending: self,
@@ -162,7 +202,7 @@ impl Pending {
             Finished::Failed(e) => Outcome::Failed(masking.error(serde_json::to_value(e).ok()?)),
             Finished::Cancelled => Outcome::Cancelled,
         };
-        Some(NewEntry { pending: self, elapsed, request: masking.request(attempt.request()?), outcome })
+        Some(NewEntry { pending: self, elapsed, request: request(attempt.request()?), outcome })
     }
 }
 
@@ -293,12 +333,30 @@ pub struct Entry {
     /// The response, under a new id each time it's read, so each read is a
     /// response of its own (ADR-0006).
     pub response: Option<HttpResponse>,
-    /// The response body.
+    /// The response body, up to [`BODY_CAP`].
     #[serde(skip)]
     pub body: Option<Arc<[u8]>>,
+    /// How much of the response body was kept.
+    pub body_kept: BodyKept,
     /// Why no response came back: the send error, as the webview gets it.
     pub send_error: Option<Value>,
 }
+
+/// How much History is kept (Settings → History), for every workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retention {
+    /// The most entries one request keeps in its workspace (see [`RequestLink`]).
+    pub per_request: u32,
+    /// How many days an entry is kept.
+    pub max_age_days: u32,
+    /// The most bytes every workspace's entries take together.
+    pub max_size: u64,
+}
+
+/// The entries of one request, as [`RequestLink`] links them: `e` and `x` (aliases
+/// of `entries`) are of the same request.
+const SAME_REQUEST: &str = "e.workspace = x.workspace AND e.file IS x.file AND e.name IS x.name
+    AND (x.name IS NOT NULL OR (e.method = x.method AND e.url = x.url))";
 
 /// The History store: one SQLite file for every workspace.
 pub struct Store {
@@ -331,6 +389,7 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS entries_by_name ON entries (workspace, file, name, time_ms);
 CREATE INDEX IF NOT EXISTS entries_by_time ON entries (workspace, time_ms);
 CREATE INDEX IF NOT EXISTS entries_by_class ON entries (workspace, status / 100, time_ms);
+CREATE INDEX IF NOT EXISTS entries_by_age ON entries (time_ms);
 PRAGMA user_version = 1;
 ";
 
@@ -361,8 +420,16 @@ impl Store {
                 Some(response.body_size as i64),
                 None,
                 false,
-                Some(serde_json::to_string(&HttpResponse { id: String::new(), ..(**response).clone() })?),
-                Some(zstd::encode_all(&body[..], 3)?),
+                // Its request is the entry's: kept once, in `request`.
+                Some(serde_json::to_string(&HttpResponse {
+                    id: String::new(),
+                    request: SentRequest::default(),
+                    ..(**response).clone()
+                })?),
+                match body.len() > BODY_CAP && !response.body_kind.is_text() {
+                    true => None,
+                    false => Some(zstd::encode_all(capped(body), 3)?),
+                },
             ),
             Outcome::Failed(e) => (None, None, None, Some(e.to_string()), false, None, None),
             Outcome::Cancelled => (None, None, None, None, true, None, None),
@@ -450,6 +517,60 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Removes what `retention` doesn't keep: each request's oldest entries past its
+    /// count, entries past the age limit, and, while every workspace's entries
+    /// together take more than the size cap, the oldest of them. With `after`, the
+    /// entry just recorded, only that entry's request is counted; otherwise every
+    /// request is (the limits changed).
+    pub fn trim(&self, retention: &Retention, after: Option<i64>) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        match after {
+            Some(id) => tx.execute(
+                &format!(
+                    "DELETE FROM entries WHERE id IN (
+                        SELECT e.id FROM entries x JOIN entries e ON {SAME_REQUEST} WHERE x.id = ?1
+                        ORDER BY e.time_ms DESC, e.id DESC LIMIT -1 OFFSET ?2)"
+                ),
+                params![id, retention.per_request],
+            )?,
+            None => tx.execute(
+                "DELETE FROM entries WHERE id IN (SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY workspace, file, name,
+                            CASE WHEN name IS NULL THEN method END, CASE WHEN name IS NULL THEN url END
+                        ORDER BY time_ms DESC, id DESC) AS n
+                    FROM entries) WHERE n > ?1)",
+                params![retention.per_request],
+            )?,
+        };
+        let oldest = Utc::now() - chrono::Duration::days(i64::from(retention.max_age_days));
+        tx.execute("DELETE FROM entries WHERE time_ms < ?1", params![oldest.timestamp_millis()])?;
+        let total: i64 = tx.query_row("SELECT COALESCE(SUM(stored_size), 0) FROM entries", [], |r| r.get(0))?;
+        if total as u64 > retention.max_size {
+            // Keeps the newest entries that fit together.
+            tx.execute(
+                "DELETE FROM entries WHERE id IN (SELECT id FROM (
+                    SELECT id, SUM(stored_size) OVER (ORDER BY time_ms DESC, id DESC) AS kept FROM entries)
+                    WHERE kept > ?1)",
+                params![retention.max_size as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Deletes entry `id` of workspace `root`, and the space it took on disk.
+    pub fn delete(&self, root: &Path, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM entries WHERE workspace = ?1 AND id = ?2", params![workspace_key(root), id])?;
+        self.compact()
+    }
+
+    /// Deletes every entry of workspace `root`, and the space they took on disk.
+    pub fn clear_workspace(&self, root: &Path) -> Result<()> {
+        self.conn.execute("DELETE FROM entries WHERE workspace = ?1", params![workspace_key(root)])?;
+        self.compact()
+    }
+
     /// Deletes every entry of every workspace, and the space they took on disk, so
     /// nothing of them can be read back from the file.
     pub fn clear_all(&self) -> Result<()> {
@@ -482,16 +603,25 @@ impl Store {
             )
             .optional()?;
         let Some((summary, (error, source, request, response, body))) = row else { return Ok(None) };
+        let request: SentRequest = serde_json::from_str(&request)?;
         let mut response: Option<HttpResponse> = response.as_deref().map(serde_json::from_str).transpose()?;
         if let Some(r) = &mut response {
             r.id = uuid::Uuid::new_v4().to_string();
+            r.request = request.clone();
         }
+        let body: Option<Arc<[u8]>> = body.map(|b| zstd::decode_all(&b[..])).transpose()?.map(Arc::from);
+        let body_kept = match (&response, &body) {
+            (Some(_), None) => BodyKept::HeadersOnly,
+            (Some(r), Some(b)) if b.len() < r.body_size => BodyKept::Truncated,
+            _ => BodyKept::Whole,
+        };
         Ok(Some(Entry {
             summary,
             source,
-            request: serde_json::from_str(&request)?,
+            request,
             response,
-            body: body.map(|b| zstd::decode_all(&b[..])).transpose()?.map(Arc::from),
+            body,
+            body_kept,
             send_error: error.as_deref().map(serde_json::from_str).transpose()?,
         }))
     }

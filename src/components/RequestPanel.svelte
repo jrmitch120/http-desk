@@ -7,6 +7,7 @@
 <script lang="ts">
   import { formatBytes, formatDuration } from "../lib/http";
   import { formatPhase, redirectNote, timingPhases } from "../lib/timing";
+  import { TRUNCATED_AT_CAP } from "../lib/history.svelte";
   import type { HttpResponse } from "../lib/types";
 
   let { res }: { res: HttpResponse } = $props();
@@ -25,7 +26,7 @@
     </tbody>
   </table>
   {#if res.request.bodyPreview !== null}
-    <div class="sent-body-title muted">Body · {formatBytes(res.request.bodySize)}</div>
+    <div class="sent-body-title muted">Body · {formatBytes(res.request.bodySize)}{#if res.request.bodyTruncated} · {TRUNCATED_AT_CAP}{/if}</div>
     <pre class="sent-body selectable mono">{res.request.bodyPreview}</pre>
   {/if}
   <div class="sent-body-title muted">Timing · {formatDuration(res.timeMs)} total{res.timings.redirects ? `, ${redirectNote(res.timings.redirects)}` : ""}</div>

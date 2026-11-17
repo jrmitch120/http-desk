@@ -231,12 +231,27 @@ impl Drop for StopOnDrop {
 /// is cancelled after that still sent something (History records it, #151); one
 /// that stopped before it (blocked) has none.
 #[derive(Debug, Default)]
-pub struct Attempt(Mutex<Option<SentRequest>>);
+pub struct Attempt {
+    request: Mutex<Option<SentRequest>>,
+    /// The start of the body it sent, up to History's body cap: History keeps more
+    /// of it than the request as sent shows ([`SentRequest::body_preview`]).
+    body: Mutex<Option<Vec<u8>>>,
+}
 
 impl Attempt {
     /// The request as it went out, before any redirect; `None` if nothing went out.
     pub fn request(&self) -> Option<SentRequest> {
-        self.0.lock().unwrap().clone()
+        self.request.lock().unwrap().clone()
+    }
+
+    /// The body it sent, up to [`crate::history::BODY_CAP`] bytes, taken out of it.
+    pub(crate) fn take_body(&self) -> Option<Vec<u8>> {
+        self.body.lock().unwrap().take()
+    }
+
+    fn went_out(&self, p: &exec::PreparedRequest) {
+        *self.request.lock().unwrap() = Some(SentRequest::of(p));
+        *self.body.lock().unwrap() = p.body.as_ref().map(|b| b[..b.len().min(crate::history::BODY_CAP)].to_vec());
     }
 }
 
@@ -298,7 +313,7 @@ pub async fn send_attempt(
     let pending = exchange::begin(out.file_path.as_deref(), &out.request, &prepared);
     // Each send gets a client no other send is using (see ClientPool).
     let client = ctx.clients.checkout(&prepared, &ctx.settings, &ssl)?;
-    *attempt.0.lock().unwrap() = Some(SentRequest::of(&prepared));
+    attempt.went_out(&prepared);
     let mut outcome =
         exec::execute_on(&client, prepared, &ctx.settings, Some(ctx.session.cookies()), on_progress).await?;
     drop(client);

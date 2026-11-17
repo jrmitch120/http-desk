@@ -11,6 +11,7 @@ mod fetch;
 mod folder_envs;
 mod global_variables;
 mod history;
+mod history_retention;
 mod layout;
 mod paths;
 mod pre_request;

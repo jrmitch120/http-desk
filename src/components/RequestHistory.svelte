@@ -4,7 +4,8 @@
   each send, filtered and paged by HistoryView. Opening one shows it read-only in the
   response viewer (ResponseViewer). An entry's context menu compares it with the tab's
   current response, else the next newer entry; two entries selected with their boxes
-  compare with each other. While the History switch is off it says so instead (HistoryOff).
+  compare with each other, or Delete deletes it. While the History switch is off it
+  says so instead (HistoryOff).
 -->
 <script lang="ts">
   import { app, type Tab } from "../lib/store.svelte";
@@ -47,6 +48,8 @@
             action: () => app.history.compare(entry, target),
           }
         : { label: "Compare", icon: "columns", disabled: true },
+      { separator: true },
+      { label: "Delete…", icon: "trash", danger: true, action: () => app.history.delete(entry) },
     ]);
   }
 </script>

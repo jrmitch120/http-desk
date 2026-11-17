@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
 
 use httpdesk_core::history::{self, NewEntry, Store};
-pub use httpdesk_core::history::{Finished, Masking, Pending, Query, FILE_NAME};
+pub use httpdesk_core::history::{Finished, Masking, Pending, Query, Retention, FILE_NAME};
 
 type Job = Box<dyn FnOnce(Result<&Store, &str>) + Send>;
 
@@ -18,15 +18,32 @@ pub struct History {
 }
 
 impl History {
-    /// Writes `entry` to the store at `path`, without waiting. A failed write is lost:
-    /// the send it records has already been shown.
-    pub fn record(&self, path: impl FnOnce() -> Option<PathBuf>, entry: NewEntry) {
+    /// Writes `entry` to the store at `path`, then removes what `retention` no longer
+    /// keeps, without waiting. A failed write is lost: the send it records has
+    /// already been shown.
+    pub fn record(&self, path: impl FnOnce() -> Option<PathBuf>, entry: NewEntry, retention: Retention) {
         self.submit(
             path,
             Box::new(move |store| {
-                if let Err(e) = store.map_err(str::to_string).and_then(|s| s.record(&entry).map_err(|e| e.to_string()))
-                {
+                let recorded = store.map_err(str::to_string).and_then(|s| {
+                    s.record(&entry).and_then(|id| s.trim(&retention, Some(id))).map_err(|e| e.to_string())
+                });
+                if let Err(e) = recorded {
                     eprintln!("Could not record a History entry: {e}");
+                }
+            }),
+        );
+    }
+
+    /// Removes what `retention` doesn't keep from the store at `path`, without waiting.
+    pub fn trim(&self, path: impl FnOnce() -> Option<PathBuf>, retention: Retention) {
+        self.submit(
+            path,
+            Box::new(move |store| {
+                if let Err(e) =
+                    store.map_err(str::to_string).and_then(|s| s.trim(&retention, None).map_err(|e| e.to_string()))
+                {
+                    eprintln!("Could not apply History's retention: {e}");
                 }
             }),
         );

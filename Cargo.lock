@@ -2018,6 +2018,7 @@ dependencies = [
  "httpdesk-core",
  "notify-debouncer-mini",
  "objc2",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

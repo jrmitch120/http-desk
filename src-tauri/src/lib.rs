@@ -120,11 +120,40 @@ struct AppSettings {
 struct HistorySettings {
     /// The History switch: while off, no send is recorded. On by default.
     enabled: bool,
+    /// Retention: the most entries each request keeps, in its workspace.
+    max_per_request: u32,
+    /// Retention: how many days an entry is kept.
+    max_age_days: u32,
+    /// Retention: the most megabytes all History takes, every workspace together;
+    /// the oldest entries go first.
+    max_size_mb: u32,
 }
+
+/// Retention's defaults (`HISTORY_RETENTION` in src/lib/history.svelte.ts;
+/// src/lib/history.test.ts checks they agree).
+const MAX_PER_REQUEST: u32 = 50;
+const MAX_AGE_DAYS: u32 = 30;
+const MAX_SIZE_MB: u32 = 200;
 
 impl Default for HistorySettings {
     fn default() -> Self {
-        HistorySettings { enabled: true }
+        HistorySettings {
+            enabled: true,
+            max_per_request: MAX_PER_REQUEST,
+            max_age_days: MAX_AGE_DAYS,
+            max_size_mb: MAX_SIZE_MB,
+        }
+    }
+}
+
+impl HistorySettings {
+    /// What History keeps, by these settings (each limit at least 1).
+    fn retention(&self) -> history::Retention {
+        history::Retention {
+            per_request: self.max_per_request.max(1),
+            max_age_days: self.max_age_days.max(1),
+            max_size: u64::from(self.max_size_mb.max(1)) * 1024 * 1024,
+        }
     }
 }
 
@@ -652,10 +681,13 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
         Err(_) => None,
     };
-    let recording = state.settings.lock().unwrap().history.enabled;
+    let (recording, retention) = {
+        let settings = state.settings.lock().unwrap();
+        (settings.history.enabled, settings.history.retention())
+    };
     if let Some(entry) = pending.filter(|_| recording).zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking))
     {
-        state.history.record(|| history_path(&app), entry);
+        state.history.record(|| history_path(&app), entry, retention);
     }
 
     match result {
@@ -922,6 +954,26 @@ async fn open_history_entry<R: tauri::Runtime>(
 #[tauri::command]
 fn history_location<R: tauri::Runtime>(app: AppHandle<R>) -> Option<PathBuf> {
     history_path(&app)
+}
+
+/// Deletes History entry `id` of the open workspace, from disk too. Opened, it stays
+/// readable until released (ADR-0006).
+#[tauri::command]
+async fn delete_history_entry<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<()> {
+    let root = state.root()?;
+    state.history.read(|| history_path(&app), move |store| store.delete(&root, id)).await
+}
+
+/// Deletes the open workspace's History (the History view's Clear workspace
+/// history), from disk too. Entries open in a viewer stay until released.
+#[tauri::command]
+async fn clear_workspace_history<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> CmdResult<()> {
+    let root = state.root()?;
+    state.history.read(|| history_path(&app), move |store| store.clear_workspace(&root)).await
 }
 
 /// Deletes every workspace's History (Settings → Clear all history, or turning
@@ -1204,6 +1256,10 @@ fn save_settings<R: tauri::Runtime>(
     let settings = AppSettings { trusted_workspaces: current.trusted_workspaces.clone(), ..settings };
     // Applied either way: the UI already shows the new values for this session.
     let saved = persist_settings(&app, &settings);
+    let retention = settings.history.retention();
+    if retention != current.history.retention() {
+        state.history.trim(|| history_path(&app), retention);
+    }
     *current = settings;
     saved
 }
@@ -1389,6 +1445,16 @@ fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Applies History's retention at start, so entries past the age limit go even if
+/// nothing is sent. Only when there's History to trim: it doesn't create the store.
+fn trim_history<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if history_path(app).is_some_and(|p| p.exists()) {
+        let state = app.state::<AppState>();
+        let retention = state.settings.lock().unwrap().history.retention();
+        state.history.trim(|| history_path(app), retention);
+    }
+}
+
 /// Runs at setup once settings are loaded.
 type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
 
@@ -1406,6 +1472,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
         })
         .setup(move |app| {
             load_settings(app.handle());
+            trim_history(app.handle());
             Ok(after_setup(app)?)
         })
         .invoke_handler(tauri::generate_handler![
@@ -1443,6 +1510,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             list_history,
             open_history_entry,
             clear_all_history,
+            delete_history_entry,
+            clear_workspace_history,
             history_location,
             request_variable,
             exchange_shape,
