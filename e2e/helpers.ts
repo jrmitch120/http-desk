@@ -152,6 +152,8 @@ export interface MockState {
   releasedResponses: string[];
   /** Every History entry the mock keeps, oldest first, with the request as recorded (credentials masked). */
   history: (HistoryEntry & { workspace: string })[];
+  /** The History entry ids `open_history_entry` opened, in order. */
+  historyOpened: number[];
   /** The response ids `copy_response_body` copied to the clipboard, in order. */
   bodyCopies: string[];
 }
