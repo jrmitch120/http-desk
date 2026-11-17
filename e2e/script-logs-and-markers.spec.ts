@@ -77,7 +77,7 @@ test("a request without tests has no marker", async ({ page }) => {
 });
 
 test("the tree row keeps its marker after the tab closes, until another workspace is opened", async ({ page }) => {
-  await openApp(page, "?trusted=1&recent=/work/shop");
+  await openApp(page, "?trusted=1&roots=/work/shop&recent=/work/shop");
   await openHandler(page);
   await send(page);
   await expect(marker(tab(page, HANDLER), "failed")).toBeVisible();
@@ -85,7 +85,7 @@ test("the tree row keeps its marker after the tab closes, until another workspac
   await expect(tab(page, HANDLER)).toHaveCount(0);
   await expect(marker(treeRow(page), "failed")).toBeVisible();
 
-  // The mock opens the demo workspace again, as a new one with a new Session.
+  // A workspace of its own (`?roots=`), with a new Session.
   await menuClick(page, "open-recent:/work/shop");
   await expect(treeItem(page, "samples")).toHaveAttribute("aria-expanded", "false");
   await openHandler(page);

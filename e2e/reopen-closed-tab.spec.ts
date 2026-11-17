@@ -64,12 +64,12 @@ test("a closed tab whose request was deleted is skipped, and the one closed befo
 });
 
 test("opening another workspace forgets the closed tabs", async ({ page }) => {
-  await openApp(page, "?recent=/work/shop");
+  await openApp(page, "?roots=/work/shop&recent=/work/shop");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+W");
   await expect.poll(() => menuItem(page, "reopen-tab")).toMatchObject({ enabled: true });
 
-  // The mock opens the demo workspace again, as a new one.
+  // A workspace of its own (`?roots=`).
   await menuClick(page, "open-recent:/work/shop");
   await expect.poll(() => mockState(page, "settings").then((s) => s.recentWorkspaces[0])).toBe("/work/shop");
   await treeItem(page, "api").click();

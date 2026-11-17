@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
   releaseResponse: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
+  loadLayout: vi.fn(),
+  saveLayout: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
   loadFolderEnvironments: vi.fn(),

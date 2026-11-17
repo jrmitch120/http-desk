@@ -29,6 +29,7 @@ import type {
   WorkspaceInfo,
 } from "./types";
 import type { MenuItemChange, NativeMenu } from "./menuLayout";
+import type { Layout } from "./layout";
 
 /** A request with the scope it's sent in, as `send_request` and `preview_request` take it. */
 export type RequestArgs = {
@@ -186,6 +187,10 @@ export const api = {
   trustWorkspace: () => invoke<string[]>("trust_workspace"),
   /** Stops trusting the workspace at `path`; returns the Trusted workspaces left. */
   revokeWorkspaceTrust: (path: string) => invoke<string[]>("revoke_workspace_trust", { path }),
+  /** The Layout saved for the workspace at `root`, or null (see src/lib/layout.ts; checked there). */
+  loadLayout: (root: string) => invoke<unknown>("load_layout", { root }),
+  /** Saves the Layout of the workspace at `root`, in the app's config folder. */
+  saveLayout: (root: string, layout: Layout) => invoke<void>("save_layout", { root, layout }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 

@@ -1,5 +1,6 @@
 // Global application state (Svelte 5 runes). Documents are parsed `.http`
 // files; tabs point at a request inside a document by a frontend-only key.
+import { untrack } from "svelte";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -21,7 +22,9 @@ import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "
 import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
-import { treeFiles } from "./tree";
+import { findNode, treeFiles } from "./tree";
+import { reattach, signature, type KnownRequest } from "./reattach";
+import { fromWorkspace, inWorkspace, LAYOUT_SETTLE_MS, readLayout, type Layout, type LayoutTab } from "./layout";
 import { newTabView, type RequestSection, type ResponseView } from "./tabView";
 import type {
   AppSettings,
@@ -162,9 +165,6 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
 }
-
-/** Identifies a request across reloads and searches: name + method + URL. */
-const signature = (name: string, method: string, url: string) => `${name}\u0000${method}\u0000${url}`;
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -326,6 +326,13 @@ class AppStore {
         const now = this.dirtyDocs().length > 0;
         if (now !== unsaved) api.setUnsaved((unsaved = now)).catch(() => {});
       });
+      // Saves the open workspace's Layout once its changes settle.
+      $effect(() => {
+        const root = this.layoutRoot;
+        if (!root) return;
+        const layout = this.layoutNow(root);
+        untrack(() => this.layoutChanged(root, layout));
+      });
     });
     // Forget recent workspaces whose folders are gone, then reopen the last one.
     const recent = this.settings?.recentWorkspaces ?? [];
@@ -455,10 +462,126 @@ class AppStore {
     if (this.quitting) return false;
     this.quitting = true;
     try {
-      return await this.confirmUnsaved();
+      if (!(await this.confirmUnsaved())) return false;
+      await this.flushLayout();
+      return true;
     } finally {
       this.quitting = false;
     }
+  }
+
+  // ---------------------------------------------------------------- layout
+
+  /** The workspace whose Layout changes are saved; null while a workspace opens. */
+  private layoutRoot = $state<string | null>(null);
+  /** The Layout last queued for saving, as JSON, so an unchanged one isn't saved again. */
+  private lastLayout = "";
+  private pendingLayout: { root: string; layout: Layout } | null = null;
+  private layoutTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The Layout saves under way, one after another, so an older one is never written last. */
+  private layoutSave: Promise<void> = Promise.resolve();
+
+  /** The workspace's Layout as it is now. Tabs whose request was never saved are
+   *  left out (they can't be found again); the others are described as last saved. */
+  private layoutNow(root: string): Layout {
+    const tabs: LayoutTab[] = [];
+    let active: number | null = null;
+    for (const t of this.tabs) {
+      const doc = this.docs[t.path];
+      const saved = doc?.saved[t.key];
+      const path = inWorkspace(root, t.path);
+      if (!saved || path === null) continue;
+      const req = JSON.parse(saved) as Request;
+      const position = doc.savedOrder.split(",").indexOf(t.key);
+      if (t.id === this.activeTabId) active = tabs.length;
+      tabs.push({
+        path,
+        name: req.name,
+        method: req.method,
+        url: req.url,
+        position: position < 0 ? null : position,
+        section: t.section,
+        responseView: { ...t.responseView },
+      });
+    }
+    const expanded = Object.keys(this.expanded).flatMap((p) => {
+      const rel = this.expanded[p] ? inWorkspace(root, p) : null;
+      return rel === null ? [] : [rel];
+    });
+    return { tabs, active, expanded };
+  }
+
+  /** Saves `layout` once changes stop for a moment. */
+  private layoutChanged(root: string, layout: Layout) {
+    const json = JSON.stringify(layout);
+    if (json === this.lastLayout) return;
+    this.lastLayout = json;
+    this.pendingLayout = { root, layout };
+    if (this.layoutTimer) clearTimeout(this.layoutTimer);
+    this.layoutTimer = setTimeout(() => void this.flushLayout(), LAYOUT_SETTLE_MS);
+  }
+
+  /** Saves a Layout still settling now, and waits for every Layout save under way
+   *  (before quitting or opening another workspace). */
+  flushLayout(): Promise<void> {
+    if (this.layoutTimer) clearTimeout(this.layoutTimer);
+    this.layoutTimer = null;
+    const pending = this.pendingLayout;
+    this.pendingLayout = null;
+    if (pending) {
+      this.layoutSave = this.layoutSave
+        .then(() => api.saveLayout(pending.root, pending.layout))
+        .catch((e) => this.toast("error", `Could not save the layout: ${errorMessage(e)}`));
+    }
+    return this.layoutSave;
+  }
+
+  /**
+   * Brings back the Layout saved for the workspace at `root`: its tabs, the
+   * active tab and the expanded folders. Each tab's file is read once, in
+   * parallel, and becomes its document; tabs re-attach to their requests as a
+   * reload does (`reattach`). Tabs whose request is gone are dropped, with one
+   * note giving how many.
+   */
+  private async restoreLayout(root: string, tree: TreeNode) {
+    let saved: unknown = null;
+    try {
+      saved = await api.loadLayout(root);
+    } catch {
+      // No Layout to restore: the workspace opens as it always did.
+    }
+    const layout = readLayout(saved);
+    const paths = layout.tabs.map((t) => fromWorkspace(root, t.path));
+    const keys = layout.tabs.map(() => uid());
+    const distinct = [...new Set(paths)];
+    const files = await Promise.all(distinct.map((p) => api.readHttpFile(p).catch(() => null)));
+    if (this.root !== root) return;
+    distinct.forEach((path, i) => {
+      const file = files[i];
+      if (!file) return;
+      const known = layout.tabs.flatMap((t, j): KnownRequest[] =>
+        paths[j] === path ? [{ key: keys[j], name: t.name, method: t.method, url: t.url, position: t.position }] : [],
+      );
+      reattach(known, file.requests);
+      this.docs[path] = this.makeDoc(path, file);
+    });
+    const tabs: Tab[] = [];
+    let active: string | null = null;
+    layout.tabs.forEach((t, j) => {
+      if (!this.docs[paths[j]]?.file.requests.some((r) => r._key === keys[j])) return;
+      const tab: Tab = { id: uid(), path: paths[j], key: keys[j], section: t.section, responseView: { ...t.responseView } };
+      tabs.push(tab);
+      // The active tab, or the one after it if it was dropped.
+      if (active === null && layout.active !== null && j >= layout.active) active = tab.id;
+    });
+    this.tabs = tabs;
+    this.activeTabId = active ?? tabs.at(-1)?.id ?? null;
+    const expanded: Record<string, boolean> = { [root]: true };
+    for (const p of layout.expanded.map((rel) => fromWorkspace(root, rel))) if (findNode(tree, p)) expanded[p] = true;
+    this.expanded = expanded;
+    const dropped = layout.tabs.length - tabs.length;
+    if (dropped === 1) this.toast("info", "1 tab wasn't restored: its request no longer exists.");
+    else if (dropped > 1) this.toast("info", `${dropped} tabs weren't restored: their requests no longer exist.`);
   }
 
   /** The recent workspaces other than the open one, as many as the workspace menus list (the top bar's, Open Recent). */
@@ -468,8 +591,12 @@ class AppStore {
 
   async openWorkspace(path: string) {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
+    await this.flushLayout();
     try {
       const info = await api.openWorkspace(path);
+      // The last workspace's Layout was saved; this one's is saved once it's restored.
+      this.layoutRoot = null;
+      this.lastLayout = "";
       // The shell started a new Session for it, so nothing from the last one shows.
       this.session.reset();
       this.missingRoot = null;
@@ -487,6 +614,8 @@ class AppStore {
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
       this.clearTreeSelection();
+      await this.restoreLayout(info.root, info.tree);
+      this.layoutRoot = info.root;
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
@@ -646,30 +775,10 @@ class AppStore {
     let orphans: Request[] = [];
     if (old) {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
-      const unused = new Map([...old.file.requests, ...old.orphans].map((r) => [r._key!, r]));
-      const sig = (r: Request) => signature(r.name, r.method, r.url);
-      const byName = (r: Request) => r.name;
-      for (const same of [sig, byName]) {
-        for (const r of file.requests) {
-          if (r._key || (same === byName && !r.name)) continue;
-          const match = [...unused.values()].find((o) => same(o) === same(r));
-          if (match) {
-            r._key = match._key;
-            unused.delete(match._key!);
-          }
-        }
-      }
-      // Then by position: a still-unmatched request takes the one now at its
-      // index, unless that one was already claimed.
-      old.file.requests.forEach((o, i) => {
-        const r = file.requests[i];
-        if (r && !r._key && unused.has(o._key!)) {
-          r._key = o._key;
-          unused.delete(o._key!);
-        }
-      });
+      const known = (r: Request, position: number | null): KnownRequest => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position });
+      const unused = reattach([...old.file.requests.map((r, i) => known(r, i)), ...old.orphans.map((r) => known(r, null))], file.requests);
       const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
-      orphans = [...unused.values()].filter((r) => held.has(r._key!));
+      orphans = [...old.file.requests, ...old.orphans].filter((r) => unused.has(r._key!) && held.has(r._key!));
     }
     this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
   }
