@@ -205,7 +205,7 @@ export interface SentRequest {
   url: string;
   headers: [string, string][];
   bodyPreview: string | null;
-  /** Set on a History entry's request whose body was cut off at 10 MB (`HISTORY_BODY_CAP`). */
+  /** Set on an opened History entry's request whose `bodyPreview` (the live send's 64 KB preview) stops short of its body. */
   bodyTruncated?: boolean;
   bodySize: number;
 }

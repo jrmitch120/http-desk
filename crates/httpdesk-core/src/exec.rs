@@ -734,7 +734,8 @@ pub struct SentRequest {
     pub body_preview: Option<String>,
     pub body_size: usize,
     /// Whether `body_preview` stops short of the body: set only on a History entry's
-    /// request, whose body is kept up to the body cap (`history::BODY_CAP`).
+    /// request, whose body is kept up to the body cap (`history::BODY_CAP`) and shown,
+    /// opened, as the live send shows it ([`body_preview`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub body_truncated: bool,
 }
@@ -1147,6 +1148,21 @@ pub fn body_text(body: &[u8], content_type: Option<&str>, kind: ResponseKind) ->
     kind.is_text().then(|| decode_text(body, content_type)).flatten()
 }
 
+/// How much of a request body the request as sent shows ([`SentRequest::body_preview`]).
+pub const BODY_PREVIEW: usize = 64 * 1024;
+
+/// What the Request tab shows of request body `body`: its first [`BODY_PREVIEW`]
+/// bytes, then how many bytes there are in all (`total`), when there are more.
+/// ADR-0006: a reply never carries a whole large body.
+pub fn body_preview(body: &[u8], total: usize) -> String {
+    let s = String::from_utf8_lossy(&body[..body.len().min(BODY_PREVIEW)]).into_owned();
+    if total > BODY_PREVIEW {
+        format!("{s}\n… ({total} bytes total)")
+    } else {
+        s
+    }
+}
+
 /// What the Request tab shows: the request as it reached the server that sent
 /// the final response. Without redirects that is `p`. After them it is rebuilt
 /// with the rules reqwest (and tower-http's follow-redirect under it) applies
@@ -1207,14 +1223,7 @@ fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> 
         url: if hops.is_empty() { p.url.clone() } else { final_url.to_string() },
         headers,
         body_size: body.map_or(0, <[u8]>::len),
-        body_preview: body.map(|b| {
-            let s = String::from_utf8_lossy(&b[..b.len().min(64 * 1024)]).into_owned();
-            if b.len() > 64 * 1024 {
-                format!("{s}\n… ({} bytes total)", b.len())
-            } else {
-                s
-            }
-        }),
+        body_preview: body.map(|b| body_preview(b, b.len())),
         body_truncated: false,
     }
 }

@@ -588,7 +588,7 @@ impl Store {
             )
             .optional()?;
         let Some((summary, (error, source, request, response, body))) = row else { return Ok(None) };
-        let request: SentRequest = serde_json::from_str(&request)?;
+        let request = previewed(serde_json::from_str(&request)?);
         let mut response: Option<HttpResponse> = response.as_deref().map(serde_json::from_str).transpose()?;
         if let Some(r) = &mut response {
             r.id = uuid::Uuid::new_v4().to_string();
@@ -610,6 +610,17 @@ impl Store {
             send_error: error.as_deref().map(serde_json::from_str).transpose()?,
         }))
     }
+}
+
+/// `request` (as stored, its body up to [`BODY_CAP`]) with its body as the live
+/// send's reply shows it ([`exec::body_preview`]), marked truncated when that stops
+/// short of the body: a read never carries megabytes of it (ADR-0006).
+fn previewed(mut request: SentRequest) -> SentRequest {
+    if let Some(body) = request.body_preview.take() {
+        request.body_truncated |= body.len() > exec::BODY_PREVIEW;
+        request.body_preview = Some(exec::body_preview(body.as_bytes(), request.body_size));
+    }
+    request
 }
 
 /// What a workspace's entries are kept under: its canonical path.
