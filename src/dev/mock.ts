@@ -161,6 +161,10 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
 const SAVED_FILES = "httpdesk-mock-files";
 const diskFiles: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_FILES) ?? "{}");
 Object.assign(files, diskFiles);
+function writeDiskFile(path: string, file: unknown) {
+  files[path] = diskFiles[path] = clone(file);
+  sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+}
 // `?roots=/work/shop`: opening one of these folders opens a workspace of its own there
 // (a copy of the demo one, with its own paths), not the demo workspace again.
 const otherRoots = new URLSearchParams(location.search).get("roots")?.split(",") ?? [];
@@ -683,9 +687,11 @@ window.addEventListener(
     return clone(files);
   },
   /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
-  writeFile(path: string, file: unknown) {
-    files[path] = diskFiles[path] = clone(file);
-    sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+  writeFile: writeDiskFile,
+  /** Writes a `.http` file model "on disk" while the app runs, then tells it like the watcher does (`workspace-changed`). */
+  async changeFile(path: string, file: unknown) {
+    writeDiskFile(path, file);
+    await emit("workspace-changed", { paths: [path] });
   },
   /** Each workspace's Layout as last saved, by root. */
   get layouts() {
@@ -811,6 +817,8 @@ type MockHistoryEntry = HistorySummary & {
   writtenMethod: string;
   writtenUrl: string;
   source: string;
+  /** The request `source` was rendered from: what `parse_request` gives back for it (the mock has no parser). */
+  model: Request;
   request: SentRequest;
   response: Omit<HttpResponse, "id"> | null;
   sendError: SendError | null;
@@ -851,7 +859,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
       writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: outcome.request.url,
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
-      error: outcome.sendError?.message ?? null, source: requestText(r), ...outcome,
+      error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
       request: maskCredentials(outcome.request),
     });
     try {
@@ -904,7 +912,7 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
 function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
-  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, body, response, ...entry } = clone(e);
+  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, ...entry } = clone(e);
   if (!response) return { ...entry, response: null };
   const responseId = `h-${++responseCount}`;
   if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
@@ -1609,6 +1617,11 @@ mockIPC(
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
         return requestText(args.request);
+      case "parse_request": {
+        // No parser: a History entry's source text gives back the request it was rendered from.
+        const model = historyEntries.find((e) => e.source === args.text)?.model;
+        return model ? clone(model) : null;
+      }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
         const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
