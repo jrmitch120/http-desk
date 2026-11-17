@@ -1,7 +1,10 @@
 <script module lang="ts">
-  import type { BodyMode } from "../lib/bodyView.svelte";
-  /** Per editor tab, in memory only: viewer tab, body view, wrap, and the JSONPath filter. */
-  const viewByTab = new Map<string, { tab: string; mode: BodyMode; wrap: boolean; filter: string }>();
+  import { newResponseView, type ResponseView } from "../lib/tabView";
+  /** A tab's response view lives with the tab (part of the Layout). A Runner result has no
+   *  tab, so its view is kept here, by result, in memory only. */
+  const resultViews = new Map<string, ResponseView>();
+  /** The JSONPath filter, by tab or result, in memory only: it isn't part of the Layout. */
+  const filters = new Map<string, string>();
   /** Above this many body bytes, copying a binary body as base64 asks first. */
   const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
@@ -40,16 +43,16 @@
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
 
-  const saved = untrack(() => viewByTab.get(viewId));
-  let viewerTab = $state(saved?.tab ?? "body");
-  let mode = $state<BodyMode>(saved?.mode ?? "pretty");
-  let wrap = $state(saved?.wrap ?? false);
-  let filter = $state(saved?.filter ?? "");
+  // The viewer tab, body mode and wrap: the tab's own, or this result's.
+  const resultView = $state(untrack(() => (tab ? null : (resultViews.get(viewId) ?? newResponseView()))));
+  if (resultView) resultViews.set(viewId, resultView);
+  const view = $derived(tab ? tab.responseView : resultView!);
+  let filter = $state(untrack(() => filters.get(viewId)) ?? "");
   $effect(() => {
-    viewByTab.set(viewId, { tab: viewerTab, mode, wrap, filter });
+    filters.set(viewId, filter);
   });
 
-  const body = new BodyView(() => ({ tabId: viewId, res, mode, filter }));
+  const body = new BodyView(() => ({ tabId: viewId, res, mode: view.mode, filter }));
   const isBinary = $derived(body.isBinary);
   const filtered = $derived(body.filtered);
 
@@ -113,7 +116,7 @@
     ...(res?.tests?.length || res?.logs?.length ? [{ value: "tests", label: "Tests", count: res.tests.length || undefined }] : []),
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
-  const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
+  const current = $derived(tabs.some((t) => t.value === view.tab) ? view.tab : "body");
 
   const statusTooltip = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
   const sizeTooltip = $derived.by(() => {
@@ -172,11 +175,11 @@
         </Banner>
       {/if}
       <div class="tabs">
-        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (viewerTab = t)} />
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view.tab = t)} />
       </div>
 
       {#if current === "body"}
-        <BodyPanel {res} view={body} bind:mode bind:wrap bind:filter />
+        <BodyPanel {res} view={body} bind:mode={view.mode} bind:wrap={view.wrap} bind:filter />
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />
       {:else if current === "cookies"}

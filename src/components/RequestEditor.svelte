@@ -1,10 +1,5 @@
-<script module lang="ts">
-  // Remember the selected section per tab across tab switches.
-  const sectionByTab = new Map<string, string>();
-</script>
-
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { tick } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue } from "../lib/types";
@@ -85,14 +80,12 @@
     else app.editDefinition(tab.id, { kind: "file", name: check.name, add: true });
   }
 
-  let section = $state(untrack(() => sectionByTab.get(tab.id)) ?? "params");
-  $effect(() => {
-    sectionByTab.set(tab.id, section);
-  });
+  // The selected section lives with the tab, so it outlasts a tab switch and the Layout can save it.
+  const section = $derived(tab.section);
   // "Open request Settings" on a timeout error.
   $effect(() => {
     if (app.requestSettingsFor === tab.id) {
-      section = "settings";
+      app.showSection(tab.id, "settings");
       app.requestSettingsFor = null;
     }
   });
@@ -132,7 +125,7 @@
       declaration = field.index;
       return;
     }
-    section = field.kind === "param" ? "params" : field.kind === "header" ? "headers" : field.kind;
+    app.showSection(tab.id, field.kind === "param" ? "params" : field.kind === "header" ? "headers" : field.kind);
     tick().then(() => {
       if (field.kind === "param") paramsGrid?.focusValue(req.query.items[field.index]);
       else if (field.kind === "header") headersGrid?.focusValue(req.headers.items[field.index]);
@@ -274,27 +267,27 @@
         {/if}
       {/snippet}
       <nav class="subtabs">
-        <button class="subtab" class:active={section === "params"} class:off={!req.query.enabled} onclick={() => (section = "params")}>
+        <button class="subtab" class:active={section === "params"} class:off={!req.query.enabled} onclick={() => app.showSection(tab.id, "params")}>
           <span class="label">Params</span>
           {#if !req.query.enabled}<Badge>OFF</Badge>{:else if qCount}<span class="count">{qCount}</span>{/if}
           {@render undefinedCount("params")}
         </button>
-        <button class="subtab" class:active={section === "headers"} class:off={!req.headers.enabled} onclick={() => (section = "headers")}>
+        <button class="subtab" class:active={section === "headers"} class:off={!req.headers.enabled} onclick={() => app.showSection(tab.id, "headers")}>
           <span class="label">Headers</span>
           {#if !req.headers.enabled}<Badge>OFF</Badge>{:else if hCount}<span class="count">{hCount}</span>{/if}
           {@render undefinedCount("headers")}
         </button>
-        <button class="subtab" class:active={section === "auth"} class:off={!req.auth.enabled && req.auth.kind !== "none"} onclick={() => (section = "auth")}>
+        <button class="subtab" class:active={section === "auth"} class:off={!req.auth.enabled && req.auth.kind !== "none"} onclick={() => app.showSection(tab.id, "auth")}>
           <span class="label">Authorization</span>
           {#if authLabel}{#if req.auth.enabled}<span class="count">{authLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
           {@render undefinedCount("auth")}
         </button>
-        <button class="subtab" class:active={section === "body"} class:off={!req.body.enabled && req.body.mode !== "none"} onclick={() => (section = "body")}>
+        <button class="subtab" class:active={section === "body"} class:off={!req.body.enabled && req.body.mode !== "none"} onclick={() => app.showSection(tab.id, "body")}>
           <span class="label">Body</span>
           {#if bodyLabel}{#if req.body.enabled}<span class="count">{bodyLabel}</span>{:else}<Badge>OFF</Badge>{/if}{/if}
           {@render undefinedCount("body")}
         </button>
-        <button class="subtab" class:active={section === "settings"} onclick={() => (section = "settings")}>
+        <button class="subtab" class:active={section === "settings"} onclick={() => app.showSection(tab.id, "settings")}>
           <span class="label">Settings</span>
         </button>
       </nav>

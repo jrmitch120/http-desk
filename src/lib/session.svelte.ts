@@ -7,6 +7,7 @@ import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
 import { getDirective, uid } from "./http";
 import type { RunState, Tab } from "./store.svelte";
+import { newTabView } from "./tabView";
 import type { ExchangeShape, HttpResponse, NamedExchange, Request, StoredCookie, TestResult } from "./types";
 
 /** What the Session's page state needs from the rest of the store. */
@@ -132,7 +133,7 @@ export class SessionStore {
       return;
     }
     this.closeExchange();
-    const tab: Tab = { id: `exchange:${uid()}`, path: entry.file, key: "" };
+    const tab: Tab = { id: `exchange:${uid()}`, path: entry.file, key: "", ...newTabView() };
     this.host.runs[tab.id] = { runId: uid(), loading: false, startedAt: 0, response };
     this.shownExchange = { entry, tab };
   }
