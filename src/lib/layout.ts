@@ -5,15 +5,12 @@
 // filters and pane sizes are never part of it.
 import { newResponseView, type RequestSection, type ResponseView } from "./tabView";
 import type { BodyMode } from "./bodyView.svelte";
+import type { PlacedRequest } from "./reattach";
 
 /** An open tab: its request (as last saved: `###` name, method, URL, and its
  *  index in the file, if it's still there) and how the tab showed it. */
-export interface LayoutTab {
+export interface LayoutTab extends PlacedRequest {
   path: string;
-  name: string;
-  method: string;
-  url: string;
-  position: number | null;
   section: RequestSection;
   responseView: ResponseView;
 }

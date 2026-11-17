@@ -692,6 +692,7 @@ window.addEventListener(
   releasePretty: () => releasePretty(),
   /** Lets held bodies through (`?body=hold`). */
   releaseBody: () => releaseBody(),
+  releaseReads: () => releaseReads(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
@@ -1162,6 +1163,10 @@ const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)
 const bodyHeld = new URLSearchParams(location.search).get("body") === "hold";
 let releaseBody: () => void = () => {};
 const bodyReleased = bodyHeld ? new Promise<void>((r) => (releaseBody = r)) : Promise.resolve();
+// `?reads=hold`: every `read_http_file` waits until a test calls `__mock.releaseReads()`.
+const readsHeld = new URLSearchParams(location.search).get("reads") === "hold";
+let releaseReads: () => void = () => {};
+const readsReleased = readsHeld ? new Promise<void>((r) => (releaseReads = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -1662,6 +1667,7 @@ mockIPC(
         return { gitignoreUpdated: false };
       }
       case "read_http_file":
+        await readsReleased;
         return clone(fileAt(args.path));
       case "save_http_file":
         savedPaths.push(args.path);

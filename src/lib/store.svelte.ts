@@ -23,10 +23,10 @@ import { SessionStore, type SessionHost, type TestMark } from "./session.svelte"
 import { HistoryStore, type HistoryHost } from "./history.svelte";
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
-import { findNode, treeFiles } from "./tree";
+import { treeFiles } from "./tree";
 import { reattach, signature, type KnownRequest } from "./reattach";
-import { fromWorkspace, inWorkspace, LAYOUT_SETTLE_MS, readLayout, type Layout, type LayoutTab } from "./layout";
-import { newTabView, type RequestSection, type ResponseView } from "./tabView";
+import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
+import { newTab, type RequestSection, type Tab } from "./tabView";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -65,15 +65,7 @@ export interface Doc {
   orphans: Request[];
 }
 
-export interface Tab {
-  id: string;
-  path: string;
-  key: string;
-  /** The request section shown (part of the Layout). */
-  section: RequestSection;
-  /** How the response viewer shows the tab's response (part of the Layout). */
-  responseView: ResponseView;
-}
+export type { Tab } from "./tabView";
 
 export interface RunState {
   runId: string;
@@ -337,12 +329,7 @@ class AppStore {
         if (now !== unsaved) api.setUnsaved((unsaved = now)).catch(() => {});
       });
       // Saves the open workspace's Layout once its changes settle.
-      $effect(() => {
-        const root = this.layoutRoot;
-        if (!root) return;
-        const layout = this.layoutNow(root);
-        untrack(() => this.layoutChanged(root, layout));
-      });
+      $effect(() => this.layout.track());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;
@@ -480,126 +467,11 @@ class AppStore {
     this.quitting = true;
     try {
       if (!(await this.confirmUnsaved())) return false;
-      await this.flushLayout();
+      await this.layout.flush();
       return true;
     } finally {
       this.quitting = false;
     }
-  }
-
-  // ---------------------------------------------------------------- layout
-
-  /** The workspace whose Layout changes are saved; null while a workspace opens. */
-  private layoutRoot = $state<string | null>(null);
-  /** The Layout last queued for saving, as JSON, so an unchanged one isn't saved again. */
-  private lastLayout = "";
-  private pendingLayout: { root: string; layout: Layout } | null = null;
-  private layoutTimer: ReturnType<typeof setTimeout> | null = null;
-  /** The Layout saves under way, one after another, so an older one is never written last. */
-  private layoutSave: Promise<void> = Promise.resolve();
-
-  /** The workspace's Layout as it is now. Tabs whose request was never saved are
-   *  left out (they can't be found again); the others are described as last saved. */
-  private layoutNow(root: string): Layout {
-    const tabs: LayoutTab[] = [];
-    let active: number | null = null;
-    for (const t of this.tabs) {
-      const doc = this.docs[t.path];
-      const saved = doc?.saved[t.key];
-      const path = inWorkspace(root, t.path);
-      if (!saved || path === null) continue;
-      const req = JSON.parse(saved) as Request;
-      const position = doc.savedOrder.split(",").indexOf(t.key);
-      if (t.id === this.activeTabId) active = tabs.length;
-      tabs.push({
-        path,
-        name: req.name,
-        method: req.method,
-        url: req.url,
-        position: position < 0 ? null : position,
-        section: t.section,
-        responseView: { ...t.responseView },
-      });
-    }
-    const expanded = Object.keys(this.expanded).flatMap((p) => {
-      const rel = this.expanded[p] ? inWorkspace(root, p) : null;
-      return rel === null ? [] : [rel];
-    });
-    return { tabs, active, expanded };
-  }
-
-  /** Saves `layout` once changes stop for a moment. */
-  private layoutChanged(root: string, layout: Layout) {
-    const json = JSON.stringify(layout);
-    if (json === this.lastLayout) return;
-    this.lastLayout = json;
-    this.pendingLayout = { root, layout };
-    if (this.layoutTimer) clearTimeout(this.layoutTimer);
-    this.layoutTimer = setTimeout(() => void this.flushLayout(), LAYOUT_SETTLE_MS);
-  }
-
-  /** Saves a Layout still settling now, and waits for every Layout save under way
-   *  (before quitting or opening another workspace). */
-  flushLayout(): Promise<void> {
-    if (this.layoutTimer) clearTimeout(this.layoutTimer);
-    this.layoutTimer = null;
-    const pending = this.pendingLayout;
-    this.pendingLayout = null;
-    if (pending) {
-      this.layoutSave = this.layoutSave
-        .then(() => api.saveLayout(pending.root, pending.layout))
-        .catch((e) => this.toast("error", `Could not save the layout: ${errorMessage(e)}`));
-    }
-    return this.layoutSave;
-  }
-
-  /**
-   * Brings back the Layout saved for the workspace at `root`: its tabs, the
-   * active tab and the expanded folders. Each tab's file is read once, in
-   * parallel, and becomes its document; tabs re-attach to their requests as a
-   * reload does (`reattach`). Tabs whose request is gone are dropped, with one
-   * note giving how many.
-   */
-  private async restoreLayout(root: string, tree: TreeNode) {
-    let saved: unknown = null;
-    try {
-      saved = await api.loadLayout(root);
-    } catch {
-      // No Layout to restore: the workspace opens as it always did.
-    }
-    const layout = readLayout(saved);
-    const paths = layout.tabs.map((t) => fromWorkspace(root, t.path));
-    const keys = layout.tabs.map(() => uid());
-    const distinct = [...new Set(paths)];
-    const files = await Promise.all(distinct.map((p) => api.readHttpFile(p).catch(() => null)));
-    if (this.root !== root) return;
-    distinct.forEach((path, i) => {
-      const file = files[i];
-      if (!file) return;
-      const known = layout.tabs.flatMap((t, j): KnownRequest[] =>
-        paths[j] === path ? [{ key: keys[j], name: t.name, method: t.method, url: t.url, position: t.position }] : [],
-      );
-      reattach(known, file.requests);
-      this.docs[path] = this.makeDoc(path, file);
-    });
-    const tabs: Tab[] = [];
-    let active: string | null = null;
-    layout.tabs.forEach((t, j) => {
-      if (!this.docs[paths[j]]?.file.requests.some((r) => r._key === keys[j])) return;
-      const tab: Tab = { id: uid(), path: paths[j], key: keys[j], section: t.section, responseView: { ...t.responseView } };
-      tabs.push(tab);
-      // The active tab, or the one after it if it was dropped.
-      if (active === null && layout.active !== null && j >= layout.active) active = tab.id;
-    });
-    this.tabs = tabs;
-    this.unshown = new Set(tabs.map((t) => t.id));
-    this.activeTabId = active ?? tabs.at(-1)?.id ?? null;
-    const expanded: Record<string, boolean> = { [root]: true };
-    for (const p of layout.expanded.map((rel) => fromWorkspace(root, rel))) if (findNode(tree, p)) expanded[p] = true;
-    this.expanded = expanded;
-    const dropped = layout.tabs.length - tabs.length;
-    if (dropped === 1) this.toast("info", "1 tab wasn't restored: its request no longer exists.");
-    else if (dropped > 1) this.toast("info", `${dropped} tabs weren't restored: their requests no longer exist.`);
   }
 
   /** The recent workspaces other than the open one, as many as the workspace menus list (the top bar's, Open Recent). */
@@ -609,12 +481,11 @@ class AppStore {
 
   async openWorkspace(path: string) {
     if (!(await this.confirmUnsaved("Save them before opening another workspace?"))) return;
-    await this.flushLayout();
+    await this.layout.flush();
     try {
       const info = await api.openWorkspace(path);
       // The last workspace's Layout was saved; this one's is saved once it's restored.
-      this.layoutRoot = null;
-      this.lastLayout = "";
+      this.layout.reset();
       // The shell started a new Session for it, so nothing from the last one shows.
       this.session.reset();
       this.missingRoot = null;
@@ -634,8 +505,7 @@ class AppStore {
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
       this.clearTreeSelection();
-      await this.restoreLayout(info.root, info.tree);
-      this.layoutRoot = info.root;
+      await this.layout.restore(info.root, info.tree);
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
@@ -680,16 +550,28 @@ class AppStore {
   /** Loads (once) and caches a document. Concurrent callers share one read so
    *  request keys stay stable; a second parse would orphan open tabs. */
   loadDoc(path: string): Promise<Doc | null> {
+    return this.readDoc(path, { report: true });
+  }
+
+  /**
+   * `loadDoc`, with `prepare` seeing the requests read before they get keys (the
+   * Layout's restore re-attaches them), and a failed read reported only with `report`.
+   * Null if another workspace opened meanwhile.
+   */
+  private readDoc(path: string, how: { prepare?: (requests: Request[]) => void; report?: boolean }): Promise<Doc | null> {
     if (this.docs[path]) return Promise.resolve(this.docs[path]);
     let pending = this.loading.get(path);
     if (!pending) {
+      const root = this.root;
       pending = (async () => {
         try {
           const file = await api.readHttpFile(path);
+          if (this.root !== root) return null;
+          how.prepare?.(file.requests);
           this.docs[path] ??= this.makeDoc(path, file);
           return this.docs[path];
         } catch (e) {
-          this.toast("error", errorMessage(e));
+          if (how.report) this.toast("error", errorMessage(e));
           return null;
         } finally {
           this.loading.delete(path);
@@ -902,9 +784,9 @@ class AppStore {
   async openSearchHit(hit: SearchHit) {
     const doc = await this.loadDoc(hit.path);
     if (!doc) return;
-    const want = signature(hit.name, hit.method, hit.url);
+    const want = signature(hit);
     const reqs = doc.file.requests;
-    const same = (r: Request | undefined) => !!r && signature(displayName(r), r.method, r.url) === want;
+    const same = (r: Request | undefined) => !!r && signature({ name: displayName(r), method: r.method, url: r.url }) === want;
     const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
     if (req) await this.openRequest(hit.path, { key: req._key });
   }
@@ -970,7 +852,7 @@ class AppStore {
     const key = req._key!;
     let tab = this.tabs.find((t) => t.path === path && t.key === key);
     if (!tab) {
-      tab = { id: uid(), path, key, ...newTabView() };
+      tab = newTab(path, key);
       const at = this.tabs.findIndex((t) => t.id === this.activeTabId);
       this.tabs.splice(at < 0 ? this.tabs.length : at + 1, 0, tab);
     }
@@ -1051,7 +933,7 @@ class AppStore {
       if (!doc || doc.missing || !doc.file.requests.some((r) => r._key === key)) continue;
       let tab = this.tabs.find((t) => t.path === path && t.key === key);
       if (!tab) {
-        tab = { id: uid(), path, key, ...newTabView() };
+        tab = newTab(path, key);
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
         void this.showLastResponse(tab.id);
       }
@@ -1062,6 +944,8 @@ class AppStore {
 
   /** Restored tabs (Layout restore) not shown yet: each loads its last response when it first shows. */
   private unshown = new Set<string>();
+  /** Settles once the restored tabs have re-attached to their requests (or been dropped). */
+  private reattached: Promise<void> = Promise.resolve();
 
   /**
    * Shows tab `tabId`'s last response from History (a restored or reopened tab),
@@ -1069,6 +953,7 @@ class AppStore {
    * releases it (ADR-0006), but not into the Session (ADR-0009).
    */
   private async showLastResponse(tabId: string) {
+    await this.reattached;
     const tab = this.tabs.find((t) => t.id === tabId);
     const req = this.requestFor(tab ?? null);
     if (!tab || !req) return;
@@ -1545,6 +1430,45 @@ class AppStore {
   readonly runnerStore: RunnerStore = new RunnerStore(this.runnerHost());
   /** History as the page sees it: each tab's History view and the entry it opened (history.svelte.ts). */
   readonly history: HistoryStore = new HistoryStore(this.historyHost());
+  /** The open workspace's Layout: saved as it changes, restored when it opens (layoutStore.svelte.ts). */
+  readonly layout: LayoutStore = new LayoutStore(this.layoutHost());
+
+  private layoutHost(): LayoutHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get tabs() {
+        return store.tabs;
+      },
+      set tabs(tabs) {
+        store.tabs = tabs;
+      },
+      get activeTabId() {
+        return store.activeTabId;
+      },
+      set activeTabId(id) {
+        store.activeTabId = id;
+      },
+      get expanded() {
+        return store.expanded;
+      },
+      set expanded(expanded) {
+        store.expanded = expanded;
+      },
+      get docs() {
+        return store.docs;
+      },
+      readDoc: (path, prepare) => store.readDoc(path, { prepare }),
+      removeTab: (id) => store.removeTab(id),
+      restoring: (tabs, reattached) => {
+        store.unshown = new Set(tabs.map((t) => t.id));
+        store.reattached = reattached;
+      },
+      toast: (kind, message) => store.toast(kind, message),
+    };
+  }
 
   private historyHost(): HistoryHost {
     const store = this;

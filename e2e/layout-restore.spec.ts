@@ -3,7 +3,7 @@
 // expanded folders. The mock keeps Layouts (and files written with `writeFile`)
 // in sessionStorage, so a page reload stands in for a restart.
 import { expect, test, type Page } from "@playwright/test";
-import { activeTab, menuClick, mockState, openApp, openRequest, searchBox, tab, treeItem } from "./helpers";
+import { activeTab, menuClick, mockState, openApp, openRequest, searchBox, tab, treeItem, urlBar } from "./helpers";
 
 async function send(page: Page): Promise<void> {
   await page.keyboard.press("Meta+Enter");
@@ -125,6 +125,33 @@ test("a request moved within its file re-attaches, and a deleted one is dropped 
   await expect(page.locator(".toast")).toHaveText(["1 tab wasn't restored: its request no longer exists."]);
   await tab(page, "List pets").click();
   await expect(treeItem(page, "List pets")).toHaveClass(/\bactive\b/);
+});
+
+test("restored tabs show at once from the Layout, before their files are read; a gone one drops once they are", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await tab(page, "Create pet").click();
+  await expect.poll(() => savedLayout(page)).toMatchObject({ active: 1 });
+  await page.evaluate((path) => {
+    const mock = (window as unknown as { __mock: MockFiles }).__mock;
+    const file = mock.files[path];
+    mock.writeFile(path, { ...file, requests: [file.requests[0], file.requests[2]] });
+  }, PETS);
+
+  // A restart whose file reads don't finish until the test says so.
+  await page.goto("/?reads=hold&platform=mac");
+  await expect(treeItem(page, "api")).toBeVisible();
+
+  await expect(tabNames(page)).toHaveText(["List pets", "Create pet", "Get pet image"]);
+  await expect(activeTab(page)).toContainText("Create pet");
+  await page.evaluate(() => (window as unknown as { __mock: { releaseReads: () => void } }).__mock.releaseReads());
+
+  await expect(tabNames(page)).toHaveText(["List pets", "Get pet image"]);
+  await expect(activeTab(page)).toContainText("Get pet image");
+  await expect(page.locator(".toast")).toHaveText(["1 tab wasn't restored: its request no longer exists."]);
+  await expect(urlBar(page)).toBeVisible();
 });
 
 test("the sidebar search and the response filter start empty", async ({ page }) => {
