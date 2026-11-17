@@ -10,6 +10,7 @@ mod deleting;
 mod fetch;
 mod folder_envs;
 mod global_variables;
+mod history;
 mod paths;
 mod pre_request;
 mod preview;
@@ -55,7 +56,23 @@ impl Harness {
 
     /// The app built from `builder` (extra plugins) and `context` (its config and capabilities).
     fn with(builder: tauri::Builder<MockRuntime>, context: tauri::Context<MockRuntime>) -> Self {
-        let cfg = tempfile::tempdir().unwrap();
+        Self::in_config(builder, context, tempfile::tempdir().unwrap())
+    }
+
+    /// Quits this app and starts another on the same config folder, as a restart does.
+    fn restart(self) -> Self {
+        let Harness { app, webview, cfg, trash_bin: _ } = self;
+        drop(webview);
+        drop(app);
+        Self::in_config(mock_builder(), mock_context(noop_assets()), cfg)
+    }
+
+    /// [`Harness::with`], keeping its settings in `cfg`.
+    fn in_config(
+        builder: tauri::Builder<MockRuntime>,
+        context: tauri::Context<MockRuntime>,
+        cfg: tempfile::TempDir,
+    ) -> Self {
         let builder = builder.manage(super::ConfigDir(cfg.path().to_path_buf()));
         let app = super::with_commands(builder, |_| Ok(())).build(context).unwrap();
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();

@@ -175,6 +175,25 @@ pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// `req`'s block as [`serialize`] writes it: its text as read (`raw`) where the
+/// model still matches it, else rendered. A file's first block may lack its `###`.
+/// History keeps it as a request's source text at send time.
+pub fn request_text(req: &Request) -> String {
+    let rendered = render_request(req);
+    written_text(req, &rendered).unwrap_or(rendered)
+}
+
+/// `req`'s text as read, where the model still matches it (`rendered`), or with
+/// only its scripts kept in place; `None` to render it.
+fn written_text(req: &Request, rendered: &str) -> Option<String> {
+    let raw = req.raw.as_deref()?;
+    if rendered_as_written(raw).as_deref() == Some(rendered) {
+        Some(raw.to_string())
+    } else {
+        scripts_in_place(req, raw, rendered)
+    }
+}
+
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
@@ -199,14 +218,7 @@ pub fn serialize(file: &HttpFile) -> String {
             prev_rendered = false;
         }
         let rendered = render_request(req);
-        let written = req.raw.as_deref().and_then(|raw| {
-            if rendered_as_written(raw).as_deref() == Some(rendered.as_str()) {
-                Some(raw.to_string())
-            } else {
-                scripts_in_place(req, raw, &rendered)
-            }
-        });
-        match written {
+        match written_text(req, &rendered) {
             Some(raw) => {
                 separate(&mut out, prev_rendered);
                 // Only a file's first block may omit `###`; anywhere else it would
