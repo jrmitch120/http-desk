@@ -17,11 +17,11 @@ use tokio::sync::Notify;
 
 use crate::exec::{ExecError, HttpResponse};
 use crate::send::{self, Outgoing, SendContext, Sent};
+use crate::vars::Secrets;
 
 pub mod export;
 mod report;
 
-use report::Secrets;
 pub use report::{Failure, Outcome, Reason, RequestReport};
 
 /// What a run reports when it ends: whether it was stopped, and each of its requests
