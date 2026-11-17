@@ -1,6 +1,8 @@
 // TypeScript mirror of the Rust model (crates/httpdesk-core/src/model.rs etc.).
 // Keep in sync when changing serde structs.
 
+import type { RequestIdentity } from "./reattach";
+
 export type LineEnding = "lf" | "crlf";
 
 export interface Variable {
@@ -212,14 +214,15 @@ export interface SentRequest {
 
 /**
  * What links History entries to a request (`history::RequestLink`): its file and
- * `# @name`, or for an unnamed request its file, method and URL as written.
+ * `# @name`, or for an unnamed request its file, method and URL as written. Its
+ * method and URL are a `RequestIdentity`'s; its `name` isn't (the `# @name`, not the
+ * `###` title), so it's its own.
  */
-export interface HistoryLink {
+export interface HistoryLink extends Pick<RequestIdentity, "method" | "url"> {
   /** The request's file, absolute. */
   filePath: string;
+  /** Its `# @name`; null for an unnamed request. */
   name: string | null;
-  method: string;
-  url: string;
 }
 
 /**
