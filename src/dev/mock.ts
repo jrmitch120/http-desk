@@ -728,6 +728,10 @@ window.addEventListener(
   get releasedResponses() {
     return [...releasedResponses];
   },
+  /** The History entry ids `open_history_entry` opened, in order. */
+  get historyOpened() {
+    return [...historyOpened];
+  },
   get bodyCopies() {
     return [...bodyCopies];
   },
@@ -952,10 +956,13 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
     }));
 }
 
+/** The History entry ids `open_history_entry` opened, in order (`__mock.historyOpened`). */
+const historyOpened: number[] = [];
 /** Like the shell's `open_history_entry`: the entry whole, its response under a new id whose body is kept. */
 function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
+  historyOpened.push(id);
   const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, ...entry } = clone(e);
   if (!response) return { ...entry, response: null };
   const responseId = `h-${++responseCount}`;

@@ -64,7 +64,7 @@ test("a restart brings back the tabs in order, the active tab, each tab's sectio
 
   await tab(page, "List pets").click();
   await expect(section(page, "Auth")).toHaveClass(/active/);
-  // Responses aren't restored; the next one shows the way the tab left it.
+  // Its response (from History) and the next one show the way the tab left it.
   await send(page);
   await expect(responseTab(page, "Headers")).toHaveAttribute("aria-checked", "true");
   await responseTab(page, "Body").click();

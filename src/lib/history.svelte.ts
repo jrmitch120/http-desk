@@ -175,6 +175,33 @@ export class HistoryStore {
     this.opened[tabId] = { entry, tab, source: whole.source };
   }
 
+  /**
+   * The latest History entry of request `req` of the file at `path`, as a tab's
+   * response marked "from History" (its `fromHistory` the time it was sent); its
+   * response has a kept body of its own (ADR-0006). Nothing while History is off,
+   * for a request marked `# @no-log`, with no entry, or if History can't be read.
+   * Never put into the Session (ADR-0009): Request variables still count it unsent.
+   */
+  async lastResponse(path: string, req: Request): Promise<Omit<RunState, "runId"> | null> {
+    if (!this.enabled || getDirective(req, "no-log") !== undefined) return null;
+    try {
+      const [entry] = await api.listHistory({ request: historyLink(path, req), offset: 0, limit: 1 });
+      if (!entry) return null;
+      const whole = await api.openHistoryEntry(entry.id);
+      return {
+        loading: false,
+        startedAt: 0,
+        response: whole.response ?? undefined,
+        error: whole.sendError ?? undefined,
+        cancelled: whole.cancelled || undefined,
+        fromHistory: entry.time,
+      };
+    } catch {
+      // A tab comes back without a response rather than with an error about History.
+      return null;
+    }
+  }
+
   /** Closes the entry tab `tabId` has open, releasing its copy of the response. */
   close(tabId: string) {
     const opened = this.opened[tabId];

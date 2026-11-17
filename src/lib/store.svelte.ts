@@ -85,6 +85,8 @@ export interface RunState {
   cancelled?: boolean;
   /** Body bytes received on the wire so far, while loading (`send-progress` events). */
   received?: number;
+  /** A response restored from History (not sent in this Session): when its entry was sent. */
+  fromHistory?: string;
 }
 
 export type { Runner, RunItem, RunItemState } from "./runner.svelte";
@@ -334,6 +336,11 @@ class AppStore {
         const layout = this.layoutNow(root);
         untrack(() => this.layoutChanged(root, layout));
       });
+      // A restored tab loads its last response from History the first time it shows.
+      $effect(() => {
+        const id = this.activeTabId;
+        if (id && this.unshown.delete(id)) untrack(() => void this.showLastResponse(id));
+      });
     });
     // Forget recent workspaces whose folders are gone, then reopen the last one.
     const recent = this.settings?.recentWorkspaces ?? [];
@@ -576,6 +583,7 @@ class AppStore {
       if (active === null && layout.active !== null && j >= layout.active) active = tab.id;
     });
     this.tabs = tabs;
+    this.unshown = new Set(tabs.map((t) => t.id));
     this.activeTabId = active ?? tabs.at(-1)?.id ?? null;
     const expanded: Record<string, boolean> = { [root]: true };
     for (const p of layout.expanded.map((rel) => fromWorkspace(root, rel))) if (findNode(tree, p)) expanded[p] = true;
@@ -607,6 +615,7 @@ class AppStore {
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
+      this.unshown.clear();
       this.closed = [];
       this.history.reset();
       for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
@@ -969,6 +978,7 @@ class AppStore {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
+    this.unshown.delete(id);
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
@@ -1021,8 +1031,8 @@ class AppStore {
   /**
    * Reopens the last closed tab where it sat, at the request it was on, made
    * active. One whose request is gone from its file is skipped, and the one
-   * closed before it reopens instead. A reopened tab comes back without a
-   * response: closing released it (ADR-0006).
+   * closed before it reopens instead. Closing released its response (ADR-0006),
+   * so it shows its last response from History instead.
    */
   reopenClosedTab() {
     while (this.closed.length) {
@@ -1034,10 +1044,32 @@ class AppStore {
       if (!tab) {
         tab = { id: uid(), path, key, ...newTabView() };
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
+        void this.showLastResponse(tab.id);
       }
       this.activeTabId = tab.id;
       return;
     }
+  }
+
+  /** Restored tabs (Layout restore) not shown yet: each loads its last response when it first shows. */
+  private unshown = new Set<string>();
+
+  /**
+   * Shows tab `tabId`'s last response from History (a restored or reopened tab),
+   * unless it has closed or sent meanwhile. It goes into `runs`, so closing the tab
+   * releases it (ADR-0006), but not into the Session (ADR-0009).
+   */
+  private async showLastResponse(tabId: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    const req = this.requestFor(tab ?? null);
+    if (!tab || !req) return;
+    const last = await this.history.lastResponse(tab.path, req);
+    if (!last) return;
+    if (this.runs[tabId] || !this.tabs.some((t) => t.id === tabId)) {
+      this.releaseResponse(last.response);
+      return;
+    }
+    this.runs[tabId] = { runId: uid(), ...last };
   }
 
   revertRequest(path: string, key: string) {
@@ -1316,6 +1348,8 @@ class AppStore {
     if (scripts === "cancel") return;
     const runId = uid();
     const previous = this.runs[tabId]?.response;
+    // A response from History stays marked until a live one replaces it.
+    const fromHistory = this.runs[tabId]?.fromHistory;
     this.runs[tabId] = { runId, loading: true, startedAt: performance.now(), response: previous };
     try {
       const response = await api.sendRequest({ runId, ...this.requestArgs(tab, req, doc), skipScripts: scripts === "skip" });
@@ -1339,7 +1373,7 @@ class AppStore {
       if (scripts === "run") this.sessionVersion++;
       if (this.runs[tabId]?.runId !== runId) return;
       if (this.cancelled.delete(runId)) {
-        this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous };
+        this.runs[tabId] = { runId, loading: false, startedAt: 0, cancelled: true, response: previous, fromHistory: previous && fromHistory };
       } else {
         const error = toSendError(e);
         this.runs[tabId] = { runId, loading: false, startedAt: 0, error };

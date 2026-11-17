@@ -141,6 +141,12 @@
   <button class="btn small ghost history-switch" class:on={showingHistory} aria-pressed={showingHistory} onclick={() => app.history.toggle(t.id)}>History</button>
 {/snippet}
 
+{#snippet fromHistory()}
+  {#if run?.fromHistory}
+    <span class="muted small" use:tooltip={"The last response recorded in History, not sent in this Session: Request variables reading it count it unsent"}>from History, {sentAt(run.fromHistory)}</span>
+  {/if}
+{/snippet}
+
 <div class="viewer">
   {#if historyTab && showingHistory}
     <div class="statusbar">
@@ -188,16 +194,19 @@
         {#if tab}<button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>{/if}
       {:else if run.cancelled && !res}
         <Badge size="md">Cancelled</Badge>
+        {@render fromHistory()}
       {:else if res}
         {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
         <span class="tip" use:tooltip={statusTooltip}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
         <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
+        {@render fromHistory()}
         <span class="spacer"></span>
         <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
+        {@render fromHistory()}
       {/if}
       {#if historyTab}{@render historySwitch(historyTab)}{/if}
     </div>
