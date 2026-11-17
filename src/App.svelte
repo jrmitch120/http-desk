@@ -18,6 +18,7 @@
   import RenameVariable from "./components/RenameVariable.svelte";
   import ExtractVariable from "./components/ExtractVariable.svelte";
   import ExchangeView from "./components/ExchangeView.svelte";
+  import CompareView from "./components/CompareView.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import PanelArea from "./components/PanelArea.svelte";
@@ -156,6 +157,9 @@
 {#if app.extraction}<ExtractVariable />{/if}
 {#if app.shownExchange}
   {#key app.shownExchange.tab.id}<ExchangeView shown={app.shownExchange} />{/key}
+{/if}
+{#if app.history.comparison}
+  {#key app.history.comparison.id}<CompareView comparison={app.history.comparison} />{/key}
 {/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}

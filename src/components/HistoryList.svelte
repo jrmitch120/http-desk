@@ -1,7 +1,8 @@
 <!--
   History entries as rows, newest first: method, URL as sent, status (or Error,
   Cancelled), when it was sent, duration and size. Clicking a row opens it. Shared
-  by History views (the request's, in the response pane).
+  by History views (the request's, in the response pane). With `onselect`, each row
+  has a box to select it (for Compare); with `onmenu`, a context menu.
 -->
 <script lang="ts">
   import type { HistorySummary } from "../lib/types";
@@ -9,14 +10,27 @@
   import { sentAt } from "../lib/history.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
+  import Checkbox from "./Checkbox.svelte";
 
-  let { entries, onopen }: { entries: HistorySummary[]; onopen: (entry: HistorySummary) => void } = $props();
+  interface Props {
+    entries: HistorySummary[];
+    onopen: (entry: HistorySummary) => void;
+    /** The selected entries' ids, with `onselect`. */
+    selected?: number[];
+    onselect?: (entry: HistorySummary, selected: boolean) => void;
+    /** Opens the row's context menu (`menu.show`). */
+    onmenu?: (event: MouseEvent, entry: HistorySummary, index: number) => void;
+  }
+  let { entries, onopen, selected = [], onselect, onmenu }: Props = $props();
 </script>
 
 <ul class="entries" aria-label="History entries">
-  {#each entries as e (e.id)}
-    <li>
-      <button class="row" onclick={() => onopen(e)}>
+  {#each entries as e, i (e.id)}
+    <li class:selectable={!!onselect}>
+      {#if onselect}
+        <Checkbox class="select" checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
+      {/if}
+      <button class="row" onclick={() => onopen(e)} oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))}>
         <Badge method={e.method} />
         <span class="url mono">{e.url}</span>
         <span class="spacer"></span>
@@ -60,6 +74,17 @@
   }
   .row:hover {
     background: var(--hover);
+  }
+  .selectable {
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+  }
+  .selectable .row {
+    padding-left: 8px;
+  }
+  .selectable :global(.select) {
+    flex: none;
   }
   .url {
     min-width: 0;
