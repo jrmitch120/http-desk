@@ -1,7 +1,8 @@
 // History as the page sees it (GLOSSARY "History"; ADR-0009). The shell records each
 // send from a tab and keeps the entries; the page keeps what follows from them: a
 // revision that goes up after each send (so History views list again), whether each
-// tab's response pane shows its request's History, and the entry a tab has opened.
+// tab's response pane shows its request's History, and the entry each History view
+// (a tab's, or the sidebar's: `WORKSPACE_HISTORY`) has opened.
 // An opened entry shows read-only in a response viewer under a pseudo tab, its
 // response a copy with its own id, released when it's closed (ADR-0006).
 import { api, errorMessage } from "./api";
@@ -20,6 +21,15 @@ export interface HistoryHost {
 
 /** An entry opened from a History view: its summary, and the pseudo tab its response shows under. */
 export type OpenedEntry = { entry: HistorySummary; tab: Tab };
+
+/**
+ * The sidebar's History view (the whole workspace's), where an editor tab's id names
+ * a request's: `open`/`openedIn`/`close` with it for the entry opened from the sidebar.
+ */
+export const WORKSPACE_HISTORY = "workspace";
+
+/** How many entries a History view lists at a time; scrolling to the end lists the next. */
+export const HISTORY_PAGE = 50;
 
 /** What links a request's History entries to it: its file and `# @name`, else its file, method and URL. */
 export function historyLink(path: string, req: Request): HistoryLink {
@@ -40,7 +50,7 @@ export class HistoryStore {
 
   /** The editor tabs whose response pane shows their request's History. */
   private shownIn = $state<Record<string, true>>({});
-  /** The entry each editor tab has opened from its History view. */
+  /** The entry each History view has opened: an editor tab's, by its id, and the sidebar's, by `WORKSPACE_HISTORY`. */
   private opened = $state<Record<string, OpenedEntry>>({});
 
   /** Notes that a send from a tab finished: it may have been recorded. */

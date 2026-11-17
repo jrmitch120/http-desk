@@ -220,6 +220,41 @@ export function resetBodyRequests(page: Page): Promise<void> {
   return page.evaluate(() => (window as unknown as { __mock: { resetBodyRequests: () => void } }).__mock.resetBodyRequests());
 }
 
+/** A History entry for `seedHistory`: a send of `method url` from `file` at `time`, answered with `status` (null: no response, `error`). */
+export type SeededEntry = {
+  method?: string;
+  url: string;
+  /** The URL as written in the request (what links an unnamed request to it); `url` by default. */
+  writtenUrl?: string;
+  file?: string | null;
+  name?: string | null;
+  status?: number | null;
+  error?: string;
+  time: string;
+};
+
+/**
+ * Gives the `/demo` workspace these History entries (kept like recorded ones, in
+ * sessionStorage) before the app loads; call before `openApp`. A page reload keeps
+ * them, with whatever was recorded since. They list but open without a response.
+ */
+export async function seedHistory(page: Page, entries: SeededEntry[]): Promise<void> {
+  const stored = entries.map((e, i) => {
+    const method = e.method ?? "GET";
+    const status = e.status === undefined ? 200 : e.status;
+    const request = { method, url: e.url, headers: [], bodyPreview: null, bodySize: 0 };
+    return {
+      id: i + 1, workspace: "/demo", time: e.time, file: e.file === undefined ? "api/pets.http" : e.file, name: e.name ?? null,
+      writtenMethod: method, writtenUrl: e.writtenUrl ?? e.url, method, url: e.url, status, statusText: status === null ? null : "",
+      durationMs: 12, size: status === null ? null : 34, error: status === null ? (e.error ?? "Connection refused") : null,
+      cancelled: false, source: `${method} ${e.url}\n`, request, response: null, sendError: null, body: null,
+    };
+  });
+  await page.addInitScript((json) => {
+    if (!sessionStorage.getItem("httpdesk-mock-history")) sessionStorage.setItem("httpdesk-mock-history", json);
+  }, JSON.stringify(stored));
+}
+
 /** Makes the mock's next sends answer like `?response=<kind>` (null: the default JSON). */
 export function setMockResponse(page: Page, kind: string | null): Promise<void> {
   return page.evaluate((k) => {

@@ -18,6 +18,8 @@
   import RenameVariable from "./components/RenameVariable.svelte";
   import ExtractVariable from "./components/ExtractVariable.svelte";
   import ExchangeView from "./components/ExchangeView.svelte";
+  import HistoryEntryView from "./components/HistoryEntryView.svelte";
+  import { WORKSPACE_HISTORY } from "./lib/history.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import PanelArea from "./components/PanelArea.svelte";
@@ -156,6 +158,10 @@
 {#if app.extraction}<ExtractVariable />{/if}
 {#if app.shownExchange}
   {#key app.shownExchange.tab.id}<ExchangeView shown={app.shownExchange} />{/key}
+{/if}
+{#if app.history.openedIn(WORKSPACE_HISTORY)}
+  {@const opened = app.history.openedIn(WORKSPACE_HISTORY)!}
+  {#key opened.tab.id}<HistoryEntryView {opened} />{/key}
 {/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}

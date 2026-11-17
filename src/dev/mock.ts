@@ -889,9 +889,13 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
   const link = query.request;
   const file = link && (link.filePath.startsWith(`${ROOT}/`) ? link.filePath.slice(ROOT.length + 1) : link.filePath);
   const offset = query.offset ?? 0;
+  const text = query.text?.toLowerCase();
+  const inClass = (status: number | null) => (query.status === "error" ? status === null : status !== null && `${Math.floor(status / 100)}xx` === query.status);
   return historyEntries
     .filter((e) => e.workspace === ROOT)
     .filter((e) => !link || (e.file === file && (link.name ? e.name === link.name : !e.name && e.writtenMethod === link.method && e.writtenUrl === link.url)))
+    .filter((e) => !query.status || inClass(e.status))
+    .filter((e) => !text || [e.url, e.method, e.file, e.name].some((s) => s?.toLowerCase().includes(text)))
     .sort((a, b) => b.time.localeCompare(a.time) || b.id - a.id)
     .slice(offset, offset + (query.limit ?? 200))
     .map((e) => ({

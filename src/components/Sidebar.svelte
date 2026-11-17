@@ -1,3 +1,8 @@
+<script module lang="ts">
+  /** The last `app.focusSearch` ask the search box took focus for. */
+  let focusAsked = 0;
+</script>
+
 <script lang="ts">
   import { untrack } from "svelte";
   import { app } from "../lib/store.svelte";
@@ -9,6 +14,14 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import WorkspaceHistory from "./WorkspaceHistory.svelte";
+  import type { SidebarView } from "../lib/store.svelte";
+
+  const VIEWS: SegmentedOption<SidebarView>[] = [
+    { value: "explorer", label: "Explorer" },
+    { value: "history", label: "History" },
+  ];
 
   let query = $state("");
   let hits = $state<SearchHit[]>([]);
@@ -19,8 +32,13 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
 
+  // Each ask once, even when the box only appears later (the sidebar shown, or the
+  // Explorer view picked, for it), and not again when the Explorer comes back.
   $effect(() => {
-    if (app.focusSearch) searchInput?.focus();
+    if (app.focusSearch !== focusAsked && searchInput) {
+      focusAsked = app.focusSearch;
+      searchInput.focus();
+    }
   });
 
   // Find usages takes the place of search results.
@@ -139,15 +157,22 @@
 
 <div class="sidebar">
   <div class="head">
-    <span class="title">Explorer</span>
-    <div class="spacer"></div>
-    <button class="icon-btn" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
-    <button class="icon-btn" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
-    <button class="icon-btn" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
-    <button class="icon-btn" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
-    <button class="icon-btn" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
+    <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
+    {#if app.sidebarView === "explorer"}
+      <!-- Beside the switch when they fit, else on a row of their own. -->
+      <div class="actions">
+        <button class="icon-btn" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
+        <button class="icon-btn" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
+        <button class="icon-btn" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
+        <button class="icon-btn" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
+        <button class="icon-btn" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
+      </div>
+    {/if}
   </div>
 
+  {#if app.sidebarView === "history"}
+    <WorkspaceHistory />
+  {:else}
   <div class="search">
     <Icon name="search" size={13} />
     <input
@@ -250,6 +275,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -260,16 +286,18 @@
   }
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 1px;
-    padding: 8px 8px 4px 14px;
+    gap: 4px 8px;
+    padding: 8px 8px 4px 10px;
   }
-  .title {
-    font-size: 11px;
-    font-weight: 650;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted);
+  .views {
+    flex: none;
+  }
+  .actions {
+    display: flex;
+    gap: 1px;
+    margin-left: auto;
   }
   .search {
     margin: 4px 10px 8px;
