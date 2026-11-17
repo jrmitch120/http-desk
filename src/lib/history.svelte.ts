@@ -18,8 +18,8 @@ export interface HistoryHost {
   toast(kind: "error", message: string): void;
 }
 
-/** An entry opened from a History view: its summary, and the pseudo tab its response shows under. */
-export type OpenedEntry = { entry: HistorySummary; tab: Tab };
+/** An entry opened from a History view: its summary, the pseudo tab its response shows under, and its source text (to restore). */
+export type OpenedEntry = { entry: HistorySummary; tab: Tab; source: string };
 
 /** What links a request's History entries to it: its file and `# @name`, else its file, method and URL. */
 export function historyLink(path: string, req: Request): HistoryLink {
@@ -87,7 +87,7 @@ export class HistoryStore {
       error: whole.sendError ?? undefined,
       cancelled: whole.cancelled || undefined,
     };
-    this.opened[tabId] = { entry, tab };
+    this.opened[tabId] = { entry, tab, source: whole.source };
   }
 
   /** Closes the entry tab `tabId` has open, releasing its copy of the response. */
