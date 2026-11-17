@@ -5,12 +5,14 @@
 // An opened entry shows read-only in a response viewer under a pseudo tab, its
 // response a copy with its own id, released when it's closed (ADR-0006). Compare
 // shows two responses side by side (an entry and the tab's current response, or two
-// entries); the entries it opens are released the same way when it closes.
+// entries); the entries it opens are released the same way when it closes. It also
+// turns the History switch (an app setting) on and off, and clears all History.
 import { api, errorMessage } from "./api";
+import { CANCEL, type DialogButton } from "./dialog";
 import { getDirective, uid } from "./http";
 import { newTabView } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
-import type { HistoryLink, HistorySummary, HttpResponse, Request } from "./types";
+import type { HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
 import type { CompareSide } from "./compare";
 
 /** What History's page state needs from the rest of the store. */
@@ -18,7 +20,12 @@ export interface HistoryHost {
   /** The response viewers' state by tab id, where an opened entry shows under a pseudo tab. */
   readonly runs: Record<string, RunState>;
   releaseResponse(response: HttpResponse | undefined): void;
-  toast(kind: "error", message: string): void;
+  toast(kind: "error" | "success", message: string): void;
+  choose(title: string, message: string, buttons: DialogButton[]): Promise<{ button: string }>;
+  /** History's settings; null until the settings have loaded. */
+  readonly settings: HistorySettings | null;
+  /** Applies and saves History's settings; false if they couldn't be saved. */
+  updateSettings(history: HistorySettings): Promise<boolean>;
 }
 
 /** An entry opened from a History view: its summary, the pseudo tab its response shows under, and its source text (to restore). */
@@ -68,6 +75,58 @@ export class HistoryStore {
   private shownIn = $state<Record<string, true>>({});
   /** The entry each editor tab has opened from its History view. */
   private opened = $state<Record<string, OpenedEntry>>({});
+
+  /** Whether sends are recorded: the History switch. On until the settings say otherwise. */
+  get enabled(): boolean {
+    return this.host.settings?.enabled !== false;
+  }
+
+  /**
+   * Turns the History switch on, or off once the user has said whether to also delete
+   * what's stored (Keep or Delete; Cancel leaves it on).
+   */
+  async setEnabled(on: boolean) {
+    const settings = this.host.settings;
+    if (!settings || settings.enabled === on) return;
+    if (on) {
+      await this.host.updateSettings({ ...settings, enabled: true });
+      return;
+    }
+    const r = await this.host.choose(
+      "Also delete existing history?",
+      "While History is off, nothing you send is recorded. The History already kept, for every workspace, can stay or be deleted.",
+      [CANCEL, { label: "Delete", value: "delete", role: "destructive", danger: true }, { label: "Keep", value: "keep", role: "primary" }],
+    );
+    if (r.button !== "keep" && r.button !== "delete") return;
+    const saved = await this.host.updateSettings({ ...settings, enabled: false });
+    if (saved && r.button === "delete") await this.deleteAll();
+  }
+
+  /** Deletes every workspace's History once the user confirms (Settings → Clear all history). */
+  async clearAll() {
+    const r = await this.host.choose(
+      "Clear all history?",
+      "Every History entry of every workspace is deleted from this computer. This can't be undone.",
+      [
+        { ...CANCEL, focus: true },
+        { label: "Clear all history", value: "clear", role: "primary", danger: true },
+      ],
+    );
+    if (r.button === "clear" && (await this.deleteAll())) this.host.toast("success", "History cleared");
+  }
+
+  /** Deletes every workspace's History, closing the entries tabs have open; false if it failed. */
+  private async deleteAll(): Promise<boolean> {
+    try {
+      await api.clearAllHistory();
+    } catch (e) {
+      this.host.toast("error", `Could not clear History: ${errorMessage(e)}`);
+      return false;
+    }
+    for (const tabId of Object.keys(this.opened)) this.close(tabId);
+    this.revision++;
+    return true;
+  }
 
   /** Notes that a send from a tab finished: it may have been recorded. */
   sent() {

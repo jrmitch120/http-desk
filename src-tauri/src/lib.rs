@@ -108,6 +108,24 @@ struct AppSettings {
     /// Per workspace: the Runner's options, as last set in its panel.
     #[serde(deserialize_with = "or_default")]
     runner_options: HashMap<String, RunnerOptions>,
+    /// History's settings (Settings → History), for every workspace.
+    #[serde(deserialize_with = "or_default")]
+    history: HistorySettings,
+}
+
+/// History's settings (see `AppSettings::history`); `history` in the settings file,
+/// `HistorySettings` in src/lib/types.ts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct HistorySettings {
+    /// The History switch: while off, no send is recorded. On by default.
+    enabled: bool,
+}
+
+impl Default for HistorySettings {
+    fn default() -> Self {
+        HistorySettings { enabled: true }
+    }
 }
 
 /// The Runner's options in one workspace (see `AppSettings::runner_options`). The
@@ -207,6 +225,7 @@ impl Default for AppSettings {
             env_matrix_widths: HashMap::new(),
             trusted_workspaces: Vec::new(),
             runner_options: HashMap::new(),
+            history: HistorySettings::default(),
         }
     }
 }
@@ -590,9 +609,9 @@ async fn preview_request<R: tauri::Runtime>(
 /// Sends one request from a tab the way every send goes (`send::send`, shared with
 /// runs), keeps its body for the viewer, and records it in History once it has
 /// finished, however it ended, if anything went out (the only send recorded: a
-/// Run's aren't). Unlike other commands, a failed send is a classified
-/// `{ kind, message, details }` object (see `ExecError`), so the viewer can explain
-/// it and offer the fix.
+/// Run's aren't), unless it's marked `# @no-log` or the History switch is off then.
+/// Unlike other commands, a failed send is a classified `{ kind, message, details }`
+/// object (see `ExecError`), so the viewer can explain it and offer the fix.
 // Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -633,7 +652,9 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
         Err(_) => None,
     };
-    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking)) {
+    let recording = state.settings.lock().unwrap().history.enabled;
+    if let Some(entry) = pending.filter(|_| recording).zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking))
+    {
         state.history.record(|| history_path(&app), entry);
     }
 
@@ -894,6 +915,20 @@ async fn open_history_entry<R: tauri::Runtime>(
         keep_body(&state, &Sent { response: response.clone(), body: body.clone() });
     }
     Ok(entry)
+}
+
+/// Where History is kept on disk, for Settings to show; null when the app has no
+/// config folder.
+#[tauri::command]
+fn history_location<R: tauri::Runtime>(app: AppHandle<R>) -> Option<PathBuf> {
+    history_path(&app)
+}
+
+/// Deletes every workspace's History (Settings → Clear all history, or turning
+/// History off with Delete). Entries open in a viewer stay until released.
+#[tauri::command]
+async fn clear_all_history<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> CmdResult<()> {
+    state.history.read(|| history_path(&app), |store| store.clear_all()).await
 }
 
 /// What Request variable `reference` (trimmed, without braces) of a request in
@@ -1407,6 +1442,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             open_exchange,
             list_history,
             open_history_entry,
+            clear_all_history,
+            history_location,
             request_variable,
             exchange_shape,
             session_cookies,

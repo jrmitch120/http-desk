@@ -28,6 +28,9 @@ use crate::vars::{Secrets, MASK};
 /// The store's file name in the config folder.
 pub const FILE_NAME: &str = "history.sqlite3";
 
+/// The directive (JetBrains `# @no-log`) of a request that is never recorded.
+const NO_LOG: &str = "no-log";
+
 /// The request headers whose values are always masked: they carry credentials.
 const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "proxy-authorization", "cookie"];
 
@@ -116,10 +119,14 @@ pub struct Pending {
 
 impl Pending {
     /// Starts recording the send of `out` from a tab in workspace `root`, now. `None`
-    /// with no workspace: History is kept per workspace.
+    /// with no workspace (History is kept per workspace), and for a request marked
+    /// `# @no-log`, which is never recorded (honoured like `# @no-cookie-jar`).
     pub fn begin(root: Option<&Path>, out: &Outgoing) -> Option<Pending> {
         let root = root?;
         let request = &out.request;
+        if request.directive(NO_LOG).is_some() {
+            return None;
+        }
         Some(Pending {
             workspace: root.to_path_buf(),
             file: out.file_path.as_deref().map(|f| relative(root, f)),
@@ -382,6 +389,21 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())), summary)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Deletes every entry of every workspace, and the space they took on disk, so
+    /// nothing of them can be read back from the file.
+    pub fn clear_all(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM entries", [])?;
+        self.compact()
+    }
+
+    /// Rewrites the file without the space deleted entries left, then empties the
+    /// journal (WAL) of what it still held of them.
+    fn compact(&self) -> Result<()> {
+        self.conn.execute_batch("VACUUM")?;
+        self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
     }
 
     /// Entry `id` of workspace `root`, whole; `None` if there's no such entry.

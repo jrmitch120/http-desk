@@ -154,6 +154,10 @@ export const api = {
    * whose body is kept until released, like any response's.
    */
   openHistoryEntry: (id: number) => invoke<HistoryEntry>("open_history_entry", { id }),
+  /** Deletes every workspace's History (entries open in a viewer stay until released). */
+  clearAllHistory: () => invoke<void>("clear_all_history"),
+  /** Where History is kept on disk; null when the app has no config folder. */
+  historyLocation: () => invoke<string | null>("history_location"),
   /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */
   requestVariable: (filePath: string, reference: string) => invoke<RequestVariableReading | null>("request_variable", { filePath, reference }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),

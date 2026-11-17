@@ -1,11 +1,13 @@
 <script lang="ts">
-  // Application settings: appearance, request defaults, TLS, response limits, Trusted workspaces.
+  // Application settings: appearance, request defaults, TLS, response limits, History, Trusted workspaces.
+  // A section can be a component of its own (HistorySettings): the styles below reach into it.
   import { open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
   import Banner from "./Banner.svelte";
+  import HistorySettings from "./HistorySettings.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
@@ -172,6 +174,8 @@
         </div>
       </section>
 
+      <HistorySettings />
+
       <section aria-labelledby="settings-trust">
         <h3 id="settings-trust">Trusted workspaces</h3>
         {#each settings.trustedWorkspaces ?? [] as path (path)}
@@ -198,45 +202,45 @@
   .body {
     padding: 6px 20px 16px;
   }
-  section {
+  .body :global(section) {
     padding: 12px 0 8px;
     border-bottom: 1px solid var(--border);
   }
-  section:last-child {
+  .body :global(section:last-child) {
     border-bottom: none;
   }
-  h3 {
+  .body :global(h3) {
     margin: 0 0 8px;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--muted);
   }
-  .setting {
+  .body :global(.setting) {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 7px 0;
     min-height: 40px;
   }
-  .setting.col {
+  .body :global(.setting.col) {
     flex-direction: column;
     align-items: stretch;
     gap: 6px;
   }
-  .label {
+  .body :global(.label) {
     flex: 1;
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
-  .label small {
+  .body :global(.label small) {
     font-size: 11.5px;
   }
-  .grow {
+  .body :global(.grow) {
     flex: 1;
   }
-  .note {
+  .body :global(.note) {
     margin: 4px 0 6px;
     font-size: 11.5px;
     line-height: 1.5;

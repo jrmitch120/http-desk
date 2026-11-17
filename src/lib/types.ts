@@ -598,6 +598,14 @@ export interface AppSettings {
   trustedWorkspaces: string[];
   /** Per workspace root: the Runner's options, as last set in its panel. */
   runnerOptions: Record<string, RunnerOptions>;
+  /** History's settings (Settings → History), for every workspace. */
+  history: HistorySettings;
+}
+
+/** History's settings (`HistorySettings` in src-tauri/src/lib.rs). */
+export interface HistorySettings {
+  /** The History switch: while off, no send is recorded. On by default. */
+  enabled: boolean;
 }
 
 /** The Runner's options in one workspace (`RunnerOptions` in src-tauri/src/lib.rs). */

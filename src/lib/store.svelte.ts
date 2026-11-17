@@ -158,7 +158,7 @@ export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
 export type PanelId = "session" | "runner";
 /** A section of the Settings modal that can be opened scrolled into view. */
-export type SettingsSection = "tls";
+export type SettingsSection = "tls" | "history";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -1510,6 +1510,11 @@ class AppStore {
       },
       releaseResponse: (response) => store.releaseResponse(response),
       toast: (kind, message) => store.toast(kind, message),
+      choose: (title, message, buttons) => store.choose(title, message, buttons),
+      get settings() {
+        return store.settings?.history ?? null;
+      },
+      updateSettings: (history) => store.updateSettings({ history }),
     };
   }
 
