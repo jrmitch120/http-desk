@@ -22,6 +22,7 @@ export type CommandId =
   | "save"
   | "save-all"
   | "close-tab"
+  | "reopen-tab"
   | "close-window"
   | "quit"
   | "settings"
@@ -175,6 +176,13 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, key: "w" },
     enabled: withTab,
     run: () => app.activeTabId && void app.closeTab(app.activeTabId),
+  },
+  {
+    id: "reopen-tab",
+    label: "Reopen Closed Tab",
+    shortcut: { mod: true, shift: true, key: "t" },
+    enabled: () => app.canReopenTab,
+    run: () => app.reopenClosedTab(),
   },
   {
     id: "close-window",
