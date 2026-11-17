@@ -17,7 +17,7 @@ use tokio::sync::Notify;
 
 use crate::exec::{ExecError, HttpResponse};
 use crate::send::{self, Outgoing, SendContext, Sent};
-use crate::vars::Secrets;
+use crate::vars::MaskedValues;
 
 pub mod export;
 mod report;
@@ -119,7 +119,7 @@ pub async fn run(
         }
         on_event(index, RunEvent::Sending);
         let scope = send::scope(root, ctx.environment.as_deref(), &ctx.session, &out);
-        let secrets = Secrets::new(scope.map(|s| s.secret_values()).unwrap_or_default());
+        let secrets = MaskedValues::new(scope.map(|s| s.secret_values()).unwrap_or_default());
         let result = tokio::select! {
             result = send::send(ctx, out, |_| {}) => result,
             _ = cancel.cancelled() => {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::exec::{ErrorKind, ExecError, HttpResponse};
 use crate::script::TestResult;
 use crate::send::Outgoing;
-use crate::vars::Secrets;
+use crate::vars::MaskedValues;
 
 /// One request of a Run, as an export shows it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ impl RequestReport {
     }
 
     /// It got `response`, and `failed` per [`super::failed`].
-    pub(crate) fn sent(&mut self, response: &HttpResponse, failed: bool, secrets: &Secrets) {
+    pub(crate) fn sent(&mut self, response: &HttpResponse, failed: bool, secrets: &MaskedValues) {
         self.method = response.request.method.clone();
         self.url = Some(secrets.mask(&response.request.url));
         self.status = Some(response.status);
@@ -122,7 +122,7 @@ impl RequestReport {
     }
 
     /// It got no response: `error` blocked it or the network failed.
-    pub(crate) fn failed(&mut self, error: &ExecError, secrets: &Secrets) {
+    pub(crate) fn failed(&mut self, error: &ExecError, secrets: &MaskedValues) {
         let reason = match error.kind() {
             ErrorKind::Dns
             | ErrorKind::Refused

@@ -677,20 +677,21 @@ fn convert_format(f: &str) -> String {
     out
 }
 
-/// The values a request was sent with that must never show (its Secrets'; in
-/// History, its prompt answers too), to mask wherever they would.
+/// Values a request was sent with that must never show, to mask wherever they
+/// would: its Secrets' values (a Run's export), and in History its prompt answers
+/// too. Not every masked value is a Secret.
 #[derive(Debug, Default, Clone)]
-pub struct Secrets(Vec<String>);
+pub struct MaskedValues(Vec<String>);
 
-impl Secrets {
+impl MaskedValues {
     pub fn new(mut values: Vec<String>) -> Self {
         values.retain(|v| !v.is_empty());
         // A longer value first, so one containing another is masked whole.
         values.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        Secrets(values)
+        MaskedValues(values)
     }
 
-    /// `text` with each Secret value in it replaced by [`MASK`], also where it's
+    /// `text` with each of the values in it replaced by [`MASK`], also where it's
     /// percent-encoded, wholly or in part, as in a URL (`+` for a space, too).
     pub fn mask(&self, text: &str) -> String {
         let mut out = text.to_string();
