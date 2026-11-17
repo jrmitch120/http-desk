@@ -26,6 +26,7 @@ mod confine;
 mod copying;
 mod deleting;
 mod json_docs;
+mod layout;
 mod menu;
 mod opening;
 mod paths;
@@ -277,14 +278,18 @@ impl AppState {
 #[cfg(test)]
 struct ConfigDir(PathBuf);
 
-/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs).
-fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+/// The folder for everything the app keeps (settings, Layouts): the test's
+/// `ConfigDir`, else `HTTPDESK_CONFIG_DIR` (portable installs), else the OS's.
+fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(dir) = app.try_state::<ConfigDir>() {
-        return Some(dir.0.join("settings.json"));
+        return Some(dir.0.clone());
     }
-    let dir = config_dir_override().or_else(|| app.path().app_config_dir().ok())?;
-    Some(dir.join("settings.json"))
+    config_dir_override().or_else(|| app.path().app_config_dir().ok())
+}
+
+fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    Some(config_dir(app)?.join("settings.json"))
 }
 
 /// The config folder `HTTPDESK_CONFIG_DIR` sets, if any.
@@ -1357,6 +1362,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             openapi_generate,
             menu::set_menu,
             menu::set_menu_state,
+            layout::load_layout,
+            layout::save_layout,
         ])
 }
 
