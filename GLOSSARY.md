@@ -55,7 +55,7 @@ _Avoid_: call, transaction
 
 **History**:
 The Exchanges HttpDesk has recorded for a workspace, newest first, kept on disk outside the workspace so they are never committed or shared.
-Only sends the user makes from a tab are recorded; a Run's sends and requests marked `# @no-log` are not. One item is a **History entry**.
+Only sends the user makes from a tab are recorded; a Run's sends and requests marked `# @no-log` are not, and nothing is while the **History switch** (one app setting, on by default) is off. One item is a **History entry**.
 _Avoid_: log, request log
 
 **Session**:

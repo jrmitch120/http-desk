@@ -432,6 +432,7 @@ let settings = {
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
   trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
   runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
+  history: { enabled: true },
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -838,11 +839,19 @@ function requestText(r: any): string {
   return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
 }
 
-/** Like the shell's `send_request`: sends, then records the send in History if anything went out. */
+/** Where the mock says History is kept (`history_location`). */
+const MOCK_HISTORY_LOCATION = "/Users/me/Library/Application Support/io.github.jrmitch120.httpdesk/history.sqlite3";
+
+/**
+ * Like the shell's `send_request`: sends, then records the send in History if anything
+ * went out, unless the request is marked `# @no-log` or the History switch is off then.
+ */
 async function sendFromTab(args: any): Promise<HttpResponse> {
   const r = args.request;
   const started = performance.now();
+  const noLog = r.directives.some((d: { name: string }) => d.name.toLowerCase() === "no-log");
   const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled">) => {
+    if (noLog || !settings.history?.enabled) return;
     const response = outcome.response;
     historyEntries.push({
       id: ++historyIds, workspace: ROOT, time: new Date().toISOString(),
@@ -1659,6 +1668,12 @@ mockIPC(
         return listHistory(args.query);
       case "open_history_entry":
         return openHistoryEntry(args.id);
+      case "clear_all_history":
+        historyEntries.length = 0;
+        sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+        return null;
+      case "history_location":
+        return MOCK_HISTORY_LOCATION;
       case "run_requests": {
         // Like the shell: each request through the send flow, reported as `run-progress`.
         const { runId, selection, options } = args;

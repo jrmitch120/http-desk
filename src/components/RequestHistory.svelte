@@ -2,6 +2,7 @@
   The request's History view in the response pane: the entries of the tab's request
   (by file and `# @name`, else file, method and URL), newest first, listed again after
   each send. Opening one shows it read-only in the response viewer (ResponseViewer).
+  While the History switch is off it says so instead (HistoryOff).
 -->
 <script lang="ts">
   import { untrack } from "svelte";
@@ -10,6 +11,7 @@
   import { historyLink } from "../lib/history.svelte";
   import type { HistorySummary } from "../lib/types";
   import HistoryList from "./HistoryList.svelte";
+  import HistoryOff from "./HistoryOff.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -23,7 +25,7 @@
     void linkKey;
     void app.history.revision;
     const request = untrack(() => link && { ...link });
-    if (!request) return;
+    if (!request || !app.history.enabled) return;
     let current = true;
     api
       .listHistory({ request })
@@ -33,7 +35,9 @@
   });
 </script>
 
-{#if entries?.length === 0}
+{#if !app.history.enabled}
+  <HistoryOff />
+{:else if entries?.length === 0}
   <div class="empty-state small">No History for this request yet</div>
 {:else if entries}
   <HistoryList {entries} onopen={(e) => app.history.open(tab.id, e)} />
