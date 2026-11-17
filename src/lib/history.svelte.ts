@@ -2,7 +2,7 @@
 // send from a tab and keeps the entries; the page keeps what follows from them: a
 // revision that goes up after each send (so History views list again), whether each
 // tab's response pane shows its request's History, and the entry each History view
-// (a tab's, or the sidebar's: `WORKSPACE_HISTORY`) has opened.
+// (`HistoryViewId`: a tab's, or the sidebar's) has opened.
 // An opened entry shows read-only in a response viewer under a pseudo tab, its
 // response a copy with its own id, released when it's closed (ADR-0006). Compare
 // shows two responses side by side (an entry and the tab's current response, or two
@@ -12,9 +12,9 @@
 import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
 import { getDirective, uid } from "./http";
-import { newTabView } from "./tabView";
+import { newTab } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
-import type { HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
+import type { HistoryEntry, HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
 import type { CompareSide } from "./compare";
 
 /** What History's page state needs from the rest of the store. */
@@ -34,10 +34,16 @@ export interface HistoryHost {
 export type OpenedEntry = { entry: HistorySummary; tab: Tab; source: string };
 
 /**
- * The sidebar's History view (the whole workspace's), where an editor tab's id names
- * a request's: `open`/`openedIn`/`close` with it for the entry opened from the sidebar.
+ * A History view, which can have one entry open: an editor tab's (its request's
+ * History, in its response pane) or the sidebar's (the whole workspace's).
  */
+export type HistoryViewId = { tab: string } | typeof WORKSPACE_HISTORY;
+
+/** The sidebar's History view (the whole workspace's). */
 export const WORKSPACE_HISTORY = "workspace";
+
+/** What `opened` keeps a view's entry under: no tab id can be the sidebar's. */
+const viewKey = (view: HistoryViewId) => (view === WORKSPACE_HISTORY ? view : `tab:${view.tab}`);
 
 /** How many entries a History view lists at a time; scrolling to the end lists the next. */
 export const HISTORY_PAGE = 50;
@@ -48,16 +54,38 @@ export const HISTORY_RETENTION = { maxPerRequest: 50, maxAgeDays: 30, maxSizeMb:
 /** Retention's limits, for every workspace (`HistorySettings` without the switch). */
 export type HistoryRetention = Omit<HistorySettings, "enabled">;
 
+const BODY_CAP_MB = 10;
+
 /** The most of a body a History entry keeps (core `history::BODY_CAP`): 10 MB. */
-export const HISTORY_BODY_CAP = 10 * 1024 * 1024;
+export const HISTORY_BODY_CAP = BODY_CAP_MB * 1024 * 1024;
+
+/** History's body cap as the UI says it: "10 MB". */
+export const HISTORY_BODY_CAP_TEXT = `${BODY_CAP_MB} MB`;
 
 /** What the viewer says of a body History cut off at its cap. */
-export const TRUNCATED_AT_CAP = "Truncated at 10 MB";
+export const TRUNCATED_AT_CAP = `Truncated at ${HISTORY_BODY_CAP_TEXT}`;
 
 /** What links a request's History entries to it: its file and `# @name`, else its file, method and URL. */
 export function historyLink(path: string, req: Request): HistoryLink {
   return { filePath: path, name: getDirective(req, "name")?.trim() || null, method: req.method, url: req.url };
 }
+
+/**
+ * What a link's request is known by (as the core's `history::REQUEST`): its file and
+ * `# @name`, else its file, method and URL. Two links with the same key are of the
+ * same request; a named request's URL can change under it.
+ */
+export function historyLinkKey(link: HistoryLink): string {
+  return JSON.stringify(link.name ? [link.filePath, link.name] : [link.filePath, null, link.method, link.url]);
+}
+
+/**
+ * Whether entries `a` and `b` (of one workspace) were sent from the same request, as
+ * far as their summaries say: the same file and `# @name`, or for an unnamed request
+ * the same method and URL as sent.
+ */
+const sameRequest = (a: HistorySummary, b: HistorySummary) =>
+  a.file === b.file && a.name === b.name && (a.name !== null || (a.method === b.method && a.url === b.url));
 
 /** When an entry was sent (RFC 3339): the time of day today, else the date and time. */
 export function sentAt(time: string, now = new Date()): string {
@@ -73,12 +101,28 @@ export type Comparison = { id: string; a: CompareSide; b: CompareSide };
 
 /**
  * What Compare on `entries[i]` (a History list, newest first) compares it with: the
- * tab's `current` response, else the next newer entry. Nothing for the newest entry
- * of a tab with no response.
+ * tab's `current` response, unless it came from History (it's then an entry's, maybe
+ * this one's); else the next newer entry of the same request: the one just above in a
+ * request's list, the nearest above of its request in a list that `mixes` requests
+ * (the sidebar's). Nothing for its request's newest entry with no current response.
  */
-export function compareTarget(entries: HistorySummary[], i: number, current: HttpResponse | undefined): CompareTarget | undefined {
-  if (current) return { response: current };
-  return i > 0 ? { entry: entries[i - 1] } : undefined;
+export function compareTarget(entries: HistorySummary[], i: number, current?: RunState, mixes = false): CompareTarget | undefined {
+  if (current?.response && !current.fromHistory) return { response: current.response };
+  for (let j = i - 1; j >= 0; j--) if (!mixes || sameRequest(entries[j], entries[i])) return { entry: entries[j] };
+  return undefined;
+}
+
+/** A tab's response state showing History entry `whole`, opened (no `runId`). */
+function runOf(whole: HistoryEntry, fromHistory?: string): Omit<RunState, "runId"> {
+  return {
+    loading: false,
+    startedAt: 0,
+    response: whole.response ?? undefined,
+    error: whole.sendError ?? undefined,
+    cancelled: whole.cancelled || undefined,
+    bodyKept: whole.bodyKept,
+    fromHistory,
+  };
 }
 
 export class HistoryStore {
@@ -98,7 +142,7 @@ export class HistoryStore {
 
   /** The editor tabs whose response pane shows their request's History. */
   private shownIn = $state<Record<string, true>>({});
-  /** The entry each History view has opened: an editor tab's, by its id, and the sidebar's, by `WORKSPACE_HISTORY`. */
+  /** The entry each History view has opened, by `viewKey`. */
   private opened = $state<Record<string, OpenedEntry>>({});
 
   /** Whether sends are recorded: the History switch. On until the settings say otherwise. */
@@ -214,7 +258,7 @@ export class HistoryStore {
 
   /** Closes the opened entries, and the comparison, of the entries `deleted` says were deleted. */
   private closeWhere(deleted: (id: number) => boolean) {
-    for (const [viewId, opened] of Object.entries(this.opened)) if (deleted(opened.entry.id)) this.close(viewId);
+    for (const [key, opened] of Object.entries(this.opened)) if (deleted(opened.entry.id)) this.closeKey(key);
     if (this.compared.some(deleted)) this.closeComparison();
   }
 
@@ -231,20 +275,20 @@ export class HistoryStore {
   /** Shows or hides tab `tabId`'s History view; hiding it closes the entry it opened. */
   toggle(tabId: string) {
     if (this.shownIn[tabId]) {
-      this.close(tabId);
+      this.close({ tab: tabId });
       delete this.shownIn[tabId];
     } else {
       this.shownIn[tabId] = true;
     }
   }
 
-  /** The entry tab `tabId` has opened, if any. */
-  openedIn(tabId: string): OpenedEntry | undefined {
-    return this.opened[tabId];
+  /** The entry History view `view` has opened, if any. */
+  openedIn(view: HistoryViewId): OpenedEntry | undefined {
+    return this.opened[viewKey(view)];
   }
 
-  /** Opens `entry` read-only in tab `tabId`'s History view, in place of the one it had open. */
-  async open(tabId: string, entry: HistorySummary) {
+  /** Opens `entry` read-only in History view `view`, in place of the one it had open. */
+  async open(view: HistoryViewId, entry: HistorySummary) {
     let whole;
     try {
       whole = await api.openHistoryEntry(entry.id);
@@ -252,18 +296,10 @@ export class HistoryStore {
       this.host.toast("error", errorMessage(e));
       return;
     }
-    this.close(tabId);
-    const tab: Tab = { id: `history:${uid()}`, path: "", key: "", ...newTabView() };
-    this.host.runs[tab.id] = {
-      runId: uid(),
-      loading: false,
-      startedAt: 0,
-      response: whole.response ?? undefined,
-      error: whole.sendError ?? undefined,
-      cancelled: whole.cancelled || undefined,
-      bodyKept: whole.bodyKept,
-    };
-    this.opened[tabId] = { entry, tab, source: whole.source };
+    this.close(view);
+    const tab: Tab = { ...newTab("", ""), id: `history:${uid()}` };
+    this.host.runs[tab.id] = { runId: uid(), ...runOf(whole) };
+    this.opened[viewKey(view)] = { entry, tab, source: whole.source };
   }
 
   /**
@@ -278,40 +314,35 @@ export class HistoryStore {
     try {
       const [entry] = await api.listHistory({ request: historyLink(path, req), offset: 0, limit: 1 });
       if (!entry) return null;
-      const whole = await api.openHistoryEntry(entry.id);
-      return {
-        loading: false,
-        startedAt: 0,
-        response: whole.response ?? undefined,
-        error: whole.sendError ?? undefined,
-        cancelled: whole.cancelled || undefined,
-        bodyKept: whole.bodyKept,
-        fromHistory: entry.time,
-      };
+      return runOf(await api.openHistoryEntry(entry.id), entry.time);
     } catch {
       // A tab comes back without a response rather than with an error about History.
       return null;
     }
   }
 
-  /** Closes the entry tab `tabId` has open, releasing its copy of the response. */
-  close(tabId: string) {
-    const opened = this.opened[tabId];
+  /** Closes the entry History view `view` has open, releasing its copy of the response. */
+  close(view: HistoryViewId) {
+    this.closeKey(viewKey(view));
+  }
+
+  private closeKey(key: string) {
+    const opened = this.opened[key];
     if (!opened) return;
-    delete this.opened[tabId];
+    delete this.opened[key];
     this.host.releaseResponse(this.host.runs[opened.tab.id]?.response);
     delete this.host.runs[opened.tab.id];
   }
 
   /** Forgets tab `tabId` (it closed): its History view and the entry it opened. */
   forget(tabId: string) {
-    this.close(tabId);
+    this.close({ tab: tabId });
     delete this.shownIn[tabId];
   }
 
   /** Forgets every tab's History view, for another workspace. */
   reset() {
-    for (const tabId of Object.keys(this.opened)) this.close(tabId);
+    for (const key of Object.keys(this.opened)) this.closeKey(key);
     this.shownIn = {};
     this.closeComparison();
   }
@@ -321,6 +352,7 @@ export class HistoryStore {
    * and the current response on the right. The entries open as responses of their own.
    */
   async compare(entry: HistorySummary, against: CompareTarget) {
+    if ("entry" in against && against.entry.id === entry.id) return;
     const run = ++this.compareRun;
     const entries = "entry" in against ? [entry, against.entry].sort((x, y) => x.time.localeCompare(y.time) || x.id - y.id) : [entry];
     const results = await Promise.allSettled(entries.map((e) => api.openHistoryEntry(e.id)));

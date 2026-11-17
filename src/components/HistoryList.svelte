@@ -6,9 +6,8 @@
   sidebar, `narrow` (two lines a row).
 
   With `onselect`, each row has a box to select it (for Compare); with `onmenu`, a
-  context menu; with `ondelete`, Delete (or Backspace) on a row deletes it. Other row actions go in the `start` and `end` snippets, rendered
-  beside each row's open button (not inside it). `footer` ends the list
-  (HistoryView's "Show more").
+  context menu; with `ondelete`, Delete (or Backspace) on a row deletes it. `footer`
+  ends the list (HistoryView's "Show more").
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
@@ -35,15 +34,11 @@
     onmenu?: (event: MouseEvent, entry: HistorySummary, index: number) => void;
     /** Deletes the entry (Delete or Backspace on its row). */
     ondelete?: (entry: HistorySummary) => void;
-    /** Controls before an entry's row. */
-    start?: Snippet<[HistorySummary]>;
-    /** Controls after an entry's row. */
-    end?: Snippet<[HistorySummary]>;
     /** After the last row. */
     footer?: Snippet;
   }
 
-  let { entries, onopen, file = false, narrow = false, current = null, selected = [], onselect, onmenu, ondelete, start, end, footer }: Props = $props();
+  let { entries, onopen, file = false, narrow = false, current = null, selected = [], onselect, onmenu, ondelete, footer }: Props = $props();
 
   function onRowKey(event: KeyboardEvent, entry: HistorySummary) {
     if (!ondelete || (event.key !== "Delete" && event.key !== "Backspace") || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -74,7 +69,6 @@
       {#if onselect}
         <Checkbox class="select" checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
       {/if}
-      {@render start?.(e)}
       <button class="row" aria-current={e.id === current || undefined} onclick={() => onopen(e)} oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))} onkeydown={(ev) => onRowKey(ev, e)}>
         {#if narrow}
           <span class="line">
@@ -97,7 +91,6 @@
           {@render metrics(e)}
         {/if}
       </button>
-      {@render end?.(e)}
     </li>
   {/each}
   {#if footer}<li class="footer" role="none">{@render footer()}</li>{/if}

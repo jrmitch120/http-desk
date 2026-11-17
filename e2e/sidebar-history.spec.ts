@@ -3,7 +3,7 @@
 // request's file. It filters by status class and text, pages through long lists, and
 // opens an entry read-only in the response viewer.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, searchBox, seedHistory, treeItem, treeMenu } from "./helpers";
+import { activeTab, dialog, mockState, openApp, openRequest, searchBox, seedHistory, setMockResponse, tab, treeItem, treeMenu, urlBar } from "./helpers";
 
 const status = (page: Page) => page.locator(".statusbar").first();
 const sidebarView = (page: Page) => page.getByRole("radiogroup", { name: "Sidebar" });
@@ -173,4 +173,54 @@ test("a long History lists a page at a time, the next as the list scrolls to its
   await expect(entries(page)).toHaveCount(121);
   await expect(urls(page).last()).toHaveText("https://api.test/pets/1");
   await expect(showMore).toHaveCount(0);
+});
+
+test("Restore request from an entry opened in the sidebar brings its request back into its tab as unsaved edits", async ({ page }) => {
+  // Create pet is `# @name createPet`: its entry finds it in its file after a URL edit.
+  await openApp(page, "?chain=1");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await send(page);
+  await urlBar(page).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("/v2");
+  await page.keyboard.press("Meta+S");
+  await expect(activeTab(page).locator(".dot")).toHaveCount(0);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await showHistory(page);
+
+  await entries(page).first().getByRole("button").click();
+  await dialog(page, "History entry").getByRole("button", { name: "Restore request" }).click();
+
+  await expect(dialog(page, "History entry")).toHaveCount(0);
+  await expect(activeTab(page)).toContainText("Create pet");
+  await expect(tab(page, "Create pet")).toHaveCount(1);
+  await expect(activeTab(page).locator(".dot")).toBeVisible();
+  await expect(urlBar(page)).toHaveText("{{baseUrl}}/pets");
+});
+
+test("the sidebar's History compares an entry with the next newer one of its request, and two selected entries", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await setMockResponse(page, "petsChanged");
+  await send(page);
+  await openRequest(page, ["samples", "jetbrains.http"], "Multi-line query");
+  await setMockResponse(page, null);
+  await send(page);
+  await showHistory(page);
+  await expect(entries(page)).toHaveCount(3);
+  const compare = dialog(page, "Compare");
+  const listPetsNewer = await entries(page).nth(1).locator(".metric").first().textContent();
+
+  // The oldest entry's next newer one of the same request, not the newest in the list.
+  await entries(page).nth(2).getByRole("button").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Compare with the next newer entry/ }).click();
+  await expect(compare).toContainText(`vs. ${listPetsNewer}`);
+  await expect(compare.locator(".cm-merge-b .cm-changedLine")).toContainText(['"name": "Max"']);
+  await compare.getByRole("button", { name: "Close" }).click();
+
+  await entries(page).nth(0).getByRole("checkbox").click();
+  await entries(page).nth(1).getByRole("checkbox").click();
+  await history(page).getByRole("button", { name: "Compare selected" }).click();
+  await expect(compare.locator(".cm-merge-a .cm-changedLine")).toContainText(['"name": "Max"']);
 });

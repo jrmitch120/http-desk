@@ -20,7 +20,7 @@ import { SHARED } from "./vars";
 import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
 import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
-import { HistoryStore, type HistoryHost } from "./history.svelte";
+import { HistoryStore, historyLink, historyLinkKey, type HistoryHost } from "./history.svelte";
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
@@ -981,8 +981,10 @@ class AppStore {
   /**
    * Restore request: a History entry's source text (the request as written at send
    * time, `{{variables}}` and all) replaces request `key` of `path` as unsaved edits,
-   * and its tab shows. A request no longer in the file (or no `key`) comes back as a
-   * new unsaved request at its end. Nothing is written until the file is saved.
+   * and its tab shows. With no `key` (from the sidebar's History), it replaces the
+   * request of the file the entry links to (`historyLinkKey`: by `# @name`, else method
+   * and URL as written). A request no longer in the file comes back as a new unsaved
+   * request at its end. Nothing is written until the file is saved.
    */
   async restoreRequest(path: string, key: string | null, source: string) {
     let restored: Request | null;
@@ -995,8 +997,9 @@ class AppStore {
     if (!restored) return this.toast("error", "This History entry has no request to restore");
     const doc = await this.loadDoc(path);
     if (!doc) return;
-    const at = doc.file.requests.findIndex((r) => r._key === key);
-    const req: Request = { ...restored, leading: "", _key: at >= 0 ? key! : uid() };
+    const linked = historyLinkKey(historyLink(path, restored));
+    const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(historyLink(path, r)) === linked : r._key === key));
+    const req: Request = { ...restored, leading: "", _key: at >= 0 ? doc.file.requests[at]._key! : uid() };
     if (at >= 0) {
       // Text that preceded the request in its file stays as it is.
       doc.file.requests[at] = { ...req, leading: doc.file.requests[at].leading };

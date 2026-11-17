@@ -98,6 +98,29 @@ test("two selected entries can be compared", async ({ page }) => {
   await expect(changed(page, "b")).toContainText(['"name": "Max"']);
 });
 
+test("a response from History isn't the current response: Compare uses the next newer entry, never the entry itself", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await send(page, "petsChanged");
+  // Reopened, the tab shows the newest entry's response, from History.
+  await page.keyboard.press("Meta+W");
+  await page.keyboard.press("Meta+Shift+T");
+  await expect(page.locator(".statusbar").getByText(/^from History, /)).toBeVisible();
+  await historyButton(page).click();
+  await expect(entries(page)).toHaveCount(2);
+  const newer = await entries(page).nth(0).locator(".metric").first().textContent();
+
+  // The newest entry is the response shown: there's nothing to compare it with.
+  await entries(page).nth(0).getByRole("button").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: /^Compare/ })).toBeDisabled();
+  await page.keyboard.press("Escape");
+
+  await compareFromMenu(page, 1, /^Compare with the next newer entry/);
+  await expect(compare(page)).toContainText(`vs. ${newer}`);
+  await expect(changed(page, "b")).toContainText(['"name": "Max"']);
+});
+
 test("JSON with the same content in a different key order and spacing shows no difference", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
