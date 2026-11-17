@@ -12,4 +12,4 @@ ARCHITECTURE §9 put scripting, chaining, assertions and cookies out of scope. W
 
 - An unsent request behind a Request variable blocks the send instead of sending it on its own, and the user chooses to send it. Neither editor auto-sends a dependency.
 - Scripts come from files other people wrote, so they run sandboxed, with time and memory limits, and only in a workspace the user has trusted. Trust is stored in app settings, never in the workspace.
-- The Session (latest exchanges, Global variables, cookies) is kept in memory only. Both editors keep cookies on disk; we don't, until session restore (#40) settles how credentials are stored at rest.
+- The Session (latest exchanges, Global variables, cookies) is kept in memory only. Both editors keep cookies on disk; we don't. ADR 0009 settles how credentials are stored at rest: History goes on disk with request credentials masked, and the Session stays in memory.
