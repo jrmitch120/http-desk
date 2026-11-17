@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, ExchangeShape, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { basename, newRequest } from "./http";
 
@@ -45,6 +45,7 @@ const api = vi.hoisted(() => ({
   removeNamedExchange: vi.fn(),
   clearNamedExchanges: vi.fn(),
   openExchange: vi.fn(),
+  openHistoryEntry: vi.fn(),
   requestVariable: vi.fn(),
 }));
 const {
@@ -492,6 +493,63 @@ describe("cancelling a request", () => {
 
     expect(app.runs[tab.id]).toMatchObject({ loading: false, cancelled: true, response: previous });
     expect(app.runs[tab.id].error).toBeUndefined();
+  });
+});
+
+describe("comparing History entries", () => {
+  const released = () => api.releaseResponse.mock.calls.map(([id]) => id);
+  const summary = (id: number, time: string) => ({ id, time }) as HistorySummary;
+  const opening = (id: string) => ({ response: { id, status: 200 }, sendError: null, cancelled: false }) as unknown as HistoryEntry;
+
+  it("puts the older of two entries on the left, and closing releases both entries but not the tab's response", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    await app.send(tab.id);
+    api.openHistoryEntry.mockImplementation(async (id: number) => opening(`h${id}`));
+
+    await app.history.compare(summary(2, "2026-11-16T10:00:02Z"), { entry: summary(1, "2026-11-16T10:00:01Z") });
+    expect(app.history.comparison?.a.response?.id).toBe("h1");
+    expect(app.history.comparison?.b.response?.id).toBe("h2");
+
+    app.history.closeComparison();
+    expect(app.history.comparison).toBeNull();
+    expect(released().sort()).toEqual(["h1", "h2"]);
+  });
+
+  it("an entry compared with the current response leaves that response with its tab", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    await app.send(tab.id);
+    api.openHistoryEntry.mockResolvedValueOnce(opening("h1"));
+
+    await app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { response: app.runs[tab.id].response! });
+    expect(app.history.comparison?.b.label).toBe("current response");
+    app.history.closeComparison();
+
+    expect(released()).toEqual(["h1"]);
+    expect(app.runs[tab.id].response?.id).toBe("r1");
+  });
+
+  it("when one entry can't be opened, the other is released and the reason shown", async () => {
+    api.openHistoryEntry.mockResolvedValueOnce(opening("h1")).mockRejectedValueOnce("This History entry no longer exists");
+
+    await app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { entry: summary(2, "2026-11-16T10:00:02Z") });
+
+    expect(app.history.comparison).toBeNull();
+    expect(released()).toEqual(["h1"]);
+    expect(app.toasts.map((t) => t.message)).toContain("This History entry no longer exists");
+  });
+
+  it("entries that open after the Compare view closed are released", async () => {
+    let resolve!: (e: HistoryEntry) => void;
+    api.openHistoryEntry.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const comparing = app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { response: { id: "r9" } as HttpResponse });
+    app.history.closeComparison();
+
+    resolve(opening("late"));
+    await comparing;
+    expect(app.history.comparison).toBeNull();
+    expect(released()).toEqual(["late"]);
   });
 });
 

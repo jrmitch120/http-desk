@@ -65,8 +65,9 @@ export type RunSummary = { cancelled: boolean; requests: RunRequestReport[] };
 /** The formats a run's results export as. */
 export type RunExportFormat = "junit" | "json";
 
-/** Which form of a stored response body `api.responseBody` fetches. */
-export type BodyFetchView = "raw" | "pretty" | "bytes";
+/** Which form of a stored response body `api.responseBody` fetches. `compare`: the text
+ *  Compare diffs (JSON laid out with its keys sorted, XML as Pretty, else Raw). */
+export type BodyFetchView = "raw" | "pretty" | "bytes" | "compare";
 
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),

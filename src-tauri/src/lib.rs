@@ -1108,6 +1108,9 @@ enum BodyFetchView {
     Pretty,
     /// The body's bytes exactly as stored (after Content-Encoding is undone).
     Bytes,
+    /// The text Compare diffs (`body_format::compare_text`): JSON laid out with
+    /// its keys sorted, XML as Pretty, anything else as Raw.
+    Compare,
 }
 
 /// A kept body for the viewer, by response id, as raw bytes (an
@@ -1132,6 +1135,7 @@ async fn response_body<R: tauri::Runtime>(
                 .ok_or("Response body isn't JSON or XML")?
                 .into_bytes(),
             BodyFetchView::Bytes => body.bytes.to_vec(),
+            BodyFetchView::Compare => body_format::compare_text(body.content_type.as_deref(), &text()?).into_bytes(),
         };
         Ok(tauri::ipc::Response::new(bytes))
     })
