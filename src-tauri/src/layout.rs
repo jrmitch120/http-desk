@@ -1,7 +1,8 @@
 //! Each workspace's Layout (GLOSSARY): how the user left it, saved by the
 //! frontend once changes settle and loaded when the workspace opens. One small
 //! JSON document per workspace in `<config>/layouts/`, named after a hash of
-//! the workspace's canonical path; never inside the workspace (ADR-0009).
+//! the workspace's canonical path; never inside the workspace (spec #40,
+//! "What's on disk": nothing is written inside the workspace).
 //!
 //! The shell doesn't read the Layout: the frontend owns its shape and checks it
 //! when it loads one. A missing or damaged file loads as no Layout.
