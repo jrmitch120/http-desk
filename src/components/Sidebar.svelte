@@ -159,7 +159,7 @@
   <div class="head">
     <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
     {#if app.sidebarView === "explorer"}
-      <!-- Beside the switch when they fit, else on a row of their own. -->
+      <!-- Beside the switch: they fit there at the default width (280 px) and wider. -->
       <div class="actions">
         <button class="icon-btn" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
         <button class="icon-btn" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
@@ -288,16 +288,20 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 8px;
-    padding: 8px 8px 4px 10px;
+    gap: 4px 6px;
+    padding: 8px 6px 4px 8px;
   }
   .views {
     flex: none;
   }
   .actions {
     display: flex;
-    gap: 1px;
     margin-left: auto;
+  }
+  /* A notch smaller than a toolbar's, so all five fit beside the view switch. */
+  .actions .icon-btn {
+    width: 22px;
+    height: 22px;
   }
   .search {
     margin: 4px 10px 8px;

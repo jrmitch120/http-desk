@@ -24,6 +24,7 @@
   import HistoryList from "./HistoryList.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import FilterField from "./FilterField.svelte";
+  import Select from "./Select.svelte";
 
   interface Props {
     /** The view: the sidebar's (`WORKSPACE_HISTORY`), listing every entry in the workspace, or a tab's. */
@@ -36,7 +37,7 @@
     empty: string;
     /** Shows each entry's file. */
     file?: boolean;
-    /** Two lines a row, and the filters stacked, for a narrow pane. */
+    /** Two lines a row, and the status classes a dropdown, for a narrow pane (the sidebar). */
     narrow?: boolean;
   }
 
@@ -154,9 +155,14 @@
 
 <div class="history-view" class:narrow>
   <div class="filters">
-    <SegmentedControl label="Status class" options={STATUSES} value={status} onchange={(s) => (status = s)} />
+    {#if narrow}
+      <!-- Six classes side by side don't fit a narrow pane: a dropdown there. -->
+      <Select size="sm" class="status" label="Status class" options={STATUSES.map((o) => (o.value === "all" ? { ...o, label: "All statuses" } : o))} value={status} onchange={(s) => (status = s)} />
+    {:else}
+      <SegmentedControl label="Status class" options={STATUSES} value={status} onchange={(s) => (status = s)} />
+    {/if}
     <div class="text">
-      <FilterField label="Filter History" placeholder="Filter by URL, method, file or name" value={typed} oninput={onTextInput} />
+      <FilterField label="Filter History" placeholder={narrow ? "Filter by URL, file…" : "Filter by URL, method, file or name"} value={typed} oninput={onTextInput} />
       {#if workspace}
         <button class="icon-btn" aria-label="Clear workspace history" use:tooltip={"Clear workspace history: delete every entry of this workspace"} disabled={entries?.length === 0 && !filtered} onclick={() => app.history.clearWorkspace()}><Icon name="trash" /></button>
       {/if}
@@ -197,8 +203,8 @@
     flex: none;
   }
   .narrow .filters {
-    flex-direction: column;
-    align-items: stretch;
+    flex-wrap: nowrap;
+    gap: 6px;
     padding: 2px 10px 6px;
   }
   .text {
@@ -207,6 +213,12 @@
     gap: 4px;
     flex: 1;
     min-width: 160px;
+  }
+  .narrow .text {
+    min-width: 0;
+  }
+  .narrow :global(.status) {
+    flex: none;
   }
   .small {
     font-size: 12px;
