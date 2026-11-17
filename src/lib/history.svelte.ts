@@ -7,7 +7,8 @@
 // response a copy with its own id, released when it's closed (ADR-0006). Compare
 // shows two responses side by side (an entry and the tab's current response, or two
 // entries); the entries it opens are released the same way when it closes. It also
-// turns the History switch (an app setting) on and off, and clears all History.
+// turns the History switch (an app setting) on and off, deletes an entry, and clears
+// the workspace's or all History, closing the opened entries that go with them.
 import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
 import { getDirective, uid } from "./http";
@@ -40,6 +41,18 @@ export const WORKSPACE_HISTORY = "workspace";
 
 /** How many entries a History view lists at a time; scrolling to the end lists the next. */
 export const HISTORY_PAGE = 50;
+
+/** Retention's defaults (Settings → History), for every workspace; the shell's are in src-tauri/src/lib.rs. */
+export const HISTORY_RETENTION = { maxPerRequest: 50, maxAgeDays: 30, maxSizeMb: 200 } as const;
+
+/** Retention's limits, for every workspace (`HistorySettings` without the switch). */
+export type HistoryRetention = Omit<HistorySettings, "enabled">;
+
+/** The most of a body a History entry keeps (core `history::BODY_CAP`): 10 MB. */
+export const HISTORY_BODY_CAP = 10 * 1024 * 1024;
+
+/** What the viewer says of a body History cut off at its cap. */
+export const TRUNCATED_AT_CAP = "Truncated at 10 MB";
 
 /** What links a request's History entries to it: its file and `# @name`, else its file, method and URL. */
 export function historyLink(path: string, req: Request): HistoryLink {
@@ -75,6 +88,8 @@ export class HistoryStore {
   comparison = $state<Comparison | null>(null);
   /** The entries' responses opened for the comparison, released when it closes (ADR-0006). */
   private comparing: HttpResponse[] = [];
+  /** The ids of the entries compared. */
+  private compared: number[] = [];
   /** Goes up with each compare and close, so a compare that finishes late knows it's stale. */
   private compareRun = 0;
 
@@ -112,6 +127,22 @@ export class HistoryStore {
     if (saved && r.button === "delete") await this.deleteAll();
   }
 
+  /** Retention's limits (Settings → History): the defaults until the settings have loaded. */
+  get retention(): HistoryRetention {
+    const s = this.host.settings;
+    return {
+      maxPerRequest: s?.maxPerRequest ?? HISTORY_RETENTION.maxPerRequest,
+      maxAgeDays: s?.maxAgeDays ?? HISTORY_RETENTION.maxAgeDays,
+      maxSizeMb: s?.maxSizeMb ?? HISTORY_RETENTION.maxSizeMb,
+    };
+  }
+
+  /** Changes retention's limits; the shell applies them to what's stored at once. */
+  async setRetention(limits: Partial<HistoryRetention>) {
+    const settings = this.host.settings;
+    if (settings) await this.host.updateSettings({ ...settings, ...this.retention, ...limits });
+  }
+
   /** Deletes every workspace's History once the user confirms (Settings → Clear all history). */
   async clearAll() {
     const r = await this.host.choose(
@@ -133,9 +164,58 @@ export class HistoryStore {
       this.host.toast("error", `Could not clear History: ${errorMessage(e)}`);
       return false;
     }
-    for (const tabId of Object.keys(this.opened)) this.close(tabId);
+    this.closeWhere(() => true);
     this.revision++;
     return true;
+  }
+
+  /** Deletes `entry` once the user confirms, closing it wherever it's open. */
+  async delete(entry: HistorySummary) {
+    const r = await this.host.choose(
+      "Delete this History entry?",
+      `${entry.method} ${entry.url}, sent ${sentAt(entry.time)}, is deleted from this computer. This can't be undone.`,
+      [
+        { ...CANCEL, focus: true },
+        { label: "Delete", value: "delete", role: "primary", danger: true },
+      ],
+    );
+    if (r.button !== "delete") return;
+    try {
+      await api.deleteHistoryEntry(entry.id);
+    } catch (e) {
+      this.host.toast("error", `Could not delete the History entry: ${errorMessage(e)}`);
+      return;
+    }
+    this.closeWhere((id) => id === entry.id);
+    this.revision++;
+  }
+
+  /** Deletes the open workspace's History once the user confirms (Clear workspace history). */
+  async clearWorkspace() {
+    const r = await this.host.choose(
+      "Clear workspace history?",
+      "Every History entry of this workspace is deleted from this computer; other workspaces keep theirs. This can't be undone.",
+      [
+        { ...CANCEL, focus: true },
+        { label: "Clear workspace history", value: "clear", role: "primary", danger: true },
+      ],
+    );
+    if (r.button !== "clear") return;
+    try {
+      await api.clearWorkspaceHistory();
+    } catch (e) {
+      this.host.toast("error", `Could not clear History: ${errorMessage(e)}`);
+      return;
+    }
+    this.closeWhere(() => true);
+    this.revision++;
+    this.host.toast("success", "Workspace history cleared");
+  }
+
+  /** Closes the opened entries, and the comparison, of the entries `deleted` says were deleted. */
+  private closeWhere(deleted: (id: number) => boolean) {
+    for (const [viewId, opened] of Object.entries(this.opened)) if (deleted(opened.entry.id)) this.close(viewId);
+    if (this.compared.some(deleted)) this.closeComparison();
   }
 
   /** Notes that a send from a tab finished: it may have been recorded. */
@@ -181,6 +261,7 @@ export class HistoryStore {
       response: whole.response ?? undefined,
       error: whole.sendError ?? undefined,
       cancelled: whole.cancelled || undefined,
+      bodyKept: whole.bodyKept,
     };
     this.opened[tabId] = { entry, tab, source: whole.source };
   }
@@ -224,6 +305,7 @@ export class HistoryStore {
     }
     this.closeComparison();
     this.comparing = opened.flatMap((whole) => (whole.response ? [whole.response] : []));
+    this.compared = entries.map((e) => e.id);
     const side = (i: number): CompareSide => ({
       label: sentAt(entries[i].time),
       response: opened[i].response,
@@ -239,6 +321,7 @@ export class HistoryStore {
     this.compareRun++;
     for (const response of this.comparing) this.host.releaseResponse(response);
     this.comparing = [];
+    this.compared = [];
     this.comparison = null;
   }
 }

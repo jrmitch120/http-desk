@@ -156,6 +156,10 @@ export const api = {
   openHistoryEntry: (id: number) => invoke<HistoryEntry>("open_history_entry", { id }),
   /** Deletes every workspace's History (entries open in a viewer stay until released). */
   clearAllHistory: () => invoke<void>("clear_all_history"),
+  /** Deletes History entry `id` of the open workspace (opened, it stays until released). */
+  deleteHistoryEntry: (id: number) => invoke<void>("delete_history_entry", { id }),
+  /** Deletes the open workspace's History (entries open in a viewer stay until released). */
+  clearWorkspaceHistory: () => invoke<void>("clear_workspace_history"),
   /** Where History is kept on disk; null when the app has no config folder. */
   historyLocation: () => invoke<string | null>("history_location"),
   /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */

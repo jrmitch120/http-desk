@@ -61,7 +61,7 @@ pub(super) fn is_store(path: &Path) -> bool {
 }
 
 /// A workspace holding `api.http` with `text`, opened in `h`.
-fn workspace(h: &Harness, text: &str) -> (tempfile::TempDir, PathBuf) {
+pub(super) fn workspace(h: &Harness, text: &str) -> (tempfile::TempDir, PathBuf) {
     let ws = tempfile::tempdir().unwrap();
     let root = crate::paths::canonicalize(ws.path()).unwrap();
     std::fs::write(root.join("api.http"), text).unwrap();
@@ -70,18 +70,18 @@ fn workspace(h: &Harness, text: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Request `i` of `root`'s `api.http`, as the webview has it.
-fn request(h: &Harness, root: &Path, i: usize) -> Value {
+pub(super) fn request(h: &Harness, root: &Path, i: usize) -> Value {
     h.ok("read_http_file", json!({ "path": root.join("api.http") }))["requests"][i].clone()
 }
 
 /// The send of `request` from a tab, as the webview makes it.
-fn send_args(root: &Path, request: &Value) -> Value {
+pub(super) fn send_args(root: &Path, request: &Value) -> Value {
     json!({ "runId": "t1", "request": request, "filePath": root.join("api.http"), "fileVariables": [],
             "environment": null, "requestKey": "k1", "requestNames": [] })
 }
 
 /// The History of `request` in `root`'s `api.http`, as its History view asks for it.
-fn history_of(h: &Harness, root: &Path, request: &Value) -> Vec<Value> {
+pub(super) fn history_of(h: &Harness, root: &Path, request: &Value) -> Vec<Value> {
     let link = json!({ "filePath": root.join("api.http"), "name": name_of(request),
                        "method": request["method"], "url": request["url"] });
     h.ok("list_history", json!({ "query": { "request": link } })).as_array().unwrap().clone()
@@ -256,7 +256,7 @@ fn a_named_requests_history_survives_editing_its_url_and_an_unnamed_one_follows_
 }
 
 /// Every entry of the open workspace, newest first.
-fn all_history(h: &Harness) -> Vec<Value> {
+pub(super) fn all_history(h: &Harness) -> Vec<Value> {
     h.ok("list_history", json!({ "query": {} })).as_array().unwrap().clone()
 }
 
@@ -416,7 +416,7 @@ fn send_in(root: &Path, request: &Value, environment: &str) -> Value {
 }
 
 /// The one entry of the open workspace, opened.
-fn the_entry(h: &Harness) -> Value {
+pub(super) fn the_entry(h: &Harness) -> Value {
     let entries = all_history(h);
     assert_eq!(entries.len(), 1, "{entries:?}");
     h.ok("open_history_entry", json!({ "id": entries[0]["id"] }))
@@ -520,7 +520,7 @@ fn settings_can_show_where_history_is_kept_in_the_config_folder() {
 }
 
 /// The bytes of every History store file in `dir` (the database and its journal).
-fn store_bytes(dir: &Path) -> Vec<u8> {
+pub(super) fn store_bytes(dir: &Path) -> Vec<u8> {
     std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())

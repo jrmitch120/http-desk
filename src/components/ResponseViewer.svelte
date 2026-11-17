@@ -35,7 +35,7 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import RequestHistory from "./RequestHistory.svelte";
   import Self from "./ResponseViewer.svelte";
-  import { sentAt } from "../lib/history.svelte";
+  import { sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
   // has no tab to cancel or retry in. `result.id` stands in for the tab id that
@@ -45,6 +45,18 @@
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
+  /** A History entry's binary body over the cap: only its headers and size were kept. */
+  const noBody = $derived(run?.bodyKept === "headersOnly");
+  /** What the warning banner says: the response's warnings, then how its body was cut off. */
+  const warnings = $derived(
+    res
+      ? [
+          ...res.warnings,
+          ...(run?.bodyKept === "truncated" ? [TRUNCATED_AT_CAP] : []),
+          ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : []),
+        ]
+      : [],
+  );
 
   // An editor tab's pane can show its request's History instead, and an entry opened
   // from it, read-only, in a viewer of its own (not a Run's result or a pseudo tab's).
@@ -194,8 +206,10 @@
         <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         <span class="spacer"></span>
+        {#if !noBody}
         <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
         <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+        {/if}
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
       {/if}
@@ -207,16 +221,18 @@
     {:else if run.error && !run.loading}
       <SendErrorPanel error={run.error} tabId={tab?.id} onretry={tab && (() => app.send(tab.id))} />
     {:else if res}
-      {#if res.warnings.length || res.truncated}
+      {#if warnings.length}
         <Banner severity="warning">
-          <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
+          <span class="selectable">{warnings.join(" · ")}</span>
         </Banner>
       {/if}
       <div class="tabs">
         <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view.tab = t)} />
       </div>
 
-      {#if current === "body"}
+      {#if current === "body" && noBody}
+        <div class="empty-state small">Not kept: History keeps only the headers and size of a binary body over 10 MB.</div>
+      {:else if current === "body"}
         <BodyPanel {res} view={body} bind:mode={view.mode} bind:wrap={view.wrap} bind:filter />
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />

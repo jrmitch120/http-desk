@@ -46,6 +46,8 @@ const api = vi.hoisted(() => ({
   clearNamedExchanges: vi.fn(),
   openExchange: vi.fn(),
   openHistoryEntry: vi.fn(),
+  deleteHistoryEntry: vi.fn(),
+  clearWorkspaceHistory: vi.fn(),
   requestVariable: vi.fn(),
 }));
 const {
@@ -76,6 +78,7 @@ const webview = vi.hoisted(() => ({ setZoom: vi.fn(async (_zoom: number) => {}) 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ setZoom: webview.setZoom }) }));
 
 import { app } from "./store.svelte";
+import { WORKSPACE_HISTORY } from "./history.svelte";
 import { forceOS } from "./platform";
 import { canRun, command, runCommand } from "./commands";
 import { trackModal } from "./modal.svelte";
@@ -550,6 +553,68 @@ describe("comparing History entries", () => {
     await comparing;
     expect(app.history.comparison).toBeNull();
     expect(released()).toEqual(["late"]);
+  });
+});
+
+describe("deleting History", () => {
+  const released = () => api.releaseResponse.mock.calls.map(([id]) => id);
+  const summary = (id: number) => ({ id, time: "2026-11-16T10:00:00Z", method: "GET", url: `https://x/${id}` }) as HistorySummary;
+  const opening = (id: string) => ({ response: { id, status: 200 }, sendError: null, cancelled: false, source: "", bodyKept: "whole" }) as unknown as HistoryEntry;
+  /** Answers the confirmation `doing` asks with `button`. */
+  async function confirming(doing: Promise<void>, button: string) {
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    const title = app.dialog!.title;
+    app.closeDialog(button);
+    await doing;
+    return title;
+  }
+  beforeEach(() => {
+    api.openHistoryEntry.mockImplementation(async (id: number) => opening(`h${id}`));
+    api.deleteHistoryEntry.mockResolvedValue(undefined);
+    api.clearWorkspaceHistory.mockResolvedValue(undefined);
+  });
+  afterEach(() => app.history.reset());
+
+  it("deletes an entry once confirmed, closing it where it's open and releasing its response", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    await app.history.open(tab.id, summary(1));
+    await app.history.open(WORKSPACE_HISTORY, summary(2));
+
+    expect(await confirming(app.history.delete(summary(1)), "delete")).toBe("Delete this History entry?");
+
+    expect(api.deleteHistoryEntry).toHaveBeenCalledWith(1);
+    expect(app.history.openedIn(tab.id)).toBeUndefined();
+    expect(app.history.openedIn(WORKSPACE_HISTORY)?.entry.id).toBe(2);
+    expect(released()).toEqual(["h1"]);
+  });
+
+  it("keeps the entry when the confirmation is cancelled", async () => {
+    await app.history.open(WORKSPACE_HISTORY, summary(1));
+    await confirming(app.history.delete(summary(1)), "cancel");
+    expect(api.deleteHistoryEntry).not.toHaveBeenCalled();
+    expect(app.history.openedIn(WORKSPACE_HISTORY)?.entry.id).toBe(1);
+  });
+
+  it("clears the workspace's History once confirmed, closing every opened entry and the comparison", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    await app.history.open(tab.id, summary(1));
+    await app.history.open(WORKSPACE_HISTORY, summary(2));
+    await app.history.compare(summary(3), { entry: summary(4) });
+    const revision = app.history.revision;
+
+    expect(await confirming(app.history.clearWorkspace(), "clear")).toBe("Clear workspace history?");
+
+    expect(api.clearWorkspaceHistory).toHaveBeenCalled();
+    expect([app.history.openedIn(tab.id), app.history.openedIn(WORKSPACE_HISTORY), app.history.comparison]).toEqual([undefined, undefined, null]);
+    expect(released().sort()).toEqual(["h1", "h2", "h3", "h4"]);
+    expect(app.history.revision).toBeGreaterThan(revision);
+  });
+
+  it("an entry over the 10 MB cap opens marked with how much of its body was kept", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.openHistoryEntry.mockResolvedValueOnce({ ...opening("h1"), bodyKept: "truncated" });
+    await app.history.open(tab.id, summary(1));
+    expect(app.runs[app.history.openedIn(tab.id)!.tab.id].bodyKept).toBe("truncated");
   });
 });
 

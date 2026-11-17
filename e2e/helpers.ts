@@ -104,7 +104,7 @@ export interface MockState {
     environmentSettings: Record<string, Record<string, { production?: boolean; color?: string | null }>>;
     trustedWorkspaces: string[];
     runnerOptions: Record<string, { delayMs: number; stopOnFailure: boolean }>;
-    history: { enabled: boolean };
+    history: { enabled: boolean; maxPerRequest: number; maxAgeDays: number; maxSizeMb: number };
   };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;

@@ -733,6 +733,10 @@ pub struct SentRequest {
     pub headers: Vec<(String, String)>,
     pub body_preview: Option<String>,
     pub body_size: usize,
+    /// Whether `body_preview` stops short of the body: set only on a History entry's
+    /// request, whose body is kept up to the body cap (`history::BODY_CAP`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_truncated: bool,
 }
 
 impl SentRequest {
@@ -1211,6 +1215,7 @@ fn final_request(p: &PreparedRequest, hops: &[timing::Hop], final_url: &str) -> 
                 s
             }
         }),
+        body_truncated: false,
     }
 }
 
