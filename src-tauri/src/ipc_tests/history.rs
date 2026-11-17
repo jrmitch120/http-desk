@@ -271,3 +271,73 @@ fn a_runs_sends_and_sends_blocked_before_anything_went_out_are_not_recorded() {
 
     assert_eq!(all_history(&h), Vec::<Value>::new());
 }
+
+/// The URLs of the open workspace's entries that `query` asks for, newest first.
+fn listed(h: &Harness, query: Value) -> Vec<String> {
+    let entries = h.ok("list_history", json!({ "query": query }));
+    entries.as_array().unwrap().iter().map(|e| e["url"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn the_workspaces_history_filters_by_status_class_and_by_text_in_any_file() {
+    let h = Harness::new();
+    let ok = answer_once("HTTP/1.1 200 OK\r\ncontent-type: text/plain", "ok");
+    let unchanged = answer_once("HTTP/1.1 304 Not Modified", "");
+    let missing = answer_once("HTTP/1.1 404 Not Found\r\ncontent-type: text/plain", "no");
+    let broken = answer_once("HTTP/1.1 503 Service Unavailable\r\ncontent-type: text/plain", "down");
+    let refused = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let text = format!(
+        "# @name login\nPOST {ok}/login\n\n###\nGET {unchanged}/cached\n\n###\nGET {missing}/pets/9\n\n###\nGET http://127.0.0.1:{refused}/refused\n"
+    );
+    let (_ws, root) = workspace(&h, &text);
+    for i in 0..4 {
+        let _ = h.call("send_request", send_args(&root, &request(&h, &root, i)));
+    }
+    // A request in another file.
+    std::fs::write(root.join("owners.http"), format!("GET {broken}/owners\n")).unwrap();
+    let owners = h.ok("read_http_file", json!({ "path": root.join("owners.http") }))["requests"][0].clone();
+    let mut args = send_args(&root, &owners);
+    args["filePath"] = json!(root.join("owners.http"));
+    h.ok("send_request", args);
+
+    let refused = format!("http://127.0.0.1:{refused}/refused");
+    assert_eq!(listed(&h, json!({ "status": "2xx" })), [format!("{ok}/login")]);
+    assert_eq!(listed(&h, json!({ "status": "3xx" })), [format!("{unchanged}/cached")]);
+    assert_eq!(listed(&h, json!({ "status": "4xx" })), [format!("{missing}/pets/9")]);
+    assert_eq!(listed(&h, json!({ "status": "5xx" })), [format!("{broken}/owners")]);
+    assert_eq!(listed(&h, json!({ "status": "error" })), std::slice::from_ref(&refused), "no response came back");
+
+    // Text matches the URL as sent, the method, the request's file and its name, ignoring case.
+    assert_eq!(listed(&h, json!({ "text": "PETS/9" })), [format!("{missing}/pets/9")]);
+    assert_eq!(listed(&h, json!({ "text": "post" })), [format!("{ok}/login")]);
+    assert_eq!(listed(&h, json!({ "text": "owners.http" })), [format!("{broken}/owners")]);
+    assert_eq!(listed(&h, json!({ "text": "login" })), [format!("{ok}/login")]);
+    // `%` and `_` are only themselves.
+    assert_eq!(listed(&h, json!({ "text": "%" })), Vec::<String>::new());
+    assert_eq!(listed(&h, json!({ "text": "_" })), Vec::<String>::new());
+    // Both at once, and with a request.
+    assert_eq!(listed(&h, json!({ "status": "error", "text": "refused" })), [refused]);
+    assert_eq!(listed(&h, json!({ "status": "4xx", "text": "login" })), Vec::<String>::new());
+    let login = json!({ "filePath": root.join("api.http"), "name": "login", "method": "POST", "url": "x" });
+    assert_eq!(listed(&h, json!({ "request": login, "status": "2xx", "text": "LOGIN" })), [format!("{ok}/login")]);
+    assert_eq!(listed(&h, json!({ "request": login, "status": "5xx" })), Vec::<String>::new());
+}
+
+#[test]
+fn the_workspaces_history_comes_a_page_at_a_time_newest_first_and_filtered() {
+    let h = Harness::new();
+    let server = super::keep_alive_server(5);
+    let text = (1..=5).map(|i| format!("GET {server}/{i}\n")).collect::<Vec<_>>().join("\n###\n");
+    let (_ws, root) = workspace(&h, &text);
+    for i in 0..5 {
+        h.ok("send_request", send_args(&root, &request(&h, &root, i)));
+    }
+    let urls = |ids: &[u32]| ids.iter().map(|i| format!("{server}/{i}")).collect::<Vec<_>>();
+
+    assert_eq!(listed(&h, json!({ "limit": 2 })), urls(&[5, 4]));
+    assert_eq!(listed(&h, json!({ "offset": 2, "limit": 2 })), urls(&[3, 2]));
+    assert_eq!(listed(&h, json!({ "offset": 4, "limit": 2 })), urls(&[1]));
+    assert_eq!(listed(&h, json!({ "offset": 6, "limit": 2 })), Vec::<String>::new());
+    // A page of the filtered list.
+    assert_eq!(listed(&h, json!({ "text": "/", "status": "2xx", "offset": 1, "limit": 3 })), urls(&[4, 3, 2]));
+}
