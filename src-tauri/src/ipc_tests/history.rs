@@ -1,6 +1,7 @@
 //! History (#151, ADR-0009): a send from a tab is recorded, with the request as sent
-//! (credential headers masked), its source text, the response as received and its
-//! tests, in a store under the config folder, per workspace. A Run's sends and sends
+//! (credential headers, Secret values and prompt answers masked: #153), its source
+//! text, the response as received and its tests, in a store under the config folder,
+//! per workspace. A Run's sends and sends
 //! blocked before anything went out aren't recorded. An entry opens as a response
 //! of its own, whose body is kept by id until released (ADR-0006).
 
@@ -142,6 +143,37 @@ fn a_send_from_a_tab_is_recorded_with_the_request_as_sent_its_source_response_an
 
     h.ok("release_response", json!({ "responseId": response["id"] }));
     assert_eq!(fetch(&h, &response["id"], "raw").unwrap_err(), json!("Response is no longer available"));
+}
+
+const WITH_VARIABLES: &str = "### Make pet
+# @name makePet
+@kind = dog
+@token = t0k3n
+POST {url}/{{kind}}s
+Authorization: Bearer {{token}}
+
+{\"kind\": \"{{kind}}\"}
+";
+
+#[test]
+fn an_entrys_source_text_parses_back_into_its_request_with_its_variables_as_written() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 201 Created", "");
+    let (_ws, root) = workspace(&h, &WITH_VARIABLES.replace("{url}", &url));
+    let pet = request(&h, &root, 0);
+    h.ok("send_request", send_args(&root, &pet));
+    let entry = &history_of(&h, &root, &pet)[0];
+    assert_eq!(entry["url"], format!("{url}/dogs"), "sent resolved");
+
+    let source = h.ok("open_history_entry", json!({ "id": entry["id"] }))["source"].clone();
+    let restored = h.ok("parse_request", json!({ "text": source }));
+
+    assert_eq!(restored["url"], format!("{url}/{{{{kind}}}}s"));
+    // The credential as written, not masked like the request as sent.
+    assert_eq!((&restored["auth"]["kind"], &restored["auth"]["token"]), (&json!("bearer"), &json!("{{token}}")));
+    assert_eq!(restored["body"]["text"], "{\"kind\": \"{{kind}}\"}");
+    assert_eq!((&restored["name"], name_of(&restored)), (&json!("Make pet"), json!("makePet")));
+    assert_eq!(h.ok("parse_request", json!({ "text": "# only a comment\n" })), Value::Null);
 }
 
 /// The names of the files in `dir`, sorted.
@@ -340,4 +372,75 @@ fn the_workspaces_history_comes_a_page_at_a_time_newest_first_and_filtered() {
     assert_eq!(listed(&h, json!({ "offset": 6, "limit": 2 })), Vec::<String>::new());
     // A page of the filtered list.
     assert_eq!(listed(&h, json!({ "text": "/", "status": "2xx", "offset": 1, "limit": 3 })), urls(&[4, 3, 2]));
+}
+
+/// What the History store's files hold, as text, read after every write has landed.
+fn store_text(h: &Harness) -> String {
+    all_history(h);
+    let mut text = String::new();
+    for entry in std::fs::read_dir(h.config_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if is_store(&path) {
+            text.push_str(&String::from_utf8_lossy(&std::fs::read(&path).unwrap()));
+        }
+    }
+    assert!(!text.is_empty(), "no History store in the config folder");
+    text
+}
+
+/// The send of `request` from a tab with `environment` selected, as the webview makes it.
+fn send_in(root: &Path, request: &Value, environment: &str) -> Value {
+    let mut args = send_args(root, request);
+    args["environment"] = json!(environment);
+    args
+}
+
+/// The one entry of the open workspace, opened.
+fn the_entry(h: &Harness) -> Value {
+    let entries = all_history(h);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    h.ok("open_history_entry", json!({ "id": entries[0]["id"] }))
+}
+
+#[test]
+fn a_secret_is_masked_in_the_recorded_url_headers_and_body_and_is_nowhere_in_the_store() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 200 OK\r\ncontent-type: text/plain", "ok");
+    let text = format!(
+        "POST {url}/items?key={{{{token}}}}&q=a\nX-Api-Key: {{{{token}}}}\nContent-Type: application/json\n\n{{\"token\":\"{{{{token}}}}\"}}\n"
+    );
+    let (_ws, root) = workspace(&h, &text);
+    std::fs::write(root.join("http-client.env.json"), json!({ "local": { "token": "" } }).to_string()).unwrap();
+    std::fs::write(root.join("http-client.private.env.json"), json!({ "local": { "token": "tok-7Qz9" } }).to_string())
+        .unwrap();
+    h.ok("send_request", send_in(&root, &request(&h, &root, 0), "local"));
+
+    let opened = the_entry(&h);
+    for request in [&opened["request"], &opened["response"]["request"]] {
+        assert_eq!(request["url"], format!("{url}/items?key=••••••••&q=a"));
+        assert!(request["headers"].as_array().unwrap().contains(&json!(["X-Api-Key", "••••••••"])), "{request}");
+        assert_eq!(request["bodyPreview"], r#"{"token":"••••••••"}"#);
+    }
+    assert!(!store_text(&h).contains("tok-7Qz9"), "the store holds the Secret's value");
+}
+
+#[test]
+fn prompt_answers_are_masked_in_the_recorded_request_and_are_nowhere_in_the_store() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 200 OK\r\ncontent-type: text/plain", "ok");
+    let text = format!(
+        "# @prompt otp\n# @prompt password\nPOST {url}/login?otp={{{{otp}}}}\nX-Pass: {{{{password}}}}\n\notp={{{{otp}}}}&password={{{{password}}}}\n"
+    );
+    let (_ws, root) = workspace(&h, &text);
+    h.ok("answer_prompts", json!({ "requestKey": "k1", "answers": { "otp": "842913", "password": "hunter two" } }));
+    h.ok("send_request", send_args(&root, &request(&h, &root, 0)));
+
+    let opened = the_entry(&h);
+    for request in [&opened["request"], &opened["response"]["request"]] {
+        assert_eq!(request["url"], format!("{url}/login?otp=••••••••"));
+        assert!(request["headers"].as_array().unwrap().contains(&json!(["X-Pass", "••••••••"])), "{request}");
+        assert_eq!(request["bodyPreview"], "otp=••••••••&password=••••••••");
+    }
+    let store = store_text(&h);
+    assert!(!store.contains("842913") && !store.contains("hunter two"), "the store holds a prompt answer");
 }

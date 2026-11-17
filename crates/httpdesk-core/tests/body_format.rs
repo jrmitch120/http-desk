@@ -1,7 +1,7 @@
 //! Lossless body formatting: only whitespace between tokens changes; every
 //! number and string token is copied byte for byte.
 
-use httpdesk_core::body_format::{format_json, FormatMode};
+use httpdesk_core::body_format::{compare_text, format_json, FormatMode};
 use proptest::prelude::*;
 
 fn pretty(text: &str) -> String {
@@ -197,4 +197,54 @@ fn nesting_up_to_the_limit_formats() {
     let depth = httpdesk_core::body_format::MAX_DEPTH;
     let deep = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
     assert_eq!(format_json(&deep, FormatMode::Minify).unwrap(), deep);
+}
+
+// Compare's text (#158): JSON laid out like Pretty, with each object's members sorted
+// by key, so two bodies that differ only in key order and spacing compare equal.
+
+#[test]
+fn compare_text_sorts_members_by_key_at_every_level_keeping_every_token_as_written() {
+    let input = r#"{"z": 9007199254740993, "a": {"y": 10.50, "b": [{"d": 1e3, "c": "\u00e9"}]}}"#;
+    assert_eq!(
+        compare_text(Some("application/json"), input),
+        "{\n  \"a\": {\n    \"b\": [\n      {\n        \"c\": \"\\u00e9\",\n        \"d\": 1e3\n      }\n    ],\n    \"y\": 10.50\n  },\n  \"z\": 9007199254740993\n}"
+    );
+}
+
+#[test]
+fn json_differing_only_in_key_order_and_spacing_compares_equal() {
+    let a = r#"{"items":[{"id":1,"name":"Rex","tags":["good","dog"]}],"method":"GET"}"#;
+    let b =
+        "{ \"method\" : \"GET\",\n\t\"items\": [ { \"tags\": [\"good\", \"dog\"], \"name\": \"Rex\", \"id\": 1 } ] }";
+    assert_eq!(compare_text(None, a), compare_text(None, b));
+}
+
+#[test]
+fn array_order_and_the_order_of_duplicate_keys_are_kept() {
+    assert_eq!(
+        compare_text(None, r#"{"b":1,"a":[3,2],"b":0}"#),
+        "{\n  \"a\": [\n    3,\n    2\n  ],\n  \"b\": 1,\n  \"b\": 0\n}"
+    );
+    assert_eq!(compare_text(None, r#"{"a":{},"b":[]}"#), "{\n  \"a\": {},\n  \"b\": []\n}");
+}
+
+#[test]
+fn xml_compares_as_its_pretty_form_and_other_text_as_it_is() {
+    assert_eq!(compare_text(Some("application/xml"), "<a><b>x</b></a>"), "<a>\n  <b>x</b>\n</a>");
+    assert_eq!(compare_text(Some("text/plain"), "pets: 2\n  Rex"), "pets: 2\n  Rex");
+    // A JSON body that doesn't parse compares as it was received.
+    assert_eq!(compare_text(Some("application/json"), "{\"a\": oops}"), "{\"a\": oops}");
+}
+
+#[test]
+fn deeply_nested_json_compares_without_overflowing_a_small_stack() {
+    let depth = httpdesk_core::body_format::MAX_DEPTH;
+    let deep = format!("{}1{}", "[{\"a\":".repeat(depth / 2), "}]".repeat(depth / 2));
+    let text = std::thread::Builder::new()
+        .stack_size(64 * 1024)
+        .spawn(move || compare_text(None, &deep))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(text.starts_with("[\n  {\n    \"a\": [\n"), "{}", &text[..40]);
 }

@@ -4,7 +4,7 @@
   query), HISTORY_PAGE at a time: scrolling to the end lists the next page. It lists
   again after each send (keeping as many as it showed) and when the workspace changes.
   Used by the sidebar's History (the workspace's) and the response pane's (the request's).
-  `start`/`end` pass through to HistoryList for row actions.
+  Compare's selection, the context menu and row actions pass through to HistoryList.
 -->
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
@@ -28,11 +28,30 @@
     file?: boolean;
     /** Two lines a row, and the filters stacked, for a narrow pane. */
     narrow?: boolean;
+    /** The entries listed now, for the owner to read (bind it). */
+    entries?: HistorySummary[] | null;
+    /** Passed through to HistoryList: Compare's selection, the row's context menu, row actions. */
+    selected?: number[];
+    onselect?: (entry: HistorySummary, selected: boolean) => void;
+    onmenu?: (event: MouseEvent, entry: HistorySummary, index: number) => void;
     start?: Snippet<[HistorySummary]>;
     end?: Snippet<[HistorySummary]>;
   }
 
-  let { request = null, empty, onopen, current = null, file = false, narrow = false, start, end }: Props = $props();
+  let {
+    request = null,
+    empty,
+    onopen,
+    current = null,
+    file = false,
+    narrow = false,
+    entries = $bindable(null),
+    selected,
+    onselect,
+    onmenu,
+    start,
+    end,
+  }: Props = $props();
 
   type Status = "all" | HistoryStatusClass;
   const STATUSES: SegmentedOption<Status>[] = [
@@ -59,7 +78,6 @@
   // What the list depends on: a named request's URL can change under it.
   const requestKey = $derived(request && JSON.stringify(request.name ? [request.filePath, request.name] : request));
 
-  let entries = $state<HistorySummary[] | null>(null);
   /** Whether the last page was full, so there may be more. */
   let more = $state(false);
   let loading = false;
@@ -117,7 +135,7 @@
   {#if entries?.length === 0}
     <div class="empty-state small">{filtered ? "No History entries match" : empty}</div>
   {:else if entries}
-    <HistoryList {entries} {onopen} {current} {file} {narrow} {start} {end} footer={more ? showMoreButton : undefined} />
+    <HistoryList {entries} {onopen} {current} {file} {narrow} {selected} {onselect} {onmenu} {start} {end} footer={more ? showMoreButton : undefined} />
   {/if}
 </div>
 

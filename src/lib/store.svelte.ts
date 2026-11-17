@@ -1058,6 +1058,34 @@ class AppStore {
     }
   }
 
+  /**
+   * Restore request: a History entry's source text (the request as written at send
+   * time, `{{variables}}` and all) replaces request `key` of `path` as unsaved edits,
+   * and its tab shows. A request no longer in the file (or no `key`) comes back as a
+   * new unsaved request at its end. Nothing is written until the file is saved.
+   */
+  async restoreRequest(path: string, key: string | null, source: string) {
+    let restored: Request | null;
+    try {
+      restored = await api.parseRequest(source);
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+      return;
+    }
+    if (!restored) return this.toast("error", "This History entry has no request to restore");
+    const doc = await this.loadDoc(path);
+    if (!doc) return;
+    const at = doc.file.requests.findIndex((r) => r._key === key);
+    const req: Request = { ...restored, leading: "", _key: at >= 0 ? key! : uid() };
+    if (at >= 0) {
+      // Text that preceded the request in its file stays as it is.
+      doc.file.requests[at] = { ...req, leading: doc.file.requests[at].leading };
+    } else {
+      doc.file.requests.push(req);
+    }
+    await this.openRequest(path, { key: req._key });
+  }
+
   // ---------------------------------------------------------------- request ops
 
   /** Adds a request to a file and opens it. Saves immediately if the file was clean. */

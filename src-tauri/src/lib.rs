@@ -418,6 +418,12 @@ fn render_request(request: Request) -> String {
     httpdesk_core::render_request(&Request { leading: String::new(), ..request })
 }
 
+/// The first request in `text` (a History entry's source text), parsed as in a file.
+#[tauri::command]
+fn parse_request(text: String) -> Option<Request> {
+    httpdesk_core::parse(&text).requests.into_iter().next()
+}
+
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
     let path = state.confine_write(&path)?;
@@ -610,6 +616,8 @@ async fn send_request<R: tauri::Runtime>(
         let _ = emitter.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
     let pending = history::Pending::begin(ctx.root.as_deref(), &out);
+    // What to mask in its entry, read as the send will read it, before it goes.
+    let masking = pending.as_ref().map(|_| history::Masking::for_send(&ctx, &out)).unwrap_or_default();
     let attempt = Arc::new(send::Attempt::default());
     let task = {
         let attempt = attempt.clone();
@@ -625,7 +633,7 @@ async fn send_request<R: tauri::Runtime>(
         Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
         Err(_) => None,
     };
-    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &history::Masking::default())) {
+    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking)) {
         state.history.record(|| history_path(&app), entry);
     }
 
@@ -1102,6 +1110,9 @@ enum BodyFetchView {
     Pretty,
     /// The body's bytes exactly as stored (after Content-Encoding is undone).
     Bytes,
+    /// The text Compare diffs (`body_format::compare_text`): JSON laid out with
+    /// its keys sorted, XML as Pretty, anything else as Raw.
+    Compare,
 }
 
 /// A kept body for the viewer, by response id, as raw bytes (an
@@ -1126,6 +1137,7 @@ async fn response_body<R: tauri::Runtime>(
                 .ok_or("Response body isn't JSON or XML")?
                 .into_bytes(),
             BodyFetchView::Bytes => body.bytes.to_vec(),
+            BodyFetchView::Compare => body_format::compare_text(body.content_type.as_deref(), &text()?).into_bytes(),
         };
         Ok(tauri::ipc::Response::new(bytes))
     })
@@ -1369,6 +1381,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             read_http_file,
             save_http_file,
             render_request,
+            parse_request,
             create_file,
             create_dir,
             rename_path,

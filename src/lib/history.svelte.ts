@@ -4,12 +4,15 @@
 // tab's response pane shows its request's History, and the entry each History view
 // (a tab's, or the sidebar's: `WORKSPACE_HISTORY`) has opened.
 // An opened entry shows read-only in a response viewer under a pseudo tab, its
-// response a copy with its own id, released when it's closed (ADR-0006).
+// response a copy with its own id, released when it's closed (ADR-0006). Compare
+// shows two responses side by side (an entry and the tab's current response, or two
+// entries); the entries it opens are released the same way when it closes.
 import { api, errorMessage } from "./api";
 import { getDirective, uid } from "./http";
 import { newTabView } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
 import type { HistoryLink, HistorySummary, HttpResponse, Request } from "./types";
+import type { CompareSide } from "./compare";
 
 /** What History's page state needs from the rest of the store. */
 export interface HistoryHost {
@@ -19,8 +22,8 @@ export interface HistoryHost {
   toast(kind: "error", message: string): void;
 }
 
-/** An entry opened from a History view: its summary, and the pseudo tab its response shows under. */
-export type OpenedEntry = { entry: HistorySummary; tab: Tab };
+/** An entry opened from a History view: its summary, the pseudo tab its response shows under, and its source text (to restore). */
+export type OpenedEntry = { entry: HistorySummary; tab: Tab; source: string };
 
 /**
  * The sidebar's History view (the whole workspace's), where an editor tab's id names
@@ -42,8 +45,31 @@ export function sentAt(time: string, now = new Date()): string {
   return at.toDateString() === now.toDateString() ? at.toLocaleTimeString() : at.toLocaleString();
 }
 
+/** What an entry is compared with: a response (the tab's current one), or another entry. */
+export type CompareTarget = { response: HttpResponse } | { entry: HistorySummary };
+
+/** A comparison shown in the Compare view: two sides, the older on the left (`a`). */
+export type Comparison = { id: string; a: CompareSide; b: CompareSide };
+
+/**
+ * What Compare on `entries[i]` (a History list, newest first) compares it with: the
+ * tab's `current` response, else the next newer entry. Nothing for the newest entry
+ * of a tab with no response.
+ */
+export function compareTarget(entries: HistorySummary[], i: number, current: HttpResponse | undefined): CompareTarget | undefined {
+  if (current) return { response: current };
+  return i > 0 ? { entry: entries[i - 1] } : undefined;
+}
+
 export class HistoryStore {
   constructor(private readonly host: HistoryHost) {}
+
+  /** The comparison the Compare view shows, if any. */
+  comparison = $state<Comparison | null>(null);
+  /** The entries' responses opened for the comparison, released when it closes (ADR-0006). */
+  private comparing: HttpResponse[] = [];
+  /** Goes up with each compare and close, so a compare that finishes late knows it's stale. */
+  private compareRun = 0;
 
   /** Goes up after every send from a tab, so History views list their entries again. */
   revision = $state(0);
@@ -97,7 +123,7 @@ export class HistoryStore {
       error: whole.sendError ?? undefined,
       cancelled: whole.cancelled || undefined,
     };
-    this.opened[tabId] = { entry, tab };
+    this.opened[tabId] = { entry, tab, source: whole.source };
   }
 
   /** Closes the entry tab `tabId` has open, releasing its copy of the response. */
@@ -119,5 +145,41 @@ export class HistoryStore {
   reset() {
     for (const tabId of Object.keys(this.opened)) this.close(tabId);
     this.shownIn = {};
+    this.closeComparison();
+  }
+
+  /**
+   * Compares `entry` with `against` in the Compare view, the older entry on the left
+   * and the current response on the right. The entries open as responses of their own.
+   */
+  async compare(entry: HistorySummary, against: CompareTarget) {
+    const run = ++this.compareRun;
+    const entries = "entry" in against ? [entry, against.entry].sort((x, y) => x.time.localeCompare(y.time) || x.id - y.id) : [entry];
+    const results = await Promise.allSettled(entries.map((e) => api.openHistoryEntry(e.id)));
+    const opened = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed || run !== this.compareRun) {
+      for (const whole of opened) this.host.releaseResponse(whole.response ?? undefined);
+      if (failed) this.host.toast("error", errorMessage(failed.reason));
+      return;
+    }
+    this.closeComparison();
+    this.comparing = opened.flatMap((whole) => (whole.response ? [whole.response] : []));
+    const side = (i: number): CompareSide => ({
+      label: sentAt(entries[i].time),
+      response: opened[i].response,
+      error: opened[i].sendError?.message,
+      cancelled: opened[i].cancelled,
+    });
+    const b = "response" in against ? { label: "current response", response: against.response } : side(1);
+    this.comparison = { id: uid(), a: side(0), b };
+  }
+
+  /** Closes the Compare view, releasing the entries opened for it. */
+  closeComparison() {
+    this.compareRun++;
+    for (const response of this.comparing) this.host.releaseResponse(response);
+    this.comparing = [];
+    this.comparison = null;
   }
 }

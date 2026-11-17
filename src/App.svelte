@@ -20,6 +20,7 @@
   import ExchangeView from "./components/ExchangeView.svelte";
   import HistoryEntryView from "./components/HistoryEntryView.svelte";
   import { WORKSPACE_HISTORY } from "./lib/history.svelte";
+  import CompareView from "./components/CompareView.svelte";
   import Icon from "./components/Icon.svelte";
   import SplitPane from "./components/SplitPane.svelte";
   import PanelArea from "./components/PanelArea.svelte";
@@ -162,6 +163,9 @@
 {#if app.history.openedIn(WORKSPACE_HISTORY)}
   {@const opened = app.history.openedIn(WORKSPACE_HISTORY)!}
   {#key opened.tab.id}<HistoryEntryView {opened} />{/key}
+{/if}
+{#if app.history.comparison}
+  {#key app.history.comparison.id}<CompareView comparison={app.history.comparison} />{/key}
 {/if}
 {#if app.dialog}
   {#key app.dialog}<Dialog />{/key}

@@ -5,9 +5,10 @@
   request's in the response pane, one line a row, and the workspace's in the
   sidebar, `narrow` (two lines a row).
 
-  Row actions go in the `start` and `end` snippets, rendered beside each row's open
-  button (not inside it), e.g. a Checkbox to pick an entry, or a Restore button.
-  `footer` ends the list (HistoryView's "Show more").
+  With `onselect`, each row has a box to select it (for Compare); with `onmenu`, a
+  context menu. Other row actions go in the `start` and `end` snippets, rendered
+  beside each row's open button (not inside it). `footer` ends the list
+  (HistoryView's "Show more").
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
@@ -16,6 +17,7 @@
   import { sentAt } from "../lib/history.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
+  import Checkbox from "./Checkbox.svelte";
 
   interface Props {
     entries: HistorySummary[];
@@ -26,6 +28,11 @@
     narrow?: boolean;
     /** The entry shown now, marked current. */
     current?: number | null;
+    /** The selected entries' ids, with `onselect`. */
+    selected?: number[];
+    onselect?: (entry: HistorySummary, selected: boolean) => void;
+    /** Opens the row's context menu (`menu.show`). */
+    onmenu?: (event: MouseEvent, entry: HistorySummary, index: number) => void;
     /** Controls before an entry's row. */
     start?: Snippet<[HistorySummary]>;
     /** Controls after an entry's row. */
@@ -34,7 +41,7 @@
     footer?: Snippet;
   }
 
-  let { entries, onopen, file = false, narrow = false, current = null, start, end, footer }: Props = $props();
+  let { entries, onopen, file = false, narrow = false, current = null, selected = [], onselect, onmenu, start, end, footer }: Props = $props();
 </script>
 
 {#snippet outcome(e: HistorySummary)}
@@ -54,10 +61,13 @@
 {/snippet}
 
 <ul class="entries" class:narrow aria-label="History entries">
-  {#each entries as e (e.id)}
-    <li class="entry" class:current={e.id === current}>
+  {#each entries as e, i (e.id)}
+    <li class="entry" class:selectable={!!onselect} class:current={e.id === current}>
+      {#if onselect}
+        <Checkbox class="select" checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
+      {/if}
       {@render start?.(e)}
-      <button class="row" aria-current={e.id === current || undefined} onclick={() => onopen(e)}>
+      <button class="row" aria-current={e.id === current || undefined} onclick={() => onopen(e)} oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))}>
         {#if narrow}
           <span class="line">
             <Badge method={e.method} />
@@ -123,14 +133,20 @@
     gap: 2px;
     padding: 5px 12px;
   }
+  .selectable {
+    padding-left: 12px;
+  }
+  .selectable .row {
+    padding-left: 8px;
+  }
+  .selectable :global(.select) {
+    flex: none;
+  }
   .line {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-  }
-  .sub {
-    gap: 8px;
   }
   .url {
     min-width: 0;

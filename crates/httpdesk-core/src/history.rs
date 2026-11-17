@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::exec::{ExecError, HttpResponse, SentRequest};
-use crate::send::{Attempt, Outgoing, Sent};
-use crate::vars::MASK;
+use crate::send::{self, Attempt, Outgoing, SendContext, Sent};
+use crate::vars::{Secrets, MASK};
 
 /// The store's file name in the config folder.
 pub const FILE_NAME: &str = "history.sqlite3";
@@ -47,19 +47,50 @@ pub enum HistoryError {
 pub type Result<T> = std::result::Result<T, HistoryError>;
 
 /// What is masked in a recorded request before it is written (ADR-0009): the values
-/// of [`CREDENTIAL_HEADERS`]. The one place masking happens.
+/// of [`CREDENTIAL_HEADERS`], and every Secret value and prompt answer the send used,
+/// wherever it shows. The one place masking happens.
 #[derive(Debug, Default, Clone)]
-pub struct Masking {}
+pub struct Masking {
+    values: Secrets,
+}
 
 impl Masking {
-    /// `request` with its credentials replaced by [`MASK`].
-    pub fn request(&self, mut request: SentRequest) -> SentRequest {
-        for (name, value) in &mut request.headers {
-            if CREDENTIAL_HEADERS.iter().any(|c| name.eq_ignore_ascii_case(c)) {
-                *value = MASK.to_string();
-            }
+    /// The masking for sending `out` with `ctx`: the values of the Secrets it's sent
+    /// with and the Session's answers to its prompts. Read before the send, as the
+    /// send reads them.
+    pub fn for_send(ctx: &SendContext, out: &Outgoing) -> Masking {
+        let scope = send::scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, out);
+        let mut values = scope.map(|s| s.secret_values()).unwrap_or_default();
+        if let Some(key) = &out.request_key {
+            let mut answers = ctx.session.prompt_answers().get(key);
+            values.extend(out.request.prompts().into_iter().filter_map(|p| answers.remove(&p.name)));
         }
+        Masking { values: Secrets::new(values) }
+    }
+
+    /// `request` with its credential headers and every masked value in its URL,
+    /// headers and body replaced by [`MASK`].
+    pub fn request(&self, mut request: SentRequest) -> SentRequest {
+        request.url = self.values.mask(&request.url);
+        for (name, value) in &mut request.headers {
+            *value = match CREDENTIAL_HEADERS.iter().any(|c| name.eq_ignore_ascii_case(c)) {
+                true => MASK.to_string(),
+                false => self.values.mask(value),
+            };
+        }
+        request.body_preview = request.body_preview.map(|body| self.values.mask(&body));
         request
+    }
+
+    /// `value` (a send error) with every masked value in its text replaced: it can
+    /// quote the URL.
+    fn error(&self, value: Value) -> Value {
+        match value {
+            Value::String(s) => Value::String(self.values.mask(&s)),
+            Value::Array(items) => Value::Array(items.into_iter().map(|v| self.error(v)).collect()),
+            Value::Object(fields) => Value::Object(fields.into_iter().map(|(k, v)| (k, self.error(v))).collect()),
+            other => other,
+        }
     }
 }
 
@@ -107,9 +138,11 @@ impl Pending {
         let elapsed = self.started.elapsed();
         let outcome = match finished {
             Finished::Sent(sent) => {
-                // The response carries the request too: masked there as well.
+                // The response carries the request too, and the URL it was sent to:
+                // masked there as well.
                 let mut response = sent.response.clone();
                 response.request = masking.request(response.request);
+                response.url = masking.values.mask(&response.url);
                 return Some(NewEntry {
                     pending: self,
                     elapsed,
@@ -119,7 +152,7 @@ impl Pending {
             }
             // Refused before the network, though after the attempt was noted.
             Finished::Failed(ExecError::InvalidMethod(_) | ExecError::InvalidHeader(_)) => return None,
-            Finished::Failed(e) => Outcome::Failed(serde_json::to_value(e).ok()?),
+            Finished::Failed(e) => Outcome::Failed(masking.error(serde_json::to_value(e).ok()?)),
             Finished::Cancelled => Outcome::Cancelled,
         };
         Some(NewEntry { pending: self, elapsed, request: masking.request(attempt.request()?), outcome })
