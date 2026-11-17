@@ -192,14 +192,54 @@ pub struct NewEntry {
     outcome: Outcome,
 }
 
-/// Which entries to list: the workspace's, or one request's, newest first, a page at a time.
+/// Which entries to list: the workspace's, or one request's, newest first, a page at a
+/// time, narrowed by status class and text.
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Query {
     /// Only this request's entries.
     pub request: Option<RequestLink>,
+    /// Only the entries in this status class.
+    pub status: Option<StatusClass>,
+    /// Only the entries whose method, URL as sent, file or `# @name` contain this,
+    /// ignoring (ASCII) case.
+    pub text: Option<String>,
     pub offset: u32,
     pub limit: Option<u32>,
+}
+
+/// A status class to list: the responses with a 2xx … 5xx status, or the sends that
+/// got no response (a send error or a cancel).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum StatusClass {
+    #[serde(rename = "2xx")]
+    Success,
+    #[serde(rename = "3xx")]
+    Redirection,
+    #[serde(rename = "4xx")]
+    ClientError,
+    #[serde(rename = "5xx")]
+    ServerError,
+    #[serde(rename = "error")]
+    NoResponse,
+}
+
+impl StatusClass {
+    /// The hundreds digit of its statuses (`status / 100`); `None` for no response.
+    fn hundreds(self) -> Option<i64> {
+        match self {
+            StatusClass::Success => Some(2),
+            StatusClass::Redirection => Some(3),
+            StatusClass::ClientError => Some(4),
+            StatusClass::ServerError => Some(5),
+            StatusClass::NoResponse => None,
+        }
+    }
+}
+
+/// A `LIKE` pattern (with `ESCAPE '\'`) for text containing `text`.
+fn containing(text: &str) -> String {
+    format!("%{}%", text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
 }
 
 /// What links an entry to its request: its file and `# @name`, or for an unnamed
@@ -290,6 +330,7 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS entries_by_name ON entries (workspace, file, name, time_ms);
 CREATE INDEX IF NOT EXISTS entries_by_time ON entries (workspace, time_ms);
+CREATE INDEX IF NOT EXISTS entries_by_class ON entries (workspace, status / 100, time_ms);
 PRAGMA user_version = 1;
 ";
 
@@ -362,24 +403,42 @@ impl Store {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Workspace `root`'s entries that `query` asks for, newest first.
+    /// Workspace `root`'s entries that `query` asks for, newest first. The request and
+    /// the status class are indexed conditions (`entries_by_name`, `entries_by_class`);
+    /// text narrows what they find.
     pub fn list(&self, root: &Path, query: &Query) -> Result<Vec<Summary>> {
-        let mut sql = format!("SELECT {SUMMARY_COLUMNS} FROM entries WHERE workspace = ?1");
+        let mut sql = format!("SELECT {SUMMARY_COLUMNS} FROM entries WHERE workspace = ?");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(workspace_key(root))];
         if let Some(link) = &query.request {
             args.push(Box::new(relative(root, &link.file_path)));
-            sql.push_str(" AND file = ?2");
+            sql.push_str(" AND file = ?");
             match &link.name {
                 Some(name) => {
                     args.push(Box::new(name.clone()));
-                    sql.push_str(" AND name = ?3");
+                    sql.push_str(" AND name = ?");
                 }
                 None => {
                     args.push(Box::new(link.method.clone()));
                     args.push(Box::new(link.url.clone()));
-                    sql.push_str(" AND name IS NULL AND method = ?3 AND url = ?4");
+                    sql.push_str(" AND name IS NULL AND method = ? AND url = ?");
                 }
             }
+        }
+        if let Some(class) = query.status {
+            // Written as `entries_by_class` has it, so the index serves it.
+            match class.hundreds() {
+                Some(hundreds) => {
+                    args.push(Box::new(hundreds));
+                    sql.push_str(" AND status / 100 = ?");
+                }
+                None => sql.push_str(" AND status / 100 IS NULL"),
+            }
+        }
+        if let Some(text) = query.text.as_deref().filter(|t| !t.is_empty()) {
+            let columns = ["sent_url", "sent_method", "file", "name"];
+            let like: Vec<String> = columns.iter().map(|c| format!("{c} LIKE ? ESCAPE '\\'")).collect();
+            sql.push_str(&format!(" AND ({})", like.join(" OR ")));
+            args.extend(columns.map(|_| Box::new(containing(text)) as Box<dyn rusqlite::ToSql>));
         }
         sql.push_str(&format!(
             " ORDER BY time_ms DESC, id DESC LIMIT {} OFFSET {}",

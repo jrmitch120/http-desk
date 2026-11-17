@@ -1,7 +1,8 @@
 // The History switch and Settings → History (#154): History is on by default; turning
 // it off asks whether to also delete what's stored (Keep or Delete); while it's off
 // the History views say "History is off" with a link to the setting. Settings shows
-// where History is kept and clears it all after confirming.
+// where History is kept and clears it all after confirming. The sidebar's History
+// view (#156) says it's off too.
 import { expect, test, type Page } from "@playwright/test";
 import { dialog, mockState, openApp, openRequest } from "./helpers";
 
@@ -75,6 +76,31 @@ test("turning History off with Delete deletes what's stored; the History view sa
 
   await expect(page.getByText("History is off")).toHaveCount(0);
   await expect(page.getByText("No History for this request yet")).toBeVisible();
+});
+
+test("the sidebar's History view says History is off and links to the setting", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await page.getByRole("radiogroup", { name: "Sidebar" }).getByRole("radio", { name: "History" }).click();
+  const sidebar = page.getByRole("region", { name: "Workspace History" });
+  await expect(sidebar.getByRole("list", { name: "History entries" }).getByRole("listitem")).toHaveCount(1);
+
+  await openSettings(page);
+  await historySwitch(page).click();
+  await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+
+  await expect(sidebar.getByText("History is off")).toBeVisible();
+  await expect(sidebar.getByRole("list", { name: "History entries" })).toHaveCount(0);
+  await sidebar.getByRole("button", { name: "Turn it on in Settings" }).click();
+  await expect(historySwitch(page)).toBeInViewport();
+  await historySwitch(page).click();
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+
+  // Back on: the kept entry is listed again.
+  await expect(sidebar.getByText("History is off")).toHaveCount(0);
+  await expect(sidebar.getByRole("list", { name: "History entries" }).getByRole("listitem")).toHaveCount(1);
 });
 
 test("Settings shows where History is kept, and Clear all history empties it once confirmed", async ({ page }) => {
