@@ -22,6 +22,7 @@ import { SessionStore, type SessionHost, type TestMark } from "./session.svelte"
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
+import { newTabView, type RequestSection, type ResponseView } from "./tabView";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -63,6 +64,10 @@ export interface Tab {
   id: string;
   path: string;
   key: string;
+  /** The request section shown (part of the Layout). */
+  section: RequestSection;
+  /** How the response viewer shows the tab's response (part of the Layout). */
+  responseView: ResponseView;
 }
 
 export interface RunState {
@@ -836,11 +841,17 @@ class AppStore {
     const key = req._key!;
     let tab = this.tabs.find((t) => t.path === path && t.key === key);
     if (!tab) {
-      tab = { id: uid(), path, key };
+      tab = { id: uid(), path, key, ...newTabView() };
       const at = this.tabs.findIndex((t) => t.id === this.activeTabId);
       this.tabs.splice(at < 0 ? this.tabs.length : at + 1, 0, tab);
     }
     this.activeTabId = tab.id;
+  }
+
+  /** Shows one of a tab's request sections (Params, Headers, …). */
+  showSection(tabId: string, section: RequestSection) {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (tab) tab.section = section;
   }
 
   private removeTab(id: string) {
@@ -909,7 +920,7 @@ class AppStore {
       if (!doc || doc.missing || !doc.file.requests.some((r) => r._key === key)) continue;
       let tab = this.tabs.find((t) => t.path === path && t.key === key);
       if (!tab) {
-        tab = { id: uid(), path, key };
+        tab = { id: uid(), path, key, ...newTabView() };
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
       }
       this.activeTabId = tab.id;

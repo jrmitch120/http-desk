@@ -405,6 +405,28 @@ describe("closing an Orphaned tab", () => {
   });
 });
 
+describe("a tab's request section and response view", () => {
+  it("start on Params, and on the Body tab in Pretty without wrap", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+
+    expect(tab.section).toBe("params");
+    expect(tab.responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+
+  it("are forgotten when the tab closes, so reopening its request starts afresh", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"]);
+    const [tab] = await openAll(f);
+    tab.section = "auth";
+    tab.responseView = { tab: "headers", mode: "raw", wrap: true };
+    await app.closeTab(tab.id);
+
+    await app.openRequest(PATH, { index: 0 });
+
+    expect(app.tabs[0].section).toBe("params");
+    expect(app.tabs[0].responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+});
+
 describe("Reopen Closed Tab", () => {
   beforeEach(() => {
     // Forget the tabs earlier tests closed: what's left of them reopens, then goes.
