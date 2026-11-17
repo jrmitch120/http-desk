@@ -220,10 +220,20 @@ export interface HistoryLink {
   url: string;
 }
 
+/**
+ * A status class History lists can be narrowed to (`history::StatusClass`): responses
+ * with a 2xx … 5xx status, or `error`, the sends that got no response (an error or a cancel).
+ */
+export type HistoryStatusClass = "2xx" | "3xx" | "4xx" | "5xx" | "error";
+
 /** Which History entries to list (`history::Query`): newest first, a page at a time. */
 export interface HistoryQuery {
   /** Only this request's; the whole workspace's without one. */
   request?: HistoryLink;
+  /** Only this status class's. */
+  status?: HistoryStatusClass;
+  /** Only those whose method, URL as sent, file or `# @name` contain this, ignoring case. */
+  text?: string;
   offset?: number;
   limit?: number;
 }

@@ -157,6 +157,8 @@ class PendingForm<S, C> {
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
 export type PanelId = "session" | "runner";
+/** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
+export type SidebarView = "explorer" | "history";
 /** A section of the Settings modal that can be opened scrolled into view. */
 export type SettingsSection = "tls" | "history";
 
@@ -224,7 +226,9 @@ class AppStore {
   modal = $state<ModalKind>(null);
   /** The panel shown below the requests, if any. */
   panel = $state<PanelId | null>(null);
-  dialog = $state<DialogState | null>(null);
+  /** What the sidebar shows. Not part of the Layout: each start shows the Explorer. */
+  sidebarView = $state<SidebarView>("explorer");
+  dialog =$state<DialogState | null>(null);
   private extractForm = new PendingForm<Extraction, ExtractChoice>();
   /** The Extract to variable form on screen (`ExtractVariable.svelte`), if any. */
   get extraction(): Extraction | null {
@@ -385,8 +389,10 @@ class AppStore {
       .catch(() => {});
   }
 
-  /** Shows the sidebar if it's hidden, for what puts its results there (Search Requests, Find usages). */
-  showSidebar() {
+  /** Shows the sidebar if it's hidden, on `view`, for what puts its results there
+   *  (Search Requests and Find usages, in the Explorer). */
+  showSidebar(view: SidebarView = "explorer") {
+    this.sidebarView = view;
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });
   }
 

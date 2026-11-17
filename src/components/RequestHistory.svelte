@@ -1,21 +1,19 @@
 <!--
   The request's History view in the response pane: the entries of the tab's request
   (by file and `# @name`, else file, method and URL), newest first, listed again after
-  each send. Opening one shows it read-only in the response viewer (ResponseViewer).
-  An entry's context menu compares it with the tab's current response, else the next
-  newer entry; two entries selected with their boxes compare with each other. While
-  the History switch is off it says so instead (HistoryOff).
+  each send, filtered and paged by HistoryView. Opening one shows it read-only in the
+  response viewer (ResponseViewer). An entry's context menu compares it with the tab's
+  current response, else the next newer entry; two entries selected with their boxes
+  compare with each other. While the History switch is off it says so instead (HistoryOff).
 -->
 <script lang="ts">
-  import { untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
-  import { api, errorMessage } from "../lib/api";
   import { compareTarget, historyLink, sentAt } from "../lib/history.svelte";
   import { menu } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import type { HistorySummary } from "../lib/types";
-  import HistoryList from "./HistoryList.svelte";
   import HistoryOff from "./HistoryOff.svelte";
+  import HistoryView from "./HistoryView.svelte";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -23,20 +21,8 @@
   const link = $derived(req ? historyLink(tab.path, req) : null);
   // What the list depends on: a named request's URL can change under it.
   const linkKey = $derived(link && JSON.stringify(link.name ? [link.filePath, link.name] : link));
+  /** The entries listed now (HistoryView's). */
   let entries = $state<HistorySummary[] | null>(null);
-
-  $effect(() => {
-    void linkKey;
-    void app.history.revision;
-    const request = untrack(() => link && { ...link });
-    if (!request || !app.history.enabled) return;
-    let current = true;
-    api
-      .listHistory({ request })
-      .then((list) => current && (entries = list))
-      .catch((e) => current && app.toast("error", errorMessage(e)));
-    return () => (current = false);
-  });
 
   // The entries selected for Compare, in the order they were selected.
   let selected = $state<number[]>([]);
@@ -67,9 +53,7 @@
 
 {#if !app.history.enabled}
   <HistoryOff />
-{:else if entries?.length === 0}
-  <div class="empty-state small">No History for this request yet</div>
-{:else if entries}
+{:else if link}
   {#if chosen.length}
     <div class="selection">
       <span class="muted">{chosen.length} selected</span>
@@ -78,13 +62,18 @@
       <button class="btn small" disabled={chosen.length !== 2} use:tooltip={chosen.length === 2 ? null : "Select two entries to compare"} onclick={() => app.history.compare(chosen[0], { entry: chosen[1] })}>Compare selected</button>
     </div>
   {/if}
-  <HistoryList {entries} onopen={(e) => app.history.open(tab.id, e)} {selected} onselect={select} onmenu={entryMenu} />
+  <HistoryView
+    request={link}
+    empty="No History for this request yet"
+    bind:entries
+    onopen={(e) => app.history.open(tab.id, e)}
+    {selected}
+    onselect={select}
+    onmenu={entryMenu}
+  />
 {/if}
 
 <style>
-  .small {
-    font-size: 12px;
-  }
   .selection {
     display: flex;
     align-items: center;
