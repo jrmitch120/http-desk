@@ -418,6 +418,12 @@ fn render_request(request: Request) -> String {
     httpdesk_core::render_request(&Request { leading: String::new(), ..request })
 }
 
+/// The first request in `text` (a History entry's source text), parsed as in a file.
+#[tauri::command]
+fn parse_request(text: String) -> Option<Request> {
+    httpdesk_core::parse(&text).requests.into_iter().next()
+}
+
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
     let path = state.confine_write(&path)?;
@@ -1371,6 +1377,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             read_http_file,
             save_http_file,
             render_request,
+            parse_request,
             create_file,
             create_dir,
             rename_path,

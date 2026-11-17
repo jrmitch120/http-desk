@@ -145,6 +145,37 @@ fn a_send_from_a_tab_is_recorded_with_the_request_as_sent_its_source_response_an
     assert_eq!(fetch(&h, &response["id"], "raw").unwrap_err(), json!("Response is no longer available"));
 }
 
+const WITH_VARIABLES: &str = "### Make pet
+# @name makePet
+@kind = dog
+@token = t0k3n
+POST {url}/{{kind}}s
+Authorization: Bearer {{token}}
+
+{\"kind\": \"{{kind}}\"}
+";
+
+#[test]
+fn an_entrys_source_text_parses_back_into_its_request_with_its_variables_as_written() {
+    let h = Harness::new();
+    let url = answer_once("HTTP/1.1 201 Created", "");
+    let (_ws, root) = workspace(&h, &WITH_VARIABLES.replace("{url}", &url));
+    let pet = request(&h, &root, 0);
+    h.ok("send_request", send_args(&root, &pet));
+    let entry = &history_of(&h, &root, &pet)[0];
+    assert_eq!(entry["url"], format!("{url}/dogs"), "sent resolved");
+
+    let source = h.ok("open_history_entry", json!({ "id": entry["id"] }))["source"].clone();
+    let restored = h.ok("parse_request", json!({ "text": source }));
+
+    assert_eq!(restored["url"], format!("{url}/{{{{kind}}}}s"));
+    // The credential as written, not masked like the request as sent.
+    assert_eq!((&restored["auth"]["kind"], &restored["auth"]["token"]), (&json!("bearer"), &json!("{{token}}")));
+    assert_eq!(restored["body"]["text"], "{\"kind\": \"{{kind}}\"}");
+    assert_eq!((&restored["name"], name_of(&restored)), (&json!("Make pet"), json!("makePet")));
+    assert_eq!(h.ok("parse_request", json!({ "text": "# only a comment\n" })), Value::Null);
+}
+
 /// The names of the files in `dir`, sorted.
 fn files_in(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> =
