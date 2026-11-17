@@ -65,8 +65,9 @@ export type RunSummary = { cancelled: boolean; requests: RunRequestReport[] };
 /** The formats a run's results export as. */
 export type RunExportFormat = "junit" | "json";
 
-/** Which form of a stored response body `api.responseBody` fetches. */
-export type BodyFetchView = "raw" | "pretty" | "bytes";
+/** Which form of a stored response body `api.responseBody` fetches. `compare`: the text
+ *  Compare diffs (JSON laid out with its keys sorted, XML as Pretty, else Raw). */
+export type BodyFetchView = "raw" | "pretty" | "bytes" | "compare";
 
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
@@ -78,6 +79,8 @@ export const api = {
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
   renderRequest: (request: Request) => invoke<string>("render_request", { request }),
+  /** The first request in `text` (a History entry's source text), parsed as in a file; null without one. */
+  parseRequest: (text: string) => invoke<Request | null>("parse_request", { text }),
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),

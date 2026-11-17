@@ -147,6 +147,7 @@
       {#if openedEntry}
         <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close(historyTab.id)}><Icon name="chevron-left" />Back</button>
         <span class="muted small">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
+        <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
       {:else}
         <span class="title">History</span>
       {/if}

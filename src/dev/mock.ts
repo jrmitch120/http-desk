@@ -161,6 +161,10 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
 const SAVED_FILES = "httpdesk-mock-files";
 const diskFiles: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_FILES) ?? "{}");
 Object.assign(files, diskFiles);
+function writeDiskFile(path: string, file: unknown) {
+  files[path] = diskFiles[path] = clone(file);
+  sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+}
 // `?roots=/work/shop`: opening one of these folders opens a workspace of its own there
 // (a copy of the demo one, with its own paths), not the demo workspace again.
 const otherRoots = new URLSearchParams(location.search).get("roots")?.split(",") ?? [];
@@ -684,9 +688,11 @@ window.addEventListener(
     return clone(files);
   },
   /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
-  writeFile(path: string, file: unknown) {
-    files[path] = diskFiles[path] = clone(file);
-    sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+  writeFile: writeDiskFile,
+  /** Writes a `.http` file model "on disk" while the app runs, then tells it like the watcher does (`workspace-changed`). */
+  async changeFile(path: string, file: unknown) {
+    writeDiskFile(path, file);
+    await emit("workspace-changed", { paths: [path] });
   },
   /** Each workspace's Layout as last saved, by root. */
   get layouts() {
@@ -812,6 +818,8 @@ type MockHistoryEntry = HistorySummary & {
   writtenMethod: string;
   writtenUrl: string;
   source: string;
+  /** The request `source` was rendered from: what `parse_request` gives back for it (the mock has no parser). */
+  model: Request;
   request: SentRequest;
   response: Omit<HttpResponse, "id"> | null;
   sendError: SendError | null;
@@ -860,7 +868,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
       writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: outcome.request.url,
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
-      error: outcome.sendError?.message ?? null, source: requestText(r), ...outcome,
+      error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
       request: maskCredentials(outcome.request),
     });
     try {
@@ -913,7 +921,7 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
 function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
-  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, body, response, ...entry } = clone(e);
+  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, ...entry } = clone(e);
   if (!response) return { ...entry, response: null };
   const responseId = `h-${++responseCount}`;
   if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
@@ -1016,6 +1024,8 @@ const manyHeaders = new URLSearchParams(location.search).get("manyHeaders") === 
 const extraHeaders: [string, string][] = manyHeaders
   ? [["cache-control", "public, max-age=60"], ["etag", '"pets-v1"'], ["x-cache", "HIT"], ["access-control-allow-origin", "*"], ["ratelimit-remaining", "42"]]
   : [];
+// `?response=petsChanged`: the JSON response with Rex renamed Max, and an `x-api-version: 2` header.
+// `?response=petsReordered`: the JSON response's content with its keys in another order and other spacing.
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=asReceived`: the JSON response's Content-Encoding couldn't be undone, so
 //   its bytes are kept as received and, like the core says, its kind is binary.
@@ -1256,6 +1266,27 @@ function prettyText({ body, kind }: { body: string; kind: ResponseKind }): strin
   throw "Response body isn't JSON or XML";
 }
 
+/**
+ * Stand-in for the core's `compare_text`: JSON laid out like Pretty with each object's
+ * keys sorted (numbers kept as written, `JSON.rawJSON`), XML as Pretty, else the body as is.
+ */
+function compareText({ body, kind }: { body: string; kind: ResponseKind }): string {
+  const J = JSON as any;
+  const sorted = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v !== null && typeof v === "object" && !J.isRawJSON(v)
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]))
+        : v;
+  try {
+    if (kind === "xml") return formatXml(body, "pretty");
+    if (kind !== "json") return body;
+    return J.stringify(sorted(J.parse(body, (_k: string, v: unknown, ctx: { source?: string }) => (typeof v === "number" ? J.rawJSON(ctx.source) : v))), null, 2);
+  } catch {
+    return body;
+  }
+}
+
 /** Binary response bodies by response id, as bytes, like the shell's stored bodies. */
 const binaryBodies = new Map<string, Uint8Array>();
 /** Stores a binary response's body (`bytes`) and returns its reply, which carries no body. */
@@ -1427,6 +1458,10 @@ async function mockSend(args: any) {
               ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
               : responseKind === "nested"
                 ? `{"a":{"odd key":[{"b":1}]}}`
+              : responseKind === "petsReordered"
+                ? `{ "method": "${r.method}",\n  "items": [{"tags": ["good", "dog"], "name": "Rex", "id": 1, "active": true},\n    {"owner": null, "active": false, "tags": [], "name": "Tom", "id": 2}] }`
+              : responseKind === "petsChanged"
+                ? JSON.stringify({ items: [{ id: 1, name: "Max", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method })
                 : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
   const gzip = responseKind === "gzip";
   const transferredSize = gzip ? 112 : body.length;
@@ -1437,7 +1472,7 @@ async function mockSend(args: any) {
   const cookies = responseKind === "cookies" ? mockCookies : [];
   keepCookies(cookies);
   const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
-  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
+  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...(responseKind === "petsChanged" ? [["x-api-version", "2"] as [string, string]] : []), ...extraHeaders, ...setCookies];
   record(status, headers, body);
   return done({
     id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
@@ -1591,6 +1626,11 @@ mockIPC(
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
         return requestText(args.request);
+      case "parse_request": {
+        // No parser: a History entry's source text gives back the request it was rendered from.
+        const model = historyEntries.find((e) => e.source === args.text)?.model;
+        return model ? clone(model) : null;
+      }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
         const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
@@ -1756,6 +1796,7 @@ mockIPC(
         const stored = textBodies.get(id);
         if (stored === undefined) throw RESPONSE_GONE;
         if (stored.encoded) return stored.encoded[view === "pretty" ? "pretty" : "raw"].buffer;
+        if (view === "compare") return new TextEncoder().encode(compareText(stored)).buffer;
         return new TextEncoder().encode(view === "pretty" ? (stored.pretty ?? prettyText(stored)) : stored.body).buffer;
       }
       case "release_response":
