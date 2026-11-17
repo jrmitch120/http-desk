@@ -5,6 +5,7 @@
     "folder-open": "M3 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v1M3 7v10a2 2 0 0 0 2 2h12.5a2 2 0 0 0 1.9-1.4L21.8 11a1 1 0 0 0-1-1.3H8.2a2 2 0 0 0-1.9 1.4L3 19",
     file: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5",
     "chevron-right": "M9 6l6 6-6 6",
+    "chevron-left": "M15 6l-6 6 6 6",
     "chevron-down": "M6 9l6 6 6-6",
     "chevron-up": "M6 15l6-6 6 6",
     plus: "M12 5v14M5 12h14",

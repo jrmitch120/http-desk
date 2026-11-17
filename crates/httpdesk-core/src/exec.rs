@@ -735,6 +735,14 @@ pub struct SentRequest {
     pub body_size: usize,
 }
 
+impl SentRequest {
+    /// `p` as it goes out before any redirect, without the cookies a jar adds:
+    /// what a send that got no response sent.
+    pub fn of(p: &PreparedRequest) -> SentRequest {
+        final_request(p, &[], &p.url)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponse {

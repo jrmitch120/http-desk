@@ -15,7 +15,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryEntry, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -700,6 +700,10 @@ window.addEventListener(
   get shapeRequests() {
     return [...shapeRequests];
   },
+  /** Every History entry the mock keeps, oldest first, as stored (`MockHistoryEntry`). */
+  get history() {
+    return clone(historyEntries);
+  },
   get releasedResponses() {
     return [...releasedResponses];
   },
@@ -796,6 +800,118 @@ function recordExchange<T extends MockExchange["response"]>(file: string | null,
   }
   return response;
 }
+
+/**
+ * One History entry as the mock keeps it (like the shell's store, `history.rs`): the
+ * list's summary, what links it to its request (method and URL as written), and the
+ * entry whole, its body as text or base64.
+ */
+type MockHistoryEntry = HistorySummary & {
+  workspace: string;
+  writtenMethod: string;
+  writtenUrl: string;
+  source: string;
+  request: SentRequest;
+  response: Omit<HttpResponse, "id"> | null;
+  sendError: SendError | null;
+  body: { text: string; kind: ResponseKind } | { base64: string } | null;
+};
+// History survives a reload of the page, as it does a restart. Each test gets a
+// fresh page, so it starts with none.
+const SAVED_HISTORY = "httpdesk-mock-history";
+const historyEntries: MockHistoryEntry[] = JSON.parse(sessionStorage.getItem(SAVED_HISTORY) ?? "[]");
+let historyIds = Math.max(0, ...historyEntries.map((e) => e.id));
+/** The send errors that come after something went out, so are recorded (like `history::Pending::finish`). */
+const RECORDED_ERRORS = new Set<string>(["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"]);
+/** The largest body the mock keeps with a History entry. */
+const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
+/** Request headers whose values History masks. */
+const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
+const maskCredentials = (request: SentRequest): SentRequest => ({
+  ...request,
+  headers: request.headers.map(([n, v]) => [n, CREDENTIAL_HEADERS.includes(n.toLowerCase()) ? MASK : v]),
+});
+
+/** A request's text, as the mock renders it (it has no serializer). */
+function requestText(r: any): string {
+  const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
+  return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+}
+
+/** Like the shell's `send_request`: sends, then records the send in History if anything went out. */
+async function sendFromTab(args: any): Promise<HttpResponse> {
+  const r = args.request;
+  const started = performance.now();
+  const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled">) => {
+    const response = outcome.response;
+    historyEntries.push({
+      id: ++historyIds, workspace: ROOT, time: new Date().toISOString(),
+      file: args.filePath?.startsWith(`${ROOT}/`) ? args.filePath.slice(ROOT.length + 1) : args.filePath,
+      name: r.directives.find((d: { name: string }) => d.name === "name")?.value.trim() || null,
+      writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: outcome.request.url,
+      status: response?.status ?? null, statusText: response?.statusText ?? null,
+      durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
+      error: outcome.sendError?.message ?? null, source: requestText(r), ...outcome,
+      request: maskCredentials(outcome.request),
+    });
+    try {
+      sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+    } catch {
+      // Over the storage quota (large bodies): kept until the page reloads, like a failed write.
+    }
+  };
+  const attempted = (): SentRequest => ({
+    method: r.method, url: r.url, bodyPreview: r.body.enabled ? r.body.text : null, bodySize: r.body.enabled ? r.body.text.length : 0,
+    headers: r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]),
+  });
+  let response: HttpResponse;
+  try {
+    // Some canned replies leave out tests and logs, which the viewer reads as none.
+    response = (await mockSend(args)) as HttpResponse;
+  } catch (e: any) {
+    if (e === "cancelled") record({ request: attempted(), response: null, sendError: null, body: null, cancelled: true });
+    else if (RECORDED_ERRORS.has(e?.kind)) record({ request: attempted(), response: null, sendError: clone(e), body: null, cancelled: false });
+    throw e;
+  }
+  const { id, ...stored } = response;
+  const text = textBodies.get(id);
+  const bytes = binaryBodies.get(id);
+  // Large bodies (the perf test's, `?bigBinary`) aren't kept, so sessionStorage stays small
+  // and a measured send does no extra work: their entries open without a body.
+  const kept = !perf && response.bodySize <= MOCK_HISTORY_BODY_BYTES;
+  const body = !kept ? null : text ? { text: text.body, kind: text.kind } : bytes ? { base64: toBase64(bytes) } : null;
+  record({ request: response.request, response: { ...clone(stored), request: maskCredentials(response.request) }, sendError: null, body, cancelled: false });
+  return response;
+}
+
+/** Like the shell's `list_history`: the entries `query` asks for, newest first. */
+function listHistory(query: HistoryQuery): HistorySummary[] {
+  const link = query.request;
+  const file = link && (link.filePath.startsWith(`${ROOT}/`) ? link.filePath.slice(ROOT.length + 1) : link.filePath);
+  const offset = query.offset ?? 0;
+  return historyEntries
+    .filter((e) => e.workspace === ROOT)
+    .filter((e) => !link || (e.file === file && (link.name ? e.name === link.name : !e.name && e.writtenMethod === link.method && e.writtenUrl === link.url)))
+    .sort((a, b) => b.time.localeCompare(a.time) || b.id - a.id)
+    .slice(offset, offset + (query.limit ?? 200))
+    .map((e) => ({
+      id: e.id, time: e.time, file: e.file, name: e.name, method: e.method, url: e.url, status: e.status,
+      statusText: e.statusText, durationMs: e.durationMs, size: e.size, error: e.error, cancelled: e.cancelled,
+    }));
+}
+
+/** Like the shell's `open_history_entry`: the entry whole, its response under a new id whose body is kept. */
+function openHistoryEntry(id: number): HistoryEntry {
+  const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
+  if (!e) throw "This History entry no longer exists";
+  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, body, response, ...entry } = clone(e);
+  if (!response) return { ...entry, response: null };
+  const responseId = `h-${++responseCount}`;
+  if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
+  if (body && "base64" in body) binaryBodies.set(responseId, Uint8Array.from(atob(body.base64), (c) => c.charCodeAt(0)));
+  return { ...entry, response: { ...response, id: responseId } };
+}
+
 /** Forgets one named request's latest exchange (or, without a key, every one), like `Exchanges::remove` and `clear`. */
 function forgetExchanges(key?: string): boolean {
   if (key === undefined) {
@@ -1464,11 +1580,8 @@ mockIPC(
       case "preview_request":
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
-      case "render_request": {
-        const r = args.request;
-        const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
-        return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
-      }
+      case "render_request":
+        return requestText(args.request);
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
         const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
@@ -1540,7 +1653,12 @@ mockIPC(
         openedPaths.push(locateScriptFile(args.filePath, args.path));
         return null;
       case "send_request":
-        return mockSend(args);
+        // Only a tab's sends are recorded: a Run's go through `mockSend` alone.
+        return sendFromTab(args);
+      case "list_history":
+        return listHistory(args.query);
+      case "open_history_entry":
+        return openHistoryEntry(args.id);
       case "run_requests": {
         // Like the shell: each request through the send flow, reported as `run-progress`.
         const { runId, selection, options } = args;

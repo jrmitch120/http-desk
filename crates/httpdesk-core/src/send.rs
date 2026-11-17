@@ -15,13 +15,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
 use crate::env::{self, EnvironmentSet};
 use crate::exchange;
-use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse};
+use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse, SentRequest};
 use crate::model::{HttpFile, Request, Variable};
 use crate::script::{self, RequestScripts, ScriptContext};
 use crate::session::Session;
@@ -227,10 +227,34 @@ impl Drop for StopOnDrop {
     }
 }
 
+/// The request a send put on the wire, once it got that far. A send that fails or
+/// is cancelled after that still sent something (History records it, #151); one
+/// that stopped before it (blocked) has none.
+#[derive(Debug, Default)]
+pub struct Attempt(Mutex<Option<SentRequest>>);
+
+impl Attempt {
+    /// The request as it went out, before any redirect; `None` if nothing went out.
+    pub fn request(&self) -> Option<SentRequest> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
 /// Sends `out` in `ctx` (see the module docs). `on_progress` gets the body bytes
 /// received so far (see [`exec::execute_on`]). Dropping the future cancels the send,
 /// and stops a script it is running; a cancelled send records nothing in the Session.
 pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usize) + Send) -> Result<Sent, ExecError> {
+    send_attempt(ctx, out, on_progress, &Attempt::default()).await
+}
+
+/// [`send`], noting in `attempt` the request it puts on the wire as it goes out, so
+/// what was sent is known even when the send then fails or is cancelled.
+pub async fn send_attempt(
+    ctx: &SendContext,
+    out: Outgoing,
+    on_progress: impl FnMut(usize) + Send,
+    attempt: &Attempt,
+) -> Result<Sent, ExecError> {
     let scripts = RequestScripts::of(&out.request);
     let run_scripts = scripts.any() && ctx.scripts != Scripts::Skip;
     let stop = StopOnDrop(script::Stop::default());
@@ -274,6 +298,7 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
     let pending = exchange::begin(out.file_path.as_deref(), &out.request, &prepared);
     // Each send gets a client no other send is using (see ClientPool).
     let client = ctx.clients.checkout(&prepared, &ctx.settings, &ssl)?;
+    *attempt.0.lock().unwrap() = Some(SentRequest::of(&prepared));
     let mut outcome =
         exec::execute_on(&client, prepared, &ctx.settings, Some(ctx.session.cookies()), on_progress).await?;
     drop(client);

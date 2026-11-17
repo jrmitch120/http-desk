@@ -5,7 +5,7 @@
 // Mock state lives in the page, so every test (fresh page) starts clean.
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { BodyFetchView } from "../src/lib/api";
-import type { RunRequestReport } from "../src/lib/types";
+import type { HistoryEntry, RunRequestReport } from "../src/lib/types";
 
 /**
  * Loads the app and waits for the mocked workspace tree to appear.
@@ -149,6 +149,8 @@ export interface MockState {
   clipboardWrites: string[];
   /** The response ids `release_response` was called with, in order. */
   releasedResponses: string[];
+  /** Every History entry the mock keeps, oldest first, with the request as recorded (credentials masked). */
+  history: (HistoryEntry & { workspace: string })[];
   /** The response ids `copy_response_body` copied to the clipboard, in order. */
   bodyCopies: string[];
 }

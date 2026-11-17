@@ -33,6 +33,9 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import RequestHistory from "./RequestHistory.svelte";
+  import Self from "./ResponseViewer.svelte";
+  import { sentAt } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
   // has no tab to cancel or retry in. `result.id` stands in for the tab id that
@@ -42,6 +45,12 @@
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
+
+  // An editor tab's pane can show its request's History instead, and an entry opened
+  // from it, read-only, in a viewer of its own (not a Run's result or a pseudo tab's).
+  const historyTab = $derived(tab && app.tabs.some((t) => t.id === tab.id) ? tab : null);
+  const showingHistory = $derived(!!historyTab && app.history.isShown(historyTab.id));
+  const openedEntry = $derived(historyTab && showingHistory ? app.history.openedIn(historyTab.id) : undefined);
 
   // The viewer tab, body mode and wrap: the tab's own, or this result's.
   const resultView = $state(untrack(() => (tab ? null : (resultViews.get(viewId) ?? newResponseView()))));
@@ -128,8 +137,35 @@
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
+{#snippet historySwitch(t: Tab)}
+  <button class="btn small ghost history-switch" class:on={showingHistory} aria-pressed={showingHistory} onclick={() => app.history.toggle(t.id)}>History</button>
+{/snippet}
+
 <div class="viewer">
-  {#if !run}
+  {#if historyTab && showingHistory}
+    <div class="statusbar">
+      {#if openedEntry}
+        <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close(historyTab.id)}><Icon name="chevron-left" />Back</button>
+        <span class="muted small">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
+      {:else}
+        <span class="title">History</span>
+      {/if}
+      {@render historySwitch(historyTab)}
+    </div>
+    {#if openedEntry}
+      <section class="entry" aria-label="History entry">
+        {#key openedEntry.tab.id}<Self tab={openedEntry.tab} />{/key}
+      </section>
+    {:else}
+      <RequestHistory tab={historyTab} />
+    {/if}
+  {:else if !run}
+    {#if historyTab}
+      <div class="statusbar">
+        <span class="title">Response</span>
+        {@render historySwitch(historyTab)}
+      </div>
+    {/if}
     <div class="empty-state">
       <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <rect x="10" y="14" width="52" height="44" rx="6" stroke="var(--border-strong)" stroke-width="2" />
@@ -162,6 +198,7 @@
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
       {/if}
+      {#if historyTab}{@render historySwitch(historyTab)}{/if}
     </div>
 
     {#if run.cancelled && !res}
@@ -261,5 +298,15 @@
     padding: 6px 10px 6px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
+  }
+  /* The view switch sits at the end of the title row, whatever comes before it. */
+  .history-switch {
+    margin-left: auto;
+  }
+  .entry {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 </style>

@@ -12,6 +12,9 @@ import type {
   FolderEnvironments,
   GenerateOptions,
   GenerateReport,
+  HistoryEntry,
+  HistoryQuery,
+  HistorySummary,
   HttpFile,
   Usage,
   HttpResponse,
@@ -141,6 +144,13 @@ export const api = {
    * body is kept until released, like any response's. Rejects when there is none.
    */
   openExchange: (filePath: string, name: string) => invoke<HttpResponse>("open_exchange", { filePath, name }),
+  /** The open workspace's History entries that `query` asks for, newest first. */
+  listHistory: (query: HistoryQuery) => invoke<HistorySummary[]>("list_history", { query }),
+  /**
+   * History entry `id`, whole, to show read-only. Its response has an id of its own,
+   * whose body is kept until released, like any response's.
+   */
+  openHistoryEntry: (id: number) => invoke<HistoryEntry>("open_history_entry", { id }),
   /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */
   requestVariable: (filePath: string, reference: string) => invoke<RequestVariableReading | null>("request_variable", { filePath, reference }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),

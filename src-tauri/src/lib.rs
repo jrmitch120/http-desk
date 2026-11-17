@@ -25,6 +25,7 @@ mod bodies;
 mod confine;
 mod copying;
 mod deleting;
+mod history;
 mod json_docs;
 mod layout;
 mod menu;
@@ -232,6 +233,8 @@ struct AppState {
     bodies: Mutex<KeptBodies>,
     /// Recent bodies parsed as JSON, by response id (for the filter bar).
     json_docs: Mutex<JsonDocs>,
+    /// Every workspace's History, on disk in the config folder (see history.rs).
+    history: history::History,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
@@ -278,7 +281,7 @@ impl AppState {
 #[cfg(test)]
 struct ConfigDir(PathBuf);
 
-/// The folder for everything the app keeps (settings, Layouts): the test's
+/// The folder for everything the app keeps (settings, Layouts, History): the test's
 /// `ConfigDir`, else `HTTPDESK_CONFIG_DIR` (portable installs), else the OS's.
 fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     #[cfg(test)]
@@ -290,6 +293,11 @@ fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
 
 fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     Some(config_dir(app)?.join("settings.json"))
+}
+
+/// Where every workspace's History is kept (ADR-0009): never in a workspace.
+fn history_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    Some(config_dir(app)?.join(history::FILE_NAME))
 }
 
 /// The config folder `HTTPDESK_CONFIG_DIR` sets, if any.
@@ -573,10 +581,12 @@ async fn preview_request<R: tauri::Runtime>(
     .await
 }
 
-/// Sends one request the way every send goes (`send::send`, shared with runs), and
-/// keeps its body for the viewer. Unlike other commands, a failed send is a
-/// classified `{ kind, message, details }` object (see `ExecError`), so the viewer
-/// can explain it and offer the fix.
+/// Sends one request from a tab the way every send goes (`send::send`, shared with
+/// runs), keeps its body for the viewer, and records it in History once it has
+/// finished, however it ended, if anything went out (the only send recorded: a
+/// Run's aren't). Unlike other commands, a failed send is a classified
+/// `{ kind, message, details }` object (see `ExecError`), so the viewer can explain
+/// it and offer the fix.
 // Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -595,14 +605,29 @@ async fn send_request<R: tauri::Runtime>(
     let ctx = send_context(&state, environment, skip_scripts.unwrap_or(false));
     let out =
         Outgoing { request, file_path, file_variables, request_names: request_names.unwrap_or_default(), request_key };
-    let progress_id = run_id.clone();
+    let (progress_id, emitter) = (run_id.clone(), app.clone());
     let on_progress = move |received| {
-        let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
+        let _ = emitter.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    let task = tokio::spawn(async move { send::send(&ctx, out, on_progress).await });
+    let pending = history::Pending::begin(ctx.root.as_deref(), &out);
+    let attempt = Arc::new(send::Attempt::default());
+    let task = {
+        let attempt = attempt.clone();
+        tokio::spawn(async move { send::send_attempt(&ctx, out, on_progress, &attempt).await })
+    };
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
+
+    let finished = match &result {
+        Ok(Ok(sent)) => Some(history::Finished::Sent(sent)),
+        Ok(Err(e)) => Some(history::Finished::Failed(e)),
+        Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
+        Err(_) => None,
+    };
+    if let Some(entry) = pending.zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &history::Masking::default())) {
+        state.history.record(|| history_path(&app), entry);
+    }
 
     match result {
         Ok(Ok(sent)) => {
@@ -829,6 +854,38 @@ fn open_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -
     let reopened = Sent { response: exchange.reopened(), body: exchange.response_body.clone() };
     keep_body(&state, &reopened);
     Ok(reopened.response)
+}
+
+/// The open workspace's History entries that `query` asks for, newest first.
+#[tauri::command]
+async fn list_history<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    query: history::Query,
+) -> CmdResult<Vec<httpdesk_core::history::Summary>> {
+    let root = state.root()?;
+    state.history.read(|| history_path(&app), move |store| store.list(&root, &query)).await
+}
+
+/// History entry `id` of the open workspace, whole, to show read-only. Its response
+/// is a response of its own, under a new id whose body is kept like any response's
+/// until released (ADR-0006).
+#[tauri::command]
+async fn open_history_entry<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    id: i64,
+) -> CmdResult<httpdesk_core::history::Entry> {
+    let root = state.root()?;
+    let entry = state
+        .history
+        .read(|| history_path(&app), move |store| store.get(&root, id))
+        .await?
+        .ok_or_else(|| "This History entry no longer exists".to_string())?;
+    if let (Some(response), Some(body)) = (&entry.response, &entry.body) {
+        keep_body(&state, &Sent { response: response.clone(), body: body.clone() });
+    }
+    Ok(entry)
 }
 
 /// What Request variable `reference` (trimmed, without braces) of a request in
@@ -1335,6 +1392,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             remove_named_exchange,
             clear_named_exchanges,
             open_exchange,
+            list_history,
+            open_history_entry,
             request_variable,
             exchange_shape,
             session_cookies,
