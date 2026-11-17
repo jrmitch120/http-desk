@@ -34,6 +34,26 @@ fn answer_once(head: &'static str, body: &'static str) -> String {
     url
 }
 
+/// Answers every request with `200 ok`, one per connection, on any number of connections.
+fn answer_each() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().map_while(Result::ok) {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-length: 2\r\n\r\nok");
+        }
+    });
+    url
+}
+
 /// Whether `path` is one of the History store's files (the database and its journal).
 pub(super) fn is_store(path: &Path) -> bool {
     path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(crate::history::FILE_NAME))
@@ -270,4 +290,100 @@ fn a_runs_sends_and_sends_blocked_before_anything_went_out_are_not_recorded() {
     assert_eq!(err["kind"], "untrustedWorkspace", "{err}");
 
     assert_eq!(all_history(&h), Vec::<Value>::new());
+}
+
+#[test]
+fn a_request_marked_no_log_is_sent_but_not_recorded() {
+    let h = Harness::new();
+    let server = super::keep_alive_server(2);
+    let (_ws, root) = workspace(&h, &format!("# @no-log\nGET {server}/secret\n\n###\nGET {server}/plain\n"));
+
+    let sent = h.ok("send_request", send_args(&root, &request(&h, &root, 0)));
+    assert_eq!(sent["status"], 200, "it is sent");
+    h.ok("send_request", send_args(&root, &request(&h, &root, 1)));
+
+    let urls: Vec<Value> = all_history(&h).iter().map(|e| e["url"].clone()).collect();
+    assert_eq!(urls, [json!(format!("{server}/plain"))]);
+}
+
+/// Turns the History switch on or off, as Settings does (the whole settings object).
+fn switch_history(h: &Harness, on: bool) {
+    let mut settings = h.ok("get_settings", json!({}));
+    settings["history"]["enabled"] = json!(on);
+    h.ok("save_settings", json!({ "settings": settings }));
+}
+
+#[test]
+fn history_is_on_by_default_and_while_it_is_off_nothing_is_recorded_and_what_was_stays() {
+    let h = Harness::new();
+    assert_eq!(h.ok("get_settings", json!({}))["history"]["enabled"], true);
+    let server = answer_each();
+    let (_ws, root) = workspace(&h, &format!("GET {server}/one\n"));
+    let one = request(&h, &root, 0);
+    h.ok("send_request", send_args(&root, &one));
+
+    // Turned off, and asked to Keep what's there.
+    switch_history(&h, false);
+    h.ok("send_request", send_args(&root, &one));
+    assert_eq!(all_history(&h).len(), 1, "nothing is recorded while it's off; what was, stays");
+
+    let h = h.restart();
+    crate::load_settings(h.app.handle());
+    assert_eq!(h.ok("get_settings", json!({}))["history"]["enabled"], false, "the switch is remembered");
+    h.ok("open_workspace", json!({ "path": root }));
+    h.ok("send_request", send_args(&root, &one));
+    assert_eq!(all_history(&h).len(), 1);
+
+    switch_history(&h, true);
+    h.ok("send_request", send_args(&root, &one));
+    assert_eq!(all_history(&h).len(), 2);
+}
+
+#[test]
+fn settings_can_show_where_history_is_kept_in_the_config_folder() {
+    let h = Harness::new();
+    let location = h.ok("history_location", json!({}));
+    assert_eq!(location, json!(h.config_dir().join("history.sqlite3")));
+}
+
+/// The bytes of every History store file in `dir` (the database and its journal).
+fn store_bytes(dir: &Path) -> Vec<u8> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| is_store(p))
+        .flat_map(|p| std::fs::read(p).unwrap())
+        .collect()
+}
+
+#[test]
+fn turning_history_off_with_delete_clears_every_workspaces_history_from_disk() {
+    let h = Harness::new();
+    let server = answer_each();
+    let (_ws_a, root_a) = workspace(&h, &format!("GET {server}/a?q=needle-a\n"));
+    h.ok("send_request", send_args(&root_a, &request(&h, &root_a, 0)));
+    let (_ws_b, root_b) = workspace(&h, &format!("GET {server}/b?q=needle-b\n"));
+    let b = request(&h, &root_b, 0);
+    h.ok("send_request", send_args(&root_b, &b));
+    let opened = h.ok("open_history_entry", json!({ "id": all_history(&h)[0]["id"] }));
+
+    // Turned off, and asked to Delete what's there.
+    switch_history(&h, false);
+    h.ok("clear_all_history", json!({}));
+
+    assert_eq!(all_history(&h), Vec::<Value>::new());
+    h.ok("open_workspace", json!({ "path": root_a }));
+    assert_eq!(all_history(&h), Vec::<Value>::new(), "every workspace's");
+    let store = store_bytes(&h.config_dir());
+    for needle in ["needle-a", "needle-b"] {
+        assert!(!store.windows(needle.len()).any(|w| w == needle.as_bytes()), "{needle} is gone from disk");
+    }
+    // An entry open in the viewer stays readable until it's closed (ADR-0006).
+    assert_eq!(fetch(&h, &opened["response"]["id"], "raw").unwrap(), b"ok");
+
+    // With the switch back on, recording starts again.
+    switch_history(&h, true);
+    h.ok("open_workspace", json!({ "path": root_b }));
+    h.ok("send_request", send_args(&root_b, &b));
+    assert_eq!(all_history(&h).len(), 1);
 }
