@@ -692,6 +692,7 @@ window.addEventListener(
   releasePretty: () => releasePretty(),
   /** Lets held bodies through (`?body=hold`). */
   releaseBody: () => releaseBody(),
+  releaseReads: () => releaseReads(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
@@ -859,7 +860,7 @@ const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
  * a binary one not at all. `?historyCap=<bytes>` lowers it, so a test needn't send 10 MB.
  */
 const HISTORY_CAP = Number(new URLSearchParams(location.search).get("historyCap")) || 10 * 1024 * 1024;
-/** `request` with its body cut off at the cap, marked, as History keeps it. */
+/** `request` with its body cut off at the cap, as History keeps it (opened, the shell shows only its first 64 KB). */
 const capRequest = (request: SentRequest): SentRequest =>
   request.bodyPreview !== null && request.bodySize > HISTORY_CAP ? { ...request, bodyPreview: request.bodyPreview.slice(0, HISTORY_CAP), bodyTruncated: true } : request;
 /** Request headers whose values History masks. */
@@ -1092,6 +1093,7 @@ const extraHeaders: [string, string][] = manyHeaders
   : [];
 // `?response=petsChanged`: the JSON response with Rex renamed Max, and an `x-api-version: 2` header.
 // `?response=petsReordered`: the JSON response's content with its keys in another order and other spacing.
+// `?response=bigJson`: a 1.6 MB JSON response (over what Compare diffs).
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=asReceived`: the JSON response's Content-Encoding couldn't be undone, so
 //   its bytes are kept as received and, like the core says, its kind is binary.
@@ -1162,6 +1164,10 @@ const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)
 const bodyHeld = new URLSearchParams(location.search).get("body") === "hold";
 let releaseBody: () => void = () => {};
 const bodyReleased = bodyHeld ? new Promise<void>((r) => (releaseBody = r)) : Promise.resolve();
+// `?reads=hold`: every `read_http_file` waits until a test calls `__mock.releaseReads()`.
+const readsHeld = new URLSearchParams(location.search).get("reads") === "hold";
+let releaseReads: () => void = () => {};
+const readsReleased = readsHeld ? new Promise<void>((r) => (releaseReads = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -1526,6 +1532,8 @@ async function mockSend(args: any) {
                 ? `{"a":{"odd key":[{"b":1}]}}`
               : responseKind === "petsReordered"
                 ? `{ "method": "${r.method}",\n  "items": [{"tags": ["good", "dog"], "name": "Rex", "id": 1, "active": true},\n    {"owner": null, "active": false, "tags": [], "name": "Tom", "id": 2}] }`
+              : responseKind === "bigJson"
+                ? JSON.stringify({ items: Array.from({ length: 24_000 }, (_, i) => ({ id: i, name: `Pet ${i}`, tags: ["good", "dog"], active: i % 2 === 0 })), method: r.method })
               : responseKind === "petsChanged"
                 ? JSON.stringify({ items: [{ id: 1, name: "Max", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method })
                 : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
@@ -1662,6 +1670,7 @@ mockIPC(
         return { gitignoreUpdated: false };
       }
       case "read_http_file":
+        await readsReleased;
         return clone(fileAt(args.path));
       case "save_http_file":
         savedPaths.push(args.path);

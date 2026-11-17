@@ -663,10 +663,13 @@ async fn send_request<R: tauri::Runtime>(
     let on_progress = move |received| {
         let _ = emitter.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    let pending = history::Pending::begin(ctx.root.as_deref(), &out);
-    // What to mask in its entry, read as the send will read it, before it goes.
-    let masking = pending.as_ref().map(|_| history::Masking::for_send(&ctx, &out)).unwrap_or_default();
-    let attempt = Arc::new(send::Attempt::default());
+    // Recorded only with the History switch on now and when the send finishes.
+    let pending =
+        history::Pending::begin(ctx.root.as_deref(), &out).filter(|_| state.settings.lock().unwrap().history.enabled);
+    let attempt = Arc::new(match pending {
+        Some(_) => send::Attempt::for_history(),
+        None => send::Attempt::default(),
+    });
     let task = {
         let attempt = attempt.clone();
         tokio::spawn(async move { send::send_attempt(&ctx, out, on_progress, &attempt).await })
@@ -685,9 +688,8 @@ async fn send_request<R: tauri::Runtime>(
         let settings = state.settings.lock().unwrap();
         (settings.history.enabled, settings.history.retention())
     };
-    if let Some(entry) = pending.filter(|_| recording).zip(finished).and_then(|(p, f)| p.finish(&attempt, f, &masking))
-    {
-        state.history.record(|| history_path(&app), entry, retention);
+    if let Some(entry) = pending.filter(|_| recording).zip(finished).and_then(|(p, f)| p.finish(&attempt, f)) {
+        state.history.record(entry, retention);
     }
 
     match result {
@@ -919,28 +921,23 @@ fn open_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -
 
 /// The open workspace's History entries that `query` asks for, newest first.
 #[tauri::command]
-async fn list_history<R: tauri::Runtime>(
-    app: AppHandle<R>,
+async fn list_history(
     state: State<'_, AppState>,
     query: history::Query,
 ) -> CmdResult<Vec<httpdesk_core::history::Summary>> {
     let root = state.root()?;
-    state.history.read(|| history_path(&app), move |store| store.list(&root, &query)).await
+    state.history.read(move |store| store.list(&root, &query)).await
 }
 
 /// History entry `id` of the open workspace, whole, to show read-only. Its response
 /// is a response of its own, under a new id whose body is kept like any response's
 /// until released (ADR-0006).
 #[tauri::command]
-async fn open_history_entry<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-    id: i64,
-) -> CmdResult<httpdesk_core::history::Entry> {
+async fn open_history_entry(state: State<'_, AppState>, id: i64) -> CmdResult<httpdesk_core::history::Entry> {
     let root = state.root()?;
     let entry = state
         .history
-        .read(|| history_path(&app), move |store| store.get(&root, id))
+        .read(move |store| store.get(&root, id))
         .await?
         .ok_or_else(|| "This History entry no longer exists".to_string())?;
     if let (Some(response), Some(body)) = (&entry.response, &entry.body) {
@@ -952,35 +949,31 @@ async fn open_history_entry<R: tauri::Runtime>(
 /// Where History is kept on disk, for Settings to show; null when the app has no
 /// config folder.
 #[tauri::command]
-fn history_location<R: tauri::Runtime>(app: AppHandle<R>) -> Option<PathBuf> {
-    history_path(&app)
+fn history_location(state: State<'_, AppState>) -> Option<PathBuf> {
+    state.history.location()
 }
 
 /// Deletes History entry `id` of the open workspace, from disk too. Opened, it stays
 /// readable until released (ADR-0006).
 #[tauri::command]
-async fn delete_history_entry<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-    id: i64,
-) -> CmdResult<()> {
+async fn delete_history_entry(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     let root = state.root()?;
-    state.history.read(|| history_path(&app), move |store| store.delete(&root, id)).await
+    state.history.read(move |store| store.delete(&root, id)).await
 }
 
 /// Deletes the open workspace's History (the History view's Clear workspace
 /// history), from disk too. Entries open in a viewer stay until released.
 #[tauri::command]
-async fn clear_workspace_history<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> CmdResult<()> {
+async fn clear_workspace_history(state: State<'_, AppState>) -> CmdResult<()> {
     let root = state.root()?;
-    state.history.read(|| history_path(&app), move |store| store.clear_workspace(&root)).await
+    state.history.read(move |store| store.clear_workspace(&root)).await
 }
 
 /// Deletes every workspace's History (Settings → Clear all history, or turning
 /// History off with Delete). Entries open in a viewer stay until released.
 #[tauri::command]
-async fn clear_all_history<R: tauri::Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> CmdResult<()> {
-    state.history.read(|| history_path(&app), |store| store.clear_all()).await
+async fn clear_all_history(state: State<'_, AppState>) -> CmdResult<()> {
+    state.history.read(|store| store.clear_all()).await
 }
 
 /// What Request variable `reference` (trimmed, without braces) of a request in
@@ -1258,7 +1251,7 @@ fn save_settings<R: tauri::Runtime>(
     let saved = persist_settings(&app, &settings);
     let retention = settings.history.retention();
     if retention != current.history.retention() {
-        state.history.trim(|| history_path(&app), retention);
+        state.history.trim(retention);
     }
     *current = settings;
     saved
@@ -1445,13 +1438,15 @@ fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Applies History's retention at start, so entries past the age limit go even if
-/// nothing is sent. Only when there's History to trim: it doesn't create the store.
-fn trim_history<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if history_path(app).is_some_and(|p| p.exists()) {
-        let state = app.state::<AppState>();
+/// Locates History in the config folder, then applies its retention, so entries past
+/// the age limit go even if nothing is sent. Only when there's History to trim: it
+/// doesn't create the store.
+fn start_history<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    state.history.locate(history_path(app));
+    if state.history.location().is_some_and(|p| p.exists()) {
         let retention = state.settings.lock().unwrap().history.retention();
-        state.history.trim(|| history_path(app), retention);
+        state.history.trim(retention);
     }
 }
 
@@ -1472,7 +1467,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
         })
         .setup(move |app| {
             load_settings(app.handle());
-            trim_history(app.handle());
+            start_history(app.handle());
             Ok(after_setup(app)?)
         })
         .invoke_handler(tauri::generate_handler![

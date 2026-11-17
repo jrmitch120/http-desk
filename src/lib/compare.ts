@@ -27,6 +27,18 @@ export function headersText(side: CompareSide): string {
   return [`${res.httpVersion} ${res.status} ${res.statusText}`.trim(), ...lines.map(([n, v]) => `${n}: ${v}`)].join("\n");
 }
 
+/**
+ * The largest text body Compare diffs: 1 MB. Past it, laying out both bodies and
+ * diffing them in the merge view would hold up the window, so Compare says they're
+ * too large (`tooLargeToCompare`) and compares their headers only.
+ */
+export const COMPARE_BODY_LIMIT = 1024 * 1024;
+
+/** Whether either side's body is a text body over `COMPARE_BODY_LIMIT`, so the bodies aren't compared. */
+export function tooLargeToCompare(...sides: CompareSide[]): boolean {
+  return sides.some(({ response: r }) => !!r && !KIND_INFO[r.bodyKind].binary && r.bodySize > COMPARE_BODY_LIMIT);
+}
+
 /** The side's body as Compare diffs it; a binary body by its kind and size, as it isn't compared as text. */
 export async function bodyText(side: CompareSide): Promise<string> {
   const res = side.response;

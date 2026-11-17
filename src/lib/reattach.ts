@@ -1,18 +1,25 @@
 // Finding requests again after their file was read anew: a reload after another
-// editor changed the file, or a workspace opening with its Layout.
+// editor changed the file, a workspace opening with its Layout, or a search result.
 import type { Request } from "./types";
 
-/** Identifies a request across reloads and searches: name + method + URL. */
-export const signature = (name: string, method: string, url: string) => `${name}\u0000${method}\u0000${url}`;
-
-/** A request known before the file was read again, by its key: its name
- *  (the `###` title), method and URL, and where it was in the file, if it was. */
-export interface KnownRequest {
-  key: string;
+/** How a request is found again: its name (the `###` title), method and URL as written. */
+export interface RequestIdentity {
   name: string;
   method: string;
   url: string;
+}
+
+/** A request's identity and where it was in its file (its index), if it was. */
+export interface PlacedRequest extends RequestIdentity {
   position: number | null;
+}
+
+/** Identifies a request across reloads and searches: name + method + URL. */
+export const signature = (r: RequestIdentity) => `${r.name}\u0000${r.method}\u0000${r.url}`;
+
+/** A request known before the file was read again, by its key. */
+export interface KnownRequest extends PlacedRequest {
+  key: string;
 }
 
 /**
@@ -24,9 +31,8 @@ export interface KnownRequest {
  */
 export function reattach(known: KnownRequest[], fresh: Request[]): Set<string> {
   const unused = new Map(known.map((k) => [k.key, k]));
-  const sig = (r: { name: string; method: string; url: string }) => signature(r.name, r.method, r.url);
   const byName = (r: { name: string }) => r.name;
-  for (const same of [sig, byName]) {
+  for (const same of [signature, byName]) {
     for (const r of fresh) {
       if (r._key || (same === byName && !r.name)) continue;
       const match = [...unused.values()].find((k) => same(k) === same(r));

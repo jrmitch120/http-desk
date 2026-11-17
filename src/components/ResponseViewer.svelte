@@ -35,7 +35,7 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import RequestHistory from "./RequestHistory.svelte";
   import Self from "./ResponseViewer.svelte";
-  import { sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
+  import { HISTORY_BODY_CAP_TEXT, sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
   // has no tab to cancel or retry in. `result.id` stands in for the tab id that
@@ -62,7 +62,7 @@
   // from it, read-only, in a viewer of its own (not a Run's result or a pseudo tab's).
   const historyTab = $derived(tab && app.tabs.some((t) => t.id === tab.id) ? tab : null);
   const showingHistory = $derived(!!historyTab && app.history.isShown(historyTab.id));
-  const openedEntry = $derived(historyTab && showingHistory ? app.history.openedIn(historyTab.id) : undefined);
+  const openedEntry = $derived(historyTab && showingHistory ? app.history.openedIn({ tab: historyTab.id }) : undefined);
 
   // The viewer tab, body mode and wrap: the tab's own, or this result's.
   const resultView = $state(untrack(() => (tab ? null : (resultViews.get(viewId) ?? newResponseView()))));
@@ -163,7 +163,7 @@
   {#if historyTab && showingHistory}
     <div class="statusbar">
       {#if openedEntry}
-        <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close(historyTab.id)}><Icon name="chevron-left" />Back</button>
+        <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close({ tab: historyTab.id })}><Icon name="chevron-left" />Back</button>
         <span class="muted small">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
         <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
       {:else}
@@ -240,7 +240,7 @@
       </div>
 
       {#if current === "body" && noBody}
-        <div class="empty-state small">Not kept: History keeps only the headers and size of a binary body over 10 MB.</div>
+        <div class="empty-state small">Not kept: History keeps only the headers and size of a binary body over {HISTORY_BODY_CAP_TEXT}.</div>
       {:else if current === "body"}
         <BodyPanel {res} view={body} bind:mode={view.mode} bind:wrap={view.wrap} bind:filter />
       {:else if current === "headers"}

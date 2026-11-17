@@ -6,6 +6,7 @@
 <script lang="ts">
   import { api } from "../lib/api";
   import { app } from "../lib/store.svelte";
+  import { HISTORY_BODY_CAP_TEXT } from "../lib/history.svelte";
   import NumberField from "./NumberField.svelte";
   import Toggle from "./Toggle.svelte";
 
@@ -70,5 +71,5 @@
     </div>
     <button class="btn small" onclick={() => app.history.clearAll()}>Clear all history</button>
   </div>
-  <p class="note muted">History stays on this computer, never in a workspace. Requests marked <span class="mono"># @no-log</span> are never recorded. Bodies over 10 MB are cut off; a binary one keeps only its headers and size.</p>
+  <p class="note muted">History stays on this computer, never in a workspace. Requests marked <span class="mono"># @no-log</span> are never recorded. Bodies over {HISTORY_BODY_CAP_TEXT} are cut off; a binary one keeps only its headers and size.</p>
 </section>

@@ -577,13 +577,13 @@ describe("deleting History", () => {
 
   it("deletes an entry once confirmed, closing it where it's open and releasing its response", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
-    await app.history.open(tab.id, summary(1));
+    await app.history.open({ tab: tab.id }, summary(1));
     await app.history.open(WORKSPACE_HISTORY, summary(2));
 
     expect(await confirming(app.history.delete(summary(1)), "delete")).toBe("Delete this History entry?");
 
     expect(api.deleteHistoryEntry).toHaveBeenCalledWith(1);
-    expect(app.history.openedIn(tab.id)).toBeUndefined();
+    expect(app.history.openedIn({ tab: tab.id })).toBeUndefined();
     expect(app.history.openedIn(WORKSPACE_HISTORY)?.entry.id).toBe(2);
     expect(released()).toEqual(["h1"]);
   });
@@ -597,7 +597,7 @@ describe("deleting History", () => {
 
   it("clears the workspace's History once confirmed, closing every opened entry and the comparison", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
-    await app.history.open(tab.id, summary(1));
+    await app.history.open({ tab: tab.id }, summary(1));
     await app.history.open(WORKSPACE_HISTORY, summary(2));
     await app.history.compare(summary(3), { entry: summary(4) });
     const revision = app.history.revision;
@@ -605,7 +605,7 @@ describe("deleting History", () => {
     expect(await confirming(app.history.clearWorkspace(), "clear")).toBe("Clear workspace history?");
 
     expect(api.clearWorkspaceHistory).toHaveBeenCalled();
-    expect([app.history.openedIn(tab.id), app.history.openedIn(WORKSPACE_HISTORY), app.history.comparison]).toEqual([undefined, undefined, null]);
+    expect([app.history.openedIn({ tab: tab.id }), app.history.openedIn(WORKSPACE_HISTORY), app.history.comparison]).toEqual([undefined, undefined, null]);
     expect(released().sort()).toEqual(["h1", "h2", "h3", "h4"]);
     expect(app.history.revision).toBeGreaterThan(revision);
   });
@@ -613,8 +613,8 @@ describe("deleting History", () => {
   it("an entry over the 10 MB cap opens marked with how much of its body was kept", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
     api.openHistoryEntry.mockResolvedValueOnce({ ...opening("h1"), bodyKept: "truncated" });
-    await app.history.open(tab.id, summary(1));
-    expect(app.runs[app.history.openedIn(tab.id)!.tab.id].bodyKept).toBe("truncated");
+    await app.history.open({ tab: tab.id }, summary(1));
+    expect(app.runs[app.history.openedIn({ tab: tab.id })!.tab.id].bodyKept).toBe("truncated");
   });
 });
 

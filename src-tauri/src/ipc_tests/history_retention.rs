@@ -118,8 +118,18 @@ fn a_binary_body_over_10_mb_keeps_only_its_headers_and_size() {
     assert!(store_bytes(&h.config_dir()).len() < 1024 * 1024, "the body isn't in the store");
 }
 
+/// The request body kept in the store for the newest entry, and whether it's marked cut off.
+fn stored_request_body(cfg: &Path) -> (String, bool) {
+    let conn = rusqlite::Connection::open(cfg.join(crate::history::FILE_NAME)).unwrap();
+    conn.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let request: String =
+        conn.query_row("SELECT request FROM entries ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
+    let request: Value = serde_json::from_str(&request).unwrap();
+    (request["bodyPreview"].as_str().unwrap().to_string(), request["bodyTruncated"] == true)
+}
+
 #[test]
-fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_is_marked_truncated_past_it() {
+fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_an_opened_entry_shows_the_live_sends_preview() {
     let h = Harness::new();
     let url = serve("text/plain", b"ok".to_vec());
     let (_ws, root) = workspace(
@@ -132,21 +142,37 @@ fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_is_marked_truncated_past_i
     std::fs::write(root.join("small.txt"), &small).unwrap();
 
     let sent = h.ok("send_request", send_args(&root, &request(&h, &root, 0)));
-    assert!(sent["request"]["bodyPreview"].as_str().unwrap().len() < small.len(), "the live preview stays short");
+    let preview = sent["request"]["bodyPreview"].as_str().unwrap();
+    assert!(preview.len() < small.len(), "the live preview stays short");
     let entries = all_history(&h);
     let opened = h.ok("open_history_entry", json!({ "id": entries[0]["id"] }));
-    assert_eq!(opened["request"]["bodyPreview"], String::from_utf8(small).unwrap(), "kept whole, past 64 KB");
-    assert_eq!(opened["request"]["bodyTruncated"], Value::Null);
+    assert_eq!(stored_request_body(&h.config_dir()), (String::from_utf8(small).unwrap(), false), "kept whole");
+    assert_eq!(opened["request"]["bodyPreview"], preview, "the reply carries the live send's preview");
+    assert_eq!(opened["request"]["bodySize"], 100 * 1024);
+    assert_eq!(opened["request"]["bodyTruncated"], true, "the preview stops short of the body");
     assert_eq!(opened["response"]["request"], opened["request"]);
 
-    h.ok("send_request", send_args(&root, &request(&h, &root, 1)));
+    let sent = h.ok("send_request", send_args(&root, &request(&h, &root, 1)));
     let entries = all_history(&h);
     let opened = h.ok("open_history_entry", json!({ "id": entries[0]["id"] }));
+    let (stored, cut_off) = stored_request_body(&h.config_dir());
+    assert_eq!((stored.as_bytes(), cut_off), (&big[..CAP], true), "kept up to 10 MB, marked cut off");
     let request = &opened["request"];
     assert_eq!(request["bodySize"], CAP + 10);
-    assert_eq!(request["bodyPreview"].as_str().unwrap().as_bytes(), &big[..CAP]);
+    assert_eq!(request["bodyPreview"], sent["request"]["bodyPreview"]);
     assert_eq!(request["bodyTruncated"], true);
     assert_eq!(opened["response"]["request"], opened["request"]);
+}
+
+#[test]
+fn an_opened_entrys_short_request_body_is_whole_and_not_marked_truncated() {
+    let h = Harness::new();
+    let url = serve("text/plain", b"ok".to_vec());
+    let (_ws, root) = workspace(&h, &format!("POST {url}/small\nContent-Type: text/plain\n\nhello\n"));
+    h.ok("send_request", send_args(&root, &request(&h, &root, 0)));
+    let opened = h.ok("open_history_entry", json!({ "id": all_history(&h)[0]["id"] }));
+    assert_eq!(opened["request"]["bodyPreview"], "hello");
+    assert_eq!(opened["request"]["bodyTruncated"], Value::Null);
 }
 
 /// The URLs of the open workspace's entries, newest first.

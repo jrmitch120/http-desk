@@ -21,9 +21,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::exec::{ExecError, HttpResponse, SentRequest};
-use crate::send::{self, Attempt, Outgoing, SendContext, Sent};
-use crate::vars::{Secrets, MASK};
+use crate::exec::{self, ExecError, HttpResponse, SentRequest};
+use crate::send::{self, Attempt, Outgoing, Sent};
+use crate::vars::{MaskedValues, MASK};
 
 /// The store's file name in the config folder.
 pub const FILE_NAME: &str = "history.sqlite3";
@@ -80,30 +80,17 @@ pub enum HistoryError {
 pub type Result<T> = std::result::Result<T, HistoryError>;
 
 /// What is masked in a recorded request before it is written (ADR-0009): the values
-/// of [`CREDENTIAL_HEADERS`], and every Secret value and prompt answer the send used,
-/// wherever it shows. The one place masking happens.
-#[derive(Debug, Default, Clone)]
-pub struct Masking {
-    values: Secrets,
+/// of [`CREDENTIAL_HEADERS`], and every Secret value and prompt answer the send used
+/// (as the send resolved them: [`send::RequestScope::masked_values`]), wherever it
+/// shows. The one place masking happens.
+struct Masking {
+    values: MaskedValues,
 }
 
 impl Masking {
-    /// The masking for sending `out` with `ctx`: the values of the Secrets it's sent
-    /// with and the Session's answers to its prompts. Read before the send, as the
-    /// send reads them.
-    pub fn for_send(ctx: &SendContext, out: &Outgoing) -> Masking {
-        let scope = send::scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, out);
-        let mut values = scope.map(|s| s.secret_values()).unwrap_or_default();
-        if let Some(key) = &out.request_key {
-            let mut answers = ctx.session.prompt_answers().get(key);
-            values.extend(out.request.prompts().into_iter().filter_map(|p| answers.remove(&p.name)));
-        }
-        Masking { values: Secrets::new(values) }
-    }
-
     /// `request` with its credential headers and every masked value in its URL,
     /// headers and body replaced by [`MASK`].
-    pub fn request(&self, mut request: SentRequest) -> SentRequest {
+    fn request(&self, mut request: SentRequest) -> SentRequest {
         request.url = self.values.mask(&request.url);
         for (name, value) in &mut request.headers {
             *value = match CREDENTIAL_HEADERS.iter().any(|c| name.eq_ignore_ascii_case(c)) {
@@ -169,12 +156,14 @@ impl Pending {
         })
     }
 
-    /// The entry for the send once it has `finished`, with what `attempt` saw go out,
-    /// masked by `masking`. `None` when nothing went out: the send was blocked. The
-    /// request keeps its body up to [`BODY_CAP`], more than the request as sent shows.
-    pub fn finish(self, attempt: &Attempt, finished: Finished<'_>, masking: &Masking) -> Option<NewEntry> {
+    /// The entry for the send once it has `finished`, with what `attempt` (made
+    /// [`Attempt::for_history`]) saw go out, masked. `None` when nothing went out (the
+    /// send was blocked), or the attempt wasn't made for History. The request keeps
+    /// its body up to [`BODY_CAP`], more than the request as sent shows.
+    pub fn finish(self, attempt: &Attempt, finished: Finished<'_>) -> Option<NewEntry> {
         let elapsed = self.started.elapsed();
-        let body = attempt.take_body();
+        let send::ForHistory { body, masked } = attempt.take_for_history()?;
+        let masking = &Masking { values: masked };
         let request = |mut request: SentRequest| {
             if let (Some(_), Some(body)) = (&request.body_preview, &body) {
                 let kept = capped(body);
@@ -353,10 +342,13 @@ pub struct Retention {
     pub max_size: u64,
 }
 
-/// The entries of one request, as [`RequestLink`] links them: `e` and `x` (aliases
-/// of `entries`) are of the same request.
-const SAME_REQUEST: &str = "e.workspace = x.workspace AND e.file IS x.file AND e.name IS x.name
-    AND (x.name IS NOT NULL OR (e.method = x.method AND e.url = x.url))";
+/// What an entry's request is, as [`RequestLink`] links them: its workspace, file
+/// and `# @name`, and for an unnamed request its method and URL as written. Two
+/// entries are of the same request when these are the same (compared as a row value
+/// with `IS`, as the file and name may be NULL). The one place the rule is written:
+/// listing a request's entries and retention's count per request both use it.
+const REQUEST: &str =
+    "workspace, file, name, CASE WHEN name IS NULL THEN method END, CASE WHEN name IS NULL THEN url END";
 
 /// The History store: one SQLite file for every workspace.
 pub struct Store {
@@ -477,19 +469,13 @@ impl Store {
         let mut sql = format!("SELECT {SUMMARY_COLUMNS} FROM entries WHERE workspace = ?");
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(workspace_key(root))];
         if let Some(link) = &query.request {
+            let unnamed = link.name.is_none();
+            sql.push_str(&format!(" AND ({REQUEST}) IS (?, ?, ?, ?, ?)"));
+            args.push(Box::new(workspace_key(root)));
             args.push(Box::new(relative(root, &link.file_path)));
-            sql.push_str(" AND file = ?");
-            match &link.name {
-                Some(name) => {
-                    args.push(Box::new(name.clone()));
-                    sql.push_str(" AND name = ?");
-                }
-                None => {
-                    args.push(Box::new(link.method.clone()));
-                    args.push(Box::new(link.url.clone()));
-                    sql.push_str(" AND name IS NULL AND method = ? AND url = ?");
-                }
-            }
+            args.push(Box::new(link.name.clone()));
+            args.push(Box::new(unnamed.then(|| link.method.clone())));
+            args.push(Box::new(unnamed.then(|| link.url.clone())));
         }
         if let Some(class) = query.status {
             // Written as `entries_by_class` has it, so the index serves it.
@@ -528,18 +514,17 @@ impl Store {
             Some(id) => tx.execute(
                 &format!(
                     "DELETE FROM entries WHERE id IN (
-                        SELECT e.id FROM entries x JOIN entries e ON {SAME_REQUEST} WHERE x.id = ?1
-                        ORDER BY e.time_ms DESC, e.id DESC LIMIT -1 OFFSET ?2)"
+                        SELECT id FROM entries WHERE ({REQUEST}) IS (SELECT {REQUEST} FROM entries WHERE id = ?1)
+                        ORDER BY time_ms DESC, id DESC LIMIT -1 OFFSET ?2)"
                 ),
                 params![id, retention.per_request],
             )?,
             None => tx.execute(
-                "DELETE FROM entries WHERE id IN (SELECT id FROM (
-                    SELECT id, ROW_NUMBER() OVER (
-                        PARTITION BY workspace, file, name,
-                            CASE WHEN name IS NULL THEN method END, CASE WHEN name IS NULL THEN url END
-                        ORDER BY time_ms DESC, id DESC) AS n
-                    FROM entries) WHERE n > ?1)",
+                &format!(
+                    "DELETE FROM entries WHERE id IN (SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (PARTITION BY {REQUEST} ORDER BY time_ms DESC, id DESC) AS n
+                        FROM entries) WHERE n > ?1)"
+                ),
                 params![retention.per_request],
             )?,
         };
@@ -603,7 +588,7 @@ impl Store {
             )
             .optional()?;
         let Some((summary, (error, source, request, response, body))) = row else { return Ok(None) };
-        let request: SentRequest = serde_json::from_str(&request)?;
+        let request = previewed(serde_json::from_str(&request)?);
         let mut response: Option<HttpResponse> = response.as_deref().map(serde_json::from_str).transpose()?;
         if let Some(r) = &mut response {
             r.id = uuid::Uuid::new_v4().to_string();
@@ -625,6 +610,17 @@ impl Store {
             send_error: error.as_deref().map(serde_json::from_str).transpose()?,
         }))
     }
+}
+
+/// `request` (as stored, its body up to [`BODY_CAP`]) with its body as the live
+/// send's reply shows it ([`exec::body_preview`]), marked truncated when that stops
+/// short of the body: a read never carries megabytes of it (ADR-0006).
+fn previewed(mut request: SentRequest) -> SentRequest {
+    if let Some(body) = request.body_preview.take() {
+        request.body_truncated |= body.len() > exec::BODY_PREVIEW;
+        request.body_preview = Some(exec::body_preview(body.as_bytes(), request.body_size));
+    }
+    request
 }
 
 /// What a workspace's entries are kept under: its canonical path.

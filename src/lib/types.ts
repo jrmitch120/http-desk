@@ -1,6 +1,8 @@
 // TypeScript mirror of the Rust model (crates/httpdesk-core/src/model.rs etc.).
 // Keep in sync when changing serde structs.
 
+import type { RequestIdentity } from "./reattach";
+
 export type LineEnding = "lf" | "crlf";
 
 export interface Variable {
@@ -205,21 +207,22 @@ export interface SentRequest {
   url: string;
   headers: [string, string][];
   bodyPreview: string | null;
-  /** Set on a History entry's request whose body was cut off at 10 MB (`HISTORY_BODY_CAP`). */
+  /** Set on an opened History entry's request whose `bodyPreview` (the live send's 64 KB preview) stops short of its body. */
   bodyTruncated?: boolean;
   bodySize: number;
 }
 
 /**
  * What links History entries to a request (`history::RequestLink`): its file and
- * `# @name`, or for an unnamed request its file, method and URL as written.
+ * `# @name`, or for an unnamed request its file, method and URL as written. Its
+ * method and URL are a `RequestIdentity`'s; its `name` isn't (the `# @name`, not the
+ * `###` title), so it's its own.
  */
-export interface HistoryLink {
+export interface HistoryLink extends Pick<RequestIdentity, "method" | "url"> {
   /** The request's file, absolute. */
   filePath: string;
+  /** Its `# @name`; null for an unnamed request. */
   name: string | null;
-  method: string;
-  url: string;
 }
 
 /**

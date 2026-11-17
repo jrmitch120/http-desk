@@ -136,17 +136,16 @@ test("Clear workspace history in the sidebar empties the list after confirming, 
   expect(left.map((e) => e.workspace)).toEqual(["/elsewhere"]);
 });
 
-test("Clear workspace history is in the request's History view too", async ({ page }) => {
+test("Clear workspace history is only in the sidebar's History view, not a request's", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
   await historyButton(page).click();
   await expect(requestEntries(page)).toHaveCount(1);
 
-  await page.locator(".viewer").getByRole("button", { name: "Clear workspace history" }).click();
-  await dialog(page, "Clear workspace history?").getByRole("button", { name: "Clear workspace history" }).click();
-
-  await expect(page.getByText("No History for this request yet")).toBeVisible();
+  await expect(page.locator(".viewer").getByRole("button", { name: "Clear workspace history" })).toHaveCount(0);
+  await showSidebarHistory(page);
+  await expect(sidebarHistory(page).getByRole("button", { name: "Clear workspace history" })).toBeEnabled();
 });
 
 test("retention limits are edited in Settings, and kept after a reload", async ({ page }) => {

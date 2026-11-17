@@ -77,6 +77,8 @@ impl Harness {
     ) -> Self {
         let builder = builder.manage(super::ConfigDir(cfg.path().to_path_buf()));
         let app = super::with_commands(builder, |_| Ok(())).build(context).unwrap();
+        // As setup does (the mock runtime doesn't run it): History is kept in `cfg`.
+        super::start_history(app.handle());
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         let trash_bin = tempfile::tempdir().unwrap();
         let bin = trash_bin.path().to_path_buf();
