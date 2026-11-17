@@ -1,14 +1,16 @@
 <!--
   Compare (`app.history.comparison`): two responses side by side in CodeMirror's merge
   view, the older on the left. Body and Headers each diff as compare.ts lays them out
-  (JSON with its keys sorted, so key order and spacing don't show). Closing it releases
-  the entries opened for it (HistoryStore.closeComparison).
+  (JSON with its keys sorted, so key order and spacing don't show). Bodies over
+  COMPARE_BODY_LIMIT aren't fetched or diffed: it says they're too large, and the
+  headers still compare. Closing it releases the entries opened for it
+  (HistoryStore.closeComparison).
 -->
 <script lang="ts">
   import { MergeView } from "@codemirror/merge";
   import { app } from "../lib/store.svelte";
   import type { Comparison } from "../lib/history.svelte";
-  import { bodyText, compareLanguage, headersText } from "../lib/compare";
+  import { bodyText, COMPARE_BODY_LIMIT, compareLanguage, headersText, tooLargeToCompare } from "../lib/compare";
   import { editorExtensions, languageExtension, type Language } from "../lib/codemirror/setup";
   import Modal from "./Modal.svelte";
   import Banner from "./Banner.svelte";
@@ -19,16 +21,18 @@
   type Part = "body" | "headers";
   let part = $state<Part>("body");
   let bodies = $state<[string, string] | null>(null);
+  const tooLarge = $derived(tooLargeToCompare(comparison.a, comparison.b));
 
   $effect(() => {
     const { a, b } = comparison;
+    if (tooLarge) return;
     let current = true;
     Promise.all([bodyText(a), bodyText(b)]).then((texts) => current && (bodies = texts));
     return () => (current = false);
   });
 
   const texts = $derived<[string, string] | null>(
-    part === "body" ? bodies : [headersText(comparison.a), headersText(comparison.b)],
+    part === "body" ? (tooLarge ? null : bodies) : [headersText(comparison.a), headersText(comparison.b)],
   );
   const language = $derived<Language>(part === "body" ? compareLanguage(comparison.a, comparison.b) : "text");
 
@@ -41,6 +45,8 @@
       b: { doc: texts[1], extensions: extensions(language) },
       parent: host,
       gutter: true,
+      // A diff that runs long settles for a rougher one rather than hold up the window.
+      diffConfig: { timeout: 500 },
       // Long unchanged stretches fold away, unless nothing changed: then it's all there to read.
       ...(texts[0] === texts[1] ? {} : { collapseUnchanged: { margin: 3, minSize: 4 } }),
     });
@@ -54,7 +60,9 @@
       <SegmentedControl label="Compare" options={[{ value: "body", label: "Body" }, { value: "headers", label: "Headers" }]} value={part} onchange={(p) => (part = p)} />
       <span class="about muted">{comparison.a.label} vs. {comparison.b.label}</span>
     </div>
-    {#if texts && texts[0] === texts[1]}
+    {#if part === "body" && tooLarge}
+      <Banner severity="info">The bodies are too large to compare (over {COMPARE_BODY_LIMIT / (1024 * 1024)} MB); their headers can still be compared.</Banner>
+    {:else if texts && texts[0] === texts[1]}
       <Banner severity="info">{part === "body" ? "The bodies are the same" : "The headers are the same"}</Banner>
     {/if}
     <div class="sides muted">

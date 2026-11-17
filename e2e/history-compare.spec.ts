@@ -121,6 +121,25 @@ test("a response from History isn't the current response: Compare uses the next 
   await expect(changed(page, "b")).toContainText(['"name": "Max"']);
 });
 
+test("bodies over 1 MB are too large to compare, and their headers still compare", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  // A 1.5 MB JSON body.
+  await send(page, "bigJson");
+  await historyButton(page).click();
+  const fetched = (await mockState(page, "bodyRequests")).length;
+
+  await compareFromMenu(page, 1, /^Compare with the current response$/);
+
+  await expect(compare(page).getByText("The bodies are too large to compare (over 1 MB)")).toBeVisible();
+  await expect(compare(page).locator(".cm-mergeView")).toHaveCount(0);
+  // Neither body was fetched to be laid out.
+  expect((await mockState(page, "bodyRequests")).slice(fetched).filter((r) => r.view === "compare")).toEqual([]);
+  await compare(page).getByRole("radio", { name: "Headers" }).click();
+  await expect(changed(page, "b").filter({ hasText: "content-length: " })).toHaveCount(1);
+});
+
 test("JSON with the same content in a different key order and spacing shows no difference", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");

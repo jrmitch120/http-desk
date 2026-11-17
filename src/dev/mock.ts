@@ -1093,6 +1093,7 @@ const extraHeaders: [string, string][] = manyHeaders
   : [];
 // `?response=petsChanged`: the JSON response with Rex renamed Max, and an `x-api-version: 2` header.
 // `?response=petsReordered`: the JSON response's content with its keys in another order and other spacing.
+// `?response=bigJson`: a 1.6 MB JSON response (over what Compare diffs).
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=asReceived`: the JSON response's Content-Encoding couldn't be undone, so
 //   its bytes are kept as received and, like the core says, its kind is binary.
@@ -1531,6 +1532,8 @@ async function mockSend(args: any) {
                 ? `{"a":{"odd key":[{"b":1}]}}`
               : responseKind === "petsReordered"
                 ? `{ "method": "${r.method}",\n  "items": [{"tags": ["good", "dog"], "name": "Rex", "id": 1, "active": true},\n    {"owner": null, "active": false, "tags": [], "name": "Tom", "id": 2}] }`
+              : responseKind === "bigJson"
+                ? JSON.stringify({ items: Array.from({ length: 24_000 }, (_, i) => ({ id: i, name: `Pet ${i}`, tags: ["good", "dog"], active: i % 2 === 0 })), method: r.method })
               : responseKind === "petsChanged"
                 ? JSON.stringify({ items: [{ id: 1, name: "Max", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method })
                 : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
