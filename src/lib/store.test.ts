@@ -405,6 +405,74 @@ describe("closing an Orphaned tab", () => {
   });
 });
 
+describe("a tab's request section and response view", () => {
+  it("start on Params, and on the Body tab in Pretty without wrap", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+
+    expect(tab.section).toBe("params");
+    expect(tab.responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+
+  it("are forgotten when the tab closes, so reopening its request starts afresh", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"]);
+    const [tab] = await openAll(f);
+    tab.section = "auth";
+    tab.responseView = { tab: "headers", mode: "raw", wrap: true };
+    await app.closeTab(tab.id);
+
+    await app.openRequest(PATH, { index: 0 });
+
+    expect(app.tabs[0].section).toBe("params");
+    expect(app.tabs[0].responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+});
+
+describe("Reopen Closed Tab", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed: what's left of them reopens, then goes.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const names = () => app.tabs.map((t) => app.requestFor(t)!.name);
+
+  it("remembers the last 20 closed tabs", async () => {
+    const all = Array.from({ length: 21 }, (_, i) => `R${i + 1}`);
+    const tabs = await openAll(file(...all));
+    for (const tab of tabs) await app.closeTab(tab.id);
+
+    for (let i = 0; i < 20; i++) expect(runCommand("reopen-tab")).toBe(true);
+
+    expect(names()).toEqual(all.slice(1));
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+
+  it("reopens a tab whose file was renamed in the app after it closed", async () => {
+    const [tab] = await openAll(file("List"));
+    await app.closeTab(tab.id);
+    await app.movePath(PATH, "/ws/api/library.http");
+
+    runCommand("reopen-tab");
+
+    expect(app.activeTab).toMatchObject({ path: "/ws/api/library.http", key: tab.key });
+    expect(names()).toEqual(["List"]);
+  });
+
+  it("skips a tab whose request another editor removed from the file", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    await app.closeTab(list.id);
+    await app.closeTab(create.id);
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    runCommand("reopen-tab");
+
+    expect(names()).toEqual(["List"]);
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+});
+
 describe("cancelling a request", () => {
   it("shows a neutral Cancelled state and keeps the previous response", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));

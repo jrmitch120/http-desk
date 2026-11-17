@@ -6,6 +6,7 @@
 // response a copy with its own id, released when it's closed (ADR-0006).
 import { api, errorMessage } from "./api";
 import { getDirective, uid } from "./http";
+import { newTabView } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
 import type { HistoryLink, HistorySummary, HttpResponse, Request } from "./types";
 
@@ -77,7 +78,7 @@ export class HistoryStore {
       return;
     }
     this.close(tabId);
-    const tab: Tab = { id: `history:${uid()}`, path: "", key: "" };
+    const tab: Tab = { id: `history:${uid()}`, path: "", key: "", ...newTabView() };
     this.host.runs[tab.id] = {
       runId: uid(),
       loading: false,
