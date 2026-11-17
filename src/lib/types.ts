@@ -209,6 +209,61 @@ export interface SentRequest {
 }
 
 /**
+ * What links History entries to a request (`history::RequestLink`): its file and
+ * `# @name`, or for an unnamed request its file, method and URL as written.
+ */
+export interface HistoryLink {
+  /** The request's file, absolute. */
+  filePath: string;
+  name: string | null;
+  method: string;
+  url: string;
+}
+
+/** Which History entries to list (`history::Query`): newest first, a page at a time. */
+export interface HistoryQuery {
+  /** Only this request's; the whole workspace's without one. */
+  request?: HistoryLink;
+  offset?: number;
+  limit?: number;
+}
+
+/** One History entry as a list shows it (`history::Summary`). */
+export interface HistorySummary {
+  id: number;
+  /** When it was sent (RFC 3339). */
+  time: string;
+  /** The request's file, relative to the workspace. */
+  file: string | null;
+  /** The request's `# @name`. */
+  name: string | null;
+  /** The method and URL as sent (resolved). */
+  method: string;
+  url: string;
+  /** Null when no response came back. */
+  status: number | null;
+  statusText: string | null;
+  durationMs: number;
+  /** The response body's size. */
+  size: number | null;
+  /** Why no response came back (the send error's message). */
+  error: string | null;
+  cancelled: boolean;
+}
+
+/** One History entry, whole (`history::Entry`), as `open_history_entry` gives it. */
+export interface HistoryEntry extends HistorySummary {
+  /** The request's text in its file at send time. */
+  source: string;
+  /** The request as sent, its credentials masked. */
+  request: SentRequest;
+  /** Its response, under an id of its own whose body is kept until released (ADR-0006). */
+  response: HttpResponse | null;
+  /** Why no response came back. */
+  sendError: SendError | null;
+}
+
+/**
  * The resolved preview (`preview_request`, core `exec::RequestPreview`): what a
  * send would send, without sending. Dynamic variables that generate a value on
  * every send stay as written (`{{$uuid}}`); the body isn't included.

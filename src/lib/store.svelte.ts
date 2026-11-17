@@ -19,6 +19,7 @@ import { SHARED } from "./vars";
 import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
 import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
+import { HistoryStore, type HistoryHost } from "./history.svelte";
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
@@ -471,6 +472,7 @@ class AppStore {
       this.tree = info.tree;
       this.docs = {};
       this.tabs = [];
+      this.history.reset();
       for (const run of Object.values(this.runs)) this.releaseResponse(run.response);
       this.runs = {};
       this.runnerStore.reset();
@@ -845,6 +847,7 @@ class AppStore {
     const [tab] = this.tabs.splice(idx, 1);
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
+    this.history.forget(id);
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
     // An orphaned request lives only in its tab.
     const doc = this.docs[tab.path];
@@ -1162,6 +1165,8 @@ class AppStore {
       }
     } finally {
       this.cancelled.delete(runId);
+      // The shell recorded it in History if anything went out.
+      this.history.sent();
     }
   }
 
@@ -1309,6 +1314,19 @@ class AppStore {
   readonly trust: Trust = new Trust(this.trustHost());
   /** Runs and the Runner panel (runner.svelte.ts). */
   readonly runnerStore: RunnerStore = new RunnerStore(this.runnerHost());
+  /** History as the page sees it: each tab's History view and the entry it opened (history.svelte.ts). */
+  readonly history: HistoryStore = new HistoryStore(this.historyHost());
+
+  private historyHost(): HistoryHost {
+    const store = this;
+    return {
+      get runs() {
+        return store.runs;
+      },
+      releaseResponse: (response) => store.releaseResponse(response),
+      toast: (kind, message) => store.toast(kind, message),
+    };
+  }
 
   private sessionHost(): SessionHost {
     const store = this;
