@@ -156,6 +156,27 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
   files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
   tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
 }
+// Files a test rewrote "on disk" with `__mock.writeFile` (another editor's changes
+// while the app was closed) are still there after a reload.
+const SAVED_FILES = "httpdesk-mock-files";
+const diskFiles: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_FILES) ?? "{}");
+Object.assign(files, diskFiles);
+// `?roots=/work/shop`: opening one of these folders opens a workspace of its own there
+// (a copy of the demo one, with its own paths), not the demo workspace again.
+const otherRoots = new URLSearchParams(location.search).get("roots")?.split(",") ?? [];
+let openRoot = ROOT;
+/** The open workspace's tree: the demo tree, moved under `openRoot`. */
+function openTree(): Node {
+  if (openRoot === ROOT) return tree;
+  const moved = (n: Node): Node => ({ ...n, path: openRoot + n.path.slice(ROOT.length), children: n.children?.map(moved) });
+  return { ...moved(tree), name: nameOf(openRoot) };
+}
+/** The file at `path`, in the open workspace (an other root's files are the demo ones). */
+const fileAt = (path: string) =>
+  files[path] ?? (openRoot !== ROOT && path.startsWith(`${openRoot}/`) ? files[ROOT + path.slice(openRoot.length)] : undefined);
+// Like the shell's Layout store: each workspace's Layout, by root; it survives a reload.
+const SAVED_LAYOUTS = "httpdesk-mock-layouts";
+const layouts: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_LAYOUTS) ?? "{}");
 let envSet = {
   shared: [{ name: "version", value: "v1", secret: false }],
   environments: [
@@ -660,6 +681,15 @@ window.addEventListener(
   /** The `.http` file models as last saved, by path (the mock has no serializer). */
   get files() {
     return clone(files);
+  },
+  /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
+  writeFile(path: string, file: unknown) {
+    files[path] = diskFiles[path] = clone(file);
+    sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+  },
+  /** Each workspace's Layout as last saved, by root. */
+  get layouts() {
+    return clone(layouts);
   },
   get savedBodies() {
     return clone(savedBodies);
@@ -1364,7 +1394,14 @@ mockIPC(
         sessionJar = new Map();
         sessionGlobals = new Map();
         forgetExchanges();
-        return { root: ROOT, tree, gitignoreUpdated: false };
+        openRoot = otherRoots.includes(args.path) ? args.path : ROOT;
+        return { root: openRoot, tree: openTree(), gitignoreUpdated: false };
+      case "load_layout":
+        return clone(layouts[args.root] ?? null);
+      case "save_layout":
+        layouts[args.root] = clone(args.layout);
+        sessionStorage.setItem(SAVED_LAYOUTS, JSON.stringify(layouts));
+        return null;
       case "set_menu":
         menuBar = clone(args.layout);
         return null;
@@ -1378,7 +1415,7 @@ mockIPC(
         }
         return null;
       case "get_tree":
-        return tree;
+        return openTree();
       case "load_environments":
         if (args?.dir && !findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
         return clone(loadFor([args?.dir ?? ""], () => ""));
@@ -1399,7 +1436,7 @@ mockIPC(
         return { gitignoreUpdated: false };
       }
       case "read_http_file":
-        return clone(files[args.path]);
+        return clone(fileAt(args.path));
       case "save_http_file":
         savedPaths.push(args.path);
         files[args.path] = clone(args.file);

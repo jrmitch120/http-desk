@@ -107,6 +107,8 @@ export interface MockState {
   };
   /** `.http` file models by path, as last saved. */
   files: Record<string, SavedFile>;
+  /** Each workspace's Layout as last saved, by root. */
+  layouts: Record<string, unknown>;
   /** What "Save body to file" wrote, by path. */
   savedBodies: Record<string, string>;
   /** What the Runner panel's Export wrote (`export_run`), in order. */
