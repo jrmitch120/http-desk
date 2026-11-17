@@ -69,6 +69,7 @@ export function menuLayout(os: OS): TopMenu[] {
     ...(mac ? [] : [SEP, cmd("settings")]),
     SEP,
     cmd("close-tab"),
+    cmd("reopen-tab"),
     cmd("close-window"),
     ...(os === "windows" ? [SEP, cmd("quit", { label: "Exit", shortcut: { alt: true, key: "F4" } })] : []),
     ...(os === "linux" ? [SEP, cmd("quit", { label: "Quit" })] : []),
