@@ -12,6 +12,7 @@
   import { inReadOnlyRegion } from "./readOnly";
   import { keepLineEndings, readEndings, setEndings, textWithEndings, type LineBreak } from "./lineEndings";
   import { sharedEnds } from "../splice";
+  import { editorKey } from "../platform";
 
   interface Props {
     value?: string;
@@ -222,7 +223,8 @@
           varC.of(variables ? variableExtensions(variables) : []),
           Prec.highest(
             keymap.of([
-              { key: "Mod-Enter", run: () => (onsend ? (onsend(), true) : false) },
+              // ⌘Enter / Ctrl+Enter, as Send is on the app's OS (platform.ts), not CodeMirror's `Mod-`.
+              { key: editorKey({ mod: true, key: "Enter" }), run: () => (onsend ? (onsend(), true) : false) },
               // Fold all's key (CodeMirror's folds at once): in pieces, and not above the limit.
               { key: "Ctrl-Alt-[", run: () => (fold(true), true) },
             ]),

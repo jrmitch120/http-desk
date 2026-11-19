@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeDialogButtons, detectOS, formatShortcut, matchesShortcut, wording, type KeyPress } from "./platform";
+import { arrangeDialogButtons, detectOS, editorKey, formatShortcut, matchesShortcut, wording, type KeyPress } from "./platform";
 
 describe("detectOS", () => {
   it("reads the OS from the webview's navigator.platform", () => {
@@ -95,6 +95,16 @@ describe("formatShortcut", () => {
     expect(formatShortcut({ mod: true, key: "Enter" }, os)).toBe("Ctrl+Enter");
     expect(formatShortcut({ mod: true, key: "," }, os)).toBe("Ctrl+,");
     expect(formatShortcut({ alt: true, key: "F4" }, os)).toBe("Alt+F4");
+  });
+});
+
+describe("editorKey", () => {
+  it("names ⌘ as Meta on macOS and Ctrl elsewhere, whatever machine CodeMirror runs on", () => {
+    expect(editorKey({ mod: true, key: "Enter" }, "mac")).toBe("Meta-Enter");
+    expect(editorKey({ mod: true, key: "Enter" }, "linux")).toBe("Ctrl-Enter");
+    expect(editorKey({ mod: true, key: "Enter" }, "windows")).toBe("Ctrl-Enter");
+    expect(editorKey({ mod: true, alt: true, shift: true, key: "u" }, "mac")).toBe("Meta-Alt-Shift-u");
+    expect(editorKey({ alt: true, key: "F4" }, "linux")).toBe("Alt-F4");
   });
 });
 

@@ -73,9 +73,10 @@ test("a header added in the table shows in the source, and the cursor stays wher
   await page.keyboard.type("&page=2");
   await expect.poll(() => sourceText(page)).toContain("GET {{baseUrl}}/pets?limit=20&page=2\n");
   // The structured edit started a new undo history: undo takes back only the typing.
-  await page.keyboard.press("Meta+KeyZ");
+  // CodeMirror's Undo key, so the test machine's (helpers.ts openApp).
+  await page.keyboard.press("ControlOrMeta+KeyZ");
   await expect.poll(() => sourceText(page)).toContain("GET {{baseUrl}}/pets?limit=20\n#~ &status=sold");
-  await page.keyboard.press("Meta+KeyZ");
+  await page.keyboard.press("ControlOrMeta+KeyZ");
   await expect.poll(() => sourceText(page)).toContain("X-Added: 1");
 });
 

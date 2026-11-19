@@ -48,7 +48,8 @@ async function openLargeFile(page: Page): Promise<void> {
 /** Puts the caret at the end of the first line holding `text`, found with the editor's Find. */
 async function caretAfter(page: Page, text: string): Promise<void> {
   await fileView(page).locator(".cm-content").click();
-  await page.keyboard.press("Meta+f");
+  // CodeMirror's own key, so the test machine's (e2e/helpers.ts openApp).
+  await page.keyboard.press("ControlOrMeta+f");
   const field = page.getByRole("search", { name: "Find in editor" }).getByRole("textbox", { name: "Find" });
   await field.fill(text);
   await field.press("Enter");

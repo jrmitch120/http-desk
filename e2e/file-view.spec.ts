@@ -61,7 +61,9 @@ test("a request folds, and so does a body", async ({ page }) => {
   // The JSON body of Create pet folds from its first line.
   await line(page, '"name": "Rex"').click();
   await page.keyboard.press("ArrowUp");
-  await page.keyboard.press("Meta+Alt+[");
+  // CodeMirror's Fold key, so the test machine's (helpers.ts openApp): ⌥⌘[ on macOS, Ctrl+Shift+[ elsewhere.
+  const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+  await page.keyboard.press(mac ? "Meta+Alt+BracketLeft" : "Control+Shift+BracketLeft");
   await expect(fileView(page).locator(".cm-foldPlaceholder")).toHaveCount(2);
   await expect(line(page, '"name": "Rex"')).toHaveCount(0);
 });

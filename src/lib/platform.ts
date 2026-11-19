@@ -60,6 +60,17 @@ export function joinShortcut(s: Shortcut, mod: string): string {
   return [s.mod && mod, s.alt && "Alt", s.shift && "Shift", key].filter(Boolean).join("+");
 }
 
+/**
+ * Shortcut `s` as a CodeMirror key binding on `os` ("Meta-Enter" on macOS,
+ * "Ctrl-Enter" elsewhere), for an app shortcut an editor handles itself (⌘Enter
+ * sending from the file view). CodeMirror's own `Mod-` follows the machine's
+ * `navigator.platform`, not `currentOS()`, which the dev mock's `?platform=`
+ * can set to another OS.
+ */
+export function editorKey(s: Shortcut, os: OS = currentOS()): string {
+  return [s.mod && (os === "mac" ? "Meta" : "Ctrl"), s.alt && "Alt", s.shift && "Shift", s.key].filter(Boolean).join("-");
+}
+
 /** The parts of a `KeyboardEvent` a shortcut is matched against. */
 export type KeyPress = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
 

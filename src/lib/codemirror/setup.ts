@@ -37,6 +37,7 @@ import { extractExtension } from "./extract";
 import { http } from "./http";
 import { httpCompletion } from "./httpCompletion";
 import type { ReadingCard } from "../exchanges";
+import { editorKey } from "../platform";
 
 export type Language = "json" | "xml" | "html" | "javascript" | "http" | "text";
 
@@ -613,7 +614,7 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
     EditorView.contentAttributes.of({ "aria-multiline": "false", ...(opts.label ? { "aria-label": opts.label } : {}) }),
     keymap.of([
       { key: "Enter", run: () => (enter?.(), true) },
-      ...(enter ? [{ key: "Mod-Enter", run: () => (enter(), true) }] : []),
+      ...(enter ? [{ key: editorKey({ mod: true, key: "Enter" }), run: () => (enter(), true) }] : []),
       ...completionKeymap,
       // Escape is left to the owner (a modal closes), as in a text input; the `{{` list still takes it while open.
       ...defaultKeymap.filter((b) => !b.key?.includes("Enter") && b.key !== "Escape"),
