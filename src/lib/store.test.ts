@@ -2,9 +2,11 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, PortabilityMark, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { basename, newRequest } from "./http";
+import { isNote, portabilityLineMarks, requestChecks } from "./checks";
+import { makeVarProvider } from "./vars";
 
 const api = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
@@ -935,6 +937,48 @@ describe("zoom", () => {
       closed();
     }
     expect(app.zoom).toBe(1);
+  });
+});
+
+describe("portability warnings (Settings → Portability)", () => {
+  const loaded = (extra: Record<string, unknown>) =>
+    ({ theme: "dark", recentWorkspaces: [], environments: {}, ...extra }) as unknown as AppSettings;
+  const req = newRequest();
+  const marks: PortabilityMark[] = [{ line: 1, construct: "no-log", support: "jetbrains-only", label: "# @no-log", hover: "VS Code ignores it" }];
+  /** The strip's portability entries and the source's markers, at the level the settings give. */
+  const shown = () => {
+    const checks = requestChecks(req, makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: "dev" }), null, null, "", [], {}, { marks, level: app.portabilityLevel });
+    return { strip: checks.filter((c) => c.kind === "portability").map((c) => [isNote(c), c.level]), gutter: portabilityLineMarks(marks, app.portabilityLevel).map((m) => m.kind) };
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    api.saveSettings.mockReset().mockResolvedValue(undefined);
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["missing", {}, "note"],
+    ["not a bool", { portabilityWarnings: "yes" }, "note"],
+    ["off", { portabilityWarnings: false }, "note"],
+    ["on", { portabilityWarnings: true }, "warning"],
+  ])("are quiet notes unless the setting is on (%s)", async (_, extra, level) => {
+    api.getSettings.mockResolvedValue(loaded(extra));
+    await app.init();
+    expect(app.portabilityLevel).toBe(level);
+  });
+
+  it("turn portability notes into warnings when switched on, and back when off, saving each", async () => {
+    app.settings = loaded({});
+    expect(shown()).toEqual({ strip: [[true, "note"]], gutter: ["jetbrains-only"] });
+
+    await app.updateSettings({ portabilityWarnings: true });
+    expect(shown()).toEqual({ strip: [[false, "warning"]], gutter: ["warning"] });
+    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ portabilityWarnings: true }));
+
+    await app.updateSettings({ portabilityWarnings: false });
+    expect(shown()).toEqual({ strip: [[true, "note"]], gutter: ["jetbrains-only"] });
+    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ portabilityWarnings: false }));
   });
 });
 
