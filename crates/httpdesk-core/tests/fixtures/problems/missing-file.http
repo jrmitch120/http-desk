@@ -1,0 +1,17 @@
+# Bodies read from files next to this one, which aren't there.
+
+### A body read from a file
+POST https://example.com/pets
+Content-Type: application/json
+
+< ./payload.json
+
+### A multipart part read from a file
+POST https://example.com/upload
+Content-Type: multipart/form-data; boundary=B
+
+--B
+Content-Disposition: form-data; name="photo"; filename="photo.png"
+
+<@ ./photo.png
+--B--

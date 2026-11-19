@@ -1,6 +1,7 @@
 <script lang="ts">
   // The strip above a request's sections listing what the request would be sent
-  // with (src/lib/checks.ts): each Undefined variable once, where it is used, and its
+  // with (src/lib/checks.ts): what the core couldn't read cleanly in its source, by
+  // line (also underlined in the source), each Undefined variable once, where it is used, and its
   // quick fixes, a selected environment the request's folder doesn't define, and a
   // `# @name` another request in the file also has. Notes (`isNote`) come last, in
   // the info tone rather than the warning one: a Request variable, which Rider refuses
@@ -13,15 +14,27 @@
   import Icon from "./Icon.svelte";
 
   let { checks, onfix }: { checks: Check[]; onfix: (check: Check, fix: QuickFix) => void } = $props();
+
+  /** Each entry's identity: one per kind, but one per Undefined variable and per problem. */
+  function key(check: Check): string {
+    if (check.kind === "undefined") return `undefined:${check.name}`;
+    if (check.kind === "problem") return `problem:${check.problem.line}:${check.problem.column}:${check.problem.code}`;
+    return check.kind;
+  }
 </script>
 
 {#if checks.length}
   <section class="checks" class:notes-only={checks.every(isNote)} aria-label="Pre-send checks">
     <ul>
-      {#each checks as check (check.kind === "undefined" ? `undefined:${check.name}` : check.kind)}
+      {#each checks as check (key(check))}
         <li class:note={isNote(check)}>
           <span class="icon"><Icon name={isNote(check) ? "info" : "alert"} size={13} /></span>
-          {#if check.kind === "riderRefuses"}
+          {#if check.kind === "problem"}
+            <span class="message" data-code={check.problem.code}>
+              <span class="line">Line {check.problem.line}</span>
+              {check.problem.message}
+            </span>
+          {:else if check.kind === "riderRefuses"}
             <span class="message" role="note">
               Rider refuses to send a request containing <code class="name">{`{{${check.name}.response…}}`}</code>
             </span>
@@ -112,6 +125,12 @@
     font-family: var(--mono);
     font-size: 11.5px;
     color: var(--var-bad);
+  }
+  .message .line {
+    margin-right: var(--space-1);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
   }
   .message strong {
     font-weight: 600;

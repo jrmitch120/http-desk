@@ -417,6 +417,9 @@ pub enum ProblemCode {
     HeaderAfterBody,
     /// A `# @tag` above the request line that neither editor nor HttpDesk knows.
     UnknownDirective,
+    /// A `< path` body reference to a file that doesn't exist. The parser can't tell:
+    /// it names the file ([`BodyFile`]) and the shell answers whether it exists.
+    MissingFile,
 }
 
 /// A file and the problems found reading it.
@@ -434,4 +437,23 @@ pub struct ParsedRequest {
     /// `None` when the text has no request line.
     pub request: Option<Request>,
     pub problems: Vec<Problem>,
+}
+
+/// A file a request's body is read from when it's sent (`< path`, `<@ path`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyFile {
+    /// As written: relative to the `.http` file's folder, variables unresolved.
+    pub path: String,
+    /// The problem to report when the file doesn't exist (`missing-file`), at the reference.
+    pub missing: Problem,
+}
+
+/// What reading a request's text found ([`crate::parser::request_problems`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestProblems {
+    pub problems: Vec<Problem>,
+    /// The files its body is read from, which the shell checks exist.
+    pub files: Vec<BodyFile>,
 }

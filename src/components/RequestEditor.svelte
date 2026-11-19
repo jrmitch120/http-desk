@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue } from "../lib/types";
@@ -7,7 +7,9 @@
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { bodyFilePaths, requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { sourceProblems } from "../lib/problems.svelte";
+  import { checkUnderlines } from "../lib/codemirror/underlines";
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
@@ -67,8 +69,32 @@
     };
   });
 
+  // What the core found reading the request's source: asked when it's opened (at once)
+  // and after each edit (debounced like the source), for the strip and the underlines.
+  $effect(() => {
+    if (!req) return;
+    const key = tab.key;
+    const snap = JSON.stringify(req);
+    const t = setTimeout(() => sourceProblems.refresh(key, JSON.parse(snap)), untrack(() => sourceProblems.read(key)) ? 120 : 0);
+    return () => clearTimeout(t);
+  });
+  const reading = $derived(sourceProblems.read(tab.key));
+  // Whether each file the body reads exists: asked when the request is opened and when a path changes.
+  const bodyFiles = $derived(variables ? bodyFilePaths(reading?.read, variables).map((f) => f.path).join("\n") : "");
+  $effect(() => {
+    const [file, paths] = [tab.path, bodyFiles];
+    for (const path of paths ? paths.split("\n") : []) void sourceProblems.check(file, path);
+  });
+
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests) : []);
+  const checks = $derived(
+    req && variables
+      ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests, {
+          read: reading?.read,
+          exists: (path) => sourceProblems.exists(tab.path, path),
+        })
+      : [],
+  );
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
@@ -141,6 +167,8 @@
     }, 120);
     return () => clearTimeout(t);
   });
+  // The strip's checks in the source: the core's problems only when it read this version of the request.
+  const underlines = $derived(checkUnderlines(source, reading?.snap === rendered ? checks : checks.filter((c) => c.kind !== "problem")));
   $effect(() => {
     if (declaration === null || !showSource || !req || !sourceEditor || rendered !== JSON.stringify(req)) return;
     // The source lists the request's named `@name` lines in order, before anything else starting with `@`.
@@ -257,7 +285,7 @@
     {#if showSource}
       <div class="source">
         <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} /></div>
+        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} {underlines} /></div>
       </div>
     {:else}
       {#snippet undefinedCount(s: Section)}

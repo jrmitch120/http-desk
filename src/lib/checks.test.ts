@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { isNote, quickFixes, requestChecks, undefinedVariables } from "./checks";
-import type { EnvironmentSet, Request } from "./types";
+import { bodyFilePaths, isNote, quickFixes, requestChecks, undefinedVariables, type SourceFindings } from "./checks";
+import type { BodyFile, EnvironmentSet, Problem, Request } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
 const request = (edit: (r: Request) => void): Request => {
@@ -188,5 +188,50 @@ describe("the note that Rider refuses a Request variable", () => {
       ["undefined", false],
       ["riderRefuses", true],
     ]);
+  });
+});
+
+describe("problems reading the request's source", () => {
+  // As the core reports them (`request_problems`), placed in the request's source.
+  const unparseable: Problem = { line: 2, column: 1, severity: "error", code: "unparseable-request-line", message: "Can't read this request line" };
+  const unknown: Problem = { line: 1, column: 3, severity: "warning", code: "unknown-directive", message: "Unknown directive @nmae" };
+  const missing = (path: string, line = 5): BodyFile => ({ path, missing: { line, column: 1, severity: "error", code: "missing-file", message: `${path} doesn't exist` } });
+  const checksOf = (req: Request, found: SourceFindings, env: Scope["env"] = {}) => requestChecks(req, makeVarProvider(scope({ env })), null, null, "", [req], found);
+  const exists = (answers: Record<string, boolean>) => (path: string) => answers[path];
+
+  it("lists each of the parser's problems, in the order of their lines, before the other checks", () => {
+    const req = request((r) => (r.url = "https://example.com/{{id}}"));
+    const checks = checksOf(req, { read: { problems: [unparseable, unknown], files: [] } });
+    expect(checks.map((c) => c.kind)).toEqual(["problem", "problem", "undefined"]);
+    expect(checks.slice(0, 2)).toEqual([
+      { kind: "problem", problem: unknown },
+      { kind: "problem", problem: unparseable },
+    ]);
+    expect(checks.every((c) => !isNote(c))).toBe(true);
+  });
+
+  it("goes away once the request reads cleanly", () => {
+    const req = request(() => {});
+    expect(checksOf(req, { read: { problems: [unparseable], files: [] } })).toHaveLength(1);
+    expect(checksOf(req, { read: { problems: [], files: [] } })).toEqual([]);
+    // Nothing until the core has answered.
+    expect(checksOf(req, {})).toEqual([]);
+  });
+
+  it("flags a body file the shell says doesn't exist, and not once it does, or before it has answered", () => {
+    const req = request(() => {});
+    const read = { problems: [], files: [missing("./payload.json")] };
+    expect(checksOf(req, { read, exists: exists({ "./payload.json": false }) })).toEqual([{ kind: "problem", problem: read.files[0].missing }]);
+    expect(checksOf(req, { read, exists: exists({ "./payload.json": true }) })).toEqual([]);
+    expect(checksOf(req, { read, exists: exists({}) })).toEqual([]);
+    expect(checksOf(req, { read })).toEqual([]);
+  });
+
+  it("asks about a body file by its path with variables resolved, and not at all while one is undefined", () => {
+    const read = { problems: [], files: [missing("./{{dir}}/payload.json"), missing("./{{nope}}.json", 6)] };
+    const env = { dir: { value: "fixtures", secret: false, source: "dev" } };
+    expect(bodyFilePaths(read, makeVarProvider(scope({ env })))).toEqual([{ file: read.files[0], path: "./fixtures/payload.json" }]);
+    const req = request(() => {});
+    expect(checksOf(req, { read, exists: exists({ "./fixtures/payload.json": false }) }, env)).toEqual([{ kind: "problem", problem: read.files[0].missing }]);
   });
 });

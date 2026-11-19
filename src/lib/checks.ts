@@ -5,7 +5,7 @@
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
 import { getDirective, segments, variableNameError } from "./http";
-import type { Auth, Body, EnvironmentSet, Request } from "./types";
+import type { Auth, Body, BodyFile, EnvironmentSet, Problem, Request, RequestProblems } from "./types";
 import { requestVariable } from "./vars";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
@@ -26,6 +26,12 @@ export interface UndefinedVariable {
  * branch in CheckStrip.svelte.
  */
 export type Check =
+  /**
+   * Something the core couldn't read cleanly in the request's source (`request_problems`),
+   * or a body file that doesn't exist, placed in the source (the Source view underlines
+   * it). It never blocks the send.
+   */
+  | { kind: "problem"; problem: Problem }
   | { kind: "undefined"; name: string; sections: Section[]; fixes: QuickFix[] }
   /** The selected environment `env` isn't defined for the request's folder `dir`, so it's sent with none (ADR-0004). */
   | { kind: "envMissing"; env: string; dir: string; fixes: QuickFix[] }
@@ -45,14 +51,43 @@ export type Check =
 export const isNote = (check: Check) => check.kind === "riderRefuses";
 
 /**
+ * What the core and the shell last answered about a request's source (kept by
+ * `problems.svelte.ts`, as the strip is computed synchronously). Each is undefined
+ * until it has answered, and nothing is flagged meanwhile.
+ */
+export interface SourceFindings {
+  /** The core's reading of the request's source (`request_problems`). */
+  read?: RequestProblems;
+  /** Whether the body file at `path` (as written, variables resolved) exists. */
+  exists?: (path: string) => boolean | undefined;
+}
+
+/**
+ * The files the request's body is read from (`read.files`), each with its path with
+ * variables resolved: what the shell is asked about. A path that doesn't resolve (an
+ * Undefined variable, a Prompt variable not answered yet) isn't asked about; the
+ * other checks cover it.
+ */
+export function bodyFilePaths(read: RequestProblems | undefined, variables: VarProvider): { file: BodyFile; path: string }[] {
+  return (read?.files ?? []).flatMap((file) => {
+    const r = variables.resolve(file.path);
+    return r.undefined.length || r.circular.length || r.asked.length ? [] : [{ file, path: r.value }];
+  });
+}
+
+/**
  * Everything the strip lists for a request, in order: problems first, then notes.
  * Empty: the strip is hidden. `set` is the request's own environments (its folder's)
  * and `dir` its folder, relative to the workspace root. `file` is every request of the
- * request's file (it included), whose `# @name`s it may share.
+ * request's file (it included), whose `# @name`s it may share. `found` is what the
+ * core and the shell found in its source: those problems come first, by line.
  */
-export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = "", file: Request[] = []): Check[] {
+export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = "", file: Request[] = [], found: SourceFindings = {}): Check[] {
+  const missingFiles = bodyFilePaths(found.read, variables).flatMap(({ file, path }) => (found.exists?.(path) === false ? [file.missing] : []));
+  const problems = [...(found.read?.problems ?? []), ...missingFiles].sort((a, b) => a.line - b.line || a.column - b.column);
+  const checks: Check[] = problems.map((problem) => ({ kind: "problem", problem }));
   const missing = !!envName && !set?.environments.some((e) => e.name === envName);
-  const checks: Check[] = missing ? [{ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] }] : [];
+  if (missing) checks.push({ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] });
   const name = getDirective(req, "name")?.trim();
   const others = name ? file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length : 0;
   if (name && others) checks.push({ kind: "duplicateName", name, others });

@@ -102,6 +102,31 @@ export interface HttpFile {
   bom: boolean;
 }
 
+/** Something the core couldn't read cleanly in a request's text (`httpdesk_text::Problem`). Reading recovers anyway. */
+export interface Problem {
+  /** 1-based line in the text read. */
+  line: number;
+  /** 1-based column, in characters. */
+  column: number;
+  severity: "error" | "warning";
+  code: ProblemCode;
+  message: string;
+}
+
+export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file";
+
+/** A file a request's body is read from (`< path`): as written, and the problem to report if it doesn't exist. */
+export interface BodyFile {
+  path: string;
+  missing: Problem;
+}
+
+/** What reading a request's source found (`request_problems`), placed in that text. */
+export interface RequestProblems {
+  problems: Problem[];
+  files: BodyFile[];
+}
+
 export interface TreeNode {
   name: string;
   path: string;

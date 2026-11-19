@@ -6,6 +6,7 @@
   import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
+  import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
 
   interface Props {
     value?: string;
@@ -30,8 +31,10 @@
     folding?: boolean;
     /** Out: whether the document is small enough for Fold all (`foldAll.ts`). */
     canFoldAll?: boolean;
+    /** Wavy underlines with a message on hover (`underlines.ts`), at offsets into `value`. Only for an editor given them at mount. */
+    underlines?: Underline[];
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -166,6 +169,7 @@
             return { update: (u) => void (u.docChanged && (canFoldAll = canFoldAllOf(u.state.doc.length))) };
           }),
           extensions,
+          untrack(() => underlines) ? underlineExtension() : [],
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
           }),
@@ -207,6 +211,11 @@
     wrapped = wrap;
     if (rewrap && untrack(() => doc) && !docPending) relayOut(view, effects);
     else view.dispatch({ effects });
+  });
+  $effect(() => {
+    // After the document effect above, so they're placed in the text they were found in.
+    const u = underlines;
+    if (u) view?.dispatch({ effects: setUnderlines.of(u) });
   });
   $effect(() => {
     const p = variables;

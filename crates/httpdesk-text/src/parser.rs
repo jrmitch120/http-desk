@@ -120,6 +120,17 @@ pub fn parse_request(text: &str) -> ParsedRequest {
     ParsedRequest { request: None, problems: Vec::new() }
 }
 
+/// What reading `req`'s text as the Source view shows it ([`crate::serializer::render_request`]) finds:
+/// its problems, and the files its body is read from, placed in that text. Its
+/// rendered text, not its text as written, so a request edited in the structured
+/// editors is read as it now is.
+pub fn request_problems(req: &Request) -> RequestProblems {
+    let text = crate::serializer::render_request(req);
+    let (mut problems, mut files) = (Vec::new(), Vec::new());
+    read_block(&text, &mut problems, &mut files);
+    RequestProblems { problems, files }
+}
+
 /// Splits normalized text into raw blocks. Block 0 is the text before the first
 /// `###` separator (possibly empty); every other block starts with its separator.
 pub(crate) fn split_blocks(text: &str) -> Vec<String> {
@@ -403,6 +414,11 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
 /// [`parse_block_at`], adding what it couldn't read cleanly to `problems`, with
 /// lines counted from the block's first line (1-based).
 fn parse_block_reporting(raw: &str, problems: &mut Vec<Problem>) -> Option<(Request, usize)> {
+    read_block(raw, problems, &mut Vec::new())
+}
+
+/// [`parse_block_reporting`], adding the files the body is read from to `files`.
+fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>) -> Option<(Request, usize)> {
     let lines: Vec<&str> = raw.lines().collect();
     let mut idx = 0;
     let mut req = Request::default();
@@ -680,6 +696,17 @@ fn parse_block_reporting(raw: &str, problems: &mut Vec<Problem>) -> Option<(Requ
             req.body.text = insert_disabled_parts(&req.body.text, &disabled_parts);
         } else {
             req.extra_lines.extend(disabled_parts_raw.into_iter().map(ExtraLine::new));
+        }
+    }
+    // As the sender reads them (`exec::build_body`): a body that is one `< path` line,
+    // or a multipart body's `< path` lines.
+    if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
+        for (i, line) in body_lines.iter().enumerate() {
+            let Some(FileReference { path, .. }) = file_reference(line) else { continue };
+            let message =
+                format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
+            let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
+            files.push(BodyFile { path: path.to_string(), missing });
         }
     }
 

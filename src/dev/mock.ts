@@ -119,6 +119,18 @@ if (new URLSearchParams(location.search).get("scriptFiles") === "1") {
 const scriptFiles: Record<string, string> = {
   [`${ROOT}/api/check-status.js`]: 'client.test("Status is 200", function () {\n  client.assert(response.status === 200, "Response status is not 200");\n});\n',
 };
+/** The workspace's files a request body reads (`< path`), besides its `.http` and script files. */
+const bodyFiles = new Set([`${ROOT}/samples/request-form-data.json`]);
+/** `path` as a send finds it (`exec::body_file_path`): relative to the folder of the `.http` file at `filePath`, unless absolute. */
+function resolveFrom(filePath: string, path: string): string {
+  if (path.startsWith("/")) return path;
+  const parts = filePath.slice(0, filePath.lastIndexOf("/")).split("/");
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "." && part !== "") parts.push(part);
+  }
+  return parts.join("/");
+}
 /** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
  *  `.http` file at `filePath`, or (thrown) why it can't be used. */
 function locateScriptFile(filePath: string | null, path: string): string {
@@ -1717,7 +1729,13 @@ mockIPC(
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
       case "parse_request":
+      case "request_problems":
         return invokeCore(cmd, args);
+      case "body_file_exists": {
+        // Answered from the mock's own files.
+        const path = resolveFrom(args.file, String(args.path).trim());
+        return bodyFiles.has(path) || Object.hasOwn(scriptFiles, path) || fileAt(path) !== undefined;
+      }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
         const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);
