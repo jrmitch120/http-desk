@@ -161,6 +161,18 @@ export interface RequestProblems {
   files: BodyFile[];
 }
 
+/** What the Problems panel lists for one `.http` file (`workspace_problems`), by line in the file. */
+export interface FileProblems {
+  path: string;
+  /** The parser's problems and each body file that doesn't exist, in line order. */
+  problems: Problem[];
+  /** The lines only one of VS Code and Rider reads (jetbrains-only or vscode-only constructs). */
+  portability: PortabilityMark[];
+}
+
+/** A document as the app has it, for the Problems panel: its file view's text, or else its file. */
+export type OpenText = { path: string; text: string } | { path: string; file: HttpFile };
+
 export interface TreeNode {
   name: string;
   path: string;

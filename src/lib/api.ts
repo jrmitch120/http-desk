@@ -4,6 +4,7 @@ import type {
   AppInfo,
   AppSettings,
   BodyKind,
+  FileProblems,
   FilterResult,
   FormatMode,
   ExchangeShape,
@@ -20,6 +21,7 @@ import type {
   Usage,
   HttpResponse,
   NamedExchange,
+  OpenText,
   ParsedFile,
   ParsedRequest,
   Request,
@@ -79,6 +81,10 @@ export const api = {
   searchRequests: (query: string) => invoke<SearchHit[]>("search_requests", { query }),
   /** Find usages of `{{name}}`; `open` documents are searched as given (unsaved edits included). */
   findUsages: (name: string, open: { path: string; file: HttpFile }[]) => invoke<Usage[]>("find_usages", { name, open }),
+  /** Every `.http` file with problems or lines that behave differently in VS Code or Rider; `open` documents are read as given. */
+  workspaceProblems: (open: OpenText[]) => invoke<FileProblems[]>("workspace_problems", { open }),
+  /** One file's `workspaceProblems`: as the app has it (`text` or `file`), or from disk (neither). Null if it isn't there. */
+  fileProblems: (path: string, has: { text?: string; file?: HttpFile } = {}) => invoke<FileProblems | null>("file_problems", { path, ...has }),
 
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),

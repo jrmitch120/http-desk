@@ -27,6 +27,7 @@ import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
+import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
 import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
 import type {
   AppSettings,
@@ -437,6 +438,8 @@ class AppStore {
       });
       // Saves the open workspace's Layout once its changes settle.
       $effect(() => this.layout.track());
+      // The Problems panel reads an open document again once its edits pause.
+      $effect(() => this.problems.track());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;
@@ -597,7 +600,10 @@ class AppStore {
       this.session.reset();
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
+      this.problems.reset();
       this.root = info.root;
+      // In the background: the shell reads every file off the main thread.
+      void this.problems.scan();
       this.trust.reset();
       this.tree = info.tree;
       // Reads still under way are the last workspace's: none is shared or kept.
@@ -926,6 +932,7 @@ class AppStore {
   async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
+    this.problems.changed(paths);
     // An env file anywhere, or a folder (which may hold env files: moved in, renamed, deleted).
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p) || !/\.(http|rest)$/i.test(p))) await this.loadEnvironments();
     for (const p of paths) {
@@ -1905,6 +1912,26 @@ class AppStore {
   readonly history: HistoryStore = new HistoryStore(this.historyHost());
   /** The open workspace's Layout: saved as it changes, restored when it opens (layoutStore.svelte.ts). */
   readonly layout: LayoutStore = new LayoutStore(this.layoutHost());
+  /** The Problems panel's list: every file's problems and portability notes (workspaceProblems.svelte.ts). */
+  readonly problems: WorkspaceProblems = new WorkspaceProblems(this.problemsHost());
+
+  private problemsHost(): ProblemsHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get openPaths() {
+        return Object.keys(store.docs);
+      },
+      openText(path) {
+        const doc = store.docs[path];
+        if (!doc) return null;
+        const typed = currentFileText(doc);
+        return typed ? { path, text: typed.text } : { path, file: doc.file };
+      },
+    };
+  }
 
   private layoutHost(): LayoutHost {
     const store = this;

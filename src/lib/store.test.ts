@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, PortabilityMark, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, FileProblems, HistoryEntry, HistorySummary, HttpFile, HttpResponse, OpenText, PortabilityMark, RequestProblems, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { basename, newRequest } from "./http";
 import { isNote, portabilityLineMarks, requestChecks } from "./checks";
@@ -55,6 +55,8 @@ const api = vi.hoisted(() => ({
   requestSource: vi.fn(),
   parseFileText: vi.fn(),
   fileText: vi.fn(),
+  workspaceProblems: vi.fn(),
+  fileProblems: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -123,6 +125,8 @@ beforeEach(() => {
   deletePath.mockResolvedValue("trashed");
   loadFolderEnvironments.mockResolvedValue([]);
   api.releaseResponse.mockResolvedValue(undefined);
+  api.workspaceProblems.mockResolvedValue([]);
+  api.fileProblems.mockResolvedValue(null);
   app.dialog = null;
   app.toasts = [];
   app.tree = null;
@@ -3568,5 +3572,93 @@ describe("viewing a whole file as text (#166)", () => {
     await openAll(parsed());
     await app.openFileView(PATH, { line: 8 });
     expect(app.fileLineWanted).toEqual({ tabId: fileTab()!.id, line: 8 });
+  });
+});
+
+describe("the Problems panel (#172)", () => {
+  const AUTHORS = "/ws/api/authors.http";
+  const BROKEN = "### List\nGET https://example.com/books\n\n### Search\nGET https://example.com/search for books\n";
+  const FINE = "### Authors\nGET https://example.com/authors\n";
+  /** The `.http` files on disk, by path. */
+  let disk: Record<string, string>;
+  /** The shell's `file_problems` of `text`, as far as these tests need: the real core (WASM) reads it (no body files here). */
+  const found = (path: string, text: string): FileProblems => ({ path, problems: invokeCore<RequestProblems>("text_problems", { text }).problems, portability: [] });
+  const textOf = (has: { text?: string; file?: HttpFile }) => has.text ?? (has.file ? invokeCore<string>("file_text", { file: has.file }) : undefined);
+  /** What the panel lists: each file's problems as [line, code], by path. */
+  const listed = () =>
+    Object.values(app.problems.files)
+      .map((f) => [f.path, f.problems.map((p) => [p.line, p.code])])
+      .sort(([a], [b]) => String(a).localeCompare(String(b)));
+
+  beforeEach(async () => {
+    disk = { [PATH]: BROKEN, [AUTHORS]: FINE };
+    readHttpFile.mockImplementation(async (path: string) => invokeCore<HttpFile>("parse_file", { text: disk[path] }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.workspaceProblems.mockImplementation(async (open: OpenText[]) =>
+      Object.keys(disk)
+        .map((path) => {
+          const doc = open.find((o) => o.path === path);
+          return found(path, (doc && textOf(doc)) ?? disk[path]);
+        })
+        .filter((f) => f.problems.length),
+    );
+    api.fileProblems.mockImplementation(async (path: string, has: { text?: string; file?: HttpFile } = {}) => {
+      const text = textOf(has) ?? disk[path];
+      return text === undefined ? null : found(path, text);
+    });
+    app.root = "/ws";
+    await app.problems.scan();
+  });
+
+  it("lists every file with problems, by line in the file", () => {
+    expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]]]);
+  });
+
+  it("fixing a problem in an open document removes its entry without saving", async () => {
+    await app.openRequest(PATH, { index: 1 });
+    app.requestFor(app.tabs[0])!.url = "https://example.com/search/books";
+
+    // What the app's effect does on each change.
+    await vi.waitFor(() => {
+      app.problems.track();
+      expect(listed()).toEqual([]);
+    });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("breaking an open document in its file view lists it before it's saved, at its line in the text", async () => {
+    await app.openFileView(AUTHORS);
+    void app.editFileText(AUTHORS, `${FINE}\n### Broken\n# @nmae x\nGET https://example.com/a b\n`);
+
+    await vi.waitFor(() => {
+      app.problems.track();
+      expect(listed()).toEqual([
+        [AUTHORS, [[5, "unknown-directive"], [6, "unparseable-request-line"]]],
+        [PATH, [[5, "unparseable-request-line"]]],
+      ]);
+    });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("an external change to a file updates its entries", async () => {
+    disk[AUTHORS] = "### Authors\n# @nmae authors\nGET https://example.com/authors\n";
+    await app.onExternalChange([AUTHORS]);
+    await vi.waitFor(() => expect(listed()).toEqual([[AUTHORS, [[2, "unknown-directive"]]], [PATH, [[5, "unparseable-request-line"]]]]));
+
+    // Fixed by another editor, then deleted.
+    disk[PATH] = BROKEN.replace("search for books", "search/books");
+    await app.onExternalChange([PATH]);
+    await vi.waitFor(() => expect(listed()).toEqual([[AUTHORS, [[2, "unknown-directive"]]]]));
+    delete disk[AUTHORS];
+    await app.onExternalChange([AUTHORS]);
+    await vi.waitFor(() => expect(listed()).toEqual([]));
+  });
+
+  it("reads the workspace again when a folder changes", async () => {
+    const MOVED_IN = "/ws/old/broken.http";
+    disk[MOVED_IN] = "GET https://example.com/a b\n";
+    await app.onExternalChange(["/ws/old"]);
+    await vi.waitFor(() => expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]], [MOVED_IN, [[1, "unparseable-request-line"]]]]));
   });
 });
