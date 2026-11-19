@@ -11,7 +11,7 @@
   import { basename, fileVariables, requestNames } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { portabilityLineMarks, type PortabilityLevel } from "../lib/checks";
+  import { portabilityLineMarks } from "../lib/checks";
   import { checkUnderlines } from "../lib/codemirror/underlines";
   import Editor from "../lib/codemirror/Editor.svelte";
   import Banner from "./Banner.svelte";
@@ -78,8 +78,6 @@
   /** What the core finds reading the text shown: its problems, and the lines that behave differently in VS Code or Rider. */
   let problems = $state<Problem[]>([]);
   let portability = $state<PortabilityMark[]>([]);
-  /** How portability notes show (#171 makes this a setting: `app.portabilityLevel`). */
-  const portabilityLevel: PortabilityLevel = "note";
   $effect(() => {
     if (textOf === null) return;
     const shown = text;
@@ -96,7 +94,7 @@
     };
   });
   const underlines = $derived(checkUnderlines(text, problems.map((problem) => ({ kind: "problem" as const, problem }))));
-  const marks = $derived(portabilityLineMarks(portability, portabilityLevel));
+  const marks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
 
   // Asked to show a line (`app.openFileView(path, { line })`): once the text is shown.
   $effect(() => {
