@@ -5,6 +5,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
+import { isRequestTab } from "./tabView";
 import { updates } from "./updates.svelte";
 import { DOCUMENTATION_URL, openLink, RELEASE_NOTES_URL, reportIssue } from "./about";
 import { modalOpen } from "./modal.svelte";
@@ -240,13 +241,13 @@ const COMMANDS: Command[] = [
     id: "duplicate-request",
     label: "Duplicate",
     enabled: withRequest,
-    run: () => app.activeTab && void app.duplicateRequest(app.activeTab.path, app.activeTab.key),
+    run: () => isRequestTab(app.activeTab) && void app.duplicateRequest(app.activeTab.path, app.activeTab.key),
   },
   {
     id: "rename-request",
     label: "Rename…",
     enabled: withRequest,
-    run: () => app.activeTab && void app.renameRequest(app.activeTab.path, app.activeTab.key),
+    run: () => isRequestTab(app.activeTab) && void app.renameRequest(app.activeTab.path, app.activeTab.key),
   },
   {
     id: "show-source",

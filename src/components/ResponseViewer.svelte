@@ -15,7 +15,7 @@
   // tab's state lives in a BodyView so it outlives a switch to another tab.
   import { untrack } from "svelte";
   import { save } from "@tauri-apps/plugin-dialog";
-  import { app, CANCEL, type RunState, type Tab } from "../lib/store.svelte";
+  import { app, CANCEL, type RunState, type RequestTab } from "../lib/store.svelte";
   import { api, errorMessage } from "../lib/api";
   import { formatBytes, formatDuration } from "../lib/http";
   import { explainStatus } from "../lib/status";
@@ -40,7 +40,7 @@
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
   // has no tab to cancel or retry in. `result.id` stands in for the tab id that
   // remembers the viewer's choices and keeps the body's documents.
-  let { tab, result }: { tab: Tab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
+  let { tab, result }: { tab: RequestTab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
   const viewId = untrack(() => tab?.id ?? result!.id);
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
@@ -155,7 +155,7 @@
 </script>
 
 <!-- The pane's title: which of the tab's response and its request's History it shows. -->
-{#snippet paneSwitch(t: Tab)}
+{#snippet paneSwitch(t: RequestTab)}
   <div class="pane-switch"><SegmentedControl label="Response pane" options={PANES} value={showingHistory ? "history" : "response"} onchange={(v) => app.history.show(t.id, v === "history")} /></div>
 {/snippet}
 

@@ -1,12 +1,12 @@
 <script lang="ts">
   // Request editor + response viewer in a resizable split; each layout keeps its own ratio.
-  import { app, type Tab } from "../lib/store.svelte";
+  import { app, type RequestTab } from "../lib/store.svelte";
   import { SPLIT } from "../lib/panes";
   import RequestEditor from "./RequestEditor.svelte";
   import ResponseViewer from "./ResponseViewer.svelte";
   import SplitPane from "./SplitPane.svelte";
 
-  let { tab }: { tab: Tab } = $props();
+  let { tab }: { tab: RequestTab } = $props();
 
   const layout = $derived(app.settings?.layout ?? "horizontal");
   const ratio = $derived(app.settings?.splitRatio?.[layout] ?? SPLIT.initial);

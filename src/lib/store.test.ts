@@ -3,7 +3,7 @@
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, EnvironmentSet, ExchangeShape, FileProblems, HistoryEntry, HistorySummary, HttpFile, HttpResponse, OpenText, PortabilityMark, RequestProblems, RunProgress, TestResult, Usage } from "./types";
-import type { ExtractChoice } from "./store.svelte";
+import type { ExtractChoice, RequestTab } from "./store.svelte";
 import { basename, newRequest } from "./http";
 import { isNote, portabilityLineMarks, requestChecks } from "./checks";
 import { makeVarProvider } from "./vars";
@@ -116,7 +116,7 @@ function fileOf(...reqs: [method: string, name: string, url: string][]): HttpFil
 async function openAll(f: HttpFile) {
   readHttpFile.mockResolvedValueOnce(f);
   for (let i = 0; i < f.requests.length; i++) await app.openRequest(PATH, { index: i });
-  return [...app.tabs];
+  return [...app.tabs] as RequestTab[];
 }
 
 beforeEach(() => {
@@ -513,8 +513,8 @@ describe("a tab's request section and response view", () => {
 
     await app.openRequest(PATH, { index: 0 });
 
-    expect(app.tabs[0].section).toBe("params");
-    expect(app.tabs[0].responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+    expect((app.tabs[0] as RequestTab).section).toBe("params");
+    expect((app.tabs[0] as RequestTab).responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
   });
 });
 
@@ -3746,7 +3746,7 @@ describe("the Problems panel (#172)", () => {
   it("breaking a request in its Source view lists it before it's saved, at its line in the file", async () => {
     api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
     await app.openRequest(PATH, { index: 0 });
-    void app.texts.edit(PATH, sourceView(app.tabs[0].key), "### List\n# @nmae x\nGET https://example.com/books and more\n\n");
+    void app.texts.edit(PATH, sourceView((app.tabs[0] as RequestTab).key), "### List\n# @nmae x\nGET https://example.com/books and more\n\n");
 
     await vi.waitFor(() => {
       app.problems.track();
@@ -3994,7 +3994,7 @@ describe("the request under a file view's cursor (#167)", () => {
 
     expect(api.sendRequest).toHaveBeenCalledTimes(1);
     expect(api.sendRequest.mock.lastCall![0]).toMatchObject({ request: { method: "POST", url: "{{host}}/books" } });
-    const tab = app.activeTab!;
+    const tab = app.activeTab as RequestTab;
     expect([tab.kind, tab.key]).toEqual(["request", keyOf("Create")]);
     expect(app.runs[tab.id].response).toMatchObject({ id: "r1" });
   });

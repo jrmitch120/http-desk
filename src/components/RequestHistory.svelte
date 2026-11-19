@@ -6,12 +6,12 @@
   (ResponseViewer). While the History switch is off it says so instead (HistoryOff).
 -->
 <script lang="ts">
-  import { app, type Tab } from "../lib/store.svelte";
+  import { app, type RequestTab } from "../lib/store.svelte";
   import { historyLink } from "../lib/history.svelte";
   import HistoryOff from "./HistoryOff.svelte";
   import HistoryView from "./HistoryView.svelte";
 
-  let { tab }: { tab: Tab } = $props();
+  let { tab }: { tab: RequestTab } = $props();
 
   const req = $derived(app.requestFor(tab));
   const link = $derived(req ? historyLink(tab.path, req) : null);

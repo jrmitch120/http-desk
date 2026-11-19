@@ -30,7 +30,7 @@ import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
 import { docSnapshot, kept, snapshot } from "./snapshots.svelte";
 import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
-import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
+import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -80,7 +80,7 @@ export interface Doc {
 /** An answer to `AppStore.askWhatToKeep`. */
 export type KeepChoice = "written" | "revert" | "cancel";
 
-export type { Tab } from "./tabView";
+export type { RequestTab, Tab } from "./tabView";
 export type { TextView, TypedText, UnparsedText, ViewLock } from "./textViews.svelte";
 
 export interface RunState {
@@ -216,6 +216,9 @@ export interface RequestRef {
   path: string;
   key: string;
 }
+
+/** A tab the user closed (Reopen Closed Tab): what it showed, and where it sat in the tab bar. */
+type ClosedTab = ({ kind: "request" } & RequestRef & { index: number }) | { kind: "file"; path: string; index: number };
 
 class AppStore {
   root = $state<string | null>(null);
@@ -658,8 +661,9 @@ class AppStore {
     for (const p of paths) if (this.docs[p]) await this.reload(p);
   }
 
+  /** A request tab's request (a file view has none). */
   requestFor(tab: Tab | null): Request | undefined {
-    if (!tab) return undefined;
+    if (!isRequestTab(tab)) return undefined;
     return this.findRequest(tab.path, tab.key);
   }
 
@@ -672,7 +676,7 @@ class AppStore {
   /** True for an Orphaned tab: its request is no longer in the file on disk. */
   isOrphaned(tab: Tab): boolean {
     const doc = this.docs[tab.path];
-    return !!doc && (doc.missing || doc.orphans.some((r) => r._key === tab.key));
+    return !!doc && (doc.missing || (tab.kind === "request" && doc.orphans.some((r) => r._key === tab.key)));
   }
 
   /** Edited since loaded or saved; source text that doesn't parse counts as an edit too. */
@@ -719,7 +723,7 @@ class AppStore {
 
   /** Saves a tab's file; an Orphaned tab's request is written back into it. */
   async saveTab(tab: Tab): Promise<boolean> {
-    return this.save(tab.path, [tab.key]);
+    return this.save(tab.path, tab.kind === "request" ? [tab.key] : []);
   }
 
   async saveActive() {
@@ -789,7 +793,7 @@ class AppStore {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
       const known = (r: Request, position: number | null): KnownRequest => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position });
       const unused = reattach([...old.file.requests.map((r, i) => known(r, i)), ...old.orphans.map((r) => known(r, null))], file.requests);
-      const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
+      const held = new Set(this.tabs.flatMap((t) => (t.kind === "request" && t.path === path ? [t.key] : [])));
       orphans = [...old.file.requests, ...old.orphans].filter((r) => unused.has(r._key!) && held.has(r._key!));
     }
     this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
@@ -962,7 +966,7 @@ class AppStore {
     const req = which.key ? doc.file.requests.find((r) => r._key === which.key) : doc.file.requests[which.index ?? 0];
     if (!req) return;
     const key = req._key!;
-    let tab = this.tabs.find((t) => t.path === path && t.key === key);
+    let tab = this.tabs.find((t) => t.kind === "request" && t.path === path && t.key === key);
     if (!tab) {
       tab = newTab(path, key);
       const at = this.tabs.findIndex((t) => t.id === this.activeTabId);
@@ -974,7 +978,7 @@ class AppStore {
   /** Shows one of a tab's request sections (Params, Headers, …). */
   showSection(tabId: string, section: RequestSection) {
     const tab = this.tabs.find((t) => t.id === tabId);
-    if (tab) tab.section = section;
+    if (isRequestTab(tab)) tab.section = section;
   }
 
   private removeTab(id: string) {
@@ -990,8 +994,9 @@ class AppStore {
     // A file view's text lives only in its tab. An orphaned request lives only in its
     // tabs, and so does the text typed in its Source view.
     const doc = this.docs[tab.path];
-    if (doc && tab.kind === "file") this.texts.drop(tab.path, fileView);
-    else if (doc && !this.tabs.some((t) => t.kind === "request" && t.path === tab.path && t.key === tab.key)) {
+    if (!doc) return;
+    if (tab.kind === "file") this.texts.drop(tab.path, fileView);
+    else if (!this.tabs.some((t) => t.kind === "request" && t.path === tab.path && t.key === tab.key)) {
       doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
       this.texts.drop(tab.path, sourceView(tab.key));
     }
@@ -1016,7 +1021,8 @@ class AppStore {
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     const index = this.tabs.indexOf(tab);
-    if (index >= 0) this.closed = [{ kind: tab.kind, path: tab.path, key: tab.key, index }, ...this.closed].slice(0, CLOSED_TABS_KEPT);
+    const was: ClosedTab = tab.kind === "file" ? { kind: "file", path: tab.path, index } : { kind: "request", path: tab.path, key: tab.key, index };
+    if (index >= 0) this.closed = [was, ...this.closed].slice(0, CLOSED_TABS_KEPT);
     this.removeTab(id);
     return true;
   }
@@ -1051,7 +1057,7 @@ class AppStore {
 
   /** The tabs the user closed in this workspace, the last closed first: each one's
    *  request (or file, for a file view) and where it sat in the tab bar. In memory only. */
-  private closed = $state<(RequestRef & { kind: Tab["kind"]; index: number })[]>([]);
+  private closed = $state<ClosedTab[]>([]);
 
   /** Whether Reopen Closed Tab has a tab to reopen. */
   get canReopenTab(): boolean {
@@ -1066,19 +1072,21 @@ class AppStore {
    */
   reopenClosedTab() {
     while (this.closed.length) {
-      const [{ kind, path, key, index }, ...rest] = this.closed;
+      const [was, ...rest] = this.closed;
+      const { path, index } = was;
       this.closed = rest;
       const doc = this.docs[path];
-      if (!doc || doc.missing || (kind === "request" && !doc.file.requests.some((r) => r._key === key))) continue;
-      let tab = this.tabs.find((t) => t.kind === kind && t.path === path && t.key === key);
-      if (!tab && kind === "file") {
+      if (!doc || doc.missing || (was.kind === "request" && !doc.file.requests.some((r) => r._key === was.key))) continue;
+      let tab = this.tabs.find((t) => t.path === path && (t.kind === "file" ? was.kind === "file" : was.kind === "request" && t.key === was.key));
+      if (!tab && was.kind === "file") {
         tab = newFileTab(path);
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
-      } else if (!tab) {
-        tab = newTab(path, key);
+      } else if (!tab && was.kind === "request") {
+        tab = newTab(path, was.key);
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
         void this.showLastResponse(tab.id);
       }
+      if (!tab) continue;
       this.activeTabId = tab.id;
       return;
     }
@@ -1216,7 +1224,7 @@ class AppStore {
     const key = this.requestUnderCursor(tab);
     if (!key) return;
     await this.openRequest(tab.path, { key });
-    if (this.activeTab?.key === key) await this.send(this.activeTab.id);
+    if (isRequestTab(this.activeTab) && this.activeTab.key === key) await this.send(this.activeTab.id);
   }
 
   // ---------------------------------------------------------------- request ops
@@ -1277,7 +1285,7 @@ class AppStore {
       else doc.file.trailing = req.leading + doc.file.trailing;
     }
     doc.file.requests.splice(idx, 1);
-    for (const t of this.tabs.filter((t) => t.path === path && t.key === key)) this.removeTab(t.id);
+    for (const t of this.tabs.filter((t) => t.kind === "request" && t.path === path && t.key === key)) this.removeTab(t.id);
     if (wasClean) await this.save(path);
   }
 
@@ -1398,7 +1406,7 @@ class AppStore {
   // ---------------------------------------------------------------- execution
 
   /** The request with the scope it's sent in. Send and the resolved preview both use this, so they agree. */
-  private requestArgs(tab: Tab, req: Request, doc: Doc): RequestArgs {
+  private requestArgs(tab: RequestTab, req: Request, doc: Doc): RequestArgs {
     return {
       request: $state.snapshot(req) as Request,
       filePath: tab.path,
@@ -1413,7 +1421,7 @@ class AppStore {
    * The values the Session remembers for the tab's request's Prompt variables, by
    * name. The Session (in the shell) holds them, never the webview.
    */
-  promptAnswers(tab: Tab): Promise<Record<string, string>> {
+  promptAnswers(tab: RequestTab): Promise<Record<string, string>> {
     return api.promptAnswers(tab.key);
   }
 
@@ -1426,7 +1434,7 @@ class AppStore {
    * Asks for the request's Prompt variables that the Session has no value for, all in
    * one form, and has the Session remember the answers. False if the user cancelled.
    */
-  private async askPrompts(tab: Tab, req: Request): Promise<boolean> {
+  private async askPrompts(tab: RequestTab, req: Request): Promise<boolean> {
     const remembered = await this.promptAnswers(tab);
     const asked = requestPrompts(req).filter((p) => !Object.hasOwn(remembered, p.name));
     if (!asked.length) return true;
@@ -1446,7 +1454,7 @@ class AppStore {
   }
 
   /** What sending the tab's request would send, without sending it (see `api.previewRequest`). */
-  async preview(tab: Tab): Promise<RequestPreview | null> {
+  async preview(tab: RequestTab): Promise<RequestPreview | null> {
     const req = this.requestFor(tab);
     const doc = this.docs[tab.path];
     if (!req || !doc) return null;
@@ -1458,7 +1466,7 @@ class AppStore {
     if (typing?.kind === "file") return this.sendUnderCursor(typing);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
     if (typing && this.texts.waiting(typing.path, sourceView(typing.key))) await this.texts.readNow(typing.path, sourceView(typing.key));
-    const tab = this.tabs.find((t) => t.id === tabId);
+    const tab = this.tabs.find((t): t is RequestTab => t.id === tabId && t.kind === "request");
     const req = this.requestFor(tab ?? null);
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
@@ -1841,7 +1849,7 @@ class AppStore {
   exchangeShape(path: string, name: string): Promise<ExchangeShape | null> {
     return this.session.exchangeShape(path, name);
   }
-  forgetPrompts(tab: Tab): Promise<void> {
+  forgetPrompts(tab: RequestTab): Promise<void> {
     return this.session.forgetPrompts(tab.key);
   }
   deleteGlobal(name: string): Promise<void> {
@@ -2194,7 +2202,7 @@ class AppStore {
     const { name, target } = choice;
     const tab = this.tabs.find((t) => t.id === tabId);
     // The field gets `{{name}}`, and a File variable goes in the file.
-    if (tab && this.refused(tab.path, [tab.key])) return null;
+    if (tab && this.refused(tab.path, isRequestTab(tab) ? [tab.key] : [])) return null;
     if (target.kind !== "file") return tab && (await this.extractToEnvironments(tab.path, target, name, value)) ? name : null;
     const doc = tab && this.docs[tab.path];
     if (!tab || !doc) return null;

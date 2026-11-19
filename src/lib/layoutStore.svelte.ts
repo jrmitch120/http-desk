@@ -75,7 +75,6 @@ export class LayoutStore {
     let active: number | null = null;
     for (const t of open) {
       const doc = docs[t.path];
-      const saved = doc?.saved[t.key];
       const path = inWorkspace(root, t.path);
       if (t.kind === "file") {
         if (!doc || path === null) continue;
@@ -83,6 +82,7 @@ export class LayoutStore {
         tabs.push({ kind: "file", path });
         continue;
       }
+      const saved = doc?.saved[t.key];
       if (!saved || path === null) continue;
       const req = JSON.parse(saved) as Request;
       const position = doc.savedOrder.split(",").indexOf(t.key);
@@ -172,20 +172,21 @@ export class LayoutStore {
     tabs.forEach((t, i) => {
       const d = described[i];
       const requests = known.get(t.path) ?? [];
-      known.set(t.path, d.kind === "file" ? requests : [...requests, { key: t.key, name: d.name, method: d.method, url: d.url, position: d.position }]);
+      known.set(t.path, d.kind === "file" || t.kind === "file" ? requests : [...requests, { key: t.key, name: d.name, method: d.method, url: d.url, position: d.position }]);
     });
     const ready = new Map<string, Promise<void>>();
     let dropped = 0;
     const reads = [...known].map(([path, requests]) => {
       const read = this.host.readDoc(path, (fresh) => reattach(requests, fresh)).then(() => {
         if (this.opens !== open) return;
-        for (const { id, key, kind } of tabs.filter((t) => t.path === path)) {
+        for (const t of tabs.filter((t) => t.path === path)) {
+          const { id } = t;
           const shown = this.host.tabs.find((t) => t.id === id);
           if (!shown) continue; // closed meanwhile
           const doc = this.host.docs[path];
-          if (kind === "file" ? !!doc : doc?.file.requests.some((r) => r._key === key)) {
+          if (t.kind === "file" ? !!doc : doc?.file.requests.some((r) => r._key === t.key)) {
             shown.restoring = undefined;
-          } else if (kind === "file") {
+          } else if (t.kind === "file") {
             this.host.removeTab(id);
           } else {
             // The active tab's place goes to the one after it.

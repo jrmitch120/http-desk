@@ -146,7 +146,7 @@
     {/each}
   {:else if doc}
     {#each doc.file.requests as req (req._key)}
-      {@const active = app.activeTab?.path === node.path && app.activeTab?.key === req._key}
+      {@const active = app.activeTab?.kind === "request" && app.activeTab.path === node.path && app.activeTab.key === req._key}
       {@const selected = app.isTreeSelected(node.path, req._key!)}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div

@@ -73,7 +73,7 @@ src/                    Svelte 5 frontend
   components/HistorySettings.svelte  Settings → History: the History switch, retention's limits, where History is kept, Clear all history
   lib/compare.ts, components/CompareView.svelte  Compare: two responses' bodies and headers in CodeMirror's merge view; bodies over 1 MB aren't compared, only their headers
   lib/layout.ts, lib/layoutStore.svelte.ts  the Layout's shape and paths; the Layout store (saving as it settles, restoring when a workspace opens)
-  lib/tabView.ts        a tab (`Tab`, `newTab`, a file view's `newFileTab`) and its view: request section and response view
+  lib/tabView.ts        a tab (`Tab`: a `RequestTab` with its view, request section and response view, or a file view's `FileTab`; `newTab`, `newFileTab`)
   components/FileView.svelte  a file view: the whole `.http` file as one editable text (#166)
   lib/textViews.svelte.ts  text typed in a document's views (a request's Source view, the file view): reading it in, what doesn't parse, the read-only locks and the refusals (#163, #164, #166, #174)
   lib/snapshots.svelte.ts  a document's requests and file as JSON, kept by Svelte, for dirty checks and `FileStamp`
@@ -1114,7 +1114,7 @@ Decisions made during implementation, beyond the plan above:
   mounted, hidden, once shown, so its cursor outlasts a switch to the sections.
 * **The file view** (#166, GLOSSARY **File view**; the File button beside .http, Request →
   View File as Text, and the explorer's View as text on a file) is a tab of its own
-  (`Tab.kind === "file"`, one per file, `components/FileView.svelte`) showing the whole
+  (a `FileTab`, `kind: "file"`, with no request or request view of its own; one per file, `components/FileView.svelte`) showing the whole
   file as one text, highlighted as `.http`; each request and each body of more than one
   line folds. It works as the Source view does, a file at a time: the text shown is the
   core's `file_text` (the serializer, so untouched requests as written; with `\n` line

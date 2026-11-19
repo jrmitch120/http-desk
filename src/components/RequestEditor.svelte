@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
-  import { app, type Tab } from "../lib/store.svelte";
+  import { app, type RequestTab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue, PortabilityMark } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, HEADER_NAMES, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
@@ -33,7 +33,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
 
-  let { tab }: { tab: Tab } = $props();
+  let { tab }: { tab: RequestTab } = $props();
 
   const doc = $derived(app.docs[tab.path]);
   const req = $derived(app.requestFor(tab));
