@@ -3662,3 +3662,69 @@ describe("the Problems panel (#172)", () => {
     await vi.waitFor(() => expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]], [MOVED_IN, [[1, "unparseable-request-line"]]]]));
   });
 });
+
+describe("the request under a file view's cursor (#167)", () => {
+  const TEXT = "@host = https://example.com\n\n### List\nGET {{host}}/books\n\n### Create\nPOST {{host}}/books\n";
+  beforeEach(() => {
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    readHttpFile.mockResolvedValue(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    app.clearTreeSelection();
+  });
+  const fileTab = () => app.tabs.find((t) => t.kind === "file" && t.path === PATH)!;
+  const keyOf = (name: string) => app.docs[PATH].file.requests.find((r) => r.name === name)!._key!;
+
+  it("is the explorer's selection while the file view is active", async () => {
+    await app.openFileView(PATH);
+    expect(app.selectedRequests).toEqual([]);
+    app.setFileCursor(fileTab().id, 1);
+    expect(app.selectedRequests).toEqual([{ path: PATH, key: keyOf("Create") }]);
+    app.setFileCursor(fileTab().id, null);
+    expect(app.selectedRequests).toEqual([]);
+  });
+
+  it("is sent from its own tab, opened and made active, when the file view sends", async () => {
+    await app.openFileView(PATH);
+    app.setFileCursor(fileTab().id, 1);
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 201 } as HttpResponse);
+    await app.send(fileTab().id);
+
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(api.sendRequest.mock.lastCall![0]).toMatchObject({ request: { method: "POST", url: "{{host}}/books" } });
+    const tab = app.activeTab!;
+    expect([tab.kind, tab.key]).toEqual(["request", keyOf("Create")]);
+    expect(app.runs[tab.id].response).toMatchObject({ id: "r1" });
+  });
+
+  it("is read from text typed just before the send", async () => {
+    await app.openFileView(PATH);
+    void app.editFileText(PATH, TEXT + "\n### Delete\nDELETE {{host}}/books/1\n");
+    app.setFileCursor(fileTab().id, 2);
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 204 } as HttpResponse);
+    await app.send(fileTab().id);
+    expect(api.sendRequest.mock.lastCall![0]).toMatchObject({ request: { method: "DELETE", url: "{{host}}/books/1" } });
+  });
+
+  it("isn't sent while the text doesn't parse, and isn't selected", async () => {
+    await app.openFileView(PATH);
+    await app.editFileText(PATH, TEXT.replace("POST {{host}}/books", "POST {{host}}/books and more"));
+    app.setFileCursor(fileTab().id, 0);
+    expect(app.selectedRequests).toEqual([]);
+    await app.send(fileTab().id);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.activeTab).toBe(fileTab());
+  });
+
+  it("sends nothing outside a request", async () => {
+    await app.openFileView(PATH);
+    app.setFileCursor(fileTab().id, null);
+    await app.send(fileTab().id);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("a file view can be asked to show a request", async () => {
+    await app.openFileView(PATH);
+    await app.openFileView(PATH, { key: keyOf("Create") });
+    expect(app.fileRequestWanted).toEqual({ tabId: fileTab().id, key: keyOf("Create") });
+  });
+});

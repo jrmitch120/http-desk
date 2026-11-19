@@ -58,10 +58,11 @@
     }
   }
 
-  /** Opens the request, which becomes the explorer's selection. */
+  /** Opens the request, which becomes the explorer's selection; while its file's file view is active, shows it there instead. */
   function openRequest(key: string) {
     app.selectRequest(node.path, key, "only");
-    app.openRequest(node.path, { key });
+    if (app.activeTab?.kind === "file" && app.activeTab.path === node.path) app.openFileView(node.path, { key });
+    else app.openRequest(node.path, { key });
   }
 
   /** ⌘-click (Ctrl-click off macOS) toggles the request in the selection and Shift-click

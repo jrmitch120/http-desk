@@ -1082,6 +1082,7 @@ class AppStore {
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
     this.unshown.delete(id);
+    delete this.fileCursors[id];
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
@@ -1382,13 +1383,15 @@ class AppStore {
 
   /** A file view asked to show a line (`openFileView`), until it has. */
   fileLineWanted = $state<{ tabId: string; line: number } | null>(null);
+  /** A file view asked to show a request (`openFileView`), until it has. */
+  fileRequestWanted = $state<{ tabId: string; key: string } | null>(null);
 
   /**
    * Opens the file at `path` as one text (its file view, a tab of its own; the one
    * already open, if there is one), made active. With `line` (1-based), the view
-   * selects that line and scrolls it into view.
+   * selects that line and scrolls it into view; with `key`, it shows that request.
    */
-  async openFileView(path: string, at: { line?: number } = {}) {
+  async openFileView(path: string, at: { line?: number; key?: string } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
@@ -1399,6 +1402,47 @@ class AppStore {
     }
     this.activeTabId = tab.id;
     if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line };
+    if (at.key) this.fileRequestWanted = { tabId: tab.id, key: at.key };
+  }
+
+  /** The request under each file view's cursor (by tab id): its place among the requests of the text shown, null outside one. */
+  private fileCursors = $state<Record<string, number | null>>({});
+
+  /**
+   * The file view `tabId` has its cursor in the `index`th request of its text (0-based),
+   * or in none. That request is the explorer's selection while the view is active, and
+   * the one Send sends from it.
+   */
+  setFileCursor(tabId: string, index: number | null) {
+    this.fileCursors[tabId] = index;
+  }
+
+  /**
+   * The key of the request under file view `tab`'s cursor: none outside a request, or
+   * while the text doesn't parse (the file's requests are then as they last read, not
+   * those of the text shown).
+   */
+  private requestUnderCursor(tab: Tab): string | null {
+    const index = this.fileCursors[tab.id];
+    if (tab.kind !== "file" || index === null || index === undefined || this.isFileTextInvalid(tab.path)) return null;
+    return this.docs[tab.path]?.file.requests[index]?._key ?? null;
+  }
+
+  /**
+   * Sends the request under file view `tab`'s cursor the way its own tab sends it
+   * (opened, made active, and its response shown there), once the text typed in the
+   * view is read.
+   */
+  private async sendUnderCursor(tab: Tab) {
+    if (this.sourceReads.has(sourceId(tab.path, FILE_VIEW))) await this.readSources(tab.path);
+    if (this.isFileTextInvalid(tab.path)) {
+      this.toast("error", `${basename(tab.path)} doesn't read as a file yet. Fix the text to send a request from it.`);
+      return;
+    }
+    const key = this.requestUnderCursor(tab);
+    if (!key) return;
+    await this.openRequest(tab.path, { key });
+    if (this.activeTab?.key === key) await this.send(this.activeTab.id);
   }
 
   /**
@@ -1704,6 +1748,7 @@ class AppStore {
 
   async send(tabId: string) {
     const typing = this.tabs.find((t) => t.id === tabId);
+    if (typing?.kind === "file") return this.sendUnderCursor(typing);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
     if (typing && this.sourceReads.has(sourceId(typing.path, typing.key))) await this.readSources(typing.path);
     const tab = this.tabs.find((t) => t.id === tabId);
@@ -1846,10 +1891,14 @@ class AppStore {
 
   // ---------------------------------------------------------------- explorer selection
 
-  /** The requests selected in the explorer: those picked, else the active request. */
+  /** The requests selected in the explorer: those picked, else the active request (in a file view, the one under its cursor). */
   get selectedRequests(): RequestRef[] {
     if (this.treeSelection.length) return this.treeSelection;
     const tab = this.activeTab;
+    if (tab?.kind === "file") {
+      const key = this.requestUnderCursor(tab);
+      return key ? [{ path: tab.path, key }] : [];
+    }
     return tab ? [{ path: tab.path, key: tab.key }] : [];
   }
 
