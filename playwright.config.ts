@@ -22,7 +22,8 @@ export default defineConfig({
   projects: [
     { name: "chromium", testIgnore: "perf/**", use: { ...devices["Desktop Chrome"], colorScheme: "dark" } },
     // Large responses keep the window responsive (`pnpm test:perf`). One step
-    // at a time, so steps don't skew each other's timings, and with longer
+    // at a time, so steps don't skew each other's timings (one worker: not
+    // fully parallel still runs each file in a worker of its own), and with longer
     // waits than usual, as each one handles 50 MB bodies. PERF_CPU_THROTTLE
     // slows the page's CPU (see e2e/perf/large-response.spec.ts).
     {
@@ -30,6 +31,7 @@ export default defineConfig({
       metadata: { cpuThrottle: Number(process.env.PERF_CPU_THROTTLE ?? 1) },
       testMatch: "perf/**/*.spec.ts",
       fullyParallel: false,
+      workers: 1,
       timeout: 180_000,
       expect: { timeout: 60_000 },
       use: { ...devices["Desktop Chrome"], colorScheme: "dark" },
