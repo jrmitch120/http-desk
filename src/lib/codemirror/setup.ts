@@ -607,7 +607,8 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
   ];
 }
 
-export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }): Extension {
+/** An editable editor has an undo history unless `history` is false (its Editor keeps one of its own). */
+export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean; history?: boolean }): Extension {
   const ext: Extension[] = [
     layerTooltips(),
     scrollJumps,
@@ -625,7 +626,8 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
   if (opts.readonly) {
     ext.push(EditorState.readOnly.of(true));
   } else {
-    ext.push(history(), closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab]));
+    if (opts.history !== false) ext.push(history());
+    ext.push(closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab]));
   }
   if (opts.placeholder) ext.push(placeholderExt(opts.placeholder));
   return ext;

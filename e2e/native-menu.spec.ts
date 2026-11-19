@@ -93,7 +93,7 @@ test.describe("menu clicks run commands", () => {
     await openApp(page);
     await openRequest(page, ["api", "pets.http"], "List pets");
     await menuClick(page, "show-source");
-    await expect(page.getByText("Read-only preview of how this request is written")).toBeVisible();
+    await expect(page.getByText("This request as it's written to")).toBeVisible();
     await expect.poll(() => menuItem(page, "show-source")).toMatchObject({ checked: true });
     await page.getByRole("button", { name: ".http", exact: true }).click();
     await expect.poll(() => menuItem(page, "show-source")).toMatchObject({ checked: false });

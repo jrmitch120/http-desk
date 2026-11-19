@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue } from "../lib/types";
@@ -94,9 +94,16 @@
   const showSource = $derived(app.settings?.showSource === true);
   /** The resolved preview (ResolvedPreview) is shown under the URL bar; an app setting, so it lasts. */
   const resolved = $derived(app.settings?.showResolved === true);
+  /**
+   * The source editor, once first shown, stays (hidden behind the sections), so
+   * its cursor and undo history outlast a switch to the sections and back.
+   */
+  let sourceMounted = $state(untrack(() => showSource));
+  /** The source text: what the user typed, or the request rendered by the core. */
   let source = $state("");
-  /** The request (as JSON) `source` was rendered from. */
-  let rendered = $state<string | null>(null);
+  /** The request (as JSON) `source` is up to date with. */
+  let sourceOf = $state<string | null>(null);
+  const sourceInvalid = $derived(app.isSourceInvalid(tab.path, tab.key));
   let sourceEditor = $state<Editor>();
   /** One of the request's own `@name` lines (index into `variables`) to select once the source shows it. */
   let declaration = $state<number | null>(null);
@@ -132,21 +139,49 @@
       else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_FIELDS[field.part].label}"]`)?.focus();
     });
   });
+  // The source follows the request. A change that came from the source itself (the
+  // text the user typed, read into the request) shows that text as it is, so the
+  // editor isn't touched and its cursor never jumps. Any other change (an edit in
+  // the sections or the URL bar) renders the request again, shortly after, or at
+  // once when the source has just been shown.
   $effect(() => {
     if (!showSource || !req) return;
     const snap = JSON.stringify(req);
-    const t = setTimeout(async () => {
-      source = await api.renderRequest(JSON.parse(snap)).catch((e) => `# ${e}`);
-      rendered = snap;
-    }, 120);
+    const typed = app.sourceText(tab.path, tab.key);
+    if (typed) {
+      source = typed.text;
+      sourceOf = snap;
+      return;
+    }
+    const t = setTimeout(
+      async () => {
+        const text = await app.sourceFor(tab.path, tab.key).catch((e) => `# ${e}`);
+        if (text === null || JSON.stringify(app.requestFor(tab)) !== snap) return;
+        source = text;
+        sourceOf = snap;
+      },
+      untrack(() => sourceOf) === null ? 0 : 120,
+    );
     return () => clearTimeout(t);
   });
+  // Shown again (the .http button, its shortcut): the cursor is where it was left.
+  let sourceWasShown = untrack(() => showSource);
   $effect(() => {
-    if (declaration === null || !showSource || !req || !sourceEditor || rendered !== JSON.stringify(req)) return;
-    // The source lists the request's named `@name` lines in order, before anything else starting with `@`.
+    if (showSource && !sourceWasShown) {
+      sourceMounted = true;
+      tick().then(() => sourceEditor?.focus());
+    }
+    if (!showSource) sourceOf = null;
+    sourceWasShown = showSource;
+  });
+  $effect(() => {
+    if (declaration === null || !showSource || !req || !sourceEditor || sourceOf !== JSON.stringify(req)) return;
+    // The request's named `@name` lines are in order in its block, before anything else
+    // starting with `@`; the text before the block (`leading`) comes first.
     const nth = req.variables.slice(0, declaration + 1).filter((v) => v.name).length;
+    const skip = req.leading.split("\n").length - 1;
     let seen = 0;
-    const line = source.split("\n").findIndex((l) => l.startsWith("@") && ++seen === nth) + 1;
+    const line = source.split("\n").findIndex((l, i) => i >= skip && l.startsWith("@") && ++seen === nth) + 1;
     declaration = null;
     tick().then(() => sourceEditor?.revealLine(line));
   });
@@ -217,7 +252,7 @@
       >
         <Icon name="eye" size={14} />Resolved
       </button>
-      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={showSource ? "Hide the .http source" : "Show each request's .http source in place of its sections"}>
+      <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={`${showSource ? "Show the sections" : "Edit each request's .http source in place of its sections"} (${shortcutHint("show-source")})`}>
         <Icon name="code" size={14} />.http
       </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>
@@ -254,12 +289,21 @@
     <ResolvedPreview {tab} />
     <CheckStrip {checks} onfix={fix} />
 
-    {#if showSource}
-      <div class="source">
-        <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} /></div>
+    {#if sourceMounted}
+      <div class="source" hidden={!showSource}>
+        <div class="source-note muted">
+          {#if sourceInvalid}
+            This text doesn't read as a request yet. Until it does, the request stays as it last read.
+          {:else}
+            This request as it's written to <code>{basename(tab.path)}</code>. Edit it here or in the sections.
+          {/if}
+        </div>
+        <div class="source-code">
+          <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.editSource(tab.path, tab.key, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} />
+        </div>
       </div>
-    {:else}
+    {/if}
+    {#if !showSource}
       {#snippet undefinedCount(s: Section)}
         {@const n = undefinedIn(s)}
         {#if n}
@@ -413,6 +457,9 @@
     flex-direction: column;
     min-height: 0;
     border-top: 1px solid var(--border);
+  }
+  .source[hidden] {
+    display: none;
   }
   .source-note {
     font-size: 11.5px;

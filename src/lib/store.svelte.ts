@@ -1424,6 +1424,9 @@ class AppStore {
   }
 
   async send(tabId: string) {
+    const typing = this.tabs.find((t) => t.id === tabId);
+    // Text typed in the Source view a moment ago is sent too (and only then awaited).
+    if (typing && this.sourceReads.has(sourceId(typing.path, typing.key))) await this.readSources(typing.path);
     const tab = this.tabs.find((t) => t.id === tabId);
     const req = this.requestFor(tab ?? null);
     const doc = tab && this.docs[tab.path];

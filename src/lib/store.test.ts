@@ -3200,6 +3200,14 @@ describe("editing a request's source (#163)", () => {
 
   const savedRequest = (i: number) => (saveHttpFile.mock.lastCall![1] as HttpFile).requests[i];
 
+  it("sends text typed just before Send, without waiting for the pause", async () => {
+    const [list] = await openAll(parsed());
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    void app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
+    await app.send(list.id);
+    expect(api.sendRequest.mock.lastCall![0].request.headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
+  });
+
   it("saves text typed just before Save, without waiting for the pause", async () => {
     const [list] = await openAll(parsed());
     void app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
