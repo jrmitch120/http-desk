@@ -332,7 +332,8 @@ fn separate(out: &mut String, blank: bool) {
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    if blank && !out.ends_with("\n\n") {
+    // Verbatim text with mixed line endings keeps its `\r\n`.
+    if blank && !out.ends_with("\n\n") && !out.ends_with("\n\r\n") {
         out.push('\n');
     }
 }

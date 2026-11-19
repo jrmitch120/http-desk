@@ -33,8 +33,10 @@ pub fn parse(text: &str) -> HttpFile {
     };
     let crlf = text.matches("\r\n").count();
     let lf = text.matches('\n').count() - crlf;
-    let line_ending = if crlf > lf { LineEnding::Crlf } else { LineEnding::Lf };
-    let normalized = text.replace("\r\n", "\n");
+    // Mixed endings are kept as written: the text is read as LF, and every `\r`
+    // stays in the verbatim text, so it saves back byte for byte.
+    let line_ending = if crlf > 0 && lf == 0 { LineEnding::Crlf } else { LineEnding::Lf };
+    let normalized = if line_ending == LineEnding::Crlf { text.replace("\r\n", "\n") } else { text.to_string() };
 
     let mut file = HttpFile { line_ending, bom, ..Default::default() };
     let mut pending = String::new();
