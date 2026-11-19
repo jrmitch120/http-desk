@@ -3,7 +3,7 @@
 // across a reload. The mock records the webview zoom the app sets
 // (`plugin:webview|set_webview_zoom`) rather than zooming the page.
 import { expect, test, type Page } from "@playwright/test";
-import { menuClick, menuItem, mockState, openApp } from "./helpers";
+import { menuClick, menuItem, mockState, openApp, treeItem } from "./helpers";
 
 /** The page's window, with the last keydown recorded on it. */
 type Recording = { __lastKey: KeyboardEvent | null };
@@ -145,6 +145,8 @@ test("the zoom is saved and applied again after a reload", async ({ page }) => {
   await expectZoom(page, 1.25);
 
   await page.reload();
+  // The app is up, so the mock is (the load event can come before it).
+  await expect(treeItem(page, "api")).toBeVisible();
   await expectZoom(page, 1.25);
   await expect.poll(() => enabled(page)).toEqual([true, true, true]);
 });
