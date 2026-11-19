@@ -16,7 +16,7 @@
   {#if !app.history.enabled}
     <HistoryOff />
   {:else}
-    <HistoryView view={WORKSPACE_HISTORY} empty="No History in this workspace yet" file narrow />
+    <HistoryView view={WORKSPACE_HISTORY} empty="No History in this workspace yet" />
   {/if}
 </section>
 

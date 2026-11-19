@@ -11,7 +11,7 @@
 // the workspace's or all History, closing the opened entries that go with them.
 import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
-import { getDirective, uid } from "./http";
+import { formatLimit, getDirective, uid } from "./http";
 import { newTab } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
 import type { HistoryEntry, HistoryEntryLink, HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
@@ -54,13 +54,11 @@ export const HISTORY_RETENTION = { maxPerRequest: 50, maxAgeDays: 30, maxSizeMb:
 /** Retention's limits, for every workspace (`HistorySettings` without the switch). */
 export type HistoryRetention = Omit<HistorySettings, "enabled">;
 
-const BODY_CAP_MB = 10;
-
 /** The most of a body a History entry keeps (core `history::BODY_CAP`): 10 MB. */
-export const HISTORY_BODY_CAP = BODY_CAP_MB * 1024 * 1024;
+export const HISTORY_BODY_CAP = 10 * 1024 * 1024;
 
 /** History's body cap as the UI says it: "10 MB". */
-export const HISTORY_BODY_CAP_TEXT = `${BODY_CAP_MB} MB`;
+export const HISTORY_BODY_CAP_TEXT = formatLimit(HISTORY_BODY_CAP);
 
 /** What the viewer says of a body History cut off at its cap. */
 export const TRUNCATED_AT_CAP = `Truncated at ${HISTORY_BODY_CAP_TEXT}`;

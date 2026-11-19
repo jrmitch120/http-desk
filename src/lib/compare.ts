@@ -3,7 +3,7 @@
 // and spacing don't show; ADR-0006: fetched by response id), and the headers one per
 // line, sorted by name, after the status line.
 import { api, errorMessage } from "./api";
-import { formatBytes } from "./http";
+import { formatBytes, formatLimit } from "./http";
 import { KIND_INFO } from "./bodyView.svelte";
 import type { Language } from "./codemirror/setup";
 import type { HttpResponse } from "./types";
@@ -33,6 +33,9 @@ export function headersText(side: CompareSide): string {
  * too large (`tooLargeToCompare`) and compares their headers only.
  */
 export const COMPARE_BODY_LIMIT = 1024 * 1024;
+
+/** Compare's body limit as the UI says it: "1 MB". */
+export const COMPARE_BODY_LIMIT_TEXT = formatLimit(COMPARE_BODY_LIMIT);
 
 /** Whether either side's body is a text body over `COMPARE_BODY_LIMIT`, so the bodies aren't compared. */
 export function tooLargeToCompare(...sides: CompareSide[]): boolean {

@@ -590,6 +590,9 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
+/** A size limit (a whole number of megabytes) as the UI says it: "10 MB". */
+export const formatLimit = (bytes: number) => `${bytes / (1024 * 1024)} MB`;
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(2)} s`;
