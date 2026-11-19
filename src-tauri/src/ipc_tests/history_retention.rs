@@ -9,7 +9,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::fetch::fetch;
-use super::history::{all_history, request, send_args, store_bytes, the_entry, workspace};
+use super::history::{all_history, request, send_args, send_in, store_bytes, the_entry, workspace};
 use super::Harness;
 
 /// The body cap: 10 MB.
@@ -129,7 +129,7 @@ fn stored_request_body(cfg: &Path) -> (String, bool) {
 }
 
 #[test]
-fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_an_opened_entry_shows_the_live_sends_preview() {
+fn the_request_as_sent_keeps_its_body_up_to_10_mb_marked_truncated_past_it_and_opened_shows_the_live_preview() {
     let h = Harness::new();
     let url = serve("text/plain", b"ok".to_vec());
     let (_ws, root) = workspace(
@@ -149,7 +149,7 @@ fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_an_opened_entry_shows_the_
     assert_eq!(stored_request_body(&h.config_dir()), (String::from_utf8(small).unwrap(), false), "kept whole");
     assert_eq!(opened["request"]["bodyPreview"], preview, "the reply carries the live send's preview");
     assert_eq!(opened["request"]["bodySize"], 100 * 1024);
-    assert_eq!(opened["request"]["bodyTruncated"], true, "the preview stops short of the body");
+    assert_eq!(opened["request"]["bodyTruncated"], Value::Null, "the preview stops short, but History kept it whole");
     assert_eq!(opened["response"]["request"], opened["request"]);
 
     let sent = h.ok("send_request", send_args(&root, &request(&h, &root, 1)));
@@ -160,8 +160,28 @@ fn the_request_as_sent_keeps_its_body_up_to_10_mb_and_an_opened_entry_shows_the_
     let request = &opened["request"];
     assert_eq!(request["bodySize"], CAP + 10);
     assert_eq!(request["bodyPreview"], sent["request"]["bodyPreview"]);
-    assert_eq!(request["bodyTruncated"], true);
+    assert_eq!(request["bodyTruncated"], true, "cut off at 10 MB");
     assert_eq!(opened["response"]["request"], opened["request"]);
+}
+
+#[test]
+fn an_opened_entrys_request_body_that_masking_brings_under_64_kb_shows_whole_without_a_total() {
+    let h = Harness::new();
+    let url = serve("text/plain", b"ok".to_vec());
+    let padding = "a".repeat(64 * 1024 - 100);
+    let (_ws, root) =
+        workspace(&h, &format!("POST {url}/upload\nContent-Type: text/plain\n\n{{{{token}}}}{padding}\n"));
+    std::fs::write(root.join("http-client.env.json"), json!({ "local": { "token": "" } }).to_string()).unwrap();
+    let token = "t".repeat(1000);
+    std::fs::write(root.join("http-client.private.env.json"), json!({ "local": { "token": token } }).to_string())
+        .unwrap();
+
+    let sent = h.ok("send_request", send_in(&root, &request(&h, &root, 0), "local"));
+    assert_eq!(sent["request"]["bodySize"], 1000 + padding.len(), "over 64 KB as sent");
+    let opened = the_entry(&h);
+
+    assert_eq!(opened["request"]["bodyPreview"], format!("••••••••{padding}"), "the whole body, masked");
+    assert_eq!(opened["request"]["bodyTruncated"], Value::Null);
 }
 
 #[test]

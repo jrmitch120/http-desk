@@ -612,12 +612,13 @@ impl Store {
     }
 }
 
-/// `request` (as stored, its body up to [`BODY_CAP`]) with its body as the live
-/// send's reply shows it ([`exec::body_preview`]), marked truncated when that stops
-/// short of the body: a read never carries megabytes of it (ADR-0006).
+/// `request` (as stored: its body masked, up to [`BODY_CAP`], and `body_truncated`
+/// when the cap cut it) with its body as the live send's reply shows it
+/// ([`exec::body_preview`]): a read never carries megabytes of it (ADR-0006). Whether
+/// the preview stops short, and so says how many bytes were sent, goes by the stored
+/// body, which masking may have made shorter or longer than the one sent.
 fn previewed(mut request: SentRequest) -> SentRequest {
     if let Some(body) = request.body_preview.take() {
-        request.body_truncated |= body.len() > exec::BODY_PREVIEW;
         request.body_preview = Some(exec::body_preview(body.as_bytes(), request.body_size));
     }
     request

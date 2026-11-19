@@ -860,9 +860,21 @@ const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
  * a binary one not at all. `?historyCap=<bytes>` lowers it, so a test needn't send 10 MB.
  */
 const HISTORY_CAP = Number(new URLSearchParams(location.search).get("historyCap")) || 10 * 1024 * 1024;
-/** `request` with its body cut off at the cap, as History keeps it (opened, the shell shows only its first 64 KB). */
+/** `request` with its body cut off at the cap, marked, as History keeps it. */
 const capRequest = (request: SentRequest): SentRequest =>
   request.bodyPreview !== null && request.bodySize > HISTORY_CAP ? { ...request, bodyPreview: request.bodyPreview.slice(0, HISTORY_CAP), bodyTruncated: true } : request;
+/** How much of a request body the request as sent shows (core `exec::BODY_PREVIEW`). */
+const BODY_PREVIEW = 64 * 1024;
+/**
+ * `request` as kept (`capRequest`) with its body as an opened entry's reply has it, like
+ * the shell's (`history::previewed`): its first 64 KB and, when the kept body is longer,
+ * how many bytes were sent.
+ */
+function previewedRequest(request: SentRequest): SentRequest {
+  const body = request.bodyPreview;
+  if (body === null || body.length <= BODY_PREVIEW) return request;
+  return { ...request, bodyPreview: `${body.slice(0, BODY_PREVIEW)}\n… (${request.bodySize} bytes total)` };
+}
 /** Request headers whose values History masks. */
 const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
 /**
@@ -984,11 +996,12 @@ function openHistoryEntry(id: number): HistoryEntry {
   if (!e) throw "This History entry no longer exists";
   historyOpened.push(id);
   const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
-  if (!response) return { ...entry, response: null, bodyKept };
+  const request = previewedRequest(entry.request);
+  if (!response) return { ...entry, request, response: null, bodyKept };
   const responseId = `h-${++responseCount}`;
   if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
   if (body && "base64" in body) binaryBodies.set(responseId, Uint8Array.from(atob(body.base64), (c) => c.charCodeAt(0)));
-  return { ...entry, response: { ...response, id: responseId }, bodyKept };
+  return { ...entry, request, response: { ...response, id: responseId, request }, bodyKept };
 }
 
 /** Saves the mock's History, like a write to the store. */

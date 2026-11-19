@@ -409,7 +409,7 @@ fn store_text(h: &Harness) -> String {
 }
 
 /// The send of `request` from a tab with `environment` selected, as the webview makes it.
-fn send_in(root: &Path, request: &Value, environment: &str) -> Value {
+pub(super) fn send_in(root: &Path, request: &Value, environment: &str) -> Value {
     let mut args = send_args(root, request);
     args["environment"] = json!(environment);
     args
