@@ -3216,30 +3216,133 @@ describe("editing a request's source (#163)", () => {
     expect(app.isDocDirty(PATH)).toBe(false);
   });
 
-  it("saves the last valid request while the text doesn't parse, and keeps the text", async () => {
-    const [list] = await openAll(parsed());
-    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
-    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books and\nX-Trace: on\n");
-    await app.saveTab(list);
-    expect(savedRequest(0).headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
-    expect(app.sourceText(PATH, list.key)?.text).toBe("### List\nGET {{host}}/books and\nX-Trace: on\n");
-    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
-  });
-
   it("forgets text that doesn't parse when its tab closes", async () => {
-    const [list, create] = await openAll(parsed());
+    const [list] = await openAll(parsed());
     await app.editSource(PATH, list.key, "### List\nGET {{host}}/books and\n");
     const closing = app.closeTab(list.id);
     app.closeDialog("discard");
     await closing;
     expect(app.dirtyDocs()).toEqual([]);
+  });
+});
 
-    // Saved first: the last valid request is in the file, and the text goes with the tab.
-    await app.editSource(PATH, create.key, "### Create\nPOST {{host}}/books and\n");
-    const saving = app.closeTab(create.id);
-    app.closeDialog("save");
+describe("saving while a request's source doesn't parse (#164)", () => {
+  // The real core (WASM) reads and writes the text, and saving writes and reads back the file as the shell does.
+  const TEXT = "@host = https://example.com\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n### Create\nPOST {{host}}/books\n";
+  const LIST = "### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n";
+  const BROKEN = "### List\n// hand formatted\nGET   {{host}}/books and more\nAccept application/json\n\n";
+  const parsed = () => invokeCore<HttpFile>("parse_file", { text: TEXT });
+  /** The text the last save wrote. */
+  const written = () => invokeCore<string>("file_text", { file: saveHttpFile.mock.lastCall![1] });
+  beforeEach(() => {
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+    saveHttpFile.mockImplementation(async (_path: string, file: HttpFile) =>
+      invokeCore("parse_file", { text: invokeCore<string>("file_text", { file }) }),
+    );
+  });
+
+  it("Save as written saves the request the parser recovered, which is the typed text byte for byte", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, BROKEN);
+
+    const saving = app.saveTab(list);
+    expect(await answer("written")).toBe('Save "List" as written?');
+    expect(await saving).toBe(true);
+
+    expect(written()).toBe(TEXT.replace(LIST, BROKEN));
+    const req = app.requestFor(list)!;
+    expect(req.url).toBe("{{host}}/books and more");
+    // The header line that doesn't read as one is kept as written, not in the Headers table.
+    expect(req.headers.items).toEqual([]);
+    expect(app.isSourceInvalid(PATH, list.key)).toBe(false);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(false);
+    expect(app.dirtyDocs()).toEqual([]);
+    expect(await app.sourceFor(PATH, list.key)).toBe(BROKEN);
+  });
+
+  it("Revert to last valid restores the last valid request and its source, and saves that", async () => {
+    const [list] = await openAll(parsed());
+    const edited = LIST.replace("Accept: application/json\n", "Accept: application/json\nX-Trace: on\n");
+    await app.editSource(PATH, list.key, edited);
+    await app.editSource(PATH, list.key, BROKEN);
+
+    const saving = app.saveTab(list);
+    await answer("revert");
+    expect(await saving).toBe(true);
+
+    expect(written()).toBe(TEXT.replace(LIST, edited));
+    expect(app.requestFor(list)!.headers.items.map((h) => h.name)).toEqual(["Accept", "X-Trace"]);
+    expect(app.sourceText(PATH, list.key)).toBeNull();
+    expect(await app.sourceFor(PATH, list.key)).toBe(edited);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  const CREATE_BROKEN = "### Create\nPOST {{host}}/books now\n";
+
+  it("Save all asks about each text that doesn't parse, and Cancel leaves everything as it is", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.editSource(PATH, list.key, BROKEN);
+    // Typed just before Save all: read without waiting for the pause.
+    void app.editSource(PATH, create.key, CREATE_BROKEN);
+
+    const cancelled = app.saveAll();
+    expect(await answer("written")).toBe('Save "List" as written?');
+    expect(await answer("cancel")).toBe('Save "Create" as written?');
+    await cancelled;
+    expect(saveHttpFile).not.toHaveBeenCalled();
+    expect([app.sourceText(PATH, list.key)?.text, app.sourceText(PATH, create.key)?.text]).toEqual([BROKEN, CREATE_BROKEN]);
+    expect(app.requestFor(list)!.url).toBe("{{host}}/books");
+    expect(app.dirtyDocs()).toEqual([PATH]);
+
+    const saving = app.saveAll();
+    await answer("written");
+    await answer("revert");
     await saving;
     expect(saveHttpFile).toHaveBeenCalledOnce();
+    expect(written()).toBe(TEXT.replace(LIST, BROKEN));
     expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  it("closing a tab and choosing Save asks too", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, BROKEN);
+
+    const closing = app.closeTab(list.id);
+    expect(await answer("save")).toBe('Save changes to "List"?');
+    expect(await answer("cancel")).toBe('Save "List" as written?');
+    expect(await closing).toBe(false);
+    expect(app.tabs.map((t) => t.id)).toContain(list.id);
+    expect(saveHttpFile).not.toHaveBeenCalled();
+
+    const closed = app.closeTab(list.id);
+    await answer("save");
+    await answer("written");
+    expect(await closed).toBe(true);
+    expect(written()).toBe(TEXT.replace(LIST, BROKEN));
+  });
+
+  it("quitting with Save all asks too, and Cancel keeps the app open", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, BROKEN);
+
+    const quitting = app.confirmQuit();
+    expect(await answer("save")).toBe("Unsaved changes");
+    await answer("cancel");
+    expect(await quitting).toBe(false);
+    expect(app.isSourceInvalid(PATH, list.key)).toBe(true);
+  });
+
+  it("text with no request line can only be reverted", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, "### List\n// nothing yet\n");
+
+    const saving = app.saveTab(list);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.title).toBe('Revert "List" to the last valid request?');
+    expect(app.dialog!.buttons.map((b) => b.value)).toEqual(["cancel", "revert"]);
+    app.closeDialog("revert");
+    expect(await saving).toBe(true);
+    expect(written()).toBe(TEXT);
   });
 });

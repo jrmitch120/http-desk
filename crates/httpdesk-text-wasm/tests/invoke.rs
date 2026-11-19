@@ -67,6 +67,19 @@ fn parse_file_reads_a_whole_file() {
 }
 
 #[test]
+fn file_text_writes_a_file_as_the_shell_saves_it() {
+    let text = format!("@petId = 1\n\n{REQUEST}\n### Get pet\nGET /pets/{{{{petId}}}}\n");
+    let mut file = call("parse_file", json!({ "text": text }));
+    assert_eq!(call("file_text", json!({ "file": file })), text);
+
+    // Saved as written (#164): a request recovered from text that doesn't parse is that text.
+    let source = call("request_source", json!({ "request": file["requests"][0] }));
+    let broken = source.as_str().unwrap().replace("/pets?limit=20", "/pets and more");
+    file["requests"][0] = parse(&broken);
+    assert_eq!(call("file_text", json!({ "file": file })), text.replace("/pets?limit=20", "/pets and more"));
+}
+
+#[test]
 fn request_text_is_a_requests_text_as_history_keeps_it() {
     let edited = "### List pets\n# Returns all pets.\nGET   {{baseUrl}}/pets?limit=20\nAccept: application/json\n";
     let request = parse(edited);

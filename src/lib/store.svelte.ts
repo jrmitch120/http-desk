@@ -88,7 +88,31 @@ export interface SourceText {
  *  changes otherwise (a structured edit), the text no longer stands for it. */
 interface SourceEdit extends SourceText {
   request: string;
+  /** What the parser recovered from the text last read (null: no request line):
+   *  what Save as written saves while the text doesn't parse. */
+  recovered: Request | null;
 }
+
+/**
+ * Text that doesn't parse, held in one of a file's views, and the two ways to
+ * settle it before the file is saved (`AppStore.settleUnparsed`). A request's
+ * Source view gives one (`unparsedTexts`); a view of the whole file can too.
+ */
+export interface UnparsedText {
+  /** What holds the text, for the dialog: the request's or the file's name. */
+  name: string;
+  /** What the last valid state is of: "request" or "file". */
+  noun: string;
+  /** False when the parser recovered nothing to save (no request line): only Revert is offered. */
+  canSaveAsWritten: boolean;
+  /** The document takes what the parser recovered from the text, which is saved as the text, byte for byte. */
+  saveAsWritten(): void;
+  /** The text is dropped: the document stays at its last valid state, which is saved. */
+  revert(): void;
+}
+
+/** An answer to `AppStore.askWhatToKeep`. */
+export type KeepChoice = "written" | "revert" | "cancel";
 
 /** How long typing in a Source view pauses before the text is read. */
 export const SOURCE_READ_DELAY_MS = 150;
@@ -700,7 +724,7 @@ class AppStore {
    *  appended to it; unedited ones stay orphaned so a request another editor
    *  removed isn't silently restored. */
   async save(path: string, revive: string[] = []): Promise<boolean> {
-    await this.readSources(path);
+    if (!(await this.settleUnparsed([path]))) return false;
     const doc = this.docs[path];
     if (!doc) return false;
     try {
@@ -713,14 +737,7 @@ class AppStore {
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
       const orphans = doc.orphans.filter((r) => !back.includes(r));
-      // Text that doesn't parse stays as typed (the request saved at its last valid state).
-      const invalid = [...doc.file.requests, ...doc.orphans].filter((r) => currentSource(doc, r)?.parses === false);
-      const sources = Object.fromEntries(invalid.map((r) => [r._key!, $state.snapshot(doc.sources[r._key!])]));
-      const saved = this.makeDoc(path, fresh, orphans, doc.saved);
-      for (const r of [...saved.file.requests, ...saved.orphans]) {
-        if (sources[r._key!]) saved.sources[r._key!] = { ...sources[r._key!], request: snapshot(r) };
-      }
-      this.docs[path] = saved;
+      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -738,8 +755,75 @@ class AppStore {
     if (tab) await this.saveTab(tab);
   }
 
+  /** Saves every unsaved file, after asking about all their text that doesn't parse
+   *  (Cancel saves none of them). */
   async saveAll() {
+    if (!(await this.settleUnparsed(Object.keys(this.docs)))) return;
     for (const p of this.dirtyDocs()) await this.save(p);
+  }
+
+  /**
+   * Before `paths` are saved: asks, in turn, what to keep of each text that doesn't
+   * parse in their views (`askWhatToKeep`), then applies every answer. False on
+   * Cancel, and then nothing changes. Text typed but not yet read is read first.
+   */
+  async settleUnparsed(paths: string[]): Promise<boolean> {
+    await Promise.all(paths.map((p) => this.readSources(p)));
+    const answers: [UnparsedText, KeepChoice][] = [];
+    for (const text of paths.flatMap((p) => this.unparsedTexts(p))) {
+      const choice = await this.askWhatToKeep(text);
+      if (choice === "cancel") return false;
+      answers.push([text, choice]);
+    }
+    for (const [text, choice] of answers) {
+      if (choice === "written") text.saveAsWritten();
+      else text.revert();
+    }
+    return true;
+  }
+
+  /** The Save as written / Revert to last valid dialog for one text that doesn't parse. */
+  async askWhatToKeep(text: UnparsedText): Promise<KeepChoice> {
+    const revert = { label: "Revert to last valid", value: "revert" };
+    if (!text.canSaveAsWritten) {
+      const r = await this.choose(
+        `Revert "${text.name}" to the last valid ${text.noun}?`,
+        `Its text doesn't parse and has no request line, so it can't be saved as written. The last valid ${text.noun} will be saved instead.`,
+        [{ ...CANCEL, focus: true }, { ...revert, role: "primary", danger: true }],
+      );
+      return r.button === "revert" ? "revert" : "cancel";
+    }
+    const r = await this.choose(
+      `Save "${text.name}" as written?`,
+      `Its text doesn't parse. Save it as written, with the lines that don't parse kept as they are, or revert to the last valid ${text.noun} and save that.`,
+      [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
+    );
+    return r.button === "written" || r.button === "revert" ? r.button : "cancel";
+  }
+
+  /** The text that doesn't parse in `path`'s views: each request's Source view whose text doesn't. */
+  private unparsedTexts(path: string): UnparsedText[] {
+    const doc = this.docs[path];
+    if (!doc) return [];
+    return [...doc.file.requests, ...doc.orphans].flatMap((req) => {
+      const edit = currentSource(doc, req);
+      if (edit?.parses !== false) return [];
+      const key = req._key!;
+      const recovered = edit.recovered && ($state.snapshot(edit.recovered) as Request);
+      return [
+        {
+          name: displayName(req),
+          noun: "request",
+          canSaveAsWritten: !!recovered,
+          saveAsWritten: () => {
+            this.dropSource(path, key);
+            const now = this.docs[path];
+            if (now && recovered) this.putRequest(now, { ...recovered, _key: key });
+          },
+          revert: () => this.dropSource(path, key),
+        },
+      ];
+    });
   }
 
   /** Reloads from disk, keeping tabs attached to the same requests where possible.
@@ -1107,7 +1191,7 @@ class AppStore {
     const req = this.findRequest(path, key);
     if (!doc || !req) return Promise.resolve();
     const last = this.sourceEdit(path, key);
-    doc.sources[key] = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, request: snapshot(req) };
+    doc.sources[key] = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, request: snapshot(req), recovered: last?.recovered ?? null };
     const id = sourceId(path, key);
     const pending = this.sourceReads.get(id);
     if (pending) clearTimeout(pending.timer);
@@ -1164,12 +1248,18 @@ class AppStore {
     if (!doc || !edit || edit.text !== text) return;
     edit.problems = parsed.problems;
     edit.parses = sourceParses(parsed);
+    edit.recovered = parsed.request;
     if (!sourceParses(parsed)) return;
     const req: Request = { ...parsed.request, _key: key };
-    const at = doc.file.requests.findIndex((r) => r._key === key);
-    if (at >= 0) doc.file.requests[at] = req;
-    else doc.orphans = doc.orphans.map((r) => (r._key === key ? req : r));
+    this.putRequest(doc, req);
     edit.request = snapshot(req);
+  }
+
+  /** `req` replaces the request of `doc` (or its orphan) with the same key. */
+  private putRequest(doc: Doc, req: Request) {
+    const at = doc.file.requests.findIndex((r) => r._key === req._key);
+    if (at >= 0) doc.file.requests[at] = req;
+    else doc.orphans = doc.orphans.map((r) => (r._key === req._key ? req : r));
   }
 
   /** The source text typed for request `key`, while the request is still as that text left it. */
