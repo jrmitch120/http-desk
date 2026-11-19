@@ -1719,7 +1719,7 @@ mockIPC(
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
-        return requestText(args.request);
+        return requestText(args.request) + (args.request.body.text ? `\n${args.request.body.text}\n` : "");
       case "parse_request": {
         // No parser: a History entry's source text gives back the request it was rendered from.
         const model = historyEntries.find((e) => e.source === args.text)?.model;

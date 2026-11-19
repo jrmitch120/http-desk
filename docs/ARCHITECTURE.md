@@ -989,7 +989,12 @@ Decisions made during implementation, beyond the plan above:
   remembered as `showSource` in app settings. Jumping to a field (a Find usages result,
   a hover card's Edit) switches it, and the switch is kept: on for a request's own
   `@name` line, which only the source shows; off for any other field, which only the
-  sections show.
+  sections show. The text is highlighted as `.http` (`src/lib/codemirror/http.ts`): a
+  line parser that reads blocks, request lines, headers, bodies and handlers by the same
+  rules as the core's parser (§2), so a body line the body editor warns about is shown as
+  the separator or handler it will be read as. Bodies are highlighted by Content-Type
+  (JSON, XML, HTML, GraphQL) and scripts as JavaScript, nested with Lezer's `parseMixed`;
+  `{{variables}}` are coloured by state as in every other editor. Each `###` block folds.
 * **The resolved preview** (the Resolved button in the request's title row, beside .http, remembered as
   `showResolved` in app settings) shows the request as it will be sent: method, URL,
   every header (the auth header, the Content-Type the body implies, the defaults) and
