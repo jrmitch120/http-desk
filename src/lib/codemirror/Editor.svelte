@@ -314,6 +314,12 @@
     view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
     view.focus();
   }
+  /** Puts the caret at offset `pos` and scrolls its line to the top of the view; with `focus`, focuses the editor too. */
+  export function revealAt(pos: number, { focus = false } = {}) {
+    if (!view || pos < 0 || pos > view.state.doc.length) return;
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "start", yMargin: 8 }) });
+    if (focus) view.focus();
+  }
   /**
    * For a context menu at `e`: moves the caret to the clicked spot unless the
    * click is inside the selection (which a Copy item then copies), and returns
