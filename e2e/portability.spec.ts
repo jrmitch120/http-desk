@@ -82,17 +82,19 @@ test("the marks follow text typed in the source, even while it doesn't read as a
   await source(page).locator(".cm-line", { hasText: "GET {{baseUrl}}/pets" }).click();
   await page.keyboard.press("Home");
   await page.keyboard.type("# @timeout 5\n");
+  // The note first: it's there once the typed text is read, so the marks are the ones
+  // for it, not for a line half typed (`# @no-l` reads as a description; CI hovered that).
+  await expect(strip(page).getByRole("note")).toHaveText("1 line behaves differently in VS Code: line 6 of the .http source");
   await hoverMarkerOf(page, "# @timeout 5");
   await expect(page.getByRole("tooltip")).toHaveText("Rider uses this read timeout; VS Code ignores @timeout");
-  await expect(strip(page).getByRole("note")).toHaveText("1 line behaves differently in VS Code: line 6 of the .http source");
 
   // Text that doesn't parse leaves the request as it was; the marks stay on the text shown.
   await page.keyboard.type("# @no-log\n");
   await page.keyboard.press("End");
   await page.keyboard.type(" and more");
+  await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 6 and 7 of the .http source");
   await hoverMarkerOf(page, "# @no-log");
   await expect(page.getByRole("tooltip")).toHaveText("Rider keeps this request out of its history; VS Code ignores @no-log");
-  await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 6 and 7 of the .http source");
 });
 
 test("turning on portability warnings makes a handler line's marker and the strip's note warnings, at once", async ({ page }) => {
