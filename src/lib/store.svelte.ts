@@ -347,7 +347,8 @@ class AppStore {
   windowTitle = $derived.by(() => {
     if (!this.root) return "HttpDesk";
     const req = this.requestFor(this.activeTab);
-    return [req && displayName(req), basename(this.root), this.envName].filter(Boolean).join(" — ");
+    const shown = this.activeTab?.kind === "file" ? basename(this.activeTab.path) : req && displayName(req);
+    return [shown, basename(this.root), this.envName].filter(Boolean).join(" — ");
   });
 
   /** Every environment name in the workspace (the picker lists them all). */

@@ -1264,6 +1264,13 @@ describe("window title", () => {
     await app.selectEnvironment(null);
     expect(app.windowTitle).toBe("my-api");
   });
+
+  it("names the file a file view shows", async () => {
+    await app.openWorkspace("/dev/my-api");
+    readHttpFile.mockResolvedValueOnce(file("List"));
+    await app.openFileView("/dev/my-api/books.http");
+    expect(app.windowTitle).toBe("books.http — my-api — staging");
+  });
 });
 
 describe("switching workspace with unsaved files", () => {
