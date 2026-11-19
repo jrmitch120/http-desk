@@ -257,7 +257,7 @@
     {#if showSource}
       <div class="source">
         <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="text" /></div>
+        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} /></div>
       </div>
     {:else}
       {#snippet undefinedCount(s: Section)}

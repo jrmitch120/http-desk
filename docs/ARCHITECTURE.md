@@ -124,10 +124,13 @@ re-parses `raw`, renders it and the edited model canonically, and compares the t
 **If the request is semantically unchanged, the original bytes are emitted unchanged.**
 Only requests the user actually edited are re-emitted in canonical form. Effects:
 
-* Opening and saving an untouched file is byte-identical when the file uses one line
-  ending throughout (covered by tests for LF, CRLF, a UTF-8 BOM, and no final newline).
-  One thing is normalized: a file with mixed line endings is saved with its dominant
-  ending. Blank lines that are the only content before the first `###` are kept.
+* Opening and saving an untouched file is byte-identical, for any text: LF, CRLF, mixed
+  line endings, a UTF-8 BOM, no final newline, and text that doesn't parse cleanly
+  (unreadable lines are kept verbatim in `ExtraLine`s, `leading` and `trailing` text).
+  `tests/round_trip.rs` pins this for every `.http` file in the repository and, with
+  proptest, for arbitrary `.http`-shaped text, whole files and single requests
+  (`parse_request` / `request_source`). Blank lines that are the only content before
+  the first `###` are kept.
 * Hand-written formatting, alignment and comments in requests you didn't touch survive a
   GUI edit elsewhere in the file.
 * An edit that changes only a request's scripts (Settings → Scripts) is written into the
@@ -135,9 +138,11 @@ Only requests the user actually edited are re-emitted in canonical form. Effects
   rest of that request keeps its formatting too (`scripts_in_place` in the serializer).
 * Diffs in source control stay small.
 
-**Line endings.** The parser counts CRLF and bare LF line breaks. The file is CRLF only
-if CRLF breaks outnumber bare LF ones (a tie is LF). Text is normalized to LF in memory,
-and the whole file is written back with that one ending.
+**Line endings.** The parser counts CRLF and bare LF line breaks. A file with only CRLF
+breaks is CRLF: its text is normalized to LF in memory and the whole file is written back
+with CRLF. Any other file is LF. A file with mixed endings isn't normalized: every `\r`
+stays in the verbatim text, so it saves back as written, and a request edited in it is
+written with LF.
 
 **Byte order mark.** A leading UTF-8 BOM is stripped before parsing, so it can't hide
 the first request's `###` or method, and is recorded in `HttpFile.bom`. Saving writes it
@@ -182,6 +187,20 @@ single-line editors (the URL bar, VarField) that can't hold a line break. Body t
 `###` separator, or a column-0 `>>`, `> {%` or `> file.js` handler) gets an inline
 warning in the body editor instead.
 
+### Parse problems
+
+`parse_with_problems` (a file) and `parse_request` (a single request's text) return
+what `parse` builds plus a list of `Problem`s: line and column (1-based, the column in
+characters), severity, code and message. Reporting never changes what is built. Codes:
+
+| Code | Severity | When |
+|---|---|---|
+| `unparseable-request-line` | error | The request line's URL has whitespace outside `{{ }}`, so it isn't `[METHOD] URL [HTTP/version]`. |
+| `header-after-body` | warning | Each `Name: value` line (an RFC 9110 token name at column 0, not a `://` URL) that the body starts with. |
+| `unknown-directive` | warning | A `# @tag` above the request line that JetBrains, VS Code and HttpDesk all ignore (`KNOWN_DIRECTIVES`, matched ignoring case). |
+
+Blocks with no request line (the file header, `leading` and `trailing` text) report nothing.
+
 ---
 
 ## 3. Internal request model
@@ -194,7 +213,7 @@ HttpFile {
     header: FileHeader { comments, variables: Vec<Variable>, raw: Option<String> },
     requests: Vec<Request>,
     trailing: String,           // non-request text after the last request
-    line_ending: Lf | Crlf,     // dominant ending; the whole file is saved with it
+    line_ending: Lf | Crlf,     // Crlf only if every break is CRLF (mixed text is kept as written)
     bom: bool,                  // the file started with a UTF-8 BOM
 }
 
@@ -992,7 +1011,12 @@ Decisions made during implementation, beyond the plan above:
   remembered as `showSource` in app settings. Jumping to a field (a Find usages result,
   a hover card's Edit) switches it, and the switch is kept: on for a request's own
   `@name` line, which only the source shows; off for any other field, which only the
-  sections show.
+  sections show. The text is highlighted as `.http` (`src/lib/codemirror/http.ts`): a
+  line parser that reads blocks, request lines, headers, bodies and handlers by the same
+  rules as the core's parser (§2), so a body line the body editor warns about is shown as
+  the separator or handler it will be read as. Bodies are highlighted by Content-Type
+  (JSON, XML, HTML, GraphQL) and scripts as JavaScript, nested with Lezer's `parseMixed`;
+  `{{variables}}` are coloured by state as in every other editor. Each `###` block folds.
 * **The resolved preview** (the Resolved button in the request's title row, beside .http, remembered as
   `showResolved` in app settings) shows the request as it will be sent: method, URL,
   every header (the auth header, the Content-Type the body implies, the defaults) and
@@ -1254,7 +1278,7 @@ Decisions made during implementation, beyond the plan above:
 
 | Layer | Tests |
 |---|---|
-| Format | `crates/httpdesk-core/tests/format.rs`: JetBrains, VS Code and response handler (`fixtures/handlers.http`: inline, multi-line, file, redirect) fixtures (the JetBrains one with the pre-request examples from JetBrains' docs), handler and pre-request parts, scripts added, edited and removed in place (the rest of the request kept as written), byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings, item/section/auth/body enablement, API key, query escaping, field safety, edge cases |
+| Format | `crates/httpdesk-core/tests/format.rs`: JetBrains, VS Code and response handler (`fixtures/handlers.http`: inline, multi-line, file, redirect) fixtures (the JetBrains one with the pre-request examples from JetBrains' docs), handler and pre-request parts, scripts added, edited and removed in place (the rest of the request kept as written), byte-identical round-trip (LF, CRLF, BOM, no final newline), mixed line endings kept as written, item/section/auth/body enablement, API key, query escaping, field safety, edge cases. `tests/round_trip.rs`: every `.http` file in the repository saves back byte for byte and parses with problems to the plain parse (well-formed ones with none), and proptests that arbitrary `.http`-shaped text (broken request lines, stray headers, unclosed `{% %}`, `#~` lines, mixed line endings, a BOM) saves back byte for byte as a file and as a single request (`parse_request` / `request_source`). `tests/parse_problems.rs`: one fixture per problem code (`fixtures/problems/<code>.http`) with its exact line, column, severity and code |
 | Execution | `tests/preview.rs`: the resolved preview gives the same method, URL, headers and warnings as `prepare` (query encoding with and without `# @no-auto-encoding`, every auth kind, bodies), dynamic variables stay placeholders, a body file is never read but its implied Content-Type is shown, a request that can't be sent is shown with the reason, prompted values are shown (masked ones masked) with unanswered prompts as written, and a pre-request script is never run (the preview says so). `tests/exec.rs`, against a wiremock server (and a hand-rolled trickle server for timeouts): disabled components are never sent, auth kinds, variables, JSON/form/multipart/file bodies, redirects, idle and connect timeouts, phase timings (fresh and reused connections, redirect chains), query encoding, send errors and their kinds (refused port, `.invalid` host, self-signed and expired certificates from an rcgen test server, a server that hangs up, timeouts, unresolved variables), custom methods, binary and text responses (by the outcome's body bytes and kind; a text kind with no text is binary), content encodings (gzip, br, deflate, zstd, unsupported and undecodable bodies being binary), transferred size, the final request after 302/303/307 and cross-origin redirects, the client pool (a second send reuses the connection; a client in use or with other settings isn't shared), rate-limited download progress, cookies set on redirect hops (listed, and sent on the next hop), a reused client listing only each request's own cookies, and the Session's cookie jar: a login cookie sent on the next request to the same host and under its path only, not to another host, after it expires or once the server deletes it; a `Secure` cookie kept but not sent over plain http; `# @no-cookie-jar` neither sending nor keeping cookies; no cookie sent back without a jar; a written `Cookie` header sent instead of the jar's; concurrent sends on different pooled clients sharing one jar; and the jar listing its cookies and deleting one or all. `src/cookies.rs` unit tests cover Set-Cookie attribute parsing. `tests/tls_behind_proxy.rs` (its own binary, as it sets proxy variables): behind a CONNECT proxy a rejected certificate isn't probed directly, and NO_PROXY exempts the host |
 | Scripts | `crates/httpdesk-core/tests/scripts.rs`, against a wiremock server: passing and failing `client.test`s and `client.assert`s with names and messages, a thrown value (`null`, `undefined`, a number, text, an object, an `Error` and a `TypeError`) reading the same in a test and at the top level, the `response` API (status, headers in any case, JSON and text bodies, content type), a throwing or unparseable handler keeping earlier tests and reporting its handler line, every unimplemented JetBrains API failing by name, attempts to read files, open sockets and spawn processes all failing (nothing leaks to the server, no process runs), an endless loop stopped at the 5 s limit (even when it catches) and unbounded allocation at 64 MB, both keeping the response, a handler file next to the `.http` file running and reporting its tests and errors by file and line, a missing handler file, a folder, one outside the workspace (by `..` or through a symlink, even when it doesn't exist) and no open workspace each becoming a failed test, a redirect running nothing, writing no file and warning on the send and the preview, a fresh context per handler, and `client.log` lines kept in order as text (objects as JSON, values JSON can't write as text), kept when the handler later fails, and stopped at 64 KB with one line saying so, and `script/api.json` naming exactly the API the prelude implements. `tests/pre_request_scripts.rs`, against a wiremock server, runs pre-request scripts as the shell does: `request.variables.set` values reaching the URL, a header and the body, `request.variables.get`, `request.environment.get` reading private environment values, `request.variables.set` winning over the environment, File variables and the request's own variables (Rider's order, #129), a thrown error, a syntax error, the time and memory limits, an unsupported `request.*` API each sending nothing and reporting the line counted from the first `<` line, a script file next to the `.http` file running before the request is built, and one that throws (named by file and line), is missing or is outside the workspace sending nothing, and tests and asserts in a pre-request script coming back as results; through `send::send`, a send blocked by an unsent or unmatched Request variable running no pre-request script (no `client.global.set`) and reporting the block, in an untrusted workspace too, a script still defining a name the URL uses, and cancelling a send stopping its running pre-request script, what it set before standing |
 | OpenAPI | `tests/openapi.rs`: 3.0 YAML and 3.1 JSON fixtures, insta snapshots of generated files, grouping, selection, auth, env and secrets output, validation errors, external refs |

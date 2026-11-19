@@ -34,9 +34,10 @@ import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
+import { http } from "./http";
 import type { ReadingCard } from "../exchanges";
 
-export type Language = "json" | "xml" | "html" | "javascript" | "text";
+export type Language = "json" | "xml" | "html" | "javascript" | "http" | "text";
 
 export const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--text)", height: "100%", fontSize: "12.5px" },
@@ -116,10 +117,18 @@ const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operator], color: "var(--tok-keyword, #c586c0)" },
   { tag: [t.punctuation, t.bracket, t.angleBracket], color: "var(--muted)" },
   { tag: t.invalid, color: "var(--danger)" },
+  // `.http` (./http.ts): `###` separators, File variable names, directives, `< file` paths and `#~` lines.
+  { tag: t.heading, color: "var(--text-2)", fontWeight: "600" },
+  { tag: t.definition(t.variableName), color: "var(--tok-key, #9cdcfe)" },
+  { tag: t.annotation, color: "var(--tok-tag, #569cd6)" },
+  { tag: t.link, color: "var(--tok-string, #ce9178)", textDecoration: "underline" },
+  { tag: t.deleted, textDecoration: "line-through" },
 ]);
 
 export function languageExtension(lang: Language): Extension {
   switch (lang) {
+    case "http":
+      return http();
     case "json":
       return json();
     case "xml":
