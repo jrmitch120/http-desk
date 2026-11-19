@@ -1142,6 +1142,7 @@ class AppStore {
     if (!doc) return;
     const linked = historyLinkKey(path, historyLink(path, restored));
     const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(path, historyLink(path, r)) === linked : r._key === key));
+    if (this.refused(path, at >= 0 ? [doc.file.requests[at]._key!] : [])) return;
     const req: Request = { ...restored, leading: "", _key: at >= 0 ? doc.file.requests[at]._key! : uid() };
     if (at >= 0) {
       // Text that preceded the request in its file stays as it is.
@@ -1220,10 +1221,22 @@ class AppStore {
 
   // ---------------------------------------------------------------- request ops
 
+  /**
+   * Whether an action from outside the views (the explorer, History, Rename variable, a
+   * quick fix) is refused from changing the file at `path` (or requests `keys` of it): a
+   * view holds text that doesn't parse that the change would stop standing for, which
+   * would drop it unseen (`TextViews.blocked`, #174). Says why when it is.
+   */
+  private refused(path: string, keys: string[] = []): boolean {
+    const why = this.texts.blocked(path, keys);
+    if (why) this.toast("error", `${why}: fix it, or save it as written or revert it, first.`);
+    return !!why;
+  }
+
   /** Adds a request to a file and opens it. Saves immediately if the file was clean. */
   async addRequest(path: string, req: Request = newRequest()) {
     const doc = await this.loadDoc(path);
-    if (!doc) return;
+    if (!doc || this.refused(path)) return;
     const wasClean = !this.isDocDirty(path);
     ensureKey(req);
     doc.file.requests.push(req);
@@ -1235,7 +1248,7 @@ class AppStore {
   async duplicateRequest(path: string, key: string) {
     const doc = await this.loadDoc(path);
     const src = doc?.file.requests.find((r) => r._key === key);
-    if (!doc || !src) return;
+    if (!doc || !src || this.refused(path)) return;
     const copy: Request = { ...JSON.parse(snapshot(src)), name: `${displayName(src)} copy`, raw: null, leading: "", _key: uid() };
     const wasClean = !this.isDocDirty(path);
     doc.file.requests.splice(doc.file.requests.indexOf(src) + 1, 0, copy);
@@ -1247,6 +1260,9 @@ class AppStore {
     const doc = await this.loadDoc(path);
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!doc || !req) return;
+    // The request after it takes the text before it.
+    const next = doc.file.requests[doc.file.requests.indexOf(req) + 1];
+    if (this.refused(path, [key, ...(req.leading && next ? [next._key!] : [])])) return;
     const r = await this.choose("Delete request", `Delete "${displayName(req)}" from ${basename(path)}?`, [
       CANCEL,
       { label: "Delete", value: "delete", role: "primary", danger: true },
@@ -1268,7 +1284,7 @@ class AppStore {
   async renameRequest(path: string, key: string) {
     const doc = await this.loadDoc(path);
     const req = doc?.file.requests.find((r) => r._key === key);
-    if (!req) return;
+    if (!req || this.refused(path, [key])) return;
     const r = await this.prompt("Rename request", displayName(req));
     if (r === null || !r.trim()) return;
     const wasClean = !this.isDocDirty(path);
@@ -2005,6 +2021,9 @@ class AppStore {
    *  (the Undefined-variable strip's "Add …" fixes), an empty one is added there first. */
   async editDefinition(tabId: string, definition: WantedDefinition) {
     if (definition.kind === "request") return this.showDeclaration(tabId, definition.name);
+    // Adding a File variable changes the file.
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (definition.kind === "file" && definition.add && tab && this.refused(tab.path)) return;
     this.definitionWanted = definition;
     if (definition.kind === "file") this.showRequestSettings(tabId);
     else this.modal = "env";
@@ -2092,13 +2111,19 @@ class AppStore {
     if (!choice) return false;
     const { name: next } = choice;
     const usages = choice.usages ? await this.renameTargets(name, dir, choice.usages) : [];
+    const byFile = new Map<string, Usage[]>();
+    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
+    // Nothing changes if a file it would rewrite can't be (an open one's view holds text that doesn't parse).
+    for (const [path, list] of byFile) {
+      const requests = this.docs[path]?.file.requests ?? [];
+      const keys = list.flatMap((u) => (u.kind === "request" && requests[u.index] ? [requests[u.index]._key!] : []));
+      if (this.refused(path, keys)) return false;
+    }
     const set = await this.folderPair(dir);
     if (!set) return false;
     renameInEnvironments(set, usages, name, next);
     if (!(await this.writeEnvironments(set, dir))) return false;
 
-    const byFile = new Map<string, Usage[]>();
-    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
     let edited = 0;
     const unsaved: string[] = [];
     for (const [path, list] of byFile) {
@@ -2158,6 +2183,8 @@ class AppStore {
     if (!choice) return null;
     const { name, target } = choice;
     const tab = this.tabs.find((t) => t.id === tabId);
+    // The field gets `{{name}}`, and a File variable goes in the file.
+    if (tab && this.refused(tab.path, [tab.key])) return null;
     if (target.kind !== "file") return tab && (await this.extractToEnvironments(tab.path, target, name, value)) ? name : null;
     const doc = tab && this.docs[tab.path];
     if (!tab || !doc) return null;

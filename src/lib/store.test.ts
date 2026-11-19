@@ -3297,6 +3297,14 @@ describe("editing a request's source (#163)", () => {
     expect(app.isDocDirty(PATH)).toBe(false);
   });
 
+  it("finds the files a body reads in text that doesn't parse, placed in it", async () => {
+    const [list] = await openAll(parsed());
+    await app.texts.edit(PATH, sourceView(list.key), "### List\nPOST {{host}}/books and more\n\n< ./body.json\n");
+    const typed = app.texts.typed(PATH, sourceView(list.key))!;
+    expect(typed.parses).toBe(false);
+    expect(typed.files.map((f) => [f.path, f.missing.line, f.missing.code])).toEqual([["./body.json", 4, "missing-file"]]);
+  });
+
   it("forgets text that doesn't parse when its tab closes", async () => {
     const [list] = await openAll(parsed());
     await app.texts.edit(PATH, sourceView(list.key), "### List\nGET {{host}}/books and\n");
@@ -3356,6 +3364,24 @@ describe("saving while a request's source doesn't parse (#164)", () => {
     expect(app.requestFor(list)!.headers.items.map((h) => h.name)).toEqual(["Accept", "X-Trace"]);
     expect(app.texts.typed(PATH, sourceView(list.key))).toBeNull();
     expect(await app.texts.textFor(PATH, sourceView(list.key))).toBe(edited);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  it("text typed after the request's block doesn't parse, and Save as written adds it to the file after the request", async () => {
+    const [list, create] = await openAll(parsed());
+    const typed = `${LIST}### Typed too\nGET {{host}}/typed\n\n# a note\n`;
+    await app.texts.edit(PATH, sourceView(list.key), typed);
+    expect(app.texts.isInvalid(PATH, sourceView(list.key))).toBe(true);
+    expect(app.texts.typed(PATH, sourceView(list.key))?.problems.map((p) => [p.line, p.code])).toEqual([[6, "text-after-request"]]);
+
+    const saving = app.saveTab(list);
+    expect(await answer("written")).toBe('Save "List" as written?');
+    expect(await saving).toBe(true);
+
+    expect(written()).toBe(TEXT.replace(LIST, typed));
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "Typed too", "Create"]);
+    // Each tab is still on its own request.
+    expect([app.requestFor(list)!.name, app.requestFor(create)!.name]).toEqual(["List", "Create"]);
     expect(app.dirtyDocs()).toEqual([]);
   });
 
@@ -3658,6 +3684,18 @@ describe("the Problems panel (#172)", () => {
     expect(saveHttpFile).not.toHaveBeenCalled();
   });
 
+  it("breaking a request in its Source view lists it before it's saved, at its line in the file", async () => {
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    await app.openRequest(PATH, { index: 0 });
+    void app.texts.edit(PATH, sourceView(app.tabs[0].key), "### List\n# @nmae x\nGET https://example.com/books and more\n\n");
+
+    await vi.waitFor(() => {
+      app.problems.track();
+      expect(listed()).toEqual([[PATH, [[2, "unknown-directive"], [3, "unparseable-request-line"], [6, "unparseable-request-line"]]]]);
+    });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
   it("breaking an open document in its file view lists it before it's saved, at its line in the text", async () => {
     await app.openFileView(AUTHORS);
     void app.texts.edit(AUTHORS, fileView, `${FINE}\n### Broken\n# @nmae x\nGET https://example.com/a b\n`);
@@ -3801,6 +3839,71 @@ describe("the file view and request tabs while text doesn't parse (#174)", () =>
     expect(written()).toBe(BROKEN);
     expect([app.texts.typed(PATH, sourceView(list.key)), app.texts.typed(PATH, fileView)]).toEqual([null, null]);
     expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  const FILE_HELD = "The text in books.http's file view doesn't parse, so books.http can't be changed until it does: fix it, or save it as written or revert it, first.";
+
+  it("while the file view's text doesn't parse, nothing from outside the views changes the file, and each says why", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.texts.edit(PATH, fileView, BROKEN);
+    app.definitionWanted = null;
+    const urls = () => app.docs[PATH].file.requests.map((r) => r.url);
+    const before = urls();
+
+    await app.duplicateRequest(PATH, list.key);
+    await app.renameRequest(PATH, list.key);
+    await app.deleteRequest(PATH, create.key);
+    await app.addRequest(PATH);
+    await app.restoreRequest(PATH, list.key, "### List\nGET https://example.com/restored\n");
+    await app.editDefinition(list.id, { kind: "file", name: "token", add: true });
+
+    expect(app.dialog).toBeNull();
+    expect(errors()).toEqual(Array(6).fill(FILE_HELD));
+    expect(urls()).toEqual(before);
+    expect(app.definitionWanted).toBeNull();
+    expect(app.texts.typed(PATH, fileView)?.text).toBe(BROKEN);
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("while a request's source doesn't parse, nothing from outside it changes that request; the file's others can be", async () => {
+    const [list, create] = await openAll(parsed());
+    const broken = "### Create\nPOST {{host}}/books and more\n";
+    await app.texts.edit(PATH, sourceView(create.key), broken);
+    const held = `The source of "Create" doesn't parse, so it can't be changed until it does: fix it, or save it as written or revert it, first.`;
+
+    await app.renameRequest(PATH, create.key);
+    await app.deleteRequest(PATH, create.key);
+    await app.restoreRequest(PATH, create.key, "### Create\nPOST https://example.com/restored\n");
+    expect(app.dialog).toBeNull();
+    expect(errors()).toEqual([held, held, held]);
+    expect(app.requestFor(create)!.url).toBe("{{host}}/books");
+    expect(app.texts.typed(PATH, sourceView(create.key))?.text).toBe(broken);
+
+    // Copying it changes nothing it stands for, nor does renaming another request.
+    await app.duplicateRequest(PATH, create.key);
+    const renaming = app.renameRequest(PATH, list.key);
+    await vi.waitFor(() => expect(app.dialog?.title).toBe("Rename request"));
+    app.closeDialog("ok", "Books");
+    await renaming;
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["Books", "Create", "Create copy"]);
+    expect(app.texts.typed(PATH, sourceView(create.key))?.text).toBe(broken);
+  });
+
+  it("Rename variable changes nothing while a file it would rewrite holds text that doesn't parse", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.texts.edit(PATH, fileView, BROKEN);
+    app.root = "/ws";
+    app.envSet = { shared: [{ name: "host", value: "https://example.com", secret: false }], environments: [], privateFileIgnored: true };
+    const usage: Usage = { kind: "request", path: PATH, index: 0, name: "List", method: "GET", url: "{{host}}/books", field: { kind: "url" }, disabled: false, start: 0, end: 8 };
+
+    const renaming = app.renameVariable("host");
+    app.closeRenaming({ name: "base", usages: [usage] });
+    expect(await renaming).toBe(false);
+    expect(saveEnvironments).not.toHaveBeenCalled();
+    expect(errors()).toEqual([FILE_HELD]);
+    expect(app.texts.typed(PATH, fileView)?.text).toBe(BROKEN);
   });
 });
 
