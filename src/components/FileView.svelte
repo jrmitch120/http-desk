@@ -13,6 +13,9 @@
   import { sessionView } from "../lib/sessionView.svelte";
   import { portabilityLineMarks } from "../lib/checks";
   import { checkUnderlines } from "../lib/codemirror/underlines";
+  import { requestAt, requestBlocks, type RequestBlock } from "../lib/codemirror/outline";
+  import { EditorView } from "@codemirror/view";
+  import Badge from "./Badge.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
@@ -96,6 +99,29 @@
   const underlines = $derived(checkUnderlines(text, problems.map((problem) => ({ kind: "problem" as const, problem }))));
   const marks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
 
+  // The outline: the requests of the text shown. The one under the cursor is the
+  // explorer's selection, and the one Send (⌘Enter) sends.
+  const blocks = $derived(requestBlocks(text));
+  let cursor = $state(0);
+  const followCursor = EditorView.updateListener.of((u) => {
+    if (u.selectionSet || u.docChanged) cursor = u.state.selection.main.head;
+  });
+  const current = $derived(requestAt(blocks, cursor));
+  $effect(() => app.setFileCursor(tab.id, current?.index ?? null));
+
+  function show(block: RequestBlock, focus: boolean) {
+    editor?.revealAt(block.start, { focus });
+  }
+
+  // Asked to show a request (the explorer, `app.openFileView(path, { key })`): once the text is shown.
+  $effect(() => {
+    const want = app.fileRequestWanted;
+    if (want?.tabId !== tab.id || textOf === null || !editor || !doc) return;
+    app.fileRequestWanted = null;
+    const block = blocks[doc.file.requests.findIndex((r) => r._key === want.key)];
+    if (block) tick().then(() => show(block, false));
+  });
+
   // Asked to show a line (`app.openFileView(path, { line })`): once the text is shown.
   $effect(() => {
     const want = app.fileLineWanted;
@@ -139,8 +165,31 @@
       {/if}
     </div>
     {#if textOf !== null}
-      <div class="file-code">
-        <Editor bind:this={editor} value={text} onchange={(t) => app.editFileText(tab.path, t)} freshHistory language="http" {variables} {underlines} lineMarks={marks} />
+      <div class="file-body">
+        <nav class="outline" aria-label="Outline">
+          {#each blocks as block (block.index)}
+            <button class="entry" class:current={block === current} aria-current={block === current ? "true" : undefined} onclick={() => show(block, true)} use:tooltip={block.label}>
+              <Badge method={block.method} />
+              <span class="label ellipsis">{block.label}</span>
+            </button>
+          {:else}
+            <div class="none muted">No requests</div>
+          {/each}
+        </nav>
+        <div class="file-code">
+          <Editor
+            bind:this={editor}
+            value={text}
+            onchange={(t) => app.editFileText(tab.path, t)}
+            onsend={() => app.send(tab.id)}
+            freshHistory
+            language="http"
+            {variables}
+            {underlines}
+            lineMarks={marks}
+            extensions={followCursor}
+          />
+        </div>
       </div>
     {/if}
   </div>
@@ -181,10 +230,58 @@
     font-family: var(--mono);
     font-size: 11px;
   }
-  .file-code {
+  .file-body {
     flex: 1;
     min-height: 0;
+    display: flex;
+    gap: 8px;
     margin: 0 16px 16px;
+  }
+  .outline {
+    flex: none;
+    width: 200px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    flex: none;
+    padding: 0 6px;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 0;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .entry:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .entry.current {
+    background: var(--accent-soft);
+    border-left-color: var(--accent);
+    color: var(--text);
+  }
+  .entry .label {
+    min-width: 0;
+  }
+  .none {
+    font-size: 11.5px;
+    padding: 6px;
+  }
+  .file-code {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--panel);

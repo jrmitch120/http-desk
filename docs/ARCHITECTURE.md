@@ -1087,7 +1087,17 @@ Decisions made during implementation, beyond the plan above:
   follow and stay in sync both ways; a request gone from the text closes its tabs. Text
   that doesn't parse leaves the file at its last valid state and reads dirty. A file
   view is part of the Layout (`{ kind: "file", path }`). `app.openFileView(path, { line })`
-  opens it scrolled to a line.
+  opens it scrolled to a line, `{ key }` to a request.
+  An outline beside the text lists its requests (#167): `src/lib/codemirror/outline.ts`
+  reads them from the `.http` tree (`requestBlocks`: each `###` block with a request line,
+  in the file's order, named as `displayName` names a request) and finds the one at a
+  position (`requestAt`). The view reports the request under its cursor by its place
+  (`app.setFileCursor`); while the view is active that request is the explorer's
+  selection, and Send (⌘Enter, the Request menu) sends it through `app.send` from its
+  own tab, opened and made active, so the prompts, production confirmation, trust and
+  response are a send from that tab's. While the text doesn't parse, nothing is
+  selected or sent. Clicking a request in the explorer while its file's view is active
+  scrolls the view to it instead of opening its tab.
 * **The resolved preview** (the Resolved button in the request's title row, beside .http, remembered as
   `showResolved` in app settings) shows the request as it will be sent: method, URL,
   every header (the auth header, the Content-Type the body implies, the defaults) and

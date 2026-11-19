@@ -435,6 +435,15 @@ function parseText(text: string): Node {
   return node("Document", 0, text.length, children);
 }
 
+/**
+ * The `.http` tree of `text` without its nested languages (bodies and scripts aren't
+ * parsed inside): cheap, for reading the text's structure (its blocks and requests)
+ * outside an editor.
+ */
+export function httpLineTree(text: string): Tree {
+  return toTree(parseText(text));
+}
+
 /** The parsers of the languages nested in `.http`, by the node they parse. */
 const nested: Partial<Record<NodeName, Parser>> = {
   JsonBody: jsonLanguage.parser,
