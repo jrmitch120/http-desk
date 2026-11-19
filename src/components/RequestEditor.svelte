@@ -179,6 +179,9 @@
   // request's own `@name` lines have no field of their own, so its .http source shows them,
   // with the line selected.
   let urlInput = $state<UrlInput>();
+  let nameInput = $state<HTMLInputElement>();
+  // The full name, as a tooltip, only while the breadcrumb cuts it short.
+  const clippedName = () => (nameInput && nameInput.scrollWidth > nameInput.clientWidth ? nameInput.value || nameInput.placeholder : "");
   let paramsGrid = $state<KeyValueGrid<KeyValue>>();
   let headersGrid = $state<KeyValueGrid<KeyValue>>();
   let panel = $state<HTMLElement>();
@@ -290,8 +293,7 @@
     <div class="crumbs">
       <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <Icon name="chevron-right" size={12} />
-      <input class="name-input" readonly={!!lock} value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
-      <span class="spacer"></span>
+      <input class="name-input" readonly={!!lock} value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" bind:this={nameInput} use:tooltip={clippedName} />
       <button
         class="btn small ghost"
         class:on={resolved}
@@ -438,10 +440,12 @@
     font-size: 12.5px;
     white-space: nowrap;
   }
+  /* The name takes all the room the buttons leave (no spacer sharing it) and
+     ends in "…" when it still doesn't fit. */
   .name-input {
     flex: 1;
     min-width: 60px;
-    max-width: 520px;
+    text-overflow: ellipsis;
     border: 1px solid transparent;
     background: none;
     border-radius: var(--radius-sm);
