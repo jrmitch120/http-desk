@@ -639,6 +639,8 @@ window.addEventListener(
   get savedPaths() {
     return [...savedPaths];
   },
+  /** The text of the `.http` file at `path`, as the shell would have it on disk. */
+  fileText: (path: string) => invokeCore<string>("file_text", { file: fileAt(path) }),
   /** The native menu bar as the app last sent it, with the state changes since applied. */
   get menu() {
     return { layout: clone(menuBar) };
@@ -1701,10 +1703,13 @@ mockIPC(
       case "read_http_file":
         await readsReleased;
         return clone(fileAt(args.path));
-      case "save_http_file":
+      case "save_http_file": {
+        // Like the shell: the file is written as text, then read back.
+        const text = invokeCore<string>("file_text", { file: args.file });
         savedPaths.push(args.path);
-        files[args.path] = clone(args.file);
-        return clone(args.file);
+        files[args.path] = invokeCore<HttpFile>("parse_file", { text });
+        return clone(files[args.path]);
+      }
       case "create_file": {
         // Parsing `args.content` needs the Rust core; one request from the fixture stands in.
         const req = { ...clone((pets as any).requests[0]), name: "New request", raw: null, leading: "" };

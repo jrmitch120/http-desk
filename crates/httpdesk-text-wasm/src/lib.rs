@@ -17,13 +17,13 @@ struct Text {
 }
 
 #[derive(Deserialize)]
-struct RequestArgs {
-    request: Request,
+struct FileArgs {
+    file: HttpFile,
 }
 
 #[derive(Deserialize)]
-struct FileArgs {
-    file: HttpFile,
+struct RequestArgs {
+    request: Request,
 }
 
 fn args<T: DeserializeOwned>(command: &str, json: &str) -> Result<T, String> {
@@ -77,7 +77,9 @@ pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
             let Text { text } = args(command, args_json)?;
             json(&httpdesk_text::parse_with_problems(&text))
         }
-        // The shell's `file_text`: a whole file's text, as saving would write it.
+        // The shell's `file_text`: a whole file's text, as saving writes it (the mock's
+        // `save_http_file` writes this, then reads it back with `parse_file`). Unlike the
+        // shell's save, it refuses no field.
         "file_text" => {
             let FileArgs { file } = args(command, args_json)?;
             json(&httpdesk_text::serialize(&file))

@@ -200,6 +200,11 @@ export function mockState<K extends keyof MockState>(page: Page, key: K): Promis
   return page.evaluate((k) => (window as unknown as { __mock: MockState }).__mock[k], key) as Promise<MockState[K]>;
 }
 
+/** The text of the `.http` file at `path`, as the shell would have written it to disk. */
+export function fileText(page: Page, path: string): Promise<string> {
+  return page.evaluate((p) => (window as unknown as { __mock: { fileText: (p: string) => string } }).__mock.fileText(p), path);
+}
+
 /** The OS clipboard's text, as the clipboard plugin (src/lib/clipboard.ts) reads and writes it. */
 export function clipboard(page: Page): Promise<string> {
   return mockState(page, "clipboard");
