@@ -1,0 +1,15 @@
+### Directives both editors and HttpDesk know, in any case
+# @name known
+// @No-Redirect
+#@timeout 5
+# @prompt password
+# @note Sends to production
+# @httpdesk-disabled headers
+# @param q: what to look for
+#   @indented is description text
+GET https://example.com/search?q=1
+
+### A typo
+# @no-redirect
+# @nmae typo
+GET https://example.com

@@ -20,7 +20,9 @@ pub struct HttpFile {
     pub requests: Vec<Request>,
     /// Verbatim non-request text after the last request.
     pub trailing: String,
-    /// Dominant line ending of the original text; the whole file is saved with it.
+    /// `Crlf` when every line break of the original text is CRLF: the text is read
+    /// as LF and the whole file is saved with CRLF. Text with mixed endings is `Lf`,
+    /// its `\r`s kept in the verbatim text.
     pub line_ending: LineEnding,
     /// The file started with a UTF-8 byte order mark (stripped for parsing, written back on save).
     pub bom: bool,
@@ -381,4 +383,55 @@ impl Request {
     pub fn header(&self, name: &str) -> Option<&KeyValue> {
         self.headers.items.iter().find(|h| h.name.eq_ignore_ascii_case(name))
     }
+}
+
+/// Something the parser couldn't read cleanly. Reading recovers anyway, and the
+/// text is kept as written, so a problem never loses anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Problem {
+    /// 1-based line in the parsed text.
+    pub line: usize,
+    /// 1-based column, in characters (a leading byte order mark doesn't count).
+    pub column: usize,
+    pub severity: Severity,
+    pub code: ProblemCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// The text doesn't say what was meant.
+    Error,
+    /// The text reads, but probably not as intended.
+    Warning,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProblemCode {
+    /// The request line isn't `[METHOD] URL [HTTP/version]` (e.g. a space in the URL).
+    UnparseableRequestLine,
+    /// A header line after the blank line that starts the body: it's sent as body text.
+    HeaderAfterBody,
+    /// A `# @tag` above the request line that neither editor nor HttpDesk knows.
+    UnknownDirective,
+}
+
+/// A file and the problems found reading it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedFile {
+    pub file: HttpFile,
+    pub problems: Vec<Problem>,
+}
+
+/// A single request's text read on its own, and the problems found reading it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedRequest {
+    /// `None` when the text has no request line.
+    pub request: Option<Request>,
+    pub problems: Vec<Problem>,
 }

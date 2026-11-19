@@ -1,0 +1,22 @@
+### A blank line ends the headers
+POST https://example.com/notes
+Accept: */*
+
+Content-Type: text/plain
+X-Trace: 1
+hello
+
+### Header-like lines after body text are content
+POST https://example.com/notes
+Content-Type: text/plain
+
+https://example.com/link
+Note: this line comes after body text
+
+### JSON keys are quoted, so they're never headers
+POST https://example.com
+Content-Type: application/json
+
+{
+  "note": "fine"
+}
