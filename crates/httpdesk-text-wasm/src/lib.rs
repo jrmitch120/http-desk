@@ -67,6 +67,13 @@ pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
             let RequestArgs { request } = args(command, args_json)?;
             json(&httpdesk_text::request_problems(&request))
         }
+        // What the shell's `workspace_problems` and `file_problems` read in a file's text
+        // (`text_problems`: its problems and body files, by line in the file); the mock
+        // answers whether each body file exists itself.
+        "text_problems" => {
+            let Text { text } = args(command, args_json)?;
+            json(&httpdesk_text::text_problems(&text))
+        }
         // A whole `.http` file, as the shell reads one from disk.
         "parse_file" => {
             let Text { text } = args(command, args_json)?;

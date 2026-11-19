@@ -101,6 +101,21 @@ fn request_problems_reads_a_requests_source_as_the_shell_does() {
 }
 
 #[test]
+fn text_problems_places_a_whole_files_problems_and_body_files_in_its_text() {
+    let text =
+        "@host = https://a\n\n### Fine\nGET {{host}}\n\n### Broken\n# @nmae x\nPOST https://a b\n\n< ./payload.json\n";
+    let read = call("text_problems", json!({ "text": text }));
+    let at = |p: &Value| (p["line"].clone(), p["column"].clone(), p["code"].clone());
+    let problems: Vec<_> = read["problems"].as_array().unwrap().iter().map(at).collect();
+    assert_eq!(
+        problems,
+        [(json!(7), json!(3), json!("unknown-directive")), (json!(8), json!(1), json!("unparseable-request-line"))]
+    );
+    assert_eq!(read["files"][0]["path"], "./payload.json");
+    assert_eq!(at(&read["files"][0]["missing"]), (json!(10), json!(1), json!("missing-file")));
+}
+
+#[test]
 fn request_portability_marks_the_lines_of_the_source() {
     let request = parse(&format!("# Pets\n\n{REQUEST}"));
     let marks = call("request_portability", json!({ "request": request }));

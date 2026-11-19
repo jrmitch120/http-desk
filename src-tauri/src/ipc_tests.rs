@@ -28,6 +28,7 @@ mod source;
 mod usages;
 mod watcher;
 mod window_state;
+mod workspace_problems;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
 #[cfg(windows)]

@@ -54,6 +54,20 @@ pub fn parse(text: &str) -> HttpFile {
 
 /// [`parse`], and the problems found reading the text.
 pub fn parse_with_problems(text: &str) -> ParsedFile {
+    read_file(text, &mut Vec::new())
+}
+
+/// What reading a whole file's `text` finds: [`parse_with_problems`]'s problems, and
+/// the files its requests' bodies are read from, each placed in `text` (a workspace's
+/// Problems panel lists them by line in the file).
+pub fn text_problems(text: &str) -> RequestProblems {
+    let mut files = Vec::new();
+    let ParsedFile { problems, .. } = read_file(text, &mut files);
+    RequestProblems { problems, files }
+}
+
+/// [`parse_with_problems`], adding the files the bodies are read from to `files`.
+fn read_file(text: &str, files: &mut Vec<BodyFile>) -> ParsedFile {
     let mut problems = Vec::new();
     let (bom, text) = match text.strip_prefix(BOM) {
         Some(rest) => (true, rest),
@@ -77,10 +91,15 @@ pub fn parse_with_problems(text: &str) -> ParsedFile {
         if raw.is_empty() {
             continue;
         }
-        let mut found = Vec::new();
-        match parse_block_reporting(&raw, &mut found) {
+        let (mut found, mut named) = (Vec::new(), Vec::new());
+        match read_block(&raw, &mut found, &mut named) {
             Some((mut req, _)) => {
                 problems.extend(found.into_iter().map(|p| Problem { line: block_line + p.line, ..p }));
+                files.extend(
+                    named
+                        .into_iter()
+                        .map(|f| BodyFile { missing: Problem { line: block_line + f.missing.line, ..f.missing }, ..f }),
+                );
                 req.leading = std::mem::take(&mut pending);
                 req.raw = Some(raw);
                 file.requests.push(req);

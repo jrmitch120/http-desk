@@ -448,6 +448,60 @@ async fn find_usages<R: tauri::Runtime>(app: AppHandle<R>, name: String, open: V
     off_main(app, move |state| Ok(workspace::usages(&state.root()?, &name, &open))).await
 }
 
+/// A document as the app has it for the Problems panel: the text of its file view
+/// (which may not parse), or else its file, unsaved edits included.
+#[derive(Debug, Deserialize)]
+struct OpenText {
+    path: PathBuf,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    file: Option<HttpFile>,
+}
+
+impl OpenText {
+    fn text(self) -> Option<(PathBuf, String)> {
+        let text = self.text.or_else(|| self.file.map(|f| httpdesk_core::serialize(&f)))?;
+        Some((self.path, text))
+    }
+}
+
+/// The Problems panel: every `.http` file in the workspace with problems or lines that
+/// behave differently in VS Code or Rider, by line in the file. `open` documents are
+/// read as given instead of from disk. Parsing happens on the blocking pool.
+#[tauri::command]
+async fn workspace_problems<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    open: Vec<OpenText>,
+) -> CmdResult<Vec<workspace::FileProblems>> {
+    let open: Vec<_> = open.into_iter().filter_map(OpenText::text).collect();
+    off_main(app, move |state| Ok(workspace::problems(&state.root()?, &open))).await
+}
+
+/// [`workspace_problems`] of one file, after an edit (`text` or `file`: as the app has
+/// it) or a change on disk (neither: read from disk). None if it isn't there.
+#[tauri::command]
+async fn file_problems<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    path: PathBuf,
+    text: Option<String>,
+    file: Option<HttpFile>,
+) -> CmdResult<Option<workspace::FileProblems>> {
+    off_main(app, move |state| {
+        let path = state.confine_entry(&path)?;
+        let text = match (OpenText { path: path.clone(), text, file }).text() {
+            Some((_, text)) => text,
+            None => match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+            },
+        };
+        Ok(Some(workspace::file_problems(&path, &text)))
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ files
 
 #[tauri::command]
@@ -1528,6 +1582,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             get_tree,
             search_requests,
             find_usages,
+            workspace_problems,
+            file_problems,
             read_http_file,
             save_http_file,
             request_source,
