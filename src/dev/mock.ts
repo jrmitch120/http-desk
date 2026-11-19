@@ -15,7 +15,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -156,6 +156,31 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
   files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
   tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
 }
+// Files a test rewrote "on disk" with `__mock.writeFile` (another editor's changes
+// while the app was closed) are still there after a reload.
+const SAVED_FILES = "httpdesk-mock-files";
+const diskFiles: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_FILES) ?? "{}");
+Object.assign(files, diskFiles);
+function writeDiskFile(path: string, file: unknown) {
+  files[path] = diskFiles[path] = clone(file);
+  sessionStorage.setItem(SAVED_FILES, JSON.stringify(diskFiles));
+}
+// `?roots=/work/shop`: opening one of these folders opens a workspace of its own there
+// (a copy of the demo one, with its own paths), not the demo workspace again.
+const otherRoots = new URLSearchParams(location.search).get("roots")?.split(",") ?? [];
+let openRoot = ROOT;
+/** The open workspace's tree: the demo tree, moved under `openRoot`. */
+function openTree(): Node {
+  if (openRoot === ROOT) return tree;
+  const moved = (n: Node): Node => ({ ...n, path: openRoot + n.path.slice(ROOT.length), children: n.children?.map(moved) });
+  return { ...moved(tree), name: nameOf(openRoot) };
+}
+/** The file at `path`, in the open workspace (an other root's files are the demo ones). */
+const fileAt = (path: string) =>
+  files[path] ?? (openRoot !== ROOT && path.startsWith(`${openRoot}/`) ? files[ROOT + path.slice(openRoot.length)] : undefined);
+// Like the shell's Layout store: each workspace's Layout, by root; it survives a reload.
+const SAVED_LAYOUTS = "httpdesk-mock-layouts";
+const layouts: Record<string, unknown> = JSON.parse(sessionStorage.getItem(SAVED_LAYOUTS) ?? "{}");
 let envSet = {
   shared: [{ name: "version", value: "v1", secret: false }],
   environments: [
@@ -250,9 +275,10 @@ type PreviewArgs = {
  * through the frontend's resolver (`makeVarProvider`, kept in step with the core's):
  * dynamic variables kept as written; each value a Secret went into between the Secret
  * marks; a masked prompted value masked, unanswered ones kept as written; query values
- * percent-encoded; the Content-Type the body implies; the default headers.
+ * percent-encoded; the Content-Type the body implies; the default headers. `sending`:
+ * as it goes out instead, every prompted value in clear, with its body resolved too.
  */
-function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs) {
+function previewRequest({ request: r, filePath, fileVariables, environment, requestKey, requestNames = [] }: PreviewArgs, sending = false) {
   const promptValues = promptAnswers(requestKey);
   const own = envSetFor(filePath) as EnvironmentSet;
   const prompts = requestPrompts(r);
@@ -265,7 +291,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     segments(text)
       .map(({ text: whole, ref }) => {
         if (ref === undefined) return whole;
-        if (prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
+        if (!sending && prompts.some((p) => p.name === ref) && Object.hasOwn(promptValues, ref) && promptMasked(ref)) return MASK;
         const res = vars.resolve(whole);
         res.undefined.forEach((n) => undefinedNames.add(n));
         circular.push(...res.circular);
@@ -304,7 +330,7 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
   if (r.body.enabled && r.body.text.trim() && implied[r.body.mode] && !has("content-type")) headers.push(["Content-Type", implied[r.body.mode]]);
   if (!has("user-agent")) headers.push(["User-Agent", "HttpDesk/0.1.0"]);
   if (!has("accept-encoding")) headers.push(["Accept-Encoding", "gzip, deflate, br, zstd"]);
-  if (r.body.enabled) resolve(r.body.text);
+  const body = r.body.enabled ? resolve(r.body.text) : null;
   const hostVars = [...url.split(/[/?#]/, url.includes("://") ? 3 : 1).join("/").matchAll(/\{\{\s*(.*?)\s*\}\}/g)].map((m) => m[1]);
   const error = hostVars.length
     ? { kind: "unresolvedVariable", message: `The URL's scheme or host uses undefined variables: ${hostVars.join(", ")}.`, details: { names: hostVars } }
@@ -316,7 +342,20 @@ function previewRequest({ request: r, filePath, fileVariables, environment, requ
     warnings.unshift(environmentMissing(environment, dir || "the workspace root"));
   }
   warnings.push(...redirectNotes(r));
-  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error };
+  return { method: r.method.toUpperCase() || "GET", url, headers, auth, warnings, error, ...(sending ? { body } : {}) };
+}
+// `?asSent=1`: a response carries the tab's request as it went out (resolved, Secret
+// values and prompt answers in clear), as the shell's does, not the canned one.
+const asSent = new URLSearchParams(location.search).has("asSent");
+/** The request `args` sends, as a response reports it (`?asSent=1`). */
+function sentRequest(args: PreviewArgs): SentRequest {
+  const sent = previewRequest(args, true);
+  const clear = (text: string) => text.replaceAll(SECRET_OPEN, "").replaceAll(SECRET_CLOSE, "");
+  const body = sent.body ? clear(sent.body) : null;
+  return {
+    method: sent.method, url: clear(sent.url), headers: sent.headers.map(([n, v]) => [clear(n), clear(v)]),
+    bodyPreview: body, bodySize: body?.length ?? 0,
+  };
 }
 /**
  * A rough stand-in for the core's `workspace::usages` (tested for real in Rust):
@@ -411,6 +450,7 @@ let settings = {
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
   trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
   runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
+  history: { enabled: true, maxPerRequest: 50, maxAgeDays: 30, maxSizeMb: 200 },
 };
 // Saved settings survive a reload of the page (like the real settings file), so
 // a test can check something is still applied after `page.reload()`. Each test
@@ -652,6 +692,7 @@ window.addEventListener(
   releasePretty: () => releasePretty(),
   /** Lets held bodies through (`?body=hold`). */
   releaseBody: () => releaseBody(),
+  releaseReads: () => releaseReads(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
   get settings() {
@@ -660,6 +701,17 @@ window.addEventListener(
   /** The `.http` file models as last saved, by path (the mock has no serializer). */
   get files() {
     return clone(files);
+  },
+  /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
+  writeFile: writeDiskFile,
+  /** Writes a `.http` file model "on disk" while the app runs, then tells it like the watcher does (`workspace-changed`). */
+  async changeFile(path: string, file: unknown) {
+    writeDiskFile(path, file);
+    await emit("workspace-changed", { paths: [path] });
+  },
+  /** Each workspace's Layout as last saved, by root. */
+  get layouts() {
+    return clone(layouts);
   },
   get savedBodies() {
     return clone(savedBodies);
@@ -670,8 +722,16 @@ window.addEventListener(
   get shapeRequests() {
     return [...shapeRequests];
   },
+  /** Every History entry the mock keeps, oldest first, as stored (`MockHistoryEntry`). */
+  get history() {
+    return clone(historyEntries);
+  },
   get releasedResponses() {
     return [...releasedResponses];
+  },
+  /** The History entry ids `open_history_entry` opened, in order. */
+  get historyOpened() {
+    return [...historyOpened];
   },
   get bodyCopies() {
     return [...bodyCopies];
@@ -766,6 +826,195 @@ function recordExchange<T extends MockExchange["response"]>(file: string | null,
   }
   return response;
 }
+
+/**
+ * One History entry as the mock keeps it (like the shell's store, `history.rs`, a
+ * column each): the list's summary, what links it to its request (file, `# @name`,
+ * method and URL as written), and the entry whole, its body as text or base64.
+ */
+type MockHistoryEntry = Omit<HistorySummary, "link"> & {
+  workspace: string;
+  file: string | null;
+  name: string | null;
+  writtenMethod: string;
+  writtenUrl: string;
+  source: string;
+  /** The request `source` was rendered from: what `parse_request` gives back for it (the mock has no parser). */
+  model: Request;
+  request: SentRequest;
+  response: Omit<HttpResponse, "id"> | null;
+  sendError: SendError | null;
+  body: { text: string; kind: ResponseKind } | { base64: string } | null;
+  /** How much of the response body was kept ("whole" when left out). */
+  bodyKept?: HistoryBodyKept;
+};
+// History survives a reload of the page, as it does a restart. Each test gets a
+// fresh page, so it starts with none.
+const SAVED_HISTORY = "httpdesk-mock-history";
+const historyEntries: MockHistoryEntry[] = JSON.parse(sessionStorage.getItem(SAVED_HISTORY) ?? "[]");
+let historyIds = Math.max(0, ...historyEntries.map((e) => e.id));
+/** The send errors that come after something went out, so are recorded (like `history::Pending::finish`). */
+const RECORDED_ERRORS = new Set<string>(["dns", "refused", "reset", "tls", "timeoutIdle", "timeoutConnect", "other"]);
+/** The largest body the mock keeps with a History entry. */
+const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
+/**
+ * History's body cap (`history::BODY_CAP`, 10 MB): a text body over it is kept cut off,
+ * a binary one not at all. `?historyCap=<bytes>` lowers it, so a test needn't send 10 MB.
+ */
+const HISTORY_CAP = Number(new URLSearchParams(location.search).get("historyCap")) || 10 * 1024 * 1024;
+/** `request` with its body cut off at the cap, marked, as History keeps it. */
+const capRequest = (request: SentRequest): SentRequest =>
+  request.bodyPreview !== null && request.bodySize > HISTORY_CAP ? { ...request, bodyPreview: request.bodyPreview.slice(0, HISTORY_CAP), bodyTruncated: true } : request;
+/** How much of a request body the request as sent shows (core `exec::BODY_PREVIEW`). */
+const BODY_PREVIEW = 64 * 1024;
+/**
+ * `request` as kept (`capRequest`) with its body as an opened entry's reply has it, like
+ * the shell's (`history::previewed`): its first 64 KB and, when the kept body is longer,
+ * how many bytes were sent.
+ */
+function previewedRequest(request: SentRequest): SentRequest {
+  const body = request.bodyPreview;
+  if (body === null || body.length <= BODY_PREVIEW) return request;
+  return { ...request, bodyPreview: `${body.slice(0, BODY_PREVIEW)}\n… (${request.bodySize} bytes total)` };
+}
+/** Request headers whose values History masks. */
+const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
+/**
+ * The values History masks wherever they show in a send's request (like
+ * `history::Masking::for_send`): its environment's Secrets' and its prompt answers.
+ */
+function maskedValues(args: any): string[] {
+  const set = envSetFor(args.filePath) as EnvironmentSet;
+  const env = set.environments.find((e) => e.name === args.environment);
+  const secrets = [...set.shared, ...(env?.variables ?? [])].filter((v) => v.secret).map((v) => v.value);
+  const answers = promptAnswers(args.requestKey);
+  const prompted = requestPrompts(args.request).map((p) => answers[p.name]);
+  // A longer value first, so one containing another is masked whole.
+  return [...secrets, ...prompted].filter((v): v is string => !!v).sort((a, b) => b.length - a.length);
+}
+/** `text` with each of `values` in it, as written or percent-encoded, masked. */
+const maskValues = (text: string, values: string[]) =>
+  values.reduce((t, v) => t.replaceAll(v, MASK).replaceAll(encodeURIComponent(v), MASK), text);
+/** `request` as History records it: its credential headers and `values` masked. */
+const masked = (request: SentRequest, values: string[]): SentRequest => ({
+  ...request,
+  url: maskValues(request.url, values),
+  headers: request.headers.map(([n, v]) => [n, CREDENTIAL_HEADERS.includes(n.toLowerCase()) ? MASK : maskValues(v, values)]),
+  bodyPreview: request.bodyPreview === null ? null : maskValues(request.bodyPreview, values),
+});
+
+/** A request's text, as the mock renders it (it has no serializer). */
+function requestText(r: any): string {
+  const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
+  return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+}
+
+/** Where the mock says History is kept (`history_location`). */
+const MOCK_HISTORY_LOCATION = "/Users/me/Library/Application Support/io.github.jrmitch120.httpdesk/history.sqlite3";
+
+/**
+ * Like the shell's `send_request`: sends, then records the send in History if anything
+ * went out, unless the request is marked `# @no-log` or the History switch is off then.
+ */
+async function sendFromTab(args: any): Promise<HttpResponse> {
+  const r = args.request;
+  const started = performance.now();
+  const values = maskedValues(args);
+  const noLog = r.directives.some((d: { name: string }) => d.name.toLowerCase() === "no-log");
+  const record = (outcome: Pick<MockHistoryEntry, "request" | "response" | "sendError" | "body" | "cancelled" | "bodyKept">) => {
+    if (noLog || !settings.history?.enabled) return;
+    const response = outcome.response;
+    historyEntries.push({
+      id: ++historyIds, workspace: ROOT, time: new Date().toISOString(),
+      file: args.filePath?.startsWith(`${ROOT}/`) ? args.filePath.slice(ROOT.length + 1) : args.filePath,
+      name: r.directives.find((d: { name: string }) => d.name === "name")?.value.trim() || null,
+      writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: maskValues(outcome.request.url, values),
+      status: response?.status ?? null, statusText: response?.statusText ?? null,
+      durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
+      error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
+      request: masked(capRequest(outcome.request), values),
+    });
+    try {
+      sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+    } catch {
+      // Over the storage quota (large bodies): kept until the page reloads, like a failed write.
+    }
+  };
+  const attempted = (): SentRequest => ({
+    method: r.method, url: r.url, bodyPreview: r.body.enabled ? r.body.text : null, bodySize: r.body.enabled ? r.body.text.length : 0,
+    headers: r.headers.items.filter((h: { enabled: boolean }) => h.enabled).map((h: { name: string; value: string }) => [h.name, h.value]),
+  });
+  let response: HttpResponse;
+  try {
+    // Some canned replies leave out tests and logs, which the viewer reads as none.
+    response = (await mockSend(args)) as HttpResponse;
+  } catch (e: any) {
+    if (e === "cancelled") record({ request: attempted(), response: null, sendError: null, body: null, cancelled: true });
+    else if (RECORDED_ERRORS.has(e?.kind)) record({ request: attempted(), response: null, sendError: clone(e), body: null, cancelled: false });
+    throw e;
+  }
+  const { id, ...stored } = response;
+  const text = textBodies.get(id);
+  const bytes = binaryBodies.get(id);
+  // Large bodies (the perf test's, `?bigBinary`) aren't kept, so sessionStorage stays small
+  // and a measured send does no extra work: their entries open without a body.
+  const kept = !perf && response.bodySize <= MOCK_HISTORY_BODY_BYTES;
+  let body: MockHistoryEntry["body"] = !kept ? null : text ? { text: text.body, kind: text.kind } : bytes ? { base64: toBase64(bytes) } : null;
+  let bodyKept: HistoryBodyKept = "whole";
+  if (response.bodySize > HISTORY_CAP) {
+    bodyKept = text ? "truncated" : "headersOnly";
+    body = text && !perf ? { text: text.body.slice(0, HISTORY_CAP), kind: text.kind } : null;
+  }
+  const recorded = { ...clone(stored), url: maskValues(stored.url, values), request: masked(capRequest(response.request), values) };
+  record({ request: response.request, response: recorded, sendError: null, body, cancelled: false, bodyKept });
+  return response;
+}
+
+/** Like the shell's `list_history`: the entries `query` asks for, newest first. */
+function listHistory(query: HistoryQuery): HistorySummary[] {
+  const link = query.request;
+  const file = link && (link.filePath.startsWith(`${ROOT}/`) ? link.filePath.slice(ROOT.length + 1) : link.filePath);
+  const offset = query.offset ?? 0;
+  const text = query.text?.toLowerCase();
+  const inClass = (status: number | null) => (query.status === "error" ? status === null : status !== null && `${Math.floor(status / 100)}xx` === query.status);
+  return historyEntries
+    .filter((e) => e.workspace === ROOT)
+    .filter((e) => !link || (e.file === file && (link.name ? e.name === link.name : !e.name && e.writtenMethod === link.method && e.writtenUrl === link.url)))
+    .filter((e) => !query.status || inClass(e.status))
+    .filter((e) => !text || [e.url, e.method, e.file, e.name].some((s) => s?.toLowerCase().includes(text)))
+    .sort((a, b) => b.time.localeCompare(a.time) || b.id - a.id)
+    .slice(offset, offset + (query.limit ?? 200))
+    .map((e) => ({
+      id: e.id, time: e.time, link: linkOf(e), method: e.method, url: e.url, status: e.status,
+      statusText: e.statusText, durationMs: e.durationMs, size: e.size, error: e.error, cancelled: e.cancelled,
+    }));
+}
+
+/** What links entry `e` to its request, as a summary has it (`history::EntryLink`). */
+const linkOf = (e: MockHistoryEntry): HistoryEntryLink => ({ file: e.file, name: e.name, method: e.writtenMethod, url: e.writtenUrl });
+
+/** The History entry ids `open_history_entry` opened, in order (`__mock.historyOpened`). */
+const historyOpened: number[] = [];
+/** Like the shell's `open_history_entry`: the entry whole, its response under a new id whose body is kept. */
+function openHistoryEntry(id: number): HistoryEntry {
+  const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
+  if (!e) throw "This History entry no longer exists";
+  historyOpened.push(id);
+  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
+  const request = previewedRequest(entry.request);
+  const link = linkOf(e);
+  if (!response) return { ...entry, link, request, response: null, bodyKept };
+  const responseId = `h-${++responseCount}`;
+  if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
+  if (body && "base64" in body) binaryBodies.set(responseId, Uint8Array.from(atob(body.base64), (c) => c.charCodeAt(0)));
+  return { ...entry, link, request, response: { ...response, id: responseId, request }, bodyKept };
+}
+
+/** Saves the mock's History, like a write to the store. */
+function saveHistory() {
+  sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+}
+
 /** Forgets one named request's latest exchange (or, without a key, every one), like `Exchanges::remove` and `clear`. */
 function forgetExchanges(key?: string): boolean {
   if (key === undefined) {
@@ -861,6 +1110,9 @@ const manyHeaders = new URLSearchParams(location.search).get("manyHeaders") === 
 const extraHeaders: [string, string][] = manyHeaders
   ? [["cache-control", "public, max-age=60"], ["etag", '"pets-v1"'], ["x-cache", "HIT"], ["access-control-allow-origin", "*"], ["ratelimit-remaining", "42"]]
   : [];
+// `?response=petsChanged`: the JSON response with Rex renamed Max, and an `x-api-version: 2` header.
+// `?response=petsReordered`: the JSON response's content with its keys in another order and other spacing.
+// `?response=bigJson`: a 1.6 MB JSON response (over what Compare diffs).
 // `?response=gzip`: the JSON response arrives gzip-encoded (fewer bytes on the wire than decoded).
 // `?response=asReceived`: the JSON response's Content-Encoding couldn't be undone, so
 //   its bytes are kept as received and, like the core says, its kind is binary.
@@ -931,6 +1183,10 @@ const prettyReleased = prettyHeld ? new Promise<void>((r) => (releasePretty = r)
 const bodyHeld = new URLSearchParams(location.search).get("body") === "hold";
 let releaseBody: () => void = () => {};
 const bodyReleased = bodyHeld ? new Promise<void>((r) => (releaseBody = r)) : Promise.resolve();
+// `?reads=hold`: every `read_http_file` waits until a test calls `__mock.releaseReads()`.
+const readsHeld = new URLSearchParams(location.search).get("reads") === "hold";
+let releaseReads: () => void = () => {};
+const readsReleased = readsHeld ? new Promise<void>((r) => (releaseReads = r)) : Promise.resolve();
 
 /**
  * A small part of RFC 9535 JSONPath for the mocked `filter_response`: `$`,
@@ -1099,6 +1355,27 @@ function prettyText({ body, kind }: { body: string; kind: ResponseKind }): strin
     // reported as below, as the shell does
   }
   throw "Response body isn't JSON or XML";
+}
+
+/**
+ * Stand-in for the core's `compare_text`: JSON laid out like Pretty with each object's
+ * keys sorted (numbers kept as written, `JSON.rawJSON`), XML as Pretty, else the body as is.
+ */
+function compareText({ body, kind }: { body: string; kind: ResponseKind }): string {
+  const J = JSON as any;
+  const sorted = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sorted)
+      : v !== null && typeof v === "object" && !J.isRawJSON(v)
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]))
+        : v;
+  try {
+    if (kind === "xml") return formatXml(body, "pretty");
+    if (kind !== "json") return body;
+    return J.stringify(sorted(J.parse(body, (_k: string, v: unknown, ctx: { source?: string }) => (typeof v === "number" ? J.rawJSON(ctx.source) : v))), null, 2);
+  } catch {
+    return body;
+  }
 }
 
 /** Binary response bodies by response id, as bytes, like the shell's stored bodies. */
@@ -1272,6 +1549,12 @@ async function mockSend(args: any) {
               ? `{"items":[{"id":1,"name":"Rex"},{"id":2,"na`
               : responseKind === "nested"
                 ? `{"a":{"odd key":[{"b":1}]}}`
+              : responseKind === "petsReordered"
+                ? `{ "method": "${r.method}",\n  "items": [{"tags": ["good", "dog"], "name": "Rex", "id": 1, "active": true},\n    {"owner": null, "active": false, "tags": [], "name": "Tom", "id": 2}] }`
+              : responseKind === "bigJson"
+                ? JSON.stringify({ items: Array.from({ length: 24_000 }, (_, i) => ({ id: i, name: `Pet ${i}`, tags: ["good", "dog"], active: i % 2 === 0 })), method: r.method })
+              : responseKind === "petsChanged"
+                ? JSON.stringify({ items: [{ id: 1, name: "Max", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method })
                 : JSON.stringify({ items: [{ id: 1, name: "Rex", tags: ["good", "dog"], active: true }, { id: 2, name: "Tom", tags: [], active: false, owner: null }], method: r.method });
   const gzip = responseKind === "gzip";
   const transferredSize = gzip ? 112 : body.length;
@@ -1282,7 +1565,7 @@ async function mockSend(args: any) {
   const cookies = responseKind === "cookies" ? mockCookies : [];
   keepCookies(cookies);
   const setCookies = cookies.filter((c) => c.url === FINAL_URL).map((c): [string, string] => ["set-cookie", c.raw]);
-  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...extraHeaders, ...setCookies];
+  const headers: [string, string][] = [["content-type", contentType], ...(gzip ? [["content-encoding", "gzip"] as [string, string]] : []), ["content-length", String(transferredSize)], ["x-powered-by", "echo"], ["date", "Wed, 04 Nov 2026 07:00:00 GMT"], ...(responseKind === "petsChanged" ? [["x-api-version", "2"] as [string, string]] : []), ...extraHeaders, ...setCookies];
   record(status, headers, body);
   return done({
     id, status, statusText: reasonPhrases[status] ?? "", httpVersion: "HTTP/1.1",
@@ -1290,7 +1573,7 @@ async function mockSend(args: any) {
     headers,
     timeMs: 38.4, ttfbMs: 31.2, bodySize: body.length, transferredSize, headersSize: 120, contentType, bodyKind, contentEncoding: gzip ? "gzip" : null,
     truncated: responseKind === "truncated",
-    request: {
+    request: asSent ? sentRequest(args) : {
       method: r.method, url: "http://127.0.0.1:8765/pets?limit=20",
       headers: [["Authorization", "Bearer dev-token-123"], ["Accept", "application/json"], ["User-Agent", "HttpDesk/0.1.0"], ["Accept-Encoding", "gzip, deflate, br, zstd"]], bodyPreview: null, bodySize: 0,
     },
@@ -1364,7 +1647,14 @@ mockIPC(
         sessionJar = new Map();
         sessionGlobals = new Map();
         forgetExchanges();
-        return { root: ROOT, tree, gitignoreUpdated: false };
+        openRoot = otherRoots.includes(args.path) ? args.path : ROOT;
+        return { root: openRoot, tree: openTree(), gitignoreUpdated: false };
+      case "load_layout":
+        return clone(layouts[args.root] ?? null);
+      case "save_layout":
+        layouts[args.root] = clone(args.layout);
+        sessionStorage.setItem(SAVED_LAYOUTS, JSON.stringify(layouts));
+        return null;
       case "set_menu":
         menuBar = clone(args.layout);
         return null;
@@ -1378,7 +1668,7 @@ mockIPC(
         }
         return null;
       case "get_tree":
-        return tree;
+        return openTree();
       case "load_environments":
         if (args?.dir && !findNode(tree, `${ROOT}/${args.dir}`)) throw `${args.dir} is not a folder of the workspace`;
         return clone(loadFor([args?.dir ?? ""], () => ""));
@@ -1399,7 +1689,8 @@ mockIPC(
         return { gitignoreUpdated: false };
       }
       case "read_http_file":
-        return clone(files[args.path]);
+        await readsReleased;
+        return clone(fileAt(args.path));
       case "save_http_file":
         savedPaths.push(args.path);
         files[args.path] = clone(args.file);
@@ -1427,10 +1718,12 @@ mockIPC(
       case "preview_request":
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
-      case "render_request": {
-        const r = args.request;
-        const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
-        return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
+      case "render_request":
+        return requestText(args.request);
+      case "parse_request": {
+        // No parser: a History entry's source text gives back the request it was rendered from.
+        const model = historyEntries.find((e) => e.source === args.text)?.model;
+        return model ? clone(model) : null;
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
@@ -1503,7 +1796,28 @@ mockIPC(
         openedPaths.push(locateScriptFile(args.filePath, args.path));
         return null;
       case "send_request":
-        return mockSend(args);
+        // Only a tab's sends are recorded: a Run's go through `mockSend` alone.
+        return sendFromTab(args);
+      case "list_history":
+        return listHistory(args.query);
+      case "open_history_entry":
+        return openHistoryEntry(args.id);
+      case "clear_all_history":
+        historyEntries.length = 0;
+        sessionStorage.setItem(SAVED_HISTORY, JSON.stringify(historyEntries));
+        return null;
+      case "delete_history_entry": {
+        const i = historyEntries.findIndex((e) => e.id === args.id && e.workspace === ROOT);
+        if (i >= 0) historyEntries.splice(i, 1);
+        saveHistory();
+        return null;
+      }
+      case "clear_workspace_history":
+        historyEntries.splice(0, historyEntries.length, ...historyEntries.filter((e) => e.workspace !== ROOT));
+        saveHistory();
+        return null;
+      case "history_location":
+        return MOCK_HISTORY_LOCATION;
       case "run_requests": {
         // Like the shell: each request through the send flow, reported as `run-progress`.
         const { runId, selection, options } = args;
@@ -1586,6 +1900,7 @@ mockIPC(
         const stored = textBodies.get(id);
         if (stored === undefined) throw RESPONSE_GONE;
         if (stored.encoded) return stored.encoded[view === "pretty" ? "pretty" : "raw"].buffer;
+        if (view === "compare") return new TextEncoder().encode(compareText(stored)).buffer;
         return new TextEncoder().encode(view === "pretty" ? (stored.pretty ?? prettyText(stored)) : stored.body).buffer;
       }
       case "release_response":

@@ -138,6 +138,136 @@ pub fn pretty_response(content_type: Option<&str>, text: &str) -> Option<Result<
     Some(format_body(text, kind, FormatMode::Pretty))
 }
 
+/// The text Compare diffs for a body of `content_type`: JSON as [`sorted_json`]
+/// lays it out, so key order and spacing don't show as changes; XML in its
+/// Pretty form; anything else, or a body that doesn't parse, as it is.
+pub fn compare_text(content_type: Option<&str>, text: &str) -> String {
+    let formatted = match response_kind(content_type, Some(text)) {
+        ResponseKind::Json => sorted_json(text),
+        ResponseKind::Xml => format_xml(text, FormatMode::Pretty),
+        _ => return text.to_owned(),
+    };
+    formatted.unwrap_or_else(|_| text.to_owned())
+}
+
+/// JSON `text` laid out like Pretty, with each object's members in key order.
+/// Keys sort by their tokens as written (escapes not decoded), and members
+/// with the same key keep their order. Tokens are copied as in
+/// [`format_json`], so numbers stay exactly as sent. Fails like it too.
+pub fn sorted_json(text: &str) -> Result<String, FormatError> {
+    // Validated (and the depth checked) first, so what follows reads tokens only.
+    let min = format_json(text, FormatMode::Minify)?;
+    enum Node<'a> {
+        Leaf(&'a str),
+        Array(Vec<usize>),
+        Object(Vec<(&'a str, usize)>),
+    }
+    // Every node in one list, children by index, built and written without
+    // recursion, so deep nesting can't overflow the stack.
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    let mut key: Option<&str> = None;
+    let mut s = Scanner { text: &min, pos: 0 };
+    while let Some(c) = s.peek() {
+        let node = match c {
+            b',' | b':' => {
+                s.pos += 1;
+                continue;
+            }
+            b'}' | b']' => {
+                s.pos += 1;
+                open.pop();
+                continue;
+            }
+            b'"' if key.is_none() && open.last().is_some_and(|&o| matches!(nodes[o], Node::Object(_))) => {
+                key = Some(s.string()?);
+                continue;
+            }
+            b'{' | b'[' => {
+                s.pos += 1;
+                if c == b'{' {
+                    Node::Object(Vec::new())
+                } else {
+                    Node::Array(Vec::new())
+                }
+            }
+            b'"' => Node::Leaf(s.string()?),
+            b't' => Node::Leaf(s.literal("true")?),
+            b'f' => Node::Leaf(s.literal("false")?),
+            b'n' => Node::Leaf(s.literal("null")?),
+            _ => Node::Leaf(s.number()?),
+        };
+        let container = !matches!(node, Node::Leaf(_));
+        let id = nodes.len();
+        nodes.push(node);
+        if let Some(&parent) = open.last() {
+            match &mut nodes[parent] {
+                Node::Array(items) => items.push(id),
+                Node::Object(members) => members.push((key.take().unwrap_or_default(), id)),
+                Node::Leaf(_) => unreachable!("only containers are open"),
+            }
+        }
+        if container {
+            open.push(id);
+        }
+    }
+    for node in &mut nodes {
+        if let Node::Object(members) = node {
+            members.sort_by(|a, b| a.0.cmp(b.0)); // stable: duplicate keys keep their order
+        }
+    }
+
+    let mut out = Writer { out: String::with_capacity(min.len() * 2), pretty: true };
+    // Open containers, innermost last, with how many of their children are written.
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let mut next = Some(0);
+    loop {
+        if let Some(id) = next.take() {
+            match &nodes[id] {
+                Node::Leaf(token) => out.raw(token),
+                Node::Array(items) if items.is_empty() => out.raw("[]"),
+                Node::Object(members) if members.is_empty() => out.raw("{}"),
+                Node::Array(_) => {
+                    out.raw("[");
+                    stack.push((id, 0));
+                }
+                Node::Object(_) => {
+                    out.raw("{");
+                    stack.push((id, 0));
+                }
+            }
+        }
+        let Some(&mut (id, ref mut written)) = stack.last_mut() else { break };
+        let (count, is_object) = match &nodes[id] {
+            Node::Array(items) => (items.len(), false),
+            Node::Object(members) => (members.len(), true),
+            Node::Leaf(_) => unreachable!("only containers are open"),
+        };
+        if *written == count {
+            stack.pop();
+            out.newline(stack.len());
+            out.raw(if is_object { "}" } else { "]" });
+            continue;
+        }
+        let i = *written;
+        *written += 1;
+        if i > 0 {
+            out.raw(",");
+        }
+        out.newline(stack.len());
+        next = Some(match &nodes[id] {
+            Node::Array(items) => items[i],
+            Node::Object(members) => {
+                out.raw(members[i].0);
+                out.raw(": ");
+                members[i].1
+            }
+            Node::Leaf(_) => unreachable!("only containers are open"),
+        });
+    }
+    Ok(out.out)
+}
+
 /// Re-lays out JSON `text` without changing any token, or fails if it isn't
 /// valid JSON (RFC 8259). Iterative, so deep nesting can't overflow the stack.
 pub fn format_json(text: &str, mode: FormatMode) -> Result<String, FormatError> {

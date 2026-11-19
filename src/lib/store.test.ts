@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, ExchangeShape, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { basename, newRequest } from "./http";
 
@@ -28,6 +28,8 @@ const api = vi.hoisted(() => ({
   releaseResponse: vi.fn(),
   saveSettings: vi.fn(),
   getSettings: vi.fn(),
+  loadLayout: vi.fn(),
+  saveLayout: vi.fn(),
   openWorkspace: vi.fn(),
   loadEnvironments: vi.fn(),
   loadFolderEnvironments: vi.fn(),
@@ -43,6 +45,9 @@ const api = vi.hoisted(() => ({
   removeNamedExchange: vi.fn(),
   clearNamedExchanges: vi.fn(),
   openExchange: vi.fn(),
+  openHistoryEntry: vi.fn(),
+  deleteHistoryEntry: vi.fn(),
+  clearWorkspaceHistory: vi.fn(),
   requestVariable: vi.fn(),
 }));
 const {
@@ -73,6 +78,7 @@ const webview = vi.hoisted(() => ({ setZoom: vi.fn(async (_zoom: number) => {}) 
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ setZoom: webview.setZoom }) }));
 
 import { app } from "./store.svelte";
+import { WORKSPACE_HISTORY } from "./history.svelte";
 import { forceOS } from "./platform";
 import { canRun, command, runCommand } from "./commands";
 import { trackModal } from "./modal.svelte";
@@ -405,6 +411,124 @@ describe("closing an Orphaned tab", () => {
   });
 });
 
+describe("restoring a workspace's Layout", () => {
+  const WS = "/ws";
+  const placed = (path: string, name: string, position: number) => ({ path, name, method: "GET", url: `https://x/${name}`, position, section: "params", responseView: { tab: "body", mode: "pretty", wrap: false } });
+  /** A promise and what settles it. */
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+  const restoring = () => app.tabs.map((t) => [t.restoring?.name ?? null, !!t.restoring]);
+
+  beforeEach(() => {
+    openWorkspace.mockResolvedValue({ root: WS, tree: { name: "ws", path: WS, kind: "dir", children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+    api.saveLayout.mockResolvedValue(undefined);
+  });
+
+  it("makes each tab ready once its own file is read, and notes the dropped ones once all are", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("b.http", "Gone", 3)], active: 0, expanded: [] });
+    const slow = deferred<HttpFile>();
+    readHttpFile.mockImplementation(async (path: string) => (path === `${WS}/a.http` ? fileOf(["GET", "List", "https://x/List"]) : slow.promise));
+
+    await app.openWorkspace(WS);
+
+    await vi.waitFor(() => expect(restoring()).toEqual([[null, false], ["Gone", true]]));
+    expect(app.toasts).toEqual([]);
+    slow.resolve(fileOf(["GET", "Other", "https://x/Other"]));
+    await vi.waitFor(() => expect(app.toasts.map((t) => t.message)).toEqual(["1 tab wasn't restored: its request no longer exists."]));
+    expect(restoring()).toEqual([[null, false]]);
+  });
+
+  it("re-attaches a tab whose file was opened while the Layout was loading", async () => {
+    const layout = deferred<unknown>();
+    api.loadLayout.mockReturnValue(layout.promise);
+    readHttpFile.mockImplementation(async () => fileOf(["GET", "List", "https://x/List"]));
+
+    const opening = app.openWorkspace(WS);
+    await vi.waitFor(() => expect(api.loadLayout).toHaveBeenCalled());
+    const loading = app.loadDoc(`${WS}/a.http`);
+    layout.resolve({ tabs: [placed("a.http", "List", 0)], active: 0, expanded: [] });
+    await opening;
+    await loading;
+
+    await vi.waitFor(() => expect(restoring()).toEqual([[null, false]]));
+    expect(app.requestFor(app.tabs[0])?.name).toBe("List");
+    expect(app.toasts).toEqual([]);
+  });
+});
+
+describe("a tab's request section and response view", () => {
+  it("start on Params, and on the Body tab in Pretty without wrap", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+
+    expect(tab.section).toBe("params");
+    expect(tab.responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+
+  it("are forgotten when the tab closes, so reopening its request starts afresh", async () => {
+    const f = fileOf(["GET", "List", "https://x/books"]);
+    const [tab] = await openAll(f);
+    tab.section = "auth";
+    tab.responseView = { tab: "headers", mode: "raw", wrap: true };
+    await app.closeTab(tab.id);
+
+    await app.openRequest(PATH, { index: 0 });
+
+    expect(app.tabs[0].section).toBe("params");
+    expect(app.tabs[0].responseView).toEqual({ tab: "body", mode: "pretty", wrap: false });
+  });
+});
+
+describe("Reopen Closed Tab", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed: what's left of them reopens, then goes.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const names = () => app.tabs.map((t) => app.requestFor(t)!.name);
+
+  it("remembers the last 20 closed tabs", async () => {
+    const all = Array.from({ length: 21 }, (_, i) => `R${i + 1}`);
+    const tabs = await openAll(file(...all));
+    for (const tab of tabs) await app.closeTab(tab.id);
+
+    for (let i = 0; i < 20; i++) expect(runCommand("reopen-tab")).toBe(true);
+
+    expect(names()).toEqual(all.slice(1));
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+
+  it("reopens a tab whose file was renamed in the app after it closed", async () => {
+    const [tab] = await openAll(file("List"));
+    await app.closeTab(tab.id);
+    await app.movePath(PATH, "/ws/api/library.http");
+
+    runCommand("reopen-tab");
+
+    expect(app.activeTab).toMatchObject({ path: "/ws/api/library.http", key: tab.key });
+    expect(names()).toEqual(["List"]);
+  });
+
+  it("skips a tab whose request another editor removed from the file", async () => {
+    const [list, create] = await openAll(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]));
+    await app.closeTab(list.id);
+    await app.closeTab(create.id);
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    runCommand("reopen-tab");
+
+    expect(names()).toEqual(["List"]);
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+});
+
 describe("cancelling a request", () => {
   it("shows a neutral Cancelled state and keeps the previous response", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
@@ -422,6 +546,125 @@ describe("cancelling a request", () => {
 
     expect(app.runs[tab.id]).toMatchObject({ loading: false, cancelled: true, response: previous });
     expect(app.runs[tab.id].error).toBeUndefined();
+  });
+});
+
+describe("comparing History entries", () => {
+  const released = () => api.releaseResponse.mock.calls.map(([id]) => id);
+  const summary = (id: number, time: string) => ({ id, time }) as HistorySummary;
+  const opening = (id: string) => ({ response: { id, status: 200 }, sendError: null, cancelled: false }) as unknown as HistoryEntry;
+
+  it("puts the older of two entries on the left, and closing releases both entries but not the tab's response", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    await app.send(tab.id);
+    api.openHistoryEntry.mockImplementation(async (id: number) => opening(`h${id}`));
+
+    await app.history.compare(summary(2, "2026-11-16T10:00:02Z"), { entry: summary(1, "2026-11-16T10:00:01Z") });
+    expect(app.history.comparison?.a.response?.id).toBe("h1");
+    expect(app.history.comparison?.b.response?.id).toBe("h2");
+
+    app.history.closeComparison();
+    expect(app.history.comparison).toBeNull();
+    expect(released().sort()).toEqual(["h1", "h2"]);
+  });
+
+  it("an entry compared with the current response leaves that response with its tab", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    await app.send(tab.id);
+    api.openHistoryEntry.mockResolvedValueOnce(opening("h1"));
+
+    await app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { response: app.runs[tab.id].response! });
+    expect(app.history.comparison?.b.label).toBe("current response");
+    app.history.closeComparison();
+
+    expect(released()).toEqual(["h1"]);
+    expect(app.runs[tab.id].response?.id).toBe("r1");
+  });
+
+  it("when one entry can't be opened, the other is released and the reason shown", async () => {
+    api.openHistoryEntry.mockResolvedValueOnce(opening("h1")).mockRejectedValueOnce("This History entry no longer exists");
+
+    await app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { entry: summary(2, "2026-11-16T10:00:02Z") });
+
+    expect(app.history.comparison).toBeNull();
+    expect(released()).toEqual(["h1"]);
+    expect(app.toasts.map((t) => t.message)).toContain("This History entry no longer exists");
+  });
+
+  it("entries that open after the Compare view closed are released", async () => {
+    let resolve!: (e: HistoryEntry) => void;
+    api.openHistoryEntry.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const comparing = app.history.compare(summary(1, "2026-11-16T10:00:01Z"), { response: { id: "r9" } as HttpResponse });
+    app.history.closeComparison();
+
+    resolve(opening("late"));
+    await comparing;
+    expect(app.history.comparison).toBeNull();
+    expect(released()).toEqual(["late"]);
+  });
+});
+
+describe("deleting History", () => {
+  const released = () => api.releaseResponse.mock.calls.map(([id]) => id);
+  const summary = (id: number) => ({ id, time: "2026-11-16T10:00:00Z", method: "GET", url: `https://x/${id}` }) as HistorySummary;
+  const opening = (id: string) => ({ response: { id, status: 200 }, sendError: null, cancelled: false, source: "", bodyKept: "whole" }) as unknown as HistoryEntry;
+  /** Answers the confirmation `doing` asks with `button`. */
+  async function confirming(doing: Promise<void>, button: string) {
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    const title = app.dialog!.title;
+    app.closeDialog(button);
+    await doing;
+    return title;
+  }
+  beforeEach(() => {
+    api.openHistoryEntry.mockImplementation(async (id: number) => opening(`h${id}`));
+    api.deleteHistoryEntry.mockResolvedValue(undefined);
+    api.clearWorkspaceHistory.mockResolvedValue(undefined);
+  });
+  afterEach(() => app.history.reset());
+
+  it("deletes an entry once confirmed, closing it where it's open and releasing its response", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    await app.history.open({ tab: tab.id }, summary(1));
+    await app.history.open(WORKSPACE_HISTORY, summary(2));
+
+    expect(await confirming(app.history.delete(summary(1)), "delete")).toBe("Delete this History entry?");
+
+    expect(api.deleteHistoryEntry).toHaveBeenCalledWith(1);
+    expect(app.history.openedIn({ tab: tab.id })).toBeUndefined();
+    expect(app.history.openedIn(WORKSPACE_HISTORY)?.entry.id).toBe(2);
+    expect(released()).toEqual(["h1"]);
+  });
+
+  it("keeps the entry when the confirmation is cancelled", async () => {
+    await app.history.open(WORKSPACE_HISTORY, summary(1));
+    await confirming(app.history.delete(summary(1)), "cancel");
+    expect(api.deleteHistoryEntry).not.toHaveBeenCalled();
+    expect(app.history.openedIn(WORKSPACE_HISTORY)?.entry.id).toBe(1);
+  });
+
+  it("clears the workspace's History once confirmed, closing every opened entry and the comparison", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    await app.history.open({ tab: tab.id }, summary(1));
+    await app.history.open(WORKSPACE_HISTORY, summary(2));
+    await app.history.compare(summary(3), { entry: summary(4) });
+    const revision = app.history.revision;
+
+    expect(await confirming(app.history.clearWorkspace(), "clear")).toBe("Clear workspace history?");
+
+    expect(api.clearWorkspaceHistory).toHaveBeenCalled();
+    expect([app.history.openedIn({ tab: tab.id }), app.history.openedIn(WORKSPACE_HISTORY), app.history.comparison]).toEqual([undefined, undefined, null]);
+    expect(released().sort()).toEqual(["h1", "h2", "h3", "h4"]);
+    expect(app.history.revision).toBeGreaterThan(revision);
+  });
+
+  it("an entry over the 10 MB cap opens marked with how much of its body was kept", async () => {
+    const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
+    api.openHistoryEntry.mockResolvedValueOnce({ ...opening("h1"), bodyKept: "truncated" });
+    await app.history.open({ tab: tab.id }, summary(1));
+    expect(app.runs[app.history.openedIn({ tab: tab.id })!.tab.id].bodyKept).toBe("truncated");
   });
 });
 

@@ -205,8 +205,89 @@ export interface SentRequest {
   url: string;
   headers: [string, string][];
   bodyPreview: string | null;
+  /** Set on an opened History entry's request whose body History cut off at its 10 MB cap (`bodyPreview` is the live send's 64 KB preview either way). */
+  bodyTruncated?: boolean;
   bodySize: number;
 }
+
+/**
+ * What links History entries to a request (`history::RequestLink`): its file and
+ * `# @name`, or for an unnamed request its file, method and URL as written.
+ */
+export interface HistoryLink {
+  /** The request's file, absolute. */
+  filePath: string;
+  /** Its `# @name`; null for an unnamed request. */
+  name: string | null;
+  method: string;
+  url: string;
+}
+
+/** What links a History entry to its request, as it was written when sent (`history::EntryLink`). */
+export interface HistoryEntryLink {
+  /** The request's file, relative to the workspace. */
+  file: string | null;
+  /** Its `# @name`. */
+  name: string | null;
+  method: string;
+  url: string;
+}
+
+/**
+ * A status class History lists can be narrowed to (`history::StatusClass`): responses
+ * with a 2xx … 5xx status, or `error`, the sends that got no response (an error or a cancel).
+ */
+export type HistoryStatusClass = "2xx" | "3xx" | "4xx" | "5xx" | "error";
+
+/** Which History entries to list (`history::Query`): newest first, a page at a time. */
+export interface HistoryQuery {
+  /** Only this request's; the whole workspace's without one. */
+  request?: HistoryLink;
+  /** Only this status class's. */
+  status?: HistoryStatusClass;
+  /** Only those whose method, URL as sent, file or `# @name` contain this, ignoring case. */
+  text?: string;
+  offset?: number;
+  limit?: number;
+}
+
+/** One History entry as a list shows it (`history::Summary`). */
+export interface HistorySummary {
+  id: number;
+  /** When it was sent (RFC 3339). */
+  time: string;
+  /** What links it to its request: its file, `# @name`, method and URL as written. */
+  link: HistoryEntryLink;
+  /** The method and URL as sent (resolved, masked). */
+  method: string;
+  url: string;
+  /** Null when no response came back. */
+  status: number | null;
+  statusText: string | null;
+  durationMs: number;
+  /** The response body's size. */
+  size: number | null;
+  /** Why no response came back (the send error's message). */
+  error: string | null;
+  cancelled: boolean;
+}
+
+/** One History entry, whole (`history::Entry`), as `open_history_entry` gives it. */
+export interface HistoryEntry extends HistorySummary {
+  /** The request's text in its file at send time. */
+  source: string;
+  /** The request as sent, its credentials masked. */
+  request: SentRequest;
+  /** Its response, under an id of its own whose body is kept until released (ADR-0006). */
+  response: HttpResponse | null;
+  /** Why no response came back. */
+  sendError: SendError | null;
+  /** How much of the response body History kept: over 10 MB, a text body is cut off and a binary one isn't kept. */
+  bodyKept: HistoryBodyKept;
+}
+
+/** How much of a response body a History entry kept (core `history::BodyKept`). */
+export type HistoryBodyKept = "whole" | "truncated" | "headersOnly";
 
 /**
  * The resolved preview (`preview_request`, core `exec::RequestPreview`): what a
@@ -543,6 +624,20 @@ export interface AppSettings {
   trustedWorkspaces: string[];
   /** Per workspace root: the Runner's options, as last set in its panel. */
   runnerOptions: Record<string, RunnerOptions>;
+  /** History's settings (Settings → History), for every workspace. */
+  history: HistorySettings;
+}
+
+/** History's settings (`HistorySettings` in src-tauri/src/lib.rs). */
+export interface HistorySettings {
+  /** The History switch: while off, no send is recorded. On by default. */
+  enabled: boolean;
+  /** Retention: the most entries each request keeps, in its workspace. */
+  maxPerRequest: number;
+  /** Retention: how many days an entry is kept. */
+  maxAgeDays: number;
+  /** Retention: the most megabytes all History takes, every workspace together; the oldest entries go first. */
+  maxSizeMb: number;
 }
 
 /** The Runner's options in one workspace (`RunnerOptions` in src-tauri/src/lib.rs). */

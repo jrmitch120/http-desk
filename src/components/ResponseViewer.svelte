@@ -1,7 +1,10 @@
 <script module lang="ts">
-  import type { BodyMode } from "../lib/bodyView.svelte";
-  /** Per editor tab, in memory only: viewer tab, body view, wrap, and the JSONPath filter. */
-  const viewByTab = new Map<string, { tab: string; mode: BodyMode; wrap: boolean; filter: string }>();
+  import { newResponseView, type ResponseView } from "../lib/tabView";
+  /** A tab's response view lives with the tab (part of the Layout). A Runner result has no
+   *  tab, so its view is kept here, by result, in memory only. */
+  const resultViews = new Map<string, ResponseView>();
+  /** The JSONPath filter, by tab or result, in memory only: it isn't part of the Layout. */
+  const filters = new Map<string, string>();
   /** Above this many body bytes, copying a binary body as base64 asks first. */
   const BASE64_COPY_CONFIRM_BYTES = 1024 * 1024;
 </script>
@@ -30,6 +33,9 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import RequestHistory from "./RequestHistory.svelte";
+  import Self from "./ResponseViewer.svelte";
+  import { HISTORY_BODY_CAP_TEXT, sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
   // has no tab to cancel or retry in. `result.id` stands in for the tab id that
@@ -39,17 +45,40 @@
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
+  /** A History entry's binary body over the cap: only its headers and size were kept. */
+  const noBody = $derived(run?.bodyKept === "headersOnly");
+  /** What the warning banner says: the response's warnings, then how its body was cut off. */
+  const warnings = $derived(
+    res
+      ? [
+          ...res.warnings,
+          ...(run?.bodyKept === "truncated" ? [TRUNCATED_AT_CAP] : []),
+          ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : []),
+        ]
+      : [],
+  );
 
-  const saved = untrack(() => viewByTab.get(viewId));
-  let viewerTab = $state(saved?.tab ?? "body");
-  let mode = $state<BodyMode>(saved?.mode ?? "pretty");
-  let wrap = $state(saved?.wrap ?? false);
-  let filter = $state(saved?.filter ?? "");
+  // An editor tab's pane can show its request's History instead, and an entry opened
+  // from it, read-only, in a viewer of its own (not a Run's result or a pseudo tab's).
+  const historyTab = $derived(tab && app.tabs.some((t) => t.id === tab.id) ? tab : null);
+  const showingHistory = $derived(!!historyTab && app.history.isShown(historyTab.id));
+  const openedEntry = $derived(historyTab && showingHistory ? app.history.openedIn({ tab: historyTab.id }) : undefined);
+  type Pane = "response" | "history";
+  const PANES: SegmentedOption<Pane>[] = [
+    { value: "response", label: "Response" },
+    { value: "history", label: "History" },
+  ];
+
+  // The viewer tab, body mode and wrap: the tab's own, or this result's.
+  const resultView = $state(untrack(() => (tab ? null : (resultViews.get(viewId) ?? newResponseView()))));
+  if (resultView) resultViews.set(viewId, resultView);
+  const view = $derived(tab ? tab.responseView : resultView!);
+  let filter = $state(untrack(() => filters.get(viewId)) ?? "");
   $effect(() => {
-    viewByTab.set(viewId, { tab: viewerTab, mode, wrap, filter });
+    filters.set(viewId, filter);
   });
 
-  const body = new BodyView(() => ({ tabId: viewId, res, mode, filter }));
+  const body = new BodyView(() => ({ tabId: viewId, res, mode: view.mode, filter }));
   const isBinary = $derived(body.isBinary);
   const filtered = $derived(body.filtered);
 
@@ -113,7 +142,7 @@
     ...(res?.tests?.length || res?.logs?.length ? [{ value: "tests", label: "Tests", count: res.tests.length || undefined }] : []),
   ]);
   // A remembered tab that this response doesn't have falls back to Body.
-  const current = $derived(tabs.some((t) => t.value === viewerTab) ? viewerTab : "body");
+  const current = $derived(tabs.some((t) => t.value === view.tab) ? view.tab : "body");
 
   const statusTooltip = $derived(res ? `${explainStatus(res.status, res.statusText)}\n${res.httpVersion} · final URL ${res.url}` : "");
   const sizeTooltip = $derived.by(() => {
@@ -125,8 +154,40 @@
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
+<!-- The pane's title: which of the tab's response and its request's History it shows. -->
+{#snippet paneSwitch(t: Tab)}
+  <div class="pane-switch"><SegmentedControl label="Response pane" options={PANES} value={showingHistory ? "history" : "response"} onchange={(v) => app.history.show(t.id, v === "history")} /></div>
+{/snippet}
+
+{#snippet fromHistory()}
+  {#if run?.fromHistory}
+    <span class="muted small" use:tooltip={"The last response recorded in History, not sent in this Session: Request variables reading it count it unsent"}>from History, {sentAt(run.fromHistory)}</span>
+  {/if}
+{/snippet}
+
 <div class="viewer">
-  {#if !run}
+  {#if historyTab && showingHistory}
+    <div class="statusbar">
+      {@render paneSwitch(historyTab)}
+      {#if openedEntry}
+        <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close({ tab: historyTab.id })}><Icon name="chevron-left" />Back</button>
+        <span class="muted small sent">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
+        <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
+      {/if}
+    </div>
+    {#if openedEntry}
+      <section class="entry" aria-label="History entry">
+        {#key openedEntry.tab.id}<Self tab={openedEntry.tab} />{/key}
+      </section>
+    {:else}
+      <RequestHistory tab={historyTab} />
+    {/if}
+  {:else if !run}
+    {#if historyTab}
+      <div class="statusbar">
+        {@render paneSwitch(historyTab)}
+      </div>
+    {/if}
     <div class="empty-state">
       <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <rect x="10" y="14" width="52" height="44" rx="6" stroke="var(--border-strong)" stroke-width="2" />
@@ -138,7 +199,7 @@
     </div>
   {:else}
     <div class="statusbar">
-      <span class="title">Response</span>
+      {#if historyTab}{@render paneSwitch(historyTab)}{:else}<span class="title">Response</span>{/if}
       {#if run.loading}
         <span class="loading">
           <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
@@ -148,16 +209,23 @@
         {#if tab}<button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>{/if}
       {:else if run.cancelled && !res}
         <Badge size="md">Cancelled</Badge>
+        {@render fromHistory()}
       {:else if res}
         {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
         <span class="tip" use:tooltip={statusTooltip}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
         <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
         <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
+        {@render fromHistory()}
         <span class="spacer"></span>
-        <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
-        <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+        {#if !noBody}
+        <span class="body-actions">
+          <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
+          <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+        </span>
+        {/if}
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
+        {@render fromHistory()}
       {/if}
     </div>
 
@@ -166,17 +234,19 @@
     {:else if run.error && !run.loading}
       <SendErrorPanel error={run.error} tabId={tab?.id} onretry={tab && (() => app.send(tab.id))} />
     {:else if res}
-      {#if res.warnings.length || res.truncated}
+      {#if warnings.length}
         <Banner severity="warning">
-          <span class="selectable">{[...res.warnings, ...(res.truncated ? ["Body truncated at the configured size limit (save to keep the received part)."] : [])].join(" · ")}</span>
+          <span class="selectable">{warnings.join(" · ")}</span>
         </Banner>
       {/if}
       <div class="tabs">
-        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (viewerTab = t)} />
+        <SegmentedControl label="Response tabs" options={tabs} value={current} onchange={(t) => (view.tab = t)} />
       </div>
 
-      {#if current === "body"}
-        <BodyPanel {res} view={body} bind:mode bind:wrap bind:filter />
+      {#if current === "body" && noBody}
+        <div class="empty-state small">Not kept: History keeps only the headers and size of a binary body over {HISTORY_BODY_CAP_TEXT}.</div>
+      {:else if current === "body"}
+        <BodyPanel {res} view={body} bind:mode={view.mode} bind:wrap={view.wrap} bind:filter />
       {:else if current === "headers"}
         <HeadersPanel headers={res.headers} />
       {:else if current === "cookies"}
@@ -202,12 +272,14 @@
   .small {
     font-size: 12px;
   }
+  /* In a narrow pane, what doesn't fit moves to a second row rather than out of sight. */
   .statusbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    gap: 6px 12px;
     min-height: 40px;
-    padding: 0 10px 0 16px;
+    padding: 4px 10px 4px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
   }
@@ -219,9 +291,29 @@
   .tip {
     display: flex;
   }
+  /* In a narrow pane, when the entry was sent gives way first, on one line. */
+  .sent {
+    flex: 1 1 0;
+    min-width: 80px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Copy and save stay together, on whichever row they land. */
+  .body-actions {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+  /* Its options side by side, never squeezed onto two rows. */
+  .pane-switch {
+    flex: none;
+    display: flex;
+  }
   .metric {
     font-size: 12px;
     font-family: var(--mono);
+    white-space: nowrap;
   }
   .metric .muted {
     font-family: var(--font);
@@ -258,5 +350,11 @@
     padding: 6px 10px 6px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
+  }
+  .entry {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 </style>

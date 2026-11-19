@@ -12,6 +12,9 @@ import type {
   FolderEnvironments,
   GenerateOptions,
   GenerateReport,
+  HistoryEntry,
+  HistoryQuery,
+  HistorySummary,
   HttpFile,
   Usage,
   HttpResponse,
@@ -29,6 +32,7 @@ import type {
   WorkspaceInfo,
 } from "./types";
 import type { MenuItemChange, NativeMenu } from "./menuLayout";
+import type { Layout } from "./layout";
 
 /** A request with the scope it's sent in, as `send_request` and `preview_request` take it. */
 export type RequestArgs = {
@@ -61,8 +65,9 @@ export type RunSummary = { cancelled: boolean; requests: RunRequestReport[] };
 /** The formats a run's results export as. */
 export type RunExportFormat = "junit" | "json";
 
-/** Which form of a stored response body `api.responseBody` fetches. */
-export type BodyFetchView = "raw" | "pretty" | "bytes";
+/** Which form of a stored response body `api.responseBody` fetches. `compare`: the text
+ *  Compare diffs (JSON laid out with its keys sorted, XML as Pretty, else Raw). */
+export type BodyFetchView = "raw" | "pretty" | "bytes" | "compare";
 
 export const api = {
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
@@ -74,6 +79,8 @@ export const api = {
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
   renderRequest: (request: Request) => invoke<string>("render_request", { request }),
+  /** The first request in `text` (a History entry's source text), parsed as in a file; null without one. */
+  parseRequest: (text: string) => invoke<Request | null>("parse_request", { text }),
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),
@@ -140,6 +147,21 @@ export const api = {
    * body is kept until released, like any response's. Rejects when there is none.
    */
   openExchange: (filePath: string, name: string) => invoke<HttpResponse>("open_exchange", { filePath, name }),
+  /** The open workspace's History entries that `query` asks for, newest first. */
+  listHistory: (query: HistoryQuery) => invoke<HistorySummary[]>("list_history", { query }),
+  /**
+   * History entry `id`, whole, to show read-only. Its response has an id of its own,
+   * whose body is kept until released, like any response's.
+   */
+  openHistoryEntry: (id: number) => invoke<HistoryEntry>("open_history_entry", { id }),
+  /** Deletes every workspace's History (entries open in a viewer stay until released). */
+  clearAllHistory: () => invoke<void>("clear_all_history"),
+  /** Deletes History entry `id` of the open workspace (opened, it stays until released). */
+  deleteHistoryEntry: (id: number) => invoke<void>("delete_history_entry", { id }),
+  /** Deletes the open workspace's History (entries open in a viewer stay until released). */
+  clearWorkspaceHistory: () => invoke<void>("clear_workspace_history"),
+  /** Where History is kept on disk; null when the app has no config folder. */
+  historyLocation: () => invoke<string | null>("history_location"),
   /** What a Request variable (`login.response.body.$.token`) of a request in `filePath` reads now; null if it isn't one. */
   requestVariable: (filePath: string, reference: string) => invoke<RequestVariableReading | null>("request_variable", { filePath, reference }),
   saveResponseBody: (responseId: string, path: string) => invoke<void>("save_response_body", { responseId, path }),
@@ -186,6 +208,10 @@ export const api = {
   trustWorkspace: () => invoke<string[]>("trust_workspace"),
   /** Stops trusting the workspace at `path`; returns the Trusted workspaces left. */
   revokeWorkspaceTrust: (path: string) => invoke<string[]>("revoke_workspace_trust", { path }),
+  /** The Layout saved for the workspace at `root`, or null (see src/lib/layout.ts; checked there). */
+  loadLayout: (root: string) => invoke<unknown>("load_layout", { root }),
+  /** Saves the Layout of the workspace at `root`, in the app's config folder. */
+  saveLayout: (root: string, layout: Layout) => invoke<void>("save_layout", { root, layout }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
 

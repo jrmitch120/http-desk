@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::exec::{ErrorKind, ExecError, HttpResponse};
 use crate::script::TestResult;
 use crate::send::Outgoing;
-use crate::vars::MASK;
+use crate::vars::MaskedValues;
 
 /// One request of a Run, as an export shows it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ impl RequestReport {
     }
 
     /// It got `response`, and `failed` per [`super::failed`].
-    pub(crate) fn sent(&mut self, response: &HttpResponse, failed: bool, secrets: &Secrets) {
+    pub(crate) fn sent(&mut self, response: &HttpResponse, failed: bool, secrets: &MaskedValues) {
         self.method = response.request.method.clone();
         self.url = Some(secrets.mask(&response.request.url));
         self.status = Some(response.status);
@@ -122,7 +122,7 @@ impl RequestReport {
     }
 
     /// It got no response: `error` blocked it or the network failed.
-    pub(crate) fn failed(&mut self, error: &ExecError, secrets: &Secrets) {
+    pub(crate) fn failed(&mut self, error: &ExecError, secrets: &MaskedValues) {
         let reason = match error.kind() {
             ErrorKind::Dns
             | ErrorKind::Refused
@@ -158,77 +158,4 @@ fn file_label(root: Option<&Path>, path: &Path) -> String {
         Some(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
         None => path.to_string_lossy().into_owned(),
     }
-}
-
-/// The Secret values a request was sent with, to mask wherever they show.
-pub(crate) struct Secrets(Vec<String>);
-
-impl Secrets {
-    pub(crate) fn new(mut values: Vec<String>) -> Self {
-        values.retain(|v| !v.is_empty());
-        // A longer value first, so one containing another is masked whole.
-        values.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        Secrets(values)
-    }
-
-    /// `text` with each Secret value in it replaced by [`MASK`], also where it's
-    /// percent-encoded, wholly or in part, as in a URL (`+` for a space, too).
-    pub(crate) fn mask(&self, text: &str) -> String {
-        let mut out = text.to_string();
-        for value in &self.0 {
-            out = mask_value(&out, value, false);
-            if value.contains(' ') {
-                out = mask_value(&out, value, true);
-            }
-        }
-        out
-    }
-}
-
-/// `text` with each occurrence of `value` replaced by [`MASK`], matching `text` with
-/// its `%XX` escapes decoded (and `+` as a space when `plus_is_space`).
-fn mask_value(text: &str, value: &str, plus_is_space: bool) -> String {
-    let bytes = text.as_bytes();
-    // Each decoded byte, with the span of `text` it came from.
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut spans = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = |b: Option<&u8>| b.and_then(|b| (*b as char).to_digit(16));
-        match (bytes[i], hex(bytes.get(i + 1)), hex(bytes.get(i + 2))) {
-            (b'%', Some(hi), Some(lo)) => {
-                decoded.push((hi * 16 + lo) as u8);
-                spans.push((i, i + 3));
-                i += 3;
-            }
-            (b'+', ..) if plus_is_space => {
-                decoded.push(b' ');
-                spans.push((i, i + 1));
-                i += 1;
-            }
-            (b, ..) => {
-                decoded.push(b);
-                spans.push((i, i + 1));
-                i += 1;
-            }
-        }
-    }
-    let needle = value.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let (mut copied, mut at) = (0, 0);
-    while at + needle.len() <= decoded.len() {
-        if decoded[at..at + needle.len()] == *needle {
-            let (start, end) = (spans[at].0, spans[at + needle.len() - 1].1);
-            if text.is_char_boundary(start) && text.is_char_boundary(end) {
-                out.push_str(&text[copied..start]);
-                out.push_str(MASK);
-                copied = end;
-                at += needle.len();
-                continue;
-            }
-        }
-        at += 1;
-    }
-    out.push_str(&text[copied..]);
-    out
 }

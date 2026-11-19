@@ -52,6 +52,7 @@
   <div class="strip" bind:this={strip} role="tablist" aria-label="Open requests" tabindex="-1" onwheel={(e) => strip && (strip.scrollLeft += e.deltaY)}>
     {#each app.tabs as tab (tab.id)}
       {@const req = app.requestFor(tab)}
+      {@const shown = req ? { method: req.method, name: displayName(req) } : tab.restoring}
       {@const dirty = app.isRequestDirty(tab.path, tab.key)}
       {@const loading = app.runs[tab.id]?.loading}
       {@const orphaned = app.isOrphaned(tab)}
@@ -64,15 +65,15 @@
         role="tab"
         aria-selected={active}
         tabindex={active ? 0 : -1}
-        use:tooltip={`${req ? displayName(req) : ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
+        use:tooltip={`${shown?.name ?? ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
         onclick={() => (app.activeTabId = tab.id)}
         onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
-        {#if req}
-          <Badge method={req.method} class="tab-method" />
-          <span class="name ellipsis">{displayName(req)}</span>
+        {#if shown}
+          <Badge method={shown.method} class="tab-method" />
+          <span class="name ellipsis">{shown.name}</span>
         {/if}
         <TestMark requestKey={tab.key} />
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}

@@ -15,17 +15,17 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 
 use crate::env::{self, EnvironmentSet};
 use crate::exchange;
-use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse};
+use crate::exec::{self, ClientPool, ExecError, ExecSettings, HttpResponse, SentRequest};
 use crate::model::{HttpFile, Request, Variable};
 use crate::script::{self, RequestScripts, ScriptContext};
 use crate::session::Session;
-use crate::vars::Resolver;
+use crate::vars::{MaskedValues, Resolver};
 
 /// A request to send, with what its file gives it: the shape of the webview's
 /// `RequestArgs` (without the environment, which is the whole send's).
@@ -112,6 +112,8 @@ pub struct RequestScope {
     pub environment: HashMap<String, String>,
     /// The names in `environment` whose value is a Secret for this request.
     secrets: Vec<String>,
+    /// The Session's answers to its Prompt variables.
+    prompt_answers: Vec<String>,
 }
 
 /// What `out` is sent with: the variables (its folder's environment from disk, the
@@ -142,16 +144,18 @@ pub fn scope(
     let env_vars = env::variables(&env_set, environment);
     let secrets = secret_names(&env_set, environment, out);
     let answers = out.request_key.as_deref().map(|k| session.prompt_answers().get(k)).unwrap_or_default();
+    let prompts = request.prompts();
+    let prompt_answers = prompts.iter().filter_map(|p| answers.get(&p.name).cloned()).collect();
     let resolver = Resolver::for_request(&env_vars, &out.file_variables, &request.variables, Some(&base_dir))
         .with_secrets(secrets.clone())
         .with_globals(session.globals().list())
-        .with_prompts(&request.prompts(), &answers)
+        .with_prompts(&prompts, &answers)
         .with_request_variables(match &out.file_path {
             Some(file) => session.exchanges().for_file(file, &out.request_names),
             // Unsaved nowhere: its named requests have no exchanges.
             None => out.request_names.iter().map(|n| (n.clone(), None)).collect(),
         });
-    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars, secrets })
+    Ok(RequestScope { resolver, base_dir, env_warning, environment: env_vars, secrets, prompt_answers })
 }
 
 /// The folder `out`'s relative paths start from: its file's, else the root.
@@ -175,10 +179,26 @@ fn secret_names(env_set: &EnvironmentSet, environment: Option<&str>, out: &Outgo
 }
 
 impl RequestScope {
-    /// The values of the Secrets the request is sent with, for what must never show
-    /// them (a Run's export). Empty ones are left out: there's nothing to hide.
-    pub fn secret_values(&self) -> Vec<String> {
+    /// The values of the Secrets the request is sent with. Empty ones are left out:
+    /// there's nothing to hide.
+    fn secret_values(&self) -> Vec<String> {
         self.secrets.iter().filter_map(|n| self.environment.get(n).filter(|v| !v.is_empty()).cloned()).collect()
+    }
+}
+
+impl MaskedValues {
+    /// What a Run's export masks of a request sent in `scope` (nothing without one):
+    /// the values of the Secrets it's sent with. Not prompt answers, which only History
+    /// masks ([`MaskedValues::for_history`]): a Run sends its requests without a
+    /// request key ([`Outgoing::all_in`]), so the Session's answers never reach them.
+    pub fn for_run_export(scope: Option<&RequestScope>) -> MaskedValues {
+        MaskedValues::new(scope.map(RequestScope::secret_values).unwrap_or_default())
+    }
+
+    /// What History masks in the entry of a request sent in `scope` (ADR-0009): the
+    /// values of its Secrets and its prompt answers.
+    pub fn for_history(scope: &RequestScope) -> MaskedValues {
+        MaskedValues::new(scope.secret_values().into_iter().chain(scope.prompt_answers.iter().cloned()).collect())
     }
 }
 
@@ -227,16 +247,84 @@ impl Drop for StopOnDrop {
     }
 }
 
+/// The request a send put on the wire, once it got that far. A send that fails or
+/// is cancelled after that still sent something (History records it, #151); one
+/// that stopped before it (blocked) has none.
+///
+/// Made [`Attempt::for_history`] for a send History will record, it also keeps what
+/// the entry needs and the request as sent doesn't hold: the start of the body sent,
+/// up to History's body cap, and the values to mask, as the send resolved them. Any
+/// other send (a Run's, a `# @no-log` one, one while History is off) copies nothing.
+#[derive(Debug, Default)]
+pub struct Attempt {
+    request: Mutex<Option<SentRequest>>,
+    history: Option<Mutex<BodyAndMaskedValues>>,
+}
+
+/// What a recorded send keeps for its History entry that the request as sent doesn't
+/// hold: the start of the body it sent, and the values to mask (see [`Attempt`]).
+#[derive(Debug, Default)]
+pub(crate) struct BodyAndMaskedValues {
+    /// The start of the body it sent, up to [`crate::history::BODY_CAP`] bytes: more
+    /// of it than the request as sent shows ([`SentRequest::body_preview`]).
+    pub body: Option<Vec<u8>>,
+    /// The values to mask in it: its Secret values and prompt answers ([`MaskedValues::for_history`]).
+    pub masked: MaskedValues,
+}
+
+impl Attempt {
+    /// An attempt for a send History records (see [`Attempt`]).
+    pub fn for_history() -> Attempt {
+        Attempt { history: Some(Mutex::default()), ..Attempt::default() }
+    }
+
+    /// The request as it went out, before any redirect; `None` if nothing went out.
+    pub fn request(&self) -> Option<SentRequest> {
+        self.request.lock().unwrap().clone()
+    }
+
+    /// What it kept for History, taken out of it; `None` if it wasn't made for History.
+    pub(crate) fn take_for_history(&self) -> Option<BodyAndMaskedValues> {
+        self.history.as_ref().map(|h| std::mem::take(&mut *h.lock().unwrap()))
+    }
+
+    /// Notes the values to mask, from the scope the send resolved its variables in.
+    fn resolved(&self, scope: &RequestScope) {
+        if let Some(history) = &self.history {
+            history.lock().unwrap().masked = MaskedValues::for_history(scope);
+        }
+    }
+
+    fn went_out(&self, p: &exec::PreparedRequest) {
+        *self.request.lock().unwrap() = Some(SentRequest::of(p));
+        if let Some(history) = &self.history {
+            history.lock().unwrap().body = p.body.as_ref().map(|b| b[..b.len().min(crate::history::BODY_CAP)].to_vec());
+        }
+    }
+}
+
 /// Sends `out` in `ctx` (see the module docs). `on_progress` gets the body bytes
 /// received so far (see [`exec::execute_on`]). Dropping the future cancels the send,
 /// and stops a script it is running; a cancelled send records nothing in the Session.
 pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usize) + Send) -> Result<Sent, ExecError> {
+    send_attempt(ctx, out, on_progress, &Attempt::default()).await
+}
+
+/// [`send`], noting in `attempt` the request it puts on the wire as it goes out, so
+/// what was sent is known even when the send then fails or is cancelled.
+pub async fn send_attempt(
+    ctx: &SendContext,
+    out: Outgoing,
+    on_progress: impl FnMut(usize) + Send,
+    attempt: &Attempt,
+) -> Result<Sent, ExecError> {
     let scripts = RequestScripts::of(&out.request);
     let run_scripts = scripts.any() && ctx.scripts != Scripts::Skip;
     let stop = StopOnDrop(script::Stop::default());
 
     let (prepared, ssl, pre, script_context) = {
         let scope = scope(ctx.root.as_deref(), ctx.environment.as_deref(), &ctx.session, &out)?;
+        attempt.resolved(&scope);
         // Blocked before anything runs: no script can define a Request variable, so
         // none can unblock it, and asking to trust the workspace wouldn't either.
         exec::check_request_variables(&out.request, &scope.resolver)?;
@@ -274,6 +362,7 @@ pub async fn send(ctx: &SendContext, out: Outgoing, on_progress: impl FnMut(usiz
     let pending = exchange::begin(out.file_path.as_deref(), &out.request, &prepared);
     // Each send gets a client no other send is using (see ClientPool).
     let client = ctx.clients.checkout(&prepared, &ctx.settings, &ssl)?;
+    attempt.went_out(&prepared);
     let mut outcome =
         exec::execute_on(&client, prepared, &ctx.settings, Some(ctx.session.cookies()), on_progress).await?;
     drop(client);

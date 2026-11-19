@@ -18,6 +18,10 @@
   }
 </script>
 
+{#if tab.restoring}
+  <!-- A restored tab whose file is still being read: its editor is built once it re-attaches. -->
+  <div class="empty-state" aria-busy="true">Opening {tab.restoring.name}…</div>
+{:else}
 <SplitPane size={ratio} limits={SPLIT} ratio stacked={layout === "vertical"} label="Resize request and response" onresize={resize}>
   {#snippet first()}
     <RequestEditor {tab} />
@@ -26,6 +30,7 @@
     <div class="response"><ResponseViewer {tab} /></div>
   {/snippet}
 </SplitPane>
+{/if}
 
 <style>
   .response {

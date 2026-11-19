@@ -25,7 +25,9 @@ mod bodies;
 mod confine;
 mod copying;
 mod deleting;
+mod history;
 mod json_docs;
+mod layout;
 mod menu;
 mod opening;
 mod paths;
@@ -106,6 +108,53 @@ struct AppSettings {
     /// Per workspace: the Runner's options, as last set in its panel.
     #[serde(deserialize_with = "or_default")]
     runner_options: HashMap<String, RunnerOptions>,
+    /// History's settings (Settings → History), for every workspace.
+    #[serde(deserialize_with = "or_default")]
+    history: HistorySettings,
+}
+
+/// History's settings (see `AppSettings::history`); `history` in the settings file,
+/// `HistorySettings` in src/lib/types.ts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct HistorySettings {
+    /// The History switch: while off, no send is recorded. On by default.
+    enabled: bool,
+    /// Retention: the most entries each request keeps, in its workspace.
+    max_per_request: u32,
+    /// Retention: how many days an entry is kept.
+    max_age_days: u32,
+    /// Retention: the most megabytes all History takes, every workspace together;
+    /// the oldest entries go first.
+    max_size_mb: u32,
+}
+
+/// Retention's defaults (`HISTORY_RETENTION` in src/lib/history.svelte.ts;
+/// src/lib/history.test.ts checks they agree).
+const MAX_PER_REQUEST: u32 = 50;
+const MAX_AGE_DAYS: u32 = 30;
+const MAX_SIZE_MB: u32 = 200;
+
+impl Default for HistorySettings {
+    fn default() -> Self {
+        HistorySettings {
+            enabled: true,
+            max_per_request: MAX_PER_REQUEST,
+            max_age_days: MAX_AGE_DAYS,
+            max_size_mb: MAX_SIZE_MB,
+        }
+    }
+}
+
+impl HistorySettings {
+    /// What History keeps, by these settings (each limit at least 1).
+    fn retention(&self) -> history::Retention {
+        history::Retention {
+            per_request: self.max_per_request.max(1),
+            max_age_days: self.max_age_days.max(1),
+            max_size: u64::from(self.max_size_mb.max(1)) * 1024 * 1024,
+        }
+    }
 }
 
 /// The Runner's options in one workspace (see `AppSettings::runner_options`). The
@@ -205,6 +254,7 @@ impl Default for AppSettings {
             env_matrix_widths: HashMap::new(),
             trusted_workspaces: Vec::new(),
             runner_options: HashMap::new(),
+            history: HistorySettings::default(),
         }
     }
 }
@@ -231,6 +281,8 @@ struct AppState {
     bodies: Mutex<KeptBodies>,
     /// Recent bodies parsed as JSON, by response id (for the filter bar).
     json_docs: Mutex<JsonDocs>,
+    /// Every workspace's History, on disk in the config folder (see history.rs).
+    history: history::History,
     specs: Mutex<HashMap<String, OpenApiDoc>>,
     settings: Mutex<AppSettings>,
     /// Whether an open file has unsaved edits (reported by the frontend), so a
@@ -277,14 +329,23 @@ impl AppState {
 #[cfg(test)]
 struct ConfigDir(PathBuf);
 
-/// `HTTPDESK_CONFIG_DIR` overrides the config location (portable installs).
-fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+/// The folder for everything the app keeps (settings, Layouts, History): the test's
+/// `ConfigDir`, else `HTTPDESK_CONFIG_DIR` (portable installs), else the OS's.
+fn config_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     #[cfg(test)]
     if let Some(dir) = app.try_state::<ConfigDir>() {
-        return Some(dir.0.join("settings.json"));
+        return Some(dir.0.clone());
     }
-    let dir = config_dir_override().or_else(|| app.path().app_config_dir().ok())?;
-    Some(dir.join("settings.json"))
+    config_dir_override().or_else(|| app.path().app_config_dir().ok())
+}
+
+fn settings_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    Some(config_dir(app)?.join("settings.json"))
+}
+
+/// Where every workspace's History is kept (ADR-0009): never in a workspace.
+fn history_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    Some(config_dir(app)?.join(history::FILE_NAME))
 }
 
 /// The config folder `HTTPDESK_CONFIG_DIR` sets, if any.
@@ -403,6 +464,12 @@ fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> 
 #[tauri::command]
 fn render_request(request: Request) -> String {
     httpdesk_core::render_request(&Request { leading: String::new(), ..request })
+}
+
+/// The first request in `text` (a History entry's source text), parsed as in a file.
+#[tauri::command]
+fn parse_request(text: String) -> Option<Request> {
+    httpdesk_core::parse(&text).requests.into_iter().next()
 }
 
 #[tauri::command]
@@ -568,10 +635,12 @@ async fn preview_request<R: tauri::Runtime>(
     .await
 }
 
-/// Sends one request the way every send goes (`send::send`, shared with runs), and
-/// keeps its body for the viewer. Unlike other commands, a failed send is a
-/// classified `{ kind, message, details }` object (see `ExecError`), so the viewer
-/// can explain it and offer the fix.
+/// Sends one request from a tab the way every send goes (`send::send`, shared with
+/// runs), keeps its body for the viewer, and records it in History once it has
+/// finished, however it ended, if anything went out (the only send recorded: a
+/// Run's aren't), unless it's marked `# @no-log` or the History switch is off then.
+/// Unlike other commands, a failed send is a classified `{ kind, message, details }`
+/// object (see `ExecError`), so the viewer can explain it and offer the fix.
 // Each argument is a field of the IPC call (`RequestArgs` in src/lib/api.ts).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -590,14 +659,38 @@ async fn send_request<R: tauri::Runtime>(
     let ctx = send_context(&state, environment, skip_scripts.unwrap_or(false));
     let out =
         Outgoing { request, file_path, file_variables, request_names: request_names.unwrap_or_default(), request_key };
-    let progress_id = run_id.clone();
+    let (progress_id, emitter) = (run_id.clone(), app.clone());
     let on_progress = move |received| {
-        let _ = app.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
+        let _ = emitter.emit("send-progress", SendProgress { run_id: progress_id.clone(), received });
     };
-    let task = tokio::spawn(async move { send::send(&ctx, out, on_progress).await });
+    // Recorded only with the History switch on now and when the send finishes.
+    let pending =
+        history::Pending::begin(ctx.root.as_deref(), &out).filter(|_| state.settings.lock().unwrap().history.enabled);
+    let attempt = Arc::new(match pending {
+        Some(_) => send::Attempt::for_history(),
+        None => send::Attempt::default(),
+    });
+    let task = {
+        let attempt = attempt.clone();
+        tokio::spawn(async move { send::send_attempt(&ctx, out, on_progress, &attempt).await })
+    };
     state.running.lock().unwrap().insert(run_id.clone(), task.abort_handle());
     let result = task.await;
     state.running.lock().unwrap().remove(&run_id);
+
+    let finished = match &result {
+        Ok(Ok(sent)) => Some(history::Finished::Sent(sent)),
+        Ok(Err(e)) => Some(history::Finished::Failed(e)),
+        Err(e) if e.is_cancelled() => Some(history::Finished::Cancelled),
+        Err(_) => None,
+    };
+    let (recording, retention) = {
+        let settings = state.settings.lock().unwrap();
+        (settings.history.enabled, settings.history.retention())
+    };
+    if let Some(entry) = pending.filter(|_| recording).zip(finished).and_then(|(p, f)| p.finish(&attempt, f)) {
+        state.history.record(entry, retention);
+    }
 
     match result {
         Ok(Ok(sent)) => {
@@ -826,6 +919,63 @@ fn open_exchange(state: State<'_, AppState>, file_path: PathBuf, name: String) -
     Ok(reopened.response)
 }
 
+/// The open workspace's History entries that `query` asks for, newest first.
+#[tauri::command]
+async fn list_history(
+    state: State<'_, AppState>,
+    query: history::Query,
+) -> CmdResult<Vec<httpdesk_core::history::Summary>> {
+    let root = state.root()?;
+    state.history.read(move |store| store.list(&root, &query)).await
+}
+
+/// History entry `id` of the open workspace, whole, to show read-only. Its response
+/// is a response of its own, under a new id whose body is kept like any response's
+/// until released (ADR-0006).
+#[tauri::command]
+async fn open_history_entry(state: State<'_, AppState>, id: i64) -> CmdResult<httpdesk_core::history::Entry> {
+    let root = state.root()?;
+    let entry = state
+        .history
+        .read(move |store| store.get(&root, id))
+        .await?
+        .ok_or_else(|| "This History entry no longer exists".to_string())?;
+    if let (Some(response), Some(body)) = (&entry.response, &entry.body) {
+        keep_body(&state, &Sent { response: response.clone(), body: body.clone() });
+    }
+    Ok(entry)
+}
+
+/// Where History is kept on disk, for Settings to show; null when the app has no
+/// config folder.
+#[tauri::command]
+fn history_location(state: State<'_, AppState>) -> Option<PathBuf> {
+    state.history.location()
+}
+
+/// Deletes History entry `id` of the open workspace, from disk too. Opened, it stays
+/// readable until released (ADR-0006).
+#[tauri::command]
+async fn delete_history_entry(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    let root = state.root()?;
+    state.history.read(move |store| store.delete(&root, id)).await
+}
+
+/// Deletes the open workspace's History (the History view's Clear workspace
+/// history), from disk too. Entries open in a viewer stay until released.
+#[tauri::command]
+async fn clear_workspace_history(state: State<'_, AppState>) -> CmdResult<()> {
+    let root = state.root()?;
+    state.history.read(move |store| store.clear_workspace(&root)).await
+}
+
+/// Deletes every workspace's History (Settings → Clear all history, or turning
+/// History off with Delete). Entries open in a viewer stay until released.
+#[tauri::command]
+async fn clear_all_history(state: State<'_, AppState>) -> CmdResult<()> {
+    state.history.read(|store| store.clear_all()).await
+}
+
 /// What Request variable `reference` (trimmed, without braces) of a request in
 /// `file_path` reads now, for its hover: unsent, its value and the exchange it comes
 /// from, or why it matches nothing. Null when it isn't a Request variable. Off the
@@ -1040,6 +1190,9 @@ enum BodyFetchView {
     Pretty,
     /// The body's bytes exactly as stored (after Content-Encoding is undone).
     Bytes,
+    /// The text Compare diffs (`body_format::compare_text`): JSON laid out with
+    /// its keys sorted, XML as Pretty, anything else as Raw.
+    Compare,
 }
 
 /// A kept body for the viewer, by response id, as raw bytes (an
@@ -1064,6 +1217,7 @@ async fn response_body<R: tauri::Runtime>(
                 .ok_or("Response body isn't JSON or XML")?
                 .into_bytes(),
             BodyFetchView::Bytes => body.bytes.to_vec(),
+            BodyFetchView::Compare => body_format::compare_text(body.content_type.as_deref(), &text()?).into_bytes(),
         };
         Ok(tauri::ipc::Response::new(bytes))
     })
@@ -1095,6 +1249,10 @@ fn save_settings<R: tauri::Runtime>(
     let settings = AppSettings { trusted_workspaces: current.trusted_workspaces.clone(), ..settings };
     // Applied either way: the UI already shows the new values for this session.
     let saved = persist_settings(&app, &settings);
+    let retention = settings.history.retention();
+    if retention != current.history.retention() {
+        state.history.trim(retention);
+    }
     *current = settings;
     saved
 }
@@ -1280,6 +1438,18 @@ fn load_settings<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Locates History in the config folder, then applies its retention, so entries past
+/// the age limit go even if nothing is sent. Only when there's History to trim: it
+/// doesn't create the store.
+fn start_history<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    state.history.locate(history_path(app));
+    if state.history.location().is_some_and(|p| p.exists()) {
+        let retention = state.settings.lock().unwrap().history.retention();
+        state.history.trim(retention);
+    }
+}
+
 /// Runs at setup once settings are loaded.
 type AfterSetup<R> = fn(&tauri::App<R>) -> tauri::Result<()>;
 
@@ -1297,6 +1467,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
         })
         .setup(move |app| {
             load_settings(app.handle());
+            start_history(app.handle());
             Ok(after_setup(app)?)
         })
         .invoke_handler(tauri::generate_handler![
@@ -1307,6 +1478,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             read_http_file,
             save_http_file,
             render_request,
+            parse_request,
             create_file,
             create_dir,
             rename_path,
@@ -1330,6 +1502,12 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             remove_named_exchange,
             clear_named_exchanges,
             open_exchange,
+            list_history,
+            open_history_entry,
+            clear_all_history,
+            delete_history_entry,
+            clear_workspace_history,
+            history_location,
             request_variable,
             exchange_shape,
             session_cookies,
@@ -1357,6 +1535,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             openapi_generate,
             menu::set_menu,
             menu::set_menu_state,
+            layout::load_layout,
+            layout::save_layout,
         ])
 }
 

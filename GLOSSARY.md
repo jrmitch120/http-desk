@@ -49,6 +49,15 @@ _Avoid_: live environment, protected environment
 
 ### Sending
 
+**Exchange**:
+One send: the request exactly as it went out, and the response or error that came back.
+_Avoid_: call, transaction
+
+**History**:
+The Exchanges HttpDesk has recorded for a workspace, newest first, kept on disk outside the workspace so they are never committed or shared.
+Only sends the user makes from a tab are recorded; a Run's sends and requests marked `# @no-log` are not, and nothing is while the **History switch** (one app setting, on by default) is off. One item is a **History entry**.
+_Avoid_: log, request log
+
 **Session**:
 What HttpDesk remembers about a workspace from one send to the next: the latest exchange of each named request, Global variables, cookies and prompt answers.
 It lives in memory until the workspace is closed or HttpDesk quits, and is never written to disk.
@@ -64,6 +73,11 @@ A request in a run fails on a network error, a script error, a failed test or a 
 _Avoid_: batch, collection run
 
 ### Editing
+
+**Layout**:
+How the user left a workspace: its open tabs in order, the active tab, each tab's request section and response view, and which folders are expanded.
+It is kept per workspace and comes back when the workspace reopens; pane sizes are an app setting, not part of it.
+_Avoid_: session, workbench, restore state
 
 **Orphaned tab**:
 An open tab whose request no longer exists in the file on disk (the file was deleted, or the request was changed beyond recognition by another editor).

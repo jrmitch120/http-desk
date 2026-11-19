@@ -17,11 +17,11 @@ use tokio::sync::Notify;
 
 use crate::exec::{ExecError, HttpResponse};
 use crate::send::{self, Outgoing, SendContext, Sent};
+use crate::vars::MaskedValues;
 
 pub mod export;
 mod report;
 
-use report::Secrets;
 pub use report::{Failure, Outcome, Reason, RequestReport};
 
 /// What a run reports when it ends: whether it was stopped, and each of its requests
@@ -119,7 +119,7 @@ pub async fn run(
         }
         on_event(index, RunEvent::Sending);
         let scope = send::scope(root, ctx.environment.as_deref(), &ctx.session, &out);
-        let secrets = Secrets::new(scope.map(|s| s.secret_values()).unwrap_or_default());
+        let secrets = MaskedValues::for_run_export(scope.as_ref().ok());
         let result = tokio::select! {
             result = send::send(ctx, out, |_| {}) => result,
             _ = cancel.cancelled() => {

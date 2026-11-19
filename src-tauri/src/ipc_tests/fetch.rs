@@ -47,6 +47,17 @@ fn pretty_text_keeps_a_19_digit_id_as_the_server_sent_it() {
 }
 
 #[test]
+fn compare_text_sorts_json_keys_and_falls_back_to_the_raw_text() {
+    let h = Harness::new();
+    let json = send_get(&h, &serve_once("application/json", br#"{"z":1234567890123456789, "a" :10.50}"#.to_vec()));
+    let text = fetch(&h, &json["id"], "compare").unwrap();
+    assert_eq!(String::from_utf8(text).unwrap(), "{\n  \"a\": 10.50,\n  \"z\": 1234567890123456789\n}");
+
+    let bad = send_get(&h, &serve_once("application/json", br#"{"id": 1, oops}"#.to_vec()));
+    assert_eq!(fetch(&h, &bad["id"], "compare").unwrap(), br#"{"id": 1, oops}"#);
+}
+
+#[test]
 fn bytes_are_a_binary_body_exactly_as_received() {
     let h = Harness::new();
     let png: Vec<u8> = b"\x89PNG\r\n\x1a\n".iter().copied().chain(0..=255).collect();

@@ -160,7 +160,8 @@ fn cookies_are_sent_back_within_a_workspace_never_written_and_forgotten_when_ano
     assert!(!raw.contains("cookie:"), "the new workspace's Session started with the old jar: {raw}");
 
     for dir in [first.path(), second.path(), h.config_dir().as_path()] {
-        for entry in walkdir(dir) {
+        // History keeps the responses that set it as received (ADR-0009); the Session is never written.
+        for entry in walkdir(dir).into_iter().filter(|p| !super::history::is_store(p)) {
             let content = String::from_utf8_lossy(&std::fs::read(&entry).unwrap_or_default()).into_owned();
             assert!(!content.contains("s3cret-sid"), "{} holds a cookie", entry.display());
         }

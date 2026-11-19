@@ -94,7 +94,8 @@ fn clear_session_and_another_workspace_start_with_no_global_variables_and_none_i
     assert_eq!(listed(&h), json!([]), "the new workspace's Session started with the old Global variables");
 
     for dir in [first.path(), second.path(), h.config_dir().as_path()] {
-        for entry in walk(dir) {
+        // History keeps the login response as received (ADR-0009); the Session is never written.
+        for entry in walk(dir).into_iter().filter(|p| !super::history::is_store(p)) {
             let content = String::from_utf8_lossy(&std::fs::read(&entry).unwrap_or_default()).into_owned();
             assert!(!content.contains("s3cret-token"), "{} holds a Global variable", entry.display());
         }
