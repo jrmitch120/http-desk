@@ -11,10 +11,10 @@
 // the workspace's or all History, closing the opened entries that go with them.
 import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
-import { getDirective, uid } from "./http";
+import { formatLimit, getDirective, uid } from "./http";
 import { newTab } from "./tabView";
 import type { RunState, Tab } from "./store.svelte";
-import type { HistoryEntry, HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
+import type { HistoryEntry, HistoryEntryLink, HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
 import type { CompareSide } from "./compare";
 
 /** What History's page state needs from the rest of the store. */
@@ -54,13 +54,11 @@ export const HISTORY_RETENTION = { maxPerRequest: 50, maxAgeDays: 30, maxSizeMb:
 /** Retention's limits, for every workspace (`HistorySettings` without the switch). */
 export type HistoryRetention = Omit<HistorySettings, "enabled">;
 
-const BODY_CAP_MB = 10;
-
 /** The most of a body a History entry keeps (core `history::BODY_CAP`): 10 MB. */
-export const HISTORY_BODY_CAP = BODY_CAP_MB * 1024 * 1024;
+export const HISTORY_BODY_CAP = 10 * 1024 * 1024;
 
 /** History's body cap as the UI says it: "10 MB". */
-export const HISTORY_BODY_CAP_TEXT = `${BODY_CAP_MB} MB`;
+export const HISTORY_BODY_CAP_TEXT = formatLimit(HISTORY_BODY_CAP);
 
 /** What the viewer says of a body History cut off at its cap. */
 export const TRUNCATED_AT_CAP = `Truncated at ${HISTORY_BODY_CAP_TEXT}`;
@@ -71,21 +69,19 @@ export function historyLink(path: string, req: Request): HistoryLink {
 }
 
 /**
- * What a link's request is known by (as the core's `history::REQUEST`): its file and
- * `# @name`, else its file, method and URL. Two links with the same key are of the
- * same request; a named request's URL can change under it.
+ * What the request a link (in `file`) is of is known by, as the core's rule has it
+ * (`history::REQUEST_IDENTITY_COLUMNS`): its file and `# @name`, else its file, method
+ * and URL as written. Two links with the same key are of the same request; a named
+ * request's URL can change under it. The page's one copy of the rule: for a request's
+ * link (`historyLink`, its file absolute) and an entry's (`HistorySummary.link`, its
+ * file relative to the workspace), so keys compare only links whose files are alike.
  */
-export function historyLinkKey(link: HistoryLink): string {
-  return JSON.stringify(link.name ? [link.filePath, link.name] : [link.filePath, null, link.method, link.url]);
+export function historyLinkKey(file: string | null, link: Omit<HistoryEntryLink, "file">): string {
+  return JSON.stringify(link.name ? [file, link.name] : [file, null, link.method, link.url]);
 }
 
-/**
- * Whether entries `a` and `b` (of one workspace) were sent from the same request, as
- * far as their summaries say: the same file and `# @name`, or for an unnamed request
- * the same method and URL as sent.
- */
-const sameRequest = (a: HistorySummary, b: HistorySummary) =>
-  a.file === b.file && a.name === b.name && (a.name !== null || (a.method === b.method && a.url === b.url));
+/** Whether entries `a` and `b` (of one workspace) were sent from the same request. */
+const sameRequest = (a: HistorySummary, b: HistorySummary) => historyLinkKey(a.link.file, a.link) === historyLinkKey(b.link.file, b.link);
 
 /** When an entry was sent (RFC 3339): the time of day today, else the date and time. */
 export function sentAt(time: string, now = new Date()): string {

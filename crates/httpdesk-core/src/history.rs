@@ -81,7 +81,7 @@ pub type Result<T> = std::result::Result<T, HistoryError>;
 
 /// What is masked in a recorded request before it is written (ADR-0009): the values
 /// of [`CREDENTIAL_HEADERS`], and every Secret value and prompt answer the send used
-/// (as the send resolved them: [`send::RequestScope::masked_values`]), wherever it
+/// (as the send resolved them: [`MaskedValues::for_history`]), wherever it
 /// shows. The one place masking happens.
 struct Masking {
     values: MaskedValues,
@@ -162,7 +162,7 @@ impl Pending {
     /// its body up to [`BODY_CAP`], more than the request as sent shows.
     pub fn finish(self, attempt: &Attempt, finished: Finished<'_>) -> Option<NewEntry> {
         let elapsed = self.started.elapsed();
-        let send::ForHistory { body, masked } = attempt.take_for_history()?;
+        let send::BodyAndMaskedValues { body, masked } = attempt.take_for_history()?;
         let masking = &Masking { values: masked };
         let request = |mut request: SentRequest| {
             if let (Some(_), Some(body)) = (&request.body_preview, &body) {
@@ -284,6 +284,18 @@ pub struct RequestLink {
     pub url: String,
 }
 
+/// What links an entry to its request, as the request was written when it was sent:
+/// its file (relative to the workspace), `# @name`, method and URL. Two entries are of
+/// the same request when their links agree by [`REQUEST_IDENTITY_COLUMNS`]'s rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryLink {
+    pub file: Option<String>,
+    pub name: Option<String>,
+    pub method: String,
+    pub url: String,
+}
+
 /// One History entry as a list shows it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -291,11 +303,9 @@ pub struct Summary {
     pub id: i64,
     /// When it was sent (RFC 3339, UTC).
     pub time: String,
-    /// The request's file, relative to the workspace.
-    pub file: Option<String>,
-    /// The request's `# @name`.
-    pub name: Option<String>,
-    /// The method and URL as sent (resolved).
+    /// What links it to its request: its file, `# @name`, method and URL as written.
+    pub link: EntryLink,
+    /// The method and URL as sent (resolved, masked).
     pub method: String,
     pub url: String,
     /// `None` when no response came back.
@@ -346,8 +356,9 @@ pub struct Retention {
 /// and `# @name`, and for an unnamed request its method and URL as written. Two
 /// entries are of the same request when these are the same (compared as a row value
 /// with `IS`, as the file and name may be NULL). The one place the rule is written:
-/// listing a request's entries and retention's count per request both use it.
-const REQUEST: &str =
+/// listing a request's entries and retention's count per request both use it (and
+/// the webview applies it to [`EntryLink`]s).
+const REQUEST_IDENTITY_COLUMNS: &str =
     "workspace, file, name, CASE WHEN name IS NULL THEN method END, CASE WHEN name IS NULL THEN url END";
 
 /// The History store: one SQLite file for every workspace.
@@ -386,8 +397,8 @@ PRAGMA user_version = 1;
 ";
 
 /// The columns a [`Summary`] reads, in [`summary`]'s order.
-const SUMMARY_COLUMNS: &str =
-    "id, time_ms, file, name, sent_method, sent_url, status, status_text, duration_ms, size, error, cancelled";
+const SUMMARY_COLUMNS: &str = "id, time_ms, file, name, method, url, sent_method, sent_url, status, status_text, \
+     duration_ms, size, error, cancelled";
 
 impl Store {
     /// Opens the store at `path`, creating it (and its folder) if needed.
@@ -470,7 +481,7 @@ impl Store {
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(workspace_key(root))];
         if let Some(link) = &query.request {
             let unnamed = link.name.is_none();
-            sql.push_str(&format!(" AND ({REQUEST}) IS (?, ?, ?, ?, ?)"));
+            sql.push_str(&format!(" AND ({REQUEST_IDENTITY_COLUMNS}) IS (?, ?, ?, ?, ?)"));
             args.push(Box::new(workspace_key(root)));
             args.push(Box::new(relative(root, &link.file_path)));
             args.push(Box::new(link.name.clone()));
@@ -514,7 +525,7 @@ impl Store {
             Some(id) => tx.execute(
                 &format!(
                     "DELETE FROM entries WHERE id IN (
-                        SELECT id FROM entries WHERE ({REQUEST}) IS (SELECT {REQUEST} FROM entries WHERE id = ?1)
+                        SELECT id FROM entries WHERE ({REQUEST_IDENTITY_COLUMNS}) IS (SELECT {REQUEST_IDENTITY_COLUMNS} FROM entries WHERE id = ?1)
                         ORDER BY time_ms DESC, id DESC LIMIT -1 OFFSET ?2)"
                 ),
                 params![id, retention.per_request],
@@ -522,7 +533,7 @@ impl Store {
             None => tx.execute(
                 &format!(
                     "DELETE FROM entries WHERE id IN (SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (PARTITION BY {REQUEST} ORDER BY time_ms DESC, id DESC) AS n
+                        SELECT id, ROW_NUMBER() OVER (PARTITION BY {REQUEST_IDENTITY_COLUMNS} ORDER BY time_ms DESC, id DESC) AS n
                         FROM entries) WHERE n > ?1)"
                 ),
                 params![retention.per_request],
@@ -581,8 +592,13 @@ impl Store {
                 ),
                 params![workspace_key(root), id],
                 |row| {
-                    let columns: (Option<String>, String, String, Option<String>, Option<Vec<u8>>) =
-                        (row.get(10)?, row.get(12)?, row.get(13)?, row.get(14)?, row.get(15)?);
+                    let columns: (Option<String>, String, String, Option<String>, Option<Vec<u8>>) = (
+                        row.get("error")?,
+                        row.get("source")?,
+                        row.get("request")?,
+                        row.get("response")?,
+                        row.get("body")?,
+                    );
                     Ok((summary(row)?, columns))
                 },
             )
@@ -612,12 +628,13 @@ impl Store {
     }
 }
 
-/// `request` (as stored, its body up to [`BODY_CAP`]) with its body as the live
-/// send's reply shows it ([`exec::body_preview`]), marked truncated when that stops
-/// short of the body: a read never carries megabytes of it (ADR-0006).
+/// `request` (as stored: its body masked, up to [`BODY_CAP`], and `body_truncated`
+/// when the cap cut it) with its body as the live send's reply shows it
+/// ([`exec::body_preview`]): a read never carries megabytes of it (ADR-0006). Whether
+/// the preview stops short, and so says how many bytes were sent, goes by the stored
+/// body, which masking may have made shorter or longer than the one sent.
 fn previewed(mut request: SentRequest) -> SentRequest {
     if let Some(body) = request.body_preview.take() {
-        request.body_truncated |= body.len() > exec::BODY_PREVIEW;
         request.body_preview = Some(exec::body_preview(body.as_bytes(), request.body_size));
     }
     request
@@ -630,21 +647,20 @@ fn workspace_key(root: &Path) -> String {
 
 fn summary(row: &Row) -> rusqlite::Result<Summary> {
     let time_ms: i64 = row.get(1)?;
-    let error: Option<String> = row.get(10)?;
+    let error: Option<String> = row.get(12)?;
     Ok(Summary {
         id: row.get(0)?,
         time: DateTime::<Utc>::from_timestamp_millis(time_ms)
             .unwrap_or_default()
             .to_rfc3339_opts(SecondsFormat::Millis, true),
-        file: row.get(2)?,
-        name: row.get(3)?,
-        method: row.get(4)?,
-        url: row.get(5)?,
-        status: row.get(6)?,
-        status_text: row.get(7)?,
-        duration_ms: row.get(8)?,
-        size: row.get(9)?,
+        link: EntryLink { file: row.get(2)?, name: row.get(3)?, method: row.get(4)?, url: row.get(5)? },
+        method: row.get(6)?,
+        url: row.get(7)?,
+        status: row.get(8)?,
+        status_text: row.get(9)?,
+        duration_ms: row.get(10)?,
+        size: row.get(11)?,
         error: error.and_then(|e| serde_json::from_str::<Value>(&e).ok()?.get("message")?.as_str().map(str::to_string)),
-        cancelled: row.get(11)?,
+        cancelled: row.get(13)?,
     })
 }

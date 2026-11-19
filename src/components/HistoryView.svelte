@@ -27,7 +27,10 @@
   import Select from "./Select.svelte";
 
   interface Props {
-    /** The view: the sidebar's (`WORKSPACE_HISTORY`), listing every entry in the workspace, or a tab's. */
+    /**
+     * The view: the sidebar's (`WORKSPACE_HISTORY`), listing every entry in the workspace
+     * with its file, laid out for a narrow pane; or a tab's.
+     */
     view: HistoryViewId;
     /** A tab's view: its request's entries. */
     request?: HistoryLink | null;
@@ -35,14 +38,12 @@
     current?: RunState;
     /** What an empty list says when nothing narrows it. */
     empty: string;
-    /** Shows each entry's file. */
-    file?: boolean;
-    /** Two lines a row, and the status classes a dropdown, for a narrow pane (the sidebar). */
-    narrow?: boolean;
   }
 
-  let { view, request = null, current, empty, file = false, narrow = false }: Props = $props();
+  let { view, request = null, current, empty }: Props = $props();
 
+  /** The sidebar's view: every request's entries (so each shows its file), in a narrow
+   *  pane (two lines a row, and the status classes a dropdown). */
   const workspace = $derived(view === WORKSPACE_HISTORY);
   /** The entries listed now. */
   let entries = $state<HistorySummary[] | null>(null);
@@ -72,7 +73,7 @@
   const filtered = $derived(status !== "all" || !!text);
 
   // What the list depends on: a named request's URL can change under it.
-  const requestKey = $derived(request && historyLinkKey(request));
+  const requestKey = $derived(request && historyLinkKey(request.filePath, request));
 
   // The entries selected for Compare, in the order they were selected; none for another request.
   let selected = $state<number[]>([]);
@@ -153,16 +154,16 @@
   }
 </script>
 
-<div class="history-view" class:narrow>
+<div class="history-view" class:narrow={workspace}>
   <div class="filters">
-    {#if narrow}
+    {#if workspace}
       <!-- Six classes side by side don't fit a narrow pane: a dropdown there. -->
       <Select size="sm" class="status" label="Status class" options={STATUSES.map((o) => (o.value === "all" ? { ...o, label: "All statuses" } : o))} value={status} onchange={(s) => (status = s)} />
     {:else}
       <SegmentedControl label="Status class" options={STATUSES} value={status} onchange={(s) => (status = s)} />
     {/if}
     <div class="text">
-      <FilterField label="Filter History" placeholder={narrow ? "Filter by URL, file…" : "Filter by URL, method, file or name"} value={typed} oninput={onTextInput} />
+      <FilterField label="Filter History" placeholder={workspace ? "Filter by URL, file…" : "Filter by URL, method, file or name"} value={typed} oninput={onTextInput} />
       {#if workspace}
         <button class="icon-btn" aria-label="Clear workspace history" use:tooltip={"Clear workspace history: delete every entry of this workspace"} disabled={entries?.length === 0 && !filtered} onclick={() => app.history.clearWorkspace()}><Icon name="trash" /></button>
       {/if}
@@ -179,7 +180,7 @@
   {#if entries?.length === 0}
     <div class="empty-state small">{filtered ? "No History entries match" : empty}</div>
   {:else if entries}
-    <HistoryList {entries} onopen={open} current={shown} {file} {narrow} {selected} onselect={select} onmenu={entryMenu} ondelete={(e) => app.history.delete(e)} footer={more ? showMoreButton : undefined} />
+    <HistoryList {entries} onopen={open} current={shown} file={workspace} narrow={workspace} {selected} onselect={select} onmenu={entryMenu} ondelete={(e) => app.history.delete(e)} footer={more ? showMoreButton : undefined} />
   {/if}
 </div>
 

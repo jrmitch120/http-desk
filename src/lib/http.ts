@@ -47,9 +47,11 @@ export function newRequest(name = "New request"): Request {
 /** The method as sent: upper-cased, GET when blank. */
 export const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
 
-export function displayName(req: Request): string {
+/** What a request is called in the UI: its `###` title, else its `# @name`, else its method and URL. (A
+ *  restored tab, described only by its title, method and URL, has no directives yet.) */
+export function displayName(req: Pick<Request, "name" | "method" | "url"> & { directives?: Request["directives"] }): string {
   if (req.name.trim()) return req.name.trim();
-  const n = req.directives.find((d) => d.name === "name")?.value;
+  const n = req.directives?.find((d) => d.name === "name")?.value;
   if (n) return n;
   return req.url ? `${req.method} ${req.url}` : "Untitled request";
 }
@@ -587,6 +589,9 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 2 : 1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
+
+/** A size limit (a whole number of megabytes) as the UI says it: "10 MB". */
+export const formatLimit = (bytes: number) => `${bytes / (1024 * 1024)} MB`;
 
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;

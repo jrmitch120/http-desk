@@ -78,14 +78,14 @@
             {@render outcome(e)}
           </span>
           <span class="line sub">
-            {#if file}<span class="file ellipsis">{e.file ?? "No file"}</span>{/if}
+            {#if file}<span class="file ellipsis">{e.link.file ?? "No file"}</span>{/if}
             <span class="spacer"></span>
             {@render metrics(e)}
           </span>
         {:else}
           <Badge method={e.method} />
           <span class="url mono">{e.url}</span>
-          {#if file}<span class="file muted ellipsis">{e.file ?? "No file"}</span>{/if}
+          {#if file}<span class="file muted ellipsis">{e.link.file ?? "No file"}</span>{/if}
           <span class="spacer"></span>
           {@render outcome(e)}
           {@render metrics(e)}

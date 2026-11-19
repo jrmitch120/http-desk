@@ -15,7 +15,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -828,12 +828,14 @@ function recordExchange<T extends MockExchange["response"]>(file: string | null,
 }
 
 /**
- * One History entry as the mock keeps it (like the shell's store, `history.rs`): the
- * list's summary, what links it to its request (method and URL as written), and the
- * entry whole, its body as text or base64.
+ * One History entry as the mock keeps it (like the shell's store, `history.rs`, a
+ * column each): the list's summary, what links it to its request (file, `# @name`,
+ * method and URL as written), and the entry whole, its body as text or base64.
  */
-type MockHistoryEntry = HistorySummary & {
+type MockHistoryEntry = Omit<HistorySummary, "link"> & {
   workspace: string;
+  file: string | null;
+  name: string | null;
   writtenMethod: string;
   writtenUrl: string;
   source: string;
@@ -860,9 +862,21 @@ const MOCK_HISTORY_BODY_BYTES = 1024 * 1024;
  * a binary one not at all. `?historyCap=<bytes>` lowers it, so a test needn't send 10 MB.
  */
 const HISTORY_CAP = Number(new URLSearchParams(location.search).get("historyCap")) || 10 * 1024 * 1024;
-/** `request` with its body cut off at the cap, as History keeps it (opened, the shell shows only its first 64 KB). */
+/** `request` with its body cut off at the cap, marked, as History keeps it. */
 const capRequest = (request: SentRequest): SentRequest =>
   request.bodyPreview !== null && request.bodySize > HISTORY_CAP ? { ...request, bodyPreview: request.bodyPreview.slice(0, HISTORY_CAP), bodyTruncated: true } : request;
+/** How much of a request body the request as sent shows (core `exec::BODY_PREVIEW`). */
+const BODY_PREVIEW = 64 * 1024;
+/**
+ * `request` as kept (`capRequest`) with its body as an opened entry's reply has it, like
+ * the shell's (`history::previewed`): its first 64 KB and, when the kept body is longer,
+ * how many bytes were sent.
+ */
+function previewedRequest(request: SentRequest): SentRequest {
+  const body = request.bodyPreview;
+  if (body === null || body.length <= BODY_PREVIEW) return request;
+  return { ...request, bodyPreview: `${body.slice(0, BODY_PREVIEW)}\n… (${request.bodySize} bytes total)` };
+}
 /** Request headers whose values History masks. */
 const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie"];
 /**
@@ -971,10 +985,13 @@ function listHistory(query: HistoryQuery): HistorySummary[] {
     .sort((a, b) => b.time.localeCompare(a.time) || b.id - a.id)
     .slice(offset, offset + (query.limit ?? 200))
     .map((e) => ({
-      id: e.id, time: e.time, file: e.file, name: e.name, method: e.method, url: e.url, status: e.status,
+      id: e.id, time: e.time, link: linkOf(e), method: e.method, url: e.url, status: e.status,
       statusText: e.statusText, durationMs: e.durationMs, size: e.size, error: e.error, cancelled: e.cancelled,
     }));
 }
+
+/** What links entry `e` to its request, as a summary has it (`history::EntryLink`). */
+const linkOf = (e: MockHistoryEntry): HistoryEntryLink => ({ file: e.file, name: e.name, method: e.writtenMethod, url: e.writtenUrl });
 
 /** The History entry ids `open_history_entry` opened, in order (`__mock.historyOpened`). */
 const historyOpened: number[] = [];
@@ -983,12 +1000,14 @@ function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
   historyOpened.push(id);
-  const { workspace: _w, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
-  if (!response) return { ...entry, response: null, bodyKept };
+  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
+  const request = previewedRequest(entry.request);
+  const link = linkOf(e);
+  if (!response) return { ...entry, link, request, response: null, bodyKept };
   const responseId = `h-${++responseCount}`;
   if (body && "text" in body) textBodies.set(responseId, { body: body.text, kind: body.kind });
   if (body && "base64" in body) binaryBodies.set(responseId, Uint8Array.from(atob(body.base64), (c) => c.charCodeAt(0)));
-  return { ...entry, response: { ...response, id: responseId }, bodyKept };
+  return { ...entry, link, request, response: { ...response, id: responseId, request }, bodyKept };
 }
 
 /** Saves the mock's History, like a write to the store. */

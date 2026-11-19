@@ -733,8 +733,8 @@ pub struct SentRequest {
     pub headers: Vec<(String, String)>,
     pub body_preview: Option<String>,
     pub body_size: usize,
-    /// Whether `body_preview` stops short of the body: set only on a History entry's
-    /// request, whose body is kept up to the body cap (`history::BODY_CAP`) and shown,
+    /// Whether History cut the body off at its body cap (`history::BODY_CAP`): set
+    /// only on a History entry's request, whose body is kept up to the cap and shown,
     /// opened, as the live send shows it ([`body_preview`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub body_truncated: bool,
@@ -1152,11 +1152,11 @@ pub fn body_text(body: &[u8], content_type: Option<&str>, kind: ResponseKind) ->
 pub const BODY_PREVIEW: usize = 64 * 1024;
 
 /// What the Request tab shows of request body `body`: its first [`BODY_PREVIEW`]
-/// bytes, then how many bytes there are in all (`total`), when there are more.
+/// bytes and, when it has more, how many bytes were sent in all (`total`).
 /// ADR-0006: a reply never carries a whole large body.
 pub fn body_preview(body: &[u8], total: usize) -> String {
     let s = String::from_utf8_lossy(&body[..body.len().min(BODY_PREVIEW)]).into_owned();
-    if total > BODY_PREVIEW {
+    if body.len() > BODY_PREVIEW {
         format!("{s}\n… ({total} bytes total)")
     } else {
         s

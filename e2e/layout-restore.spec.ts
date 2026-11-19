@@ -154,6 +154,29 @@ test("restored tabs show at once from the Layout, before their files are read; a
   await expect(urlBar(page)).toBeVisible();
 });
 
+test("switching to another workspace and back while the files are still being read restores the tabs, and the Layout keeps them", async ({ page }) => {
+  await openApp(page, "?roots=/work/shop&recent=/work/shop");
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await expect.poll(() => savedTabs(page)).toEqual(["List pets", "Create pet"]);
+
+  // A restart whose file reads don't finish until the test says so; meanwhile the
+  // user opens another workspace and comes back.
+  await page.goto("/?reads=hold&platform=mac&roots=/work/shop&recent=/work/shop");
+  await expect(tabNames(page)).toHaveText(["List pets", "Create pet"]);
+  await menuClick(page, "open-recent:/work/shop");
+  await expect(tabNames(page)).toHaveCount(0);
+  await menuClick(page, "open-recent:/demo");
+  await expect(tabNames(page)).toHaveText(["List pets", "Create pet"]);
+  await page.evaluate(() => (window as unknown as { __mock: { releaseReads: () => void } }).__mock.releaseReads());
+
+  await expect(urlBar(page)).toBeVisible();
+  await expect(tabNames(page)).toHaveText(["List pets", "Create pet"]);
+  await expect(page.locator(".toast")).toHaveCount(0);
+  await tab(page, "List pets").click();
+  await expect.poll(() => savedLayout(page)).toMatchObject({ active: 0, tabs: [{ name: "List pets" }, { name: "Create pet" }] });
+});
+
 test("the sidebar search and the response filter start empty", async ({ page }) => {
   await openApp(page, "?response=store");
   await openRequest(page, ["api", "pets.http"], "List pets");

@@ -179,16 +179,26 @@ fn secret_names(env_set: &EnvironmentSet, environment: Option<&str>, out: &Outgo
 }
 
 impl RequestScope {
-    /// The values of the Secrets the request is sent with, for what must never show
-    /// them (a Run's export). Empty ones are left out: there's nothing to hide.
-    pub fn secret_values(&self) -> Vec<String> {
+    /// The values of the Secrets the request is sent with. Empty ones are left out:
+    /// there's nothing to hide.
+    fn secret_values(&self) -> Vec<String> {
         self.secrets.iter().filter_map(|n| self.environment.get(n).filter(|v| !v.is_empty()).cloned()).collect()
     }
+}
 
-    /// The values History masks in the request's entry (ADR-0009): its Secrets' and
-    /// its prompt answers.
-    pub fn masked_values(&self) -> Vec<String> {
-        self.secret_values().into_iter().chain(self.prompt_answers.iter().cloned()).collect()
+impl MaskedValues {
+    /// What a Run's export masks of a request sent in `scope` (nothing without one):
+    /// the values of the Secrets it's sent with. Not prompt answers, which only History
+    /// masks ([`MaskedValues::for_history`]): a Run sends its requests without a
+    /// request key ([`Outgoing::all_in`]), so the Session's answers never reach them.
+    pub fn for_run_export(scope: Option<&RequestScope>) -> MaskedValues {
+        MaskedValues::new(scope.map(RequestScope::secret_values).unwrap_or_default())
+    }
+
+    /// What History masks in the entry of a request sent in `scope` (ADR-0009): the
+    /// values of its Secrets and its prompt answers.
+    pub fn for_history(scope: &RequestScope) -> MaskedValues {
+        MaskedValues::new(scope.secret_values().into_iter().chain(scope.prompt_answers.iter().cloned()).collect())
     }
 }
 
@@ -248,16 +258,17 @@ impl Drop for StopOnDrop {
 #[derive(Debug, Default)]
 pub struct Attempt {
     request: Mutex<Option<SentRequest>>,
-    history: Option<Mutex<ForHistory>>,
+    history: Option<Mutex<BodyAndMaskedValues>>,
 }
 
-/// What a recorded send keeps for its History entry (see [`Attempt`]).
+/// What a recorded send keeps for its History entry that the request as sent doesn't
+/// hold: the start of the body it sent, and the values to mask (see [`Attempt`]).
 #[derive(Debug, Default)]
-pub(crate) struct ForHistory {
+pub(crate) struct BodyAndMaskedValues {
     /// The start of the body it sent, up to [`crate::history::BODY_CAP`] bytes: more
     /// of it than the request as sent shows ([`SentRequest::body_preview`]).
     pub body: Option<Vec<u8>>,
-    /// Its Secret values and prompt answers ([`RequestScope::masked_values`]).
+    /// The values to mask in it: its Secret values and prompt answers ([`MaskedValues::for_history`]).
     pub masked: MaskedValues,
 }
 
@@ -273,14 +284,14 @@ impl Attempt {
     }
 
     /// What it kept for History, taken out of it; `None` if it wasn't made for History.
-    pub(crate) fn take_for_history(&self) -> Option<ForHistory> {
+    pub(crate) fn take_for_history(&self) -> Option<BodyAndMaskedValues> {
         self.history.as_ref().map(|h| std::mem::take(&mut *h.lock().unwrap()))
     }
 
     /// Notes the values to mask, from the scope the send resolved its variables in.
     fn resolved(&self, scope: &RequestScope) {
         if let Some(history) = &self.history {
-            history.lock().unwrap().masked = MaskedValues::new(scope.masked_values());
+            history.lock().unwrap().masked = MaskedValues::for_history(scope);
         }
     }
 

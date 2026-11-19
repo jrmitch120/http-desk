@@ -159,13 +159,13 @@
   <div class="head">
     <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
     {#if app.sidebarView === "explorer"}
-      <!-- Beside the switch: they fit there at the default width (280 px) and wider. -->
+      <!-- Beside the switch (small icon buttons): they fit there at the default width (280 px) and wider. -->
       <div class="actions">
-        <button class="icon-btn" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
-        <button class="icon-btn" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
-        <button class="icon-btn" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
-        <button class="icon-btn" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
-        <button class="icon-btn" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
+        <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
+        <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
+        <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
+        <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
+        <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
       </div>
     {/if}
   </div>
@@ -297,11 +297,6 @@
   .actions {
     display: flex;
     margin-left: auto;
-  }
-  /* A notch smaller than a toolbar's, so all five fit beside the view switch. */
-  .actions .icon-btn {
-    width: 22px;
-    height: 22px;
   }
   .search {
     margin: 4px 10px 8px;

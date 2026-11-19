@@ -38,6 +38,51 @@ test("an entry whose text body was over the cap shows it cut off, marked Truncat
   await expect(entry.locator(".body .cm-content")).not.toContainText("Rex");
 });
 
+/** Gives Create pet a JSON body of `bytes` bytes, as another editor would. */
+async function createPetBody(page: Page, bytes: number) {
+  await page.evaluate((bytes) => {
+    const mock = (window as unknown as { __mock: { files: Record<string, { requests: { body: { text: string } }[] }>; writeFile: (p: string, f: unknown) => void } }).__mock;
+    const file = mock.files["/demo/api/pets.http"];
+    const text = `{"name": "${"x".repeat(bytes - 12)}"}`;
+    file.requests[1].body.text = text;
+    mock.writeFile("/demo/api/pets.http", file);
+  }, bytes);
+}
+
+/** The opened entry's Request tab. */
+async function entryRequestTab(page: Page) {
+  await historyButton(page).click();
+  await requestEntries(page).first().getByRole("button").click();
+  const entry = page.getByRole("region", { name: "History entry" });
+  await entry.getByRole("radio", { name: /^Request/ }).click();
+  return entry;
+}
+
+test("an entry whose request body was over the cap shows its start, marked Truncated at 10 MB", async ({ page }) => {
+  await openApp(page, "?historyCap=20&asSent=1");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await send(page);
+
+  const entry = await entryRequestTab(page);
+
+  await expect(entry.locator(".sent-body-title").first()).toContainText("Truncated at 10 MB");
+  await expect(entry.locator(".sent-body")).toContainText('"name": "Rex"');
+  await expect(entry.locator(".sent-body")).not.toContainText("dog");
+});
+
+test("an entry's request body over 64 KB shows its first 64 KB and how many bytes were sent, not marked truncated", async ({ page }) => {
+  await openApp(page, "?asSent=1");
+  await createPetBody(page, 70_000);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await send(page);
+
+  const entry = await entryRequestTab(page);
+
+  await expect(entry.locator(".sent-body")).toContainText("… (70000 bytes total)");
+  expect((await entry.locator(".sent-body").textContent())?.length).toBeLessThan(66_000);
+  await expect(entry.getByText("Truncated at 10 MB")).toHaveCount(0);
+});
+
 test("an entry whose binary body was over the cap keeps only its headers and size", async ({ page }) => {
   await openApp(page, "?historyCap=40");
   await openRequest(page, ["api", "pets.http"], "Get pet image");

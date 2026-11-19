@@ -16,7 +16,7 @@
   let { opened }: { opened: OpenedEntry } = $props();
   const entry = $derived(opened.entry);
   /** The entry's request file; none for a request in no file, which can't be restored. */
-  const path = $derived(app.root && entry.file !== null ? fromWorkspace(app.root, entry.file) : null);
+  const path = $derived(app.root && entry.link.file !== null ? fromWorkspace(app.root, entry.link.file) : null);
 
   async function restore(path: string) {
     const source = opened.source;
@@ -28,7 +28,7 @@
 <Modal title="History entry" onclose={() => app.history.close(WORKSPACE_HISTORY)} width="min(960px, calc(100vw - 48px))" height="min(720px, calc(100vh - 48px))">
   <div class="opened">
     <div class="about muted">
-      <span class="what"><code>{entry.method} {entry.url}</code>{#if entry.file}&nbsp;from <code>{entry.file}</code>{/if}, sent {sentAt(entry.time)} · read-only</span>
+      <span class="what"><code>{entry.method} {entry.url}</code>{#if entry.link.file}&nbsp;from <code>{entry.link.file}</code>{/if}, sent {sentAt(entry.time)} · read-only</span>
       {#if path}
         <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => restore(path)}>Restore request</button>
       {/if}

@@ -10,7 +10,7 @@
   import { MergeView } from "@codemirror/merge";
   import { app } from "../lib/store.svelte";
   import type { Comparison } from "../lib/history.svelte";
-  import { bodyText, COMPARE_BODY_LIMIT, compareLanguage, headersText, tooLargeToCompare } from "../lib/compare";
+  import { bodyText, COMPARE_BODY_LIMIT_TEXT, compareLanguage, headersText, tooLargeToCompare } from "../lib/compare";
   import { editorExtensions, languageExtension, type Language } from "../lib/codemirror/setup";
   import Modal from "./Modal.svelte";
   import Banner from "./Banner.svelte";
@@ -61,7 +61,7 @@
       <span class="about muted">{comparison.a.label} vs. {comparison.b.label}</span>
     </div>
     {#if part === "body" && tooLarge}
-      <Banner severity="info">The bodies are too large to compare (over {COMPARE_BODY_LIMIT / (1024 * 1024)} MB); their headers can still be compared.</Banner>
+      <Banner severity="info">The bodies are too large to compare (over {COMPARE_BODY_LIMIT_TEXT}); their headers can still be compared.</Banner>
     {:else if texts && texts[0] === texts[1]}
       <Banner severity="info">{part === "body" ? "The bodies are the same" : "The headers are the same"}</Banner>
     {/if}

@@ -4,9 +4,11 @@
 //
 // Restoring shows the Layout's tabs at once, from what the Layout says of them, so a
 // Layout with many tabs opens as fast as an empty workspace. Their files are read in
-// the background: each becomes its document, the tabs re-attach to their requests as a
-// reload does (`reattach`), and tabs whose request is gone are dropped, with one note
-// saying how many. A tab's editor is built when it first shows.
+// the background, each afresh: as soon as one is read it becomes its document, its tabs
+// re-attach to their requests as a reload does (`reattach`) and are ready, and those
+// whose request is gone are dropped. Once every file is read, one note says how many
+// were dropped. A tab's editor is built when it first shows. Each workspace opened
+// restores on its own: a restore that another opening superseded stops, and saves nothing.
 import { untrack } from "svelte";
 import { api, errorMessage } from "./api";
 import { findNode } from "./tree";
@@ -15,26 +17,24 @@ import { fromWorkspace, inWorkspace, LAYOUT_SETTLE_MS, readLayout, type Layout, 
 import { newTab, type Tab } from "./tabView";
 import type { Doc } from "./store.svelte";
 import type { Request, TreeNode } from "./types";
-import { uid } from "./http";
+import { displayName, uid } from "./http";
 
 /** What the Layout needs from the rest of the store. */
 export interface LayoutHost {
-  /** The open workspace. */
-  readonly root: string | null;
   tabs: Tab[];
   activeTabId: string | null;
   expanded: Record<string, boolean>;
   readonly docs: Record<string, Doc>;
   /**
-   * Reads the file at `path` into its document, once: whoever asks meanwhile shares the
-   * read. `prepare` sees its requests before they get keys (to re-attach them). Null if
-   * it can't be read, or another workspace opened meanwhile.
+   * Reads the file at `path` afresh into its document, `prepare` seeing its requests
+   * before they get keys (to re-attach them); whoever loads it meanwhile shares the
+   * read. Null if it can't be read, or another workspace opened meanwhile.
    */
   readDoc(path: string, prepare: (requests: Request[]) => void): Promise<Doc | null>;
   /** Drops tab `id`, whose request is gone, as closing it would, without asking or remembering it. */
   removeTab(id: string): void;
-  /** Restored `tabs` are about to show; they're re-attached once `reattached` settles. */
-  restoring(tabs: Tab[], reattached: Promise<void>): void;
+  /** Restored tabs are about to show: each (by id) is re-attached, or dropped, once its promise settles. */
+  restoring(ready: Map<string, Promise<void>>): void;
   toast(kind: "info" | "error", message: string): void;
 }
 
@@ -43,6 +43,8 @@ export class LayoutStore {
 
   /** The workspace whose Layout changes are saved; null while a workspace opens. */
   private savingFor = $state<string | null>(null);
+  /** Goes up as each workspace opens, so a restore another opening superseded knows it. */
+  private opens = 0;
   /** The Layout last queued for saving, as JSON, so an unchanged one isn't saved again. */
   private last = "";
   private pending: { root: string; layout: Layout } | null = null;
@@ -62,6 +64,7 @@ export class LayoutStore {
   reset() {
     this.savingFor = null;
     this.last = "";
+    this.opens++;
   }
 
   /** The workspace's Layout as it is now. Tabs whose request was never saved are
@@ -121,22 +124,23 @@ export class LayoutStore {
   }
 
   /**
-   * Brings back the Layout saved for the workspace at `root` (whose tree is `tree`): its
-   * tabs and the active one at once, and the expanded folders. Their files are read
-   * after, in the background (see the module docs); the Layout is saved again once
-   * they're re-attached.
+   * Brings back the Layout saved for the workspace at `root` (whose tree is `tree`),
+   * the one opening since `reset`: its tabs and the active one at once, and the
+   * expanded folders. Their files are read after, in the background (see the module
+   * docs); the Layout is saved again once every one is read.
    */
   async restore(root: string, tree: TreeNode) {
+    const open = this.opens;
     let saved: unknown = null;
     try {
       saved = await api.loadLayout(root);
     } catch {
       // No Layout to restore: the workspace opens as it always did.
     }
-    if (this.host.root !== root) return;
+    if (this.opens !== open) return;
     const layout = readLayout(saved);
-    const tabs = layout.tabs.map((t): Tab => ({ ...newTab(fromWorkspace(root, t.path), uid(), t), restoring: { method: t.method, name: t.name.trim() || `${t.method} ${t.url}` } }));
-    this.host.restoring(tabs, this.reattach(root, layout.tabs, tabs));
+    const tabs = layout.tabs.map((t): Tab => ({ ...newTab(fromWorkspace(root, t.path), uid(), t), restoring: { method: t.method, name: displayName(t) } }));
+    this.host.restoring(this.reattach(open, root, layout.tabs, tabs));
     this.host.tabs = tabs;
     this.host.activeTabId = (layout.active === null ? undefined : tabs[layout.active]?.id) ?? tabs.at(-1)?.id ?? null;
     const expanded: Record<string, boolean> = { [root]: true };
@@ -144,30 +148,45 @@ export class LayoutStore {
     this.host.expanded = expanded;
   }
 
-  /** Reads restored `tabs`' files (each once, together), re-attaches each tab (described
-   *  by `described`) to its request, and drops those whose request is gone. */
-  private async reattach(root: string, described: LayoutTab[], tabs: Tab[]) {
+  /**
+   * Reads restored `tabs`' files (each once, together). As each is read, its tabs
+   * (described by `described`) re-attach to their requests, or are dropped if theirs
+   * is gone. Once all are read, says how many were dropped and saves the Layout again.
+   * Nothing of it happens once another workspace has opened since `open`. Returns, by
+   * tab id, when each tab is ready.
+   */
+  private reattach(open: number, root: string, described: LayoutTab[], tabs: Tab[]): Map<string, Promise<void>> {
     const known = new Map<string, KnownRequest[]>();
     tabs.forEach((t, i) => {
       const { name, method, url, position } = described[i];
       known.set(t.path, [...(known.get(t.path) ?? []), { key: t.key, name, method, url, position }]);
     });
-    await Promise.all([...known].map(([path, requests]) => this.host.readDoc(path, (fresh) => reattach(requests, fresh))));
-    if (this.host.root !== root) return;
+    const ready = new Map<string, Promise<void>>();
     let dropped = 0;
-    for (const { id, path, key } of tabs) {
-      const open = this.host.tabs.find((t) => t.id === id);
-      if (!open) continue; // closed meanwhile
-      if (this.host.docs[path]?.file.requests.some((r) => r._key === key)) {
-        open.restoring = undefined;
-      } else {
-        // The active tab's place goes to the one after it.
-        this.host.removeTab(id);
-        dropped++;
-      }
-    }
-    if (dropped === 1) this.host.toast("info", "1 tab wasn't restored: its request no longer exists.");
-    else if (dropped > 1) this.host.toast("info", `${dropped} tabs weren't restored: their requests no longer exist.`);
-    this.savingFor = root;
+    const reads = [...known].map(([path, requests]) => {
+      const read = this.host.readDoc(path, (fresh) => reattach(requests, fresh)).then(() => {
+        if (this.opens !== open) return;
+        for (const { id, key } of tabs.filter((t) => t.path === path)) {
+          const shown = this.host.tabs.find((t) => t.id === id);
+          if (!shown) continue; // closed meanwhile
+          if (this.host.docs[path]?.file.requests.some((r) => r._key === key)) {
+            shown.restoring = undefined;
+          } else {
+            // The active tab's place goes to the one after it.
+            this.host.removeTab(id);
+            dropped++;
+          }
+        }
+      });
+      for (const t of tabs) if (t.path === path) ready.set(t.id, read);
+      return read;
+    });
+    void Promise.all(reads).then(() => {
+      if (this.opens !== open) return;
+      if (dropped === 1) this.host.toast("info", "1 tab wasn't restored: its request no longer exists.");
+      else if (dropped > 1) this.host.toast("info", `${dropped} tabs weren't restored: their requests no longer exist.`);
+      this.savingFor = root;
+    });
+    return ready;
   }
 }

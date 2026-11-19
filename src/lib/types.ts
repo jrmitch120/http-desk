@@ -1,8 +1,6 @@
 // TypeScript mirror of the Rust model (crates/httpdesk-core/src/model.rs etc.).
 // Keep in sync when changing serde structs.
 
-import type { RequestIdentity } from "./reattach";
-
 export type LineEnding = "lf" | "crlf";
 
 export interface Variable {
@@ -207,22 +205,32 @@ export interface SentRequest {
   url: string;
   headers: [string, string][];
   bodyPreview: string | null;
-  /** Set on an opened History entry's request whose `bodyPreview` (the live send's 64 KB preview) stops short of its body. */
+  /** Set on an opened History entry's request whose body History cut off at its 10 MB cap (`bodyPreview` is the live send's 64 KB preview either way). */
   bodyTruncated?: boolean;
   bodySize: number;
 }
 
 /**
  * What links History entries to a request (`history::RequestLink`): its file and
- * `# @name`, or for an unnamed request its file, method and URL as written. Its
- * method and URL are a `RequestIdentity`'s; its `name` isn't (the `# @name`, not the
- * `###` title), so it's its own.
+ * `# @name`, or for an unnamed request its file, method and URL as written.
  */
-export interface HistoryLink extends Pick<RequestIdentity, "method" | "url"> {
+export interface HistoryLink {
   /** The request's file, absolute. */
   filePath: string;
   /** Its `# @name`; null for an unnamed request. */
   name: string | null;
+  method: string;
+  url: string;
+}
+
+/** What links a History entry to its request, as it was written when sent (`history::EntryLink`). */
+export interface HistoryEntryLink {
+  /** The request's file, relative to the workspace. */
+  file: string | null;
+  /** Its `# @name`. */
+  name: string | null;
+  method: string;
+  url: string;
 }
 
 /**
@@ -248,11 +256,9 @@ export interface HistorySummary {
   id: number;
   /** When it was sent (RFC 3339). */
   time: string;
-  /** The request's file, relative to the workspace. */
-  file: string | null;
-  /** The request's `# @name`. */
-  name: string | null;
-  /** The method and URL as sent (resolved). */
+  /** What links it to its request: its file, `# @name`, method and URL as written. */
+  link: HistoryEntryLink;
+  /** The method and URL as sent (resolved, masked). */
   method: string;
   url: string;
   /** Null when no response came back. */
