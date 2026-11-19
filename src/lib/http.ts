@@ -4,6 +4,24 @@ import type { BodyMode, HttpFile, KeyValue, Prompt, Request, Variable } from "./
 
 export const STANDARD_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
+/** The header names suggested where a header name is typed: the Headers table and the `.http` source. */
+export const HEADER_NAMES = [
+  "Accept", "Accept-Encoding", "Accept-Language", "Authorization", "Cache-Control", "Connection", "Content-Type",
+  "Content-Length", "Cookie", "Host", "If-Match", "If-None-Match", "If-Modified-Since", "Origin", "Referer",
+  "User-Agent", "X-Api-Key", "X-Request-Id", "X-Correlation-Id", "X-Forwarded-For",
+];
+
+/**
+ * The `# @tag` directives the core's parser knows (`KNOWN_DIRECTIVES` in
+ * crates/httpdesk-text/src/parser.rs; codemirror/httpCompletion.test.ts keeps the
+ * two the same): JetBrains', VS Code's, then HttpDesk's own.
+ */
+export const KNOWN_DIRECTIVES = [
+  "name", "no-redirect", "no-log", "no-cookie-jar", "no-auto-encoding", "timeout", "connection-timeout", "use-os-credentials",
+  "note", "prompt",
+  "httpdesk-disabled", "httpdesk-auth", "param", "header",
+];
+
 export function methodClass(method: string): string {
   const m = method.toUpperCase();
   return STANDARD_METHODS.includes(m) ? `m-${m.toLowerCase()}` : "m-custom";

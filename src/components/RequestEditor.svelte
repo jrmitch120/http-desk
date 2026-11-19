@@ -3,7 +3,7 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue, PortabilityMark } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, HEADER_NAMES, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
@@ -251,11 +251,6 @@
     tick().then(() => sourceEditor?.revealLine(line));
   });
 
-  const HEADER_NAMES = [
-    "Accept", "Accept-Encoding", "Accept-Language", "Authorization", "Cache-Control", "Connection", "Content-Type",
-    "Content-Length", "Cookie", "Host", "If-Match", "If-None-Match", "If-Modified-Since", "Origin", "Referer",
-    "User-Agent", "X-Api-Key", "X-Request-Id", "X-Correlation-Id", "X-Forwarded-For",
-  ];
   /** Params and headers: every column, with descriptions (`# @param` / `# @header`). */
   const documented: Column<KeyValue>[] = ["enable", "name", "value", "description", "delete"];
   const showDescriptions = $derived(app.settings?.showDescriptions !== false);
