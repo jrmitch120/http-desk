@@ -7,12 +7,12 @@
   import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import type { GlobalVariable, PortabilityMark, Problem, Variable } from "../lib/types";
+  import type { GlobalVariable, HttpFile, PortabilityMark, Problem, Variable } from "../lib/types";
   import { basename, fileVariables, requestNames } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { portabilityLineMarks } from "../lib/checks";
-  import { checkUnderlines } from "../lib/codemirror/underlines";
+  import { portabilityLineMarks, ReferenceChecks, type OutsideScope } from "../lib/checks";
+  import { checkUnderlines, fileUnderlines } from "../lib/codemirror/underlines";
   import { requestAt, requestBlocks, type OutlineEntry, type RequestBlock } from "../lib/codemirror/outline";
   import { EditorView } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
@@ -38,6 +38,12 @@
   setReadOnlyRegion(() => !!lock);
   const envSet = $derived(app.envSetFor(tab.path));
   const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
+  /** What every request of the file sees besides the file: one object while it's the same, so each request's references are looked at again only when they change. */
+  const outside: OutsideScope = $derived({
+    env: envVariables(envSet, app.envName),
+    envName: app.envName,
+    globals: Object.fromEntries((globals.current ?? []).map((g) => [g.name, g.value])),
+  });
   /**
    * The file's variables and request names, as JSON: what `variables` follows, so an
    * edit that leaves them as they were (most do) doesn't give the editor new ones,
@@ -50,12 +56,10 @@
     const [fileVars, headerVars, names] = JSON.parse(declared) as [Variable[], Variable[], string[]];
     return {
       ...makeVarProvider({
-        env: envVariables(envSet, app.envName),
+        ...outside,
         fileVars,
         headerVars,
         requestVars: [],
-        globals: Object.fromEntries((globals.current ?? []).map((g) => [g.name, g.value])),
-        envName: app.envName,
         requestNames: names,
         exchange: (name: string) => app.exchangeShape(tab.path, name),
       }),
@@ -91,21 +95,29 @@
   );
 
   /**
-   * What the core found reading the text shown, and the text it read: its problems,
-   * and the lines that behave differently in VS Code or Rider. Read a block at a time
-   * (`app.texts.findings`), shortly after typing stops; the editor moves them with
-   * its edits meanwhile. Raw state: a large file has thousands of marks, each read.
+   * What the core found reading the text shown, and the text it read: what it reads as,
+   * its problems, and the lines that behave differently in VS Code or Rider. Read a block
+   * at a time (`app.texts.findings`), shortly after typing stops; the editor moves them
+   * with its edits meanwhile. Raw state: a large file has thousands of marks, each read.
    */
-  let found = $state.raw<{ text: string; problems: Problem[]; portability: PortabilityMark[] } | null>(null);
+  let found = $state.raw<{ text: string; file: HttpFile | null; problems: Problem[]; portability: PortabilityMark[] } | null>(null);
   $effect(() => {
     if (!shown) return;
     const read = text;
     return afterPause(
-      () => app.texts.findings(tab.path, read).catch(() => ({ problems: [], portability: [] })),
+      () => app.texts.findings(tab.path, read).catch(() => ({ file: null, problems: [], portability: [] })),
       (findings) => (found = { text: read, ...findings }),
     );
   });
-  const underlines = $derived(found ? checkUnderlines(found.text, found.problems.map((problem) => ({ kind: "problem" as const, problem }))) : []);
+  /** Each request's Undefined variables and shared `# @name`, as its tab's strip finds them, kept between readings. */
+  const references = new ReferenceChecks();
+  // The core's problems, then those, each where it was found in the text (#165, #166).
+  const underlines = $derived.by(() => {
+    if (!found) return [];
+    const problems = checkUnderlines(found.text, found.problems.map((problem) => ({ kind: "problem" as const, problem })));
+    if (!found.file) return problems;
+    return [...problems, ...fileUnderlines(found.file, references.of(found.file, outside))].sort((a, b) => a.from - b.from);
+  });
   const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portabilityLevel));
 
   // The outline: the requests of the text shown. The one under the cursor is the
@@ -136,6 +148,8 @@
   });
   const current = $derived(requestAt(blocks, cursor));
   const currentIndex = $derived(current?.index ?? null);
+  /** The key of the request under the cursor, while the text reads as the file's requests. */
+  const underCursor = $derived(!invalid && currentIndex !== null ? (doc?.file.requests[currentIndex]?._key ?? null) : null);
   $effect(() => app.setFileCursor(tab.id, currentIndex));
 
   function show(block: RequestBlock, focus: boolean) {
@@ -183,6 +197,15 @@
       <Icon name="code" size={14} />
       <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <span class="spacer"></span>
+      <!-- Back to a request's own tab (the request tab's File button comes here). -->
+      <button
+        class="btn small ghost"
+        disabled={!underCursor}
+        onclick={() => underCursor && app.openRequest(tab.path, { key: underCursor })}
+        use:tooltip={underCursor ? "Open the request under the cursor in its own tab" : invalid ? "The text doesn't read as a file yet" : "Put the cursor in a request to open it in its own tab"}
+      >
+        <Icon name="file" size={14} />Request
+      </button>
       <button class="btn small" disabled={!dirty} onclick={() => app.save(tab.path)} use:tooltip={`Save (${shortcutHint("save")})`}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>

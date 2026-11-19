@@ -5,7 +5,7 @@
 // with a space in its URL) and problems/upload.http (a body read from a file that
 // isn't there) to the mock's workspace.
 import { expect, test, type Page } from "@playwright/test";
-import { activeTab, menuClick, openApp } from "./helpers";
+import { activeTab, menuClick, openApp, openRequest, urlBar } from "./helpers";
 
 const panel = (page: Page) => page.getByRole("region", { name: "Problems" });
 const toggle = (page: Page) => page.getByRole("button", { name: /^Show Problems/ });
@@ -26,6 +26,21 @@ test("a broken file and a missing < file both show in the panel; clicking one op
   await missing.click();
   await expect(activeTab(page)).toContainText("upload.http");
   await expect(fileView(page).locator(".cm-activeLine")).toHaveText("< ./missing.json");
+});
+
+test("an Undefined variable typed in a request is listed at its line, for the selected environment, before it's saved", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await urlBar(page).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("/{{nowhere}}");
+  await menuClick(page, "toggle-problems");
+  const entry = group(page, "api/pets.http").getByRole("button", { name: /\{\{nowhere\}\} is undefined/ });
+  await expect(entry).toContainText("Line 15");
+
+  await entry.click();
+  await expect(activeTab(page)).toContainText("pets.http");
+  await expect(fileView(page).locator(".cm-activeLine")).toHaveText("POST {{baseUrl}}/pets/{{nowhere}}");
 });
 
 test("a file's portability summary says how many lines behave differently, and the panel follows an edit", async ({ page }) => {

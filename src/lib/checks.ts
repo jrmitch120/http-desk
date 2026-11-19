@@ -214,24 +214,36 @@ export function requestScope(file: HttpFile, req: Request, outside: OutsideScope
   });
 }
 
-const keptReferences = new WeakMap<Request, { outside: OutsideScope; declared: string; shot: string; checks: Check[] }>();
-
 /**
- * `referenceChecks` of each request of `file`, in order, seeing `outside` too. Kept per
- * request while it reads the same (`docSnapshot`), `outside` is the same object and what
- * the file declares (its variables and each request's `# @name`) is unchanged: a file
- * view of a thousand requests asks again after each edit, and most edits change one request.
+ * `referenceChecks` of each request of a file read from its text (each request's `raw`
+ * is its block as written), seeing `outside` too. One per view that asks again after each
+ * edit (a file view): a request's are kept, by its block's text, while `outside` is the
+ * same object and what the file declares (its variables and each request's `# @name`) is
+ * unchanged, from the last two readings. A file of a thousand requests is mostly so.
  */
-export function fileReferenceChecks(file: HttpFile, outside: OutsideScope): Check[][] {
-  const declared = JSON.stringify([fileVariables(file), file.header.variables, file.requests.map((r) => getDirective(r, "name")?.trim() ?? "")]);
-  return file.requests.map((req) => {
-    const shot = docSnapshot(req);
-    const known = keptReferences.get(req);
-    if (known && known.outside === outside && known.declared === declared && known.shot === shot) return known.checks;
-    const checks = referenceChecks(req, requestScope(file, req, outside), file.requests);
-    keptReferences.set(req, { outside, declared, shot, checks });
-    return checks;
-  });
+export class ReferenceChecks {
+  private current = new Map<string, Check[]>();
+  private previous = new Map<string, Check[]>();
+  private scope: { outside: OutsideScope; declared: string } | null = null;
+
+  of(file: HttpFile, outside: OutsideScope): Check[][] {
+    const declared = JSON.stringify([fileVariables(file), file.header.variables, file.requests.map((r) => getDirective(r, "name")?.trim() ?? "")]);
+    if (this.scope?.outside !== outside || this.scope.declared !== declared) {
+      this.scope = { outside, declared };
+      this.current = new Map();
+      this.previous = new Map();
+    }
+    const found = new Map<string, Check[]>();
+    const out = file.requests.map((req) => {
+      const key = req.raw ?? docSnapshot(req);
+      const checks = this.current.get(key) ?? this.previous.get(key) ?? referenceChecks(req, requestScope(file, req, outside), file.requests);
+      found.set(key, checks);
+      return checks;
+    });
+    this.previous = this.current;
+    this.current = found;
+    return out;
+  }
 }
 
 /**

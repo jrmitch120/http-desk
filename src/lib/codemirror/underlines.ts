@@ -7,6 +7,7 @@ import { StateEffect, StateField, type EditorState, type Extension } from "@code
 import { Decoration, EditorView, hoverTooltip, type DecorationSet } from "@codemirror/view";
 import type { Check } from "../checks";
 import { segments } from "../http";
+import type { HttpFile } from "../types";
 
 export interface Underline {
   from: number;
@@ -62,6 +63,27 @@ export function checkUnderlines(text: string, checks: Check[]): Underline[] {
     });
   }
   return out.sort((a, b) => a.from - b.from);
+}
+
+/** A whole file's text as it was read into `file`: each part as written. */
+export function textRead(file: HttpFile): string {
+  return (file.header.raw ?? "") + file.requests.map((r) => r.leading + (r.raw ?? "")).join("") + file.trailing;
+}
+
+/**
+ * Where each request's `checks` (the `i`th, its request's) show in the text `file` was
+ * read from (`textRead`), as `checkUnderlines` places them in its block: a file view's
+ * or the Problems panel's Undefined variables and shared `# @name`s.
+ */
+export function fileUnderlines(file: HttpFile, checks: Check[][]): Underline[] {
+  let at = (file.header.raw ?? "").length;
+  return file.requests.flatMap((req, i) => {
+    at += req.leading.length;
+    const block = req.raw ?? "";
+    const start = at;
+    at += block.length;
+    return checks[i]?.length ? checkUnderlines(block, checks[i]).map((u) => ({ ...u, from: u.from + start, to: u.to + start })) : [];
+  });
 }
 
 interface Marked {

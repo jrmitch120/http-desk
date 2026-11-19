@@ -81,3 +81,33 @@ test("the Request menu opens the active request's file as text, and the tab come
   await expect(line(page, "### Create pet")).toBeVisible();
   await expect(tab(page, "List pets")).toBeVisible();
 });
+
+test("a request tab's File button shows its request in the file view, and the file view's Request button goes back to the one under the cursor", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await viewAsText(page).click();
+  await expect(activeTab(page)).toContainText("pets.http");
+  await expect(page.getByRole("navigation", { name: "Outline" }).locator('[aria-current="true"]')).toContainText("Create pet");
+
+  await line(page, "GET {{baseUrl}}/pets?limit=20").click();
+  await page.getByRole("button", { name: "Request", exact: true }).click();
+  await expect(activeTab(page)).toContainText("List pets");
+});
+
+test("the file view underlines an Undefined variable and a shared # @name, as each request's tab does", async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, "api").click();
+  await treeMenu(page, "pets.http", "View as text");
+  await line(page, "### Create pet").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\n# @name twin");
+  await line(page, "POST {{baseUrl}}/pets").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("/{{nowhere}}");
+  await line(page, "### List pets").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\n# @name twin");
+
+  await expect(fileView(page).locator(".cm-underline-warning", { hasText: "{{nowhere}}" })).toHaveAttribute("data-message", "{{nowhere}} is undefined");
+  await expect(fileView(page).locator(".cm-underline-warning", { hasText: "@name twin" })).toHaveCount(2);
+});

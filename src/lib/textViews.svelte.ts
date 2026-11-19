@@ -225,14 +225,15 @@ export class TextViews {
   }
 
   /**
-   * What the core finds in `text`, shown in the file view of `path`: its problems, and
-   * the lines that behave differently in VS Code or Rider. Read a block at a time, as
-   * typed text is read into the document.
+   * What the core finds in `text`, shown in the file view of `path`: what it reads as (its
+   * requests' blocks as written, so whatever is found in them can be placed in it), its
+   * problems, and the lines that behave differently in VS Code or Rider. Read a block at a
+   * time, as typed text is read into the document.
    */
-  async findings(path: string, text: string): Promise<{ problems: Problem[]; portability: PortabilityMark[] }> {
+  async findings(path: string, text: string): Promise<{ file: HttpFile | null; problems: Problem[]; portability: PortabilityMark[] }> {
     const reader = this.reader(path);
     const [parsed, portability] = await Promise.all([reader.parse(text), reader.portability(text)]);
-    return { problems: parsed.problems, portability };
+    return { file: parsed.file, problems: parsed.problems, portability };
   }
 
   /** Reads typed `text` into what `view` stands for, unless more typing or another edit came since. */

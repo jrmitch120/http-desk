@@ -5,8 +5,8 @@
 // (the page knows the selected environment and the Session). Portability notes take the
 // level the setting gives them (`app.portabilityLevel`): notes, or warnings for teams
 // that need files to work in both editors. None of it ever blocks a send.
-import { differingLines, differsText, fileReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
-import { checkUnderlines } from "./codemirror/underlines";
+import { differingLines, differsText, ReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
+import { fileUnderlines, textRead } from "./codemirror/underlines";
 import type { FileProblems, HttpFile } from "./types";
 
 export interface ProblemEntry {
@@ -32,17 +32,18 @@ export interface ProblemFile {
  * is what that text reads as (the shell's), so its verbatim text places each.
  */
 function referenceEntries(file: HttpFile, outside: OutsideScope): ProblemEntry[] {
-  const checks = fileReferenceChecks(file, outside);
-  const lines = (text: string | null) => (text ? text.split("\n").length - 1 : 0);
-  let before = lines(file.header.raw);
-  return file.requests.flatMap((req, i) => {
-    before += lines(req.leading);
-    const block = req.raw ?? "";
-    const at = before;
-    before += lines(block);
-    if (!checks[i].length) return [];
-    const lineOf = (offset: number) => lines(block.slice(0, offset)) + 1;
-    return checkUnderlines(block, checks[i]).map((u) => ({ line: at + lineOf(u.from), tone: u.severity, message: u.message }));
+  const underlines = fileUnderlines(file, new ReferenceChecks().of(file, outside));
+  if (!underlines.length) return [];
+  const text = textRead(file);
+  let line = 1;
+  let at = 0;
+  // In order of the text: each line counted once.
+  return underlines.map((u) => {
+    for (let nl = text.indexOf("\n", at); nl >= 0 && nl < u.from; nl = text.indexOf("\n", nl + 1)) {
+      line++;
+      at = nl + 1;
+    }
+    return { line, tone: u.severity, message: u.message };
   });
 }
 
