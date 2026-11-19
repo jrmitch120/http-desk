@@ -1,6 +1,6 @@
 // A read-only region: every CodeMirror field and editor in it reads as read-only while it
 // holds, without each component between passing a prop down. A request tab is one while
-// another view of its file holds text that doesn't parse (`app.viewLock`, #174). Native
+// a view of its file holds text that doesn't parse (`app.texts.lock`, #174). Native
 // controls in the region are disabled by a `<fieldset disabled>` around them.
 import { getContext, setContext } from "svelte";
 

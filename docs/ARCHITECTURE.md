@@ -75,6 +75,9 @@ src/                    Svelte 5 frontend
   lib/layout.ts, lib/layoutStore.svelte.ts  the Layout's shape and paths; the Layout store (saving as it settles, restoring when a workspace opens)
   lib/tabView.ts        a tab (`Tab`, `newTab`, a file view's `newFileTab`) and its view: request section and response view
   components/FileView.svelte  a file view: the whole `.http` file as one editable text (#166)
+  lib/textViews.svelte.ts  text typed in a document's views (a request's Source view, the file view): reading it in, what doesn't parse, the read-only locks and the refusals (#163, #164, #166, #174)
+  lib/snapshots.svelte.ts  a document's requests and file as JSON, kept by Svelte, for dirty checks and `FileStamp`
+  lib/splice.ts         the shared start and end of an old and a new sequence (`sharedEnds`): only the span between is replaced
 vendor/serde_json_path_core/  patched copy (exact number comparisons in filters; see its PATCHED file)
 ```
 
@@ -1085,15 +1088,23 @@ Decisions made during implementation, beyond the plan above:
   ⌥⌘U / Ctrl+Alt+U (a browser's View Source key) switches between it and the sections.
   **The source is editable** (#163), and the request stays authoritative: the text shown
   is the core's `request_source` (the text before the request and its block, as written
-  where the request still matches it). What the user types is kept per request in the
-  store (`Doc.sources`, `app.editSource` / `sourceText` / `isSourceInvalid`) and read by
-  the core's `parse_request` after a 150 ms pause, or at once on Save and Send. Text that
+  where the request still matches it). What the user types is kept per request
+  (`Doc.sources`) by the store's `TextViews` sub-store (`src/lib/textViews.svelte.ts`,
+  `app.texts`, host-backed like the Layout and History stores), which holds one
+  implementation for a Source view and the file view (`TextView`: `{ kind: "request", key }`
+  or `{ kind: "file" }`; `edit`, `typed`, `isInvalid`, `textFor`, `follow`, `unparsed`,
+  `lock`, `blocked`), and read by the core's `parse_request` after a pause
+  (`TEXT_READ_DELAY_MS`, 150 ms), or at once on Save and Send. Text that
   parses replaces the request, so the sections follow; text that doesn't (no request
-  line, or an error problem) leaves the request at its last valid state and reads dirty.
+  line, or an error problem, `text-after-request` among them: a second `###` block)
+  leaves the request at its last valid state and reads dirty. The body files the text
+  reads are found while it doesn't parse too, so a missing `< file` is still flagged.
   **Saving** in that state (Save, Save all, saving on close or quit) asks first, for each
   such text (`app.settleUnparsed` / `askWhatToKeep`, #164): *Save as written* saves the
   request the parser recovered from the text, which the serializer writes as that text
-  byte for byte (lines that don't parse stay in it verbatim); *Revert to last valid* drops
+  byte for byte (lines that don't parse stay in it verbatim, and text after a second `###`
+  goes into the file right after the request, as the requests and text it reads as, with
+  new keys); *Revert to last valid* drops
   the text and saves the last valid request; Cancel saves nothing. Every answer is given
   before any is applied, so Cancel leaves everything as it was. Text with no request line
   can only be reverted. A change that came from the source doesn't render it again
@@ -1108,23 +1119,34 @@ Decisions made during implementation, beyond the plan above:
   line folds. It works as the Source view does, a file at a time: the text shown is the
   core's `file_text` (the serializer, so untouched requests as written; with `\n` line
   breaks and no BOM, which the file keeps), what's typed is kept in `Doc.fileText`
-  (`app.editFileText` / `fileText` / `isFileTextInvalid` / `fileTextFor`) and read by
+  (`app.texts` with the file view, `{ kind: "file" }`) and read by
   `parse_file_text` after the same pause, or at once on Save and Send. Text that parses
   replaces the document's file: each request keeps its key (and its object, if unchanged)
   where the edit left it (`carryKeys`: the requests before and after the edited part
   as they were, those between found as a reload finds them), so the file's request tabs
   follow and stay in sync both ways; a request gone from the text closes its tabs. Text
   that doesn't parse leaves the file at its last valid state and reads dirty.
-  **While one view holds text that doesn't parse, the views it would conflict with are
-  read-only** (#174, `app.viewLock(tab)`, which also says why for the view's banner): the
-  file view's text locks every request tab of the file, and a request's source text locks
-  the file view (other request tabs stay editable: an edit to another request leaves that
-  text standing). Nothing is refused from opening. A locked view is a read-only region
+  **While a view holds text that doesn't parse, nothing else may change what that text
+  stands for** (#174): the file view's text stands for the whole file, a Source view's for
+  its request. Changed otherwise, the text would stop standing for it and be dropped
+  unseen, so instead: the views that could change it are read-only (`app.texts.lock(tab)`,
+  which also says why for the view's banner): the file view's text locks every request tab
+  of the file; a request's source text locks the file view and its own tab's sections, URL
+  bar and check strip (its source stays editable: `ReadOnlyRegion.svelte` gives the source
+  editor a region of its own); other request tabs stay editable, since an edit to another
+  request leaves that text standing. And every action from outside the views that would
+  change it is refused, changing nothing, with a toast saying why (`app.texts.blocked`,
+  the store's `refused`): explorer New request, Duplicate (while the file view's text
+  doesn't parse), Rename and Delete request, Restore request from History, Rename
+  variable (checked for every file it would rewrite before anything is written), the
+  check strip's Add File variable fix and Extract to variable. Deleting, moving or
+  reloading the file itself, and closing a view with Don't save, are the user discarding
+  the text and go ahead. Nothing is refused from opening. A locked view is a read-only region
   (`src/lib/codemirror/readOnly.ts`, a Svelte context): its CodeMirror fields and editors
   take `EditorState.readOnly` (keeping their undo history), and its other controls sit in
   a `<fieldset disabled>`; Send still sends the request as it last read. Saving the file
   view in that state asks Save as written / Revert to last valid as a request does
-  (`unparsedTexts` gives it after the file's requests, so where both hold text the file
+  (`app.texts.unparsed` gives it after the file's requests, so where both hold text the file
   view's answer is applied last and is what's saved). A file
   view is part of the Layout (`{ kind: "file", path }`). `app.openFileView(path, { line })`
   opens it scrolled to a line, `{ key }` to a request.
