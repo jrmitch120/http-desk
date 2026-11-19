@@ -63,7 +63,11 @@ fn each_problem_code_is_reported_at_its_place_in_the_requests_source() {
     );
     assert_eq!(
         problems_of(&h, &root.join("header-after-body.http")),
-        [problem(0, 5, 1, "warning", "header-after-body"), problem(0, 6, 1, "warning", "header-after-body")]
+        [
+            problem(0, 5, 1, "warning", "header-after-body"),
+            problem(0, 6, 1, "warning", "header-after-body"),
+            problem(5, 5, 1, "warning", "header-after-body")
+        ]
     );
     assert_eq!(
         problems_of(&h, &root.join("unknown-directive.http")),

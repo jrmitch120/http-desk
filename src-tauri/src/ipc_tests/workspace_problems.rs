@@ -82,7 +82,11 @@ fn every_files_problems_and_portability_notes_are_listed_by_line_in_the_file() {
             (
                 "header-after-body.http".into(),
                 (
-                    vec![problem(5, 1, "warning", "header-after-body"), problem(6, 1, "warning", "header-after-body")],
+                    vec![
+                        problem(5, 1, "warning", "header-after-body"),
+                        problem(6, 1, "warning", "header-after-body"),
+                        problem(42, 1, "warning", "header-after-body")
+                    ],
                     vec![]
                 )
             ),

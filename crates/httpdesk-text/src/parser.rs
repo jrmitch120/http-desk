@@ -75,12 +75,14 @@ fn read_file(text: &str, files: &mut Vec<BodyFile>) -> ParsedFile {
     };
     let crlf = text.matches("\r\n").count();
     let lf = text.matches('\n').count() - crlf;
-    // Mixed endings are kept as written: the text is read as LF, and every `\r`
-    // stays in the verbatim text, so it saves back byte for byte.
-    let line_ending = if crlf > 0 && lf == 0 { LineEnding::Crlf } else { LineEnding::Lf };
-    let normalized = if line_ending == LineEnding::Crlf { text.replace("\r\n", "\n") } else { text.to_string() };
+    // New and edited text gets the ending most lines have. Mixed endings are kept as
+    // written: the text is read as it is, and every `\r` stays in the verbatim text, so
+    // it saves back byte for byte. Text with only CRLF is read as LF.
+    let line_ending = if crlf > lf { LineEnding::Crlf } else { LineEnding::Lf };
+    let mixed_endings = crlf > 0 && lf > 0;
+    let normalized = if crlf > 0 && lf == 0 { text.replace("\r\n", "\n") } else { text.to_string() };
 
-    let mut file = HttpFile { line_ending, bom, ..Default::default() };
+    let mut file = HttpFile { line_ending, mixed_endings, bom, ..Default::default() };
     let mut pending = String::new();
     // Lines before the current block.
     let mut lines_before = 0;
@@ -94,12 +96,9 @@ fn read_file(text: &str, files: &mut Vec<BodyFile>) -> ParsedFile {
         let (mut found, mut named) = (Vec::new(), Vec::new());
         match read_block(&raw, &mut found, &mut named) {
             Some((mut req, _)) => {
-                problems.extend(found.into_iter().map(|p| Problem { line: block_line + p.line, ..p }));
-                files.extend(
-                    named
-                        .into_iter()
-                        .map(|f| BodyFile { missing: Problem { line: block_line + f.missing.line, ..f.missing }, ..f }),
-                );
+                place(&mut found, &mut named, block_line);
+                problems.extend(found);
+                files.extend(named);
                 req.leading = std::mem::take(&mut pending);
                 req.raw = Some(raw);
                 file.requests.push(req);
@@ -116,7 +115,8 @@ fn read_file(text: &str, files: &mut Vec<BodyFile>) -> ParsedFile {
 /// first request in it, read as [`parse`] reads it, with its text kept as written
 /// (line endings included) and everything before it, a byte order mark too, as
 /// its `leading` text, so [`crate::serializer::request_source`] gives the text
-/// back. Text after the first request isn't read.
+/// back. Text after the request's block, from the next `###` on, is an error (a
+/// request's text holds one block), kept as [`ParsedRequest::following`].
 pub fn parse_request(text: &str) -> ParsedRequest {
     let (bom, text) = match text.strip_prefix(BOM) {
         Some(rest) => (true, rest),
@@ -124,19 +124,55 @@ pub fn parse_request(text: &str) -> ParsedRequest {
     };
     let mut leading = String::from(if bom { "\u{FEFF}" } else { "" });
     let mut lines_before = 0;
-    for raw in split_blocks(text) {
+    let mut blocks = split_blocks(text).into_iter();
+    for raw in blocks.by_ref() {
         let block_line = lines_before;
         lines_before += raw.matches('\n').count();
-        let mut found = Vec::new();
-        match parse_block_reporting(&raw, &mut found) {
-            Some((req, _)) => {
-                let problems = found.into_iter().map(|p| Problem { line: block_line + p.line, ..p }).collect();
-                return ParsedRequest { request: Some(Request { leading, raw: Some(raw), ..req }), problems };
-            }
-            None => leading.push_str(&raw),
+        let (mut problems, mut files) = (Vec::new(), Vec::new());
+        let Some((req, _)) = read_block(&raw, &mut problems, &mut files) else {
+            leading.push_str(&raw);
+            continue;
+        };
+        place(&mut problems, &mut files, block_line);
+        let request = Some(Request { leading, raw: Some(raw), ..req });
+        let rest: Vec<String> = blocks.collect();
+        if rest.is_empty() {
+            return ParsedRequest { request, problems, files, following: None };
         }
+        problems.push(Problem {
+            line: lines_before + 1,
+            column: 1,
+            severity: Severity::Error,
+            code: ProblemCode::TextAfterRequest,
+            message: "This ### starts another block, and a request's text holds only one: the text from here on isn't part of this request. Save as written adds it to the file after the request".to_string(),
+        });
+        let mut following = Following::default();
+        for raw in rest {
+            let block_line = lines_before;
+            lines_before += raw.matches('\n').count();
+            let (mut found, mut named) = (Vec::new(), Vec::new());
+            match read_block(&raw, &mut found, &mut named) {
+                Some((req, _)) => {
+                    place(&mut found, &mut named, block_line);
+                    problems.extend(found);
+                    files.extend(named);
+                    let leading = std::mem::take(&mut following.trailing);
+                    following.requests.push(Request { leading, raw: Some(raw), ..req });
+                }
+                None => following.trailing.push_str(&raw),
+            }
+        }
+        return ParsedRequest { request, problems, files, following: Some(following) };
     }
-    ParsedRequest { request: None, problems: Vec::new() }
+    ParsedRequest { request: None, problems: Vec::new(), files: Vec::new(), following: None }
+}
+
+/// Moves what was found reading a block (lines counted from its first) to the text the
+/// block is in, `lines_before` lines below its start.
+fn place(problems: &mut [Problem], files: &mut [BodyFile], lines_before: usize) {
+    for p in problems.iter_mut().chain(files.iter_mut().map(|f| &mut f.missing)) {
+        p.line += lines_before;
+    }
 }
 
 /// What reading `req`'s text as the Source view shows it ([`crate::serializer::request_source`])
@@ -148,10 +184,7 @@ pub fn request_problems(req: &Request) -> RequestProblems {
     let (mut problems, mut files) = (Vec::new(), Vec::new());
     read_block(&text, &mut problems, &mut files);
     // The text before the block (`leading`) comes first in the Source view.
-    let below = req.leading.matches('\n').count();
-    for p in problems.iter_mut().chain(files.iter_mut().map(|f| &mut f.missing)) {
-        p.line += below;
-    }
+    place(&mut problems, &mut files, req.leading.matches('\n').count());
     RequestProblems { problems, files }
 }
 
@@ -651,9 +684,15 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
     // ---- body + response handler ----
     let rest = &lines[idx.min(lines.len())..];
     let handler_at = rest.iter().position(|l| is_handler_start(l)).unwrap_or(rest.len());
-    // Header lines the body starts with: probably meant as headers, before a stray blank line.
+    // Header lines the body starts with: probably meant as headers, before a stray blank
+    // line. Unless the request's Content-Type says the body is one that may start with a
+    // `Name: value` line (text, YAML, …): only one without, or JSON, XML or a form, can't.
     let body_at = idx + rest[..handler_at].iter().take_while(|l| l.trim().is_empty()).count();
-    for i in (body_at..idx + handler_at).take_while(|&i| looks_like_header(lines[i])) {
+    let content_type = header_items.iter().find(|(d, kv)| *d == 0 && kv.name.eq_ignore_ascii_case("content-type"));
+    let headers_unlikely = content_type.is_none_or(|(_, kv)| {
+        matches!(detect_body_mode(Some(&kv.value), "body"), BodyMode::Json | BodyMode::Xml | BodyMode::FormUrlEncoded)
+    });
+    for i in (body_at..idx + handler_at).take_while(|&i| headers_unlikely && looks_like_header(lines[i])) {
         problems.push(problem_at(
             &lines,
             i,

@@ -28,7 +28,9 @@ fn header_lines_that_start_the_body_are_headers_after_the_body() {
         problems_in("header-after-body.http"),
         [
             (5, 1, Severity::Warning, ProblemCode::HeaderAfterBody),
-            (6, 1, Severity::Warning, ProblemCode::HeaderAfterBody)
+            (6, 1, Severity::Warning, ProblemCode::HeaderAfterBody),
+            // A text or YAML body may start with `Name: value`; a JSON body can't.
+            (42, 1, Severity::Warning, ProblemCode::HeaderAfterBody)
         ]
     );
 }
@@ -73,7 +75,10 @@ fn request_problems_in(name: &str) -> Vec<(usize, usize, usize, ProblemCode)> {
 fn a_requests_problems_are_placed_in_its_source() {
     use ProblemCode::*;
     assert_eq!(request_problems_in("unparseable-request-line.http"), [(1, 3, 1, UnparseableRequestLine)]);
-    assert_eq!(request_problems_in("header-after-body.http"), [(0, 5, 1, HeaderAfterBody), (0, 6, 1, HeaderAfterBody)]);
+    assert_eq!(
+        request_problems_in("header-after-body.http"),
+        [(0, 5, 1, HeaderAfterBody), (0, 6, 1, HeaderAfterBody), (5, 5, 1, HeaderAfterBody)]
+    );
     assert_eq!(request_problems_in("unknown-directive.http"), [(1, 3, 3, UnknownDirective)]);
 }
 
@@ -109,4 +114,40 @@ fn only_a_file_the_body_sends_is_read() {
     // Nor is a disabled multipart part.
     let multipart = "POST https://e.com\nContent-Type: multipart/form-data; boundary=B\n\n--B\n#~ Content-Disposition: form-data; name=\"a\"\n#~\n#~ < ./a.png\n--B--\n";
     assert_eq!(files(multipart), Vec::<String>::new());
+}
+
+#[test]
+fn text_after_a_second_separator_in_a_requests_text_is_an_error_and_is_kept() {
+    let text = "### List\nGET https://a\n\n### Create\nPOST https://b\n# the end\n";
+    let parsed = parse_request(text);
+    let found: Vec<_> = parsed.problems.iter().map(|p| (p.line, p.column, p.severity, p.code)).collect();
+    assert_eq!(found, [(4, 1, Severity::Error, ProblemCode::TextAfterRequest)]);
+    assert_eq!(parsed.request.as_ref().unwrap().url, "https://a");
+    let following = parsed.following.expect("the text after the request");
+    assert_eq!(following.requests.iter().map(|r| r.url.as_str()).collect::<Vec<_>>(), ["https://b"]);
+    assert_eq!(following.trailing, "");
+    assert_eq!(request_source(&parsed.request.unwrap()) + &following.text(), text);
+
+    // A block with no request line after it is text after the request too.
+    let parsed = parse_request("GET https://a\n###\n# notes\n");
+    assert_eq!(
+        parsed.problems.iter().map(|p| (p.line, p.code)).collect::<Vec<_>>(),
+        [(2, ProblemCode::TextAfterRequest)]
+    );
+    assert_eq!(parsed.following.unwrap().trailing, "###\n# notes\n");
+
+    // The following requests' own problems are placed in the text too.
+    let parsed = parse_request("GET https://a\n### B\nGET https://b c\n");
+    assert_eq!(
+        parsed.problems.iter().map(|p| (p.line, p.code)).collect::<Vec<_>>(),
+        [(2, ProblemCode::TextAfterRequest), (3, ProblemCode::UnparseableRequestLine)]
+    );
+    assert_eq!(parse_request("GET https://a\n").following, None);
+}
+
+#[test]
+fn a_single_requests_body_files_are_placed_in_its_own_text() {
+    let parsed = parse_request("# notes\n\nPOST https://a\n\n< ./missing.json\n");
+    let files: Vec<_> = parsed.files.iter().map(|f| (f.path.as_str(), f.missing.line)).collect();
+    assert_eq!(files, [("./missing.json", 5)]);
 }

@@ -169,16 +169,24 @@ proptest! {
     #[test]
     fn a_single_requests_text_renders_back_byte_for_byte(text in request_text_strategy()) {
         let parsed = parse_request(&text);
-        if let Some(req) = parsed.request {
-            prop_assert_eq!(request_source(&req), text);
+        match parsed.request {
+            Some(req) => {
+                // Nothing is lost: the text after the request's block is kept, and reported.
+                let after = parsed.following.as_ref().map(|f| f.text()).unwrap_or_default();
+                prop_assert_eq!(request_source(&req) + &after, text.clone());
+                let reported = parsed.problems.iter().any(|p| p.code == ProblemCode::TextAfterRequest && p.severity == Severity::Error);
+                prop_assert_eq!(reported, parsed.following.is_some());
+            }
+            // Only text a file reads no request in either.
+            None => prop_assert!(parse(&text).requests.is_empty(), "{:?}", text),
         }
     }
 }
 
-/// A single request's text: like [`http_text`], with no `###` except, sometimes,
-/// on the first line, and a request line somewhere.
+/// A single request's text: like [`http_text`], sometimes starting with `###`, with a
+/// request line somewhere, and `###` lines anywhere (blocks after the request's own).
 fn request_text_strategy() -> impl Strategy<Value = String> {
-    let body = prop::collection::vec(line().prop_filter("no separator", |l| !l.starts_with("###")), 0..16);
+    let body = prop::collection::vec(line(), 0..16);
     (prop::option::of(prop::sample::select(vec!["###", "### Named"])), body, "(GET|post|FOO) [a-z/:{} ]{1,12}")
         .prop_flat_map(|(separator, mut lines, request_line)| {
             let at = lines.len() / 2;

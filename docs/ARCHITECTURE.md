@@ -140,11 +140,14 @@ Only requests the user actually edited are re-emitted in canonical form. Effects
   rest of that request keeps its formatting too (`scripts_in_place` in the serializer).
 * Diffs in source control stay small.
 
-**Line endings.** The parser counts CRLF and bare LF line breaks. A file with only CRLF
-breaks is CRLF: its text is normalized to LF in memory and the whole file is written back
-with CRLF. Any other file is LF. A file with mixed endings isn't normalized: every `\r`
-stays in the verbatim text, so it saves back as written, and a request edited in it is
-written with LF.
+**Line endings.** The parser counts CRLF and bare LF line breaks. The ending most breaks
+have is the file's (`line_ending`; CRLF only with more CRLF than LF). A file with only CRLF
+breaks is normalized to LF in memory and the whole file is written back with CRLF. A file
+with mixed endings (`mixed_endings`) isn't normalized: every `\r` stays in the verbatim
+text, so what isn't edited saves back as written, byte for byte, and text written anew (an
+edited or added request or header, a `###` or blank line put between blocks) gets the
+file's ending. The file view and Source view keep each line's own ending too (see
+"Line endings in the views" below).
 
 **Byte order mark.** A leading UTF-8 BOM is stripped before parsing, so it can't hide
 the first request's `###` or method, and is recorded in `HttpFile.bom`. Saving writes it
@@ -198,7 +201,8 @@ characters), severity, code and message. Reporting never changes what is built. 
 | Code | Severity | When |
 |---|---|---|
 | `unparseable-request-line` | error | The request line's URL has whitespace outside `{{ }}`, so it isn't `[METHOD] URL [HTTP/version]`. |
-| `header-after-body` | warning | Each `Name: value` line (an RFC 9110 token name at column 0, not a `://` URL) that the body starts with. |
+| `header-after-body` | warning | Each `Name: value` line (an RFC 9110 token name at column 0, not a `://` URL) that the body starts with, unless the request's Content-Type names a body that may start with one: only a request with no Content-Type, or a JSON, XML or form one, reports it (a text or YAML body doesn't). |
+| `text-after-request` | error | In a single request's text (`parse_request`, a Source view): a `###` after the request's block. The text from there on is kept as `following` (its requests and the text after them, their own problems reported too), so the text reads as not parsing and Save as written adds it to the file after the request. |
 | `unknown-directive` | warning | A `# @tag` above the request line that JetBrains, VS Code and HttpDesk all ignore (`KNOWN_DIRECTIVES`, matched ignoring case). |
 
 Blocks with no request line (the file header, `leading` and `trailing` text) report nothing.
@@ -252,7 +256,8 @@ HttpFile {
     header: FileHeader { comments, variables: Vec<Variable>, raw: Option<String> },
     requests: Vec<Request>,
     trailing: String,           // non-request text after the last request
-    line_ending: Lf | Crlf,     // Crlf only if every break is CRLF (mixed text is kept as written)
+    line_ending: Lf | Crlf,     // most breaks' ending: what text written anew gets
+    mixed_endings: bool,        // both CRLF and LF: read as written, each `\r` kept
     bom: bool,                  // the file started with a UTF-8 BOM
 }
 

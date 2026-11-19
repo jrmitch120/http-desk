@@ -29,7 +29,7 @@ fn parse_request_reads_the_first_request_in_text() {
 fn parse_request_gives_no_request_for_text_with_none() {
     assert_eq!(
         call("parse_request", json!({ "text": "# just a comment\n" })),
-        json!({ "request": null, "problems": [] })
+        json!({ "request": null, "problems": [], "files": [], "following": null })
     );
 }
 

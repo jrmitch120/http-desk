@@ -48,3 +48,18 @@ fn a_file_saved_as_written_reads_back_as_the_parser_recovers_it() {
     // Saved again unchanged, it is the same text.
     assert_eq!(try_serialize(&read.file).unwrap(), text);
 }
+
+#[test]
+fn a_request_saved_as_written_with_another_block_after_it_saves_that_block_after_it() {
+    let source = request_source(&parse(FILE).requests[1]);
+    let typed = format!("{source}### Typed too\nGET {{{{host}}}}/typed\n\n# a note\n");
+    let parsed = parse_request(&typed);
+    assert!(parsed.problems.iter().any(|p| p.code == ProblemCode::TextAfterRequest));
+    let following = parsed.following.unwrap();
+    let mut file = parse(FILE);
+    file.requests[1] = parsed.request.unwrap();
+    // As the store saves it: the requests that follow it, then their trailing text before the next one.
+    file.requests[2].leading = following.trailing.clone() + &file.requests[2].leading;
+    file.requests.splice(2..2, following.requests);
+    assert_eq!(try_serialize(&file).unwrap(), FILE.replace(&source, &typed));
+}

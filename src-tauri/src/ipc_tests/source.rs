@@ -27,8 +27,15 @@ fn parse_request_gives_the_request_and_its_problems() {
 
     assert_eq!(
         h.ok("parse_request", json!({ "text": "# only a comment\n" })),
-        json!({ "request": null, "problems": [] })
+        json!({ "request": null, "problems": [], "files": [], "following": null })
     );
+
+    // A second block is reported, and kept.
+    let two = h.ok("parse_request", json!({ "text": "GET https://a\n\n### B\nGET https://b\n" }));
+    assert_eq!(two["problems"][0]["code"], "text-after-request");
+    assert_eq!(two["problems"][0]["severity"], "error");
+    assert_eq!(two["following"]["requests"][0]["url"], "https://b");
+    assert_eq!(two["following"]["trailing"], "");
 }
 
 /// Every request of every `.http` file in `text`, as the webview has them.

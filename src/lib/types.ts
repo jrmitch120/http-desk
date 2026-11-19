@@ -113,6 +113,22 @@ export interface Request {
 export interface ParsedRequest {
   request: Request | null;
   problems: Problem[];
+  /** The files the request's body is read from, placed in the text. */
+  files: BodyFile[];
+  /**
+   * The text after the request's block, from the next `###` on (null: none): a request's
+   * text holds one block, so it's reported (`text-after-request`), and kept: Save as
+   * written puts it in the file after the request.
+   */
+  following: Following | null;
+}
+
+/** The text after a single request's block, read as a file reads it (`ParsedRequest.following`). */
+export interface Following {
+  /** Each with the text before it as its `leading`. */
+  requests: Request[];
+  /** The text after the last of them. */
+  trailing: string;
 }
 
 /** A whole file's text read by the core (`parse_file_text`): the file and the problems found reading it. */
@@ -131,7 +147,10 @@ export interface HttpFile {
   header: FileHeader;
   requests: Request[];
   trailing: string;
+  /** Most of its line breaks' ending: what text written anew gets. */
   lineEnding: LineEnding;
+  /** It has both CRLF and LF breaks, so its text is kept as written, each `\r` in place (the core's `mixed_endings`). */
+  mixedEndings?: boolean;
   /** The file started with a UTF-8 BOM; written back on save. */
   bom: boolean;
 }
@@ -147,7 +166,7 @@ export interface Problem {
   message: string;
 }
 
-export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file";
+export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file" | "text-after-request";
 
 /** A file a request's body is read from (`< path`): as written, and the problem to report if it doesn't exist. */
 export interface BodyFile {

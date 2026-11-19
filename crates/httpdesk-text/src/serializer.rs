@@ -203,52 +203,72 @@ fn written_text(req: &Request, rendered: &str) -> Option<String> {
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
+    // In a file with mixed endings, text written anew gets the file's own (most lines'),
+    // and what's kept as written keeps its `\r`s. Any other file is written with `\n`
+    // here, and a CRLF one has every break turned to CRLF at the end.
+    let mixed_crlf = file.mixed_endings && file.line_ending == LineEnding::Crlf;
+    let eol = if mixed_crlf { "\r\n" } else { "\n" };
+    let anew = |text: &str| -> String {
+        match (file.mixed_endings, mixed_crlf) {
+            (false, _) => text.to_string(),
+            (true, false) => text.replace("\r\n", "\n"),
+            (true, true) => text.replace("\r\n", "\n").replace('\n', "\r\n"),
+        }
+    };
 
     let in_place = file.header.raw.as_deref().and_then(|raw| Some((render_header_in_place(&file.header, raw)?, raw)));
     match in_place {
         Some((text, raw)) => {
             // Blank lines are dropped once nothing else is left, unless that's how the file was.
-            if !text.trim().is_empty() || text == raw {
+            if text == raw {
                 out.push_str(&text);
+            } else if !text.trim().is_empty() {
+                out.push_str(&anew(&text));
             }
         }
         None => {
-            out.push_str(&render_header(&file.header));
+            out.push_str(&anew(&render_header(&file.header)));
             prev_rendered = !out.is_empty();
         }
     }
     for req in &file.requests {
         if !req.leading.is_empty() {
-            separate(&mut out, prev_rendered);
+            separate(&mut out, prev_rendered, eol);
             out.push_str(&req.leading);
             prev_rendered = false;
         }
         let rendered = render_request(req);
         match written_text(req, &rendered) {
             Some(raw) => {
-                separate(&mut out, prev_rendered);
+                separate(&mut out, prev_rendered, eol);
                 // Only a file's first block may omit `###`; anywhere else it would
                 // merge into the block before it.
                 if !out.is_empty() && !parser::is_separator(&raw) {
-                    out.push_str("###\n");
+                    out.push_str("###");
+                    out.push_str(eol);
                 }
-                out.push_str(&raw);
+                // As read, or with only its scripts written anew.
+                if req.raw.as_deref() == Some(raw.as_str()) {
+                    out.push_str(&raw);
+                } else {
+                    out.push_str(&anew(&raw));
+                }
                 prev_rendered = false;
             }
             None => {
-                separate(&mut out, true);
-                out.push_str(&rendered);
+                separate(&mut out, true, eol);
+                out.push_str(&anew(&rendered));
                 prev_rendered = true;
             }
         }
     }
 
     if !file.trailing.is_empty() {
-        separate(&mut out, prev_rendered);
+        separate(&mut out, prev_rendered, eol);
         out.push_str(&file.trailing);
     }
 
-    if file.line_ending == LineEnding::Crlf {
+    if file.line_ending == LineEnding::Crlf && !file.mixed_endings {
         out = out.replace('\n', "\r\n");
     }
     if file.bom {
@@ -331,16 +351,17 @@ fn splice_pre_script(block: &str, request_line: usize, old: Option<&str>, new: O
 }
 
 /// Ensures `out` ends with a newline, plus a blank line when `blank` is set.
-fn separate(out: &mut String, blank: bool) {
+/// Ends `out` with a line break, and with `blank` a blank line too, each `eol` where added.
+fn separate(out: &mut String, blank: bool, eol: &str) {
     if out.is_empty() {
         return;
     }
     if !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(eol);
     }
     // Verbatim text with mixed line endings keeps its `\r\n`.
     if blank && !out.ends_with("\n\n") && !out.ends_with("\n\r\n") {
-        out.push('\n');
+        out.push_str(eol);
     }
 }
 

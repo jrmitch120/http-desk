@@ -20,10 +20,15 @@ pub struct HttpFile {
     pub requests: Vec<Request>,
     /// Verbatim non-request text after the last request.
     pub trailing: String,
-    /// `Crlf` when every line break of the original text is CRLF: the text is read
-    /// as LF and the whole file is saved with CRLF. Text with mixed endings is `Lf`,
-    /// its `\r`s kept in the verbatim text.
+    /// The ending most of the original text's line breaks have (`Crlf` when more are CRLF
+    /// than LF): what new and edited text is written with. A file with only CRLF breaks is
+    /// read as LF and saved with CRLF throughout.
     pub line_ending: LineEnding,
+    /// The original text has both CRLF and LF breaks. It's then read as written, each
+    /// `\r` kept in its verbatim text, so what isn't edited saves back byte for byte;
+    /// only text written anew (an edited or added request, the lines between blocks)
+    /// gets [`Self::line_ending`].
+    pub mixed_endings: bool,
     /// The file started with a UTF-8 byte order mark (stripped for parsing, written back on save).
     pub bom: bool,
 }
@@ -420,6 +425,9 @@ pub enum ProblemCode {
     /// A `< path` body reference to a file that doesn't exist. The parser can't tell:
     /// it names the file ([`BodyFile`]) and the shell answers whether it exists.
     MissingFile,
+    /// A `###` after the request's block in a single request's text (a Source view): it
+    /// starts another block, which a request's text can't hold.
+    TextAfterRequest,
 }
 
 /// A file and the problems found reading it.
@@ -437,6 +445,31 @@ pub struct ParsedRequest {
     /// `None` when the text has no request line.
     pub request: Option<Request>,
     pub problems: Vec<Problem>,
+    /// The files the request's body is read from, placed in the text.
+    pub files: Vec<BodyFile>,
+    /// The text after the request's block, from the next `###` on, when there is any. A
+    /// single request's text holds one block, so it's reported ([`ProblemCode::TextAfterRequest`]),
+    /// and kept: Save as written puts it in the file after the request.
+    pub following: Option<Following>,
+}
+
+/// The text after a single request's block ([`ParsedRequest::following`]), read as a
+/// file reads it: its requests (each with the text before it as its `leading`), and
+/// the text after the last of them.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Following {
+    pub requests: Vec<Request>,
+    pub trailing: String,
+}
+
+impl Following {
+    /// The text, as read.
+    pub fn text(&self) -> String {
+        let mut text: String = self.requests.iter().map(crate::serializer::request_source).collect();
+        text.push_str(&self.trailing);
+        text
+    }
 }
 
 /// A file a request's body is read from when it's sent (`< path`, `<@ path`).
