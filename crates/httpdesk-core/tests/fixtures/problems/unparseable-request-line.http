@@ -1,0 +1,9 @@
+@host = https://example.com
+
+### Fine, even with spaces inside a variable
+GET {{ host }}/ok HTTP/1.1
+
+### A space in the URL
+# The words after it can't be a URL or an HTTP version.
+GET {{host}}/search results HTTP/1.1
+Accept: */*

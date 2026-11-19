@@ -24,9 +24,37 @@ pub const HEADER_DOC_DIRECTIVE: &str = "header";
 
 const KNOWN_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
 
+/// `# @tag` names JetBrains, VS Code or HttpDesk reads (matched ignoring case, as
+/// VS Code does). See docs/research/http-comment-compat.md, Q2.
+const KNOWN_DIRECTIVES: &[&str] = &[
+    // JetBrains
+    "name",
+    "no-redirect",
+    "no-log",
+    "no-cookie-jar",
+    "no-auto-encoding",
+    "timeout",
+    "connection-timeout",
+    "use-os-credentials",
+    // VS Code REST Client (`name`, `no-redirect` and `no-cookie-jar` too)
+    "note",
+    "prompt",
+    // HttpDesk
+    SECTION_DIRECTIVE,
+    AUTH_DIRECTIVE,
+    PARAM_DOC_DIRECTIVE,
+    HEADER_DOC_DIRECTIVE,
+];
+
 pub const BOM: char = '\u{FEFF}';
 
 pub fn parse(text: &str) -> HttpFile {
+    parse_with_problems(text).file
+}
+
+/// [`parse`], and the problems found reading the text.
+pub fn parse_with_problems(text: &str) -> ParsedFile {
+    let mut problems = Vec::new();
     let (bom, text) = match text.strip_prefix(BOM) {
         Some(rest) => (true, rest),
         None => (false, text),
@@ -40,13 +68,19 @@ pub fn parse(text: &str) -> HttpFile {
 
     let mut file = HttpFile { line_ending, bom, ..Default::default() };
     let mut pending = String::new();
+    // Lines before the current block.
+    let mut lines_before = 0;
 
     for (i, raw) in split_blocks(&normalized).into_iter().enumerate() {
+        let block_line = lines_before;
+        lines_before += raw.matches('\n').count();
         if raw.is_empty() {
             continue;
         }
-        match parse_block(&raw) {
-            Some(mut req) => {
+        let mut found = Vec::new();
+        match parse_block_reporting(&raw, &mut found) {
+            Some((mut req, _)) => {
+                problems.extend(found.into_iter().map(|p| Problem { line: block_line + p.line, ..p }));
                 req.leading = std::mem::take(&mut pending);
                 req.raw = Some(raw);
                 file.requests.push(req);
@@ -56,7 +90,34 @@ pub fn parse(text: &str) -> HttpFile {
         }
     }
     file.trailing = pending;
-    file
+    ParsedFile { file, problems }
+}
+
+/// A single request's text (a Source view, a History entry) read on its own: the
+/// first request in it, read as [`parse`] reads it, with its text kept as written
+/// (line endings included) and everything before it, a byte order mark too, as
+/// its `leading` text, so [`crate::serializer::request_source`] gives the text
+/// back. Text after the first request isn't read.
+pub fn parse_request(text: &str) -> ParsedRequest {
+    let (bom, text) = match text.strip_prefix(BOM) {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let mut leading = String::from(if bom { "\u{FEFF}" } else { "" });
+    let mut lines_before = 0;
+    for raw in split_blocks(text) {
+        let block_line = lines_before;
+        lines_before += raw.matches('\n').count();
+        let mut found = Vec::new();
+        match parse_block_reporting(&raw, &mut found) {
+            Some((req, _)) => {
+                let problems = found.into_iter().map(|p| Problem { line: block_line + p.line, ..p }).collect();
+                return ParsedRequest { request: Some(Request { leading, raw: Some(raw), ..req }), problems };
+            }
+            None => leading.push_str(&raw),
+        }
+    }
+    ParsedRequest { request: None, problems: Vec::new() }
 }
 
 /// Splits normalized text into raw blocks. Block 0 is the text before the first
@@ -185,6 +246,31 @@ fn parse_request_line(t: &str) -> (String, String, Option<String>) {
     (method, url_tokens.join(" "), version)
 }
 
+/// Whether a request line's URL has whitespace outside `{{ … }}`, so its words
+/// can't all be the URL.
+fn has_gap(url: &str) -> bool {
+    let mut rest = url;
+    loop {
+        let (before, inside) = match rest.split_once("{{") {
+            Some((before, inside)) => (before, Some(inside)),
+            None => (rest, None),
+        };
+        if before.contains(char::is_whitespace) {
+            return true;
+        }
+        match inside.and_then(|i| i.split_once("}}")) {
+            Some((_, after)) => rest = after,
+            None => return false,
+        }
+    }
+}
+
+/// A problem at the first non-blank character of the block's `index`-th line (0-based).
+fn problem_at(lines: &[&str], index: usize, severity: Severity, code: ProblemCode, message: &str) -> Problem {
+    let column = 1 + lines[index].chars().take_while(|c| c.is_whitespace()).count();
+    Problem { line: index + 1, column, severity, code, message: message.to_string() }
+}
+
 /// Parses `name=value` as written in the file into its decoded form (ADR-0001).
 pub(crate) fn parse_param(s: &str) -> KeyValue {
     let (n, v) = s.split_once('=').unwrap_or((s, ""));
@@ -204,6 +290,14 @@ fn split_header(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((name.to_string(), value.trim().to_string()))
+}
+
+/// `Name: value` at column 0 with an RFC 9110 token as the name (so a quoted JSON
+/// key isn't one) and a value that isn't a URL's `//`.
+fn looks_like_header(line: &str) -> bool {
+    let Some((name, value)) = line.split_once(':') else { return false };
+    let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
+    name.starts_with(|c: char| c.is_ascii_alphanumeric()) && name.chars().all(token) && !value.starts_with("//")
 }
 
 /// A response handler or output redirect starts at column 0 (JetBrains), so an
@@ -303,6 +397,12 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
 
 /// [`parse_block`], and which of the block's lines (0-based) is its request line.
 pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
+    parse_block_reporting(raw, &mut Vec::new())
+}
+
+/// [`parse_block_at`], adding what it couldn't read cleanly to `problems`, with
+/// lines counted from the block's first line (1-based).
+fn parse_block_reporting(raw: &str, problems: &mut Vec<Problem>) -> Option<(Request, usize)> {
     let lines: Vec<&str> = raw.lines().collect();
     let mut idx = 0;
     let mut req = Request::default();
@@ -361,7 +461,22 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
                 {
                     docs.push(d)
                 }
-                Some(d) => req.directives.push(d),
+                Some(d) => {
+                    if !KNOWN_DIRECTIVES.iter().any(|k| k.eq_ignore_ascii_case(&d.name)) {
+                        let at = line.find('@').map_or(0, |i| line[..i].chars().count());
+                        problems.push(Problem {
+                            column: at + 1,
+                            ..problem_at(
+                                &lines,
+                                idx - 1,
+                                Severity::Warning,
+                                ProblemCode::UnknownDirective,
+                                &format!("Unknown directive @{}: neither JetBrains, VS Code nor HttpDesk reads it, so it's ignored", d.name),
+                            )
+                        });
+                    }
+                    req.directives.push(d)
+                }
                 None => req.comments.push(strip_one_space(c).to_string()),
             }
             continue;
@@ -394,6 +509,15 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     let request_line_at = idx - 1;
 
     let (method, mut url, version) = parse_request_line(request_line);
+    if has_gap(&url) {
+        problems.push(problem_at(
+            &lines,
+            request_line_at,
+            Severity::Error,
+            ProblemCode::UnparseableRequestLine,
+            "Can't read this request line: it should be a method, a URL and an optional HTTP version, and a URL can't contain spaces",
+        ));
+    }
     req.method = method;
     req.http_version = version;
 
@@ -479,6 +603,17 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     // ---- body + response handler ----
     let rest = &lines[idx.min(lines.len())..];
     let handler_at = rest.iter().position(|l| is_handler_start(l)).unwrap_or(rest.len());
+    // Header lines the body starts with: probably meant as headers, before a stray blank line.
+    let body_at = idx + rest[..handler_at].iter().take_while(|l| l.trim().is_empty()).count();
+    for i in (body_at..idx + handler_at).take_while(|&i| looks_like_header(lines[i])) {
+        problems.push(problem_at(
+            &lines,
+            i,
+            Severity::Warning,
+            ProblemCode::HeaderAfterBody,
+            "This header is in the body: the blank line above it ends the headers, so it's sent as body text",
+        ));
+    }
     let body_lines = trim_blank_lines(&rest[..handler_at]);
     let handler_lines = trim_blank_lines(&rest[handler_at..]);
     if !handler_lines.is_empty() {

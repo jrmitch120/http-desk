@@ -183,6 +183,12 @@ pub fn request_text(req: &Request) -> String {
     written_text(req, &rendered).unwrap_or(rendered)
 }
 
+/// A single request's text, as [`parser::parse_request`] read it: its `leading`
+/// text, then its block as [`request_text`] writes it.
+pub fn request_source(req: &Request) -> String {
+    format!("{}{}", req.leading, request_text(req))
+}
+
 /// `req`'s text as read, where the model still matches it (`rendered`), or with
 /// only its scripts kept in place; `None` to render it.
 fn written_text(req: &Request, rendered: &str) -> Option<String> {

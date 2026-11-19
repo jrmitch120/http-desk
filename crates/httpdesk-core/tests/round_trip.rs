@@ -30,6 +30,21 @@ fn every_fixture_file_saves_back_byte_for_byte() {
     }
 }
 
+#[test]
+fn every_fixture_file_parsed_with_problems_is_the_plain_parse() {
+    for path in fixture_files() {
+        let text = read(&path);
+        assert_eq!(parse_with_problems(&text).file, parse(&text), "{}", path.display());
+    }
+}
+
+#[test]
+fn well_formed_fixture_files_have_no_problems() {
+    for path in fixture_files().iter().filter(|p| !p.parent().is_some_and(|d| d.ends_with("problems"))) {
+        assert_eq!(parse_with_problems(&read(path)).problems, [], "{}", path.display());
+    }
+}
+
 // ---------------------------------------------------------------- any text
 
 use proptest::prelude::*;
@@ -150,4 +165,44 @@ proptest! {
     fn any_text_saves_back_byte_for_byte(text in http_text()) {
         prop_assert_eq!(serialize(&parse(&text)), text);
     }
+
+    #[test]
+    fn a_single_requests_text_renders_back_byte_for_byte(text in request_text_strategy()) {
+        let parsed = parse_request(&text);
+        if let Some(req) = parsed.request {
+            prop_assert_eq!(request_source(&req), text);
+        }
+    }
+}
+
+/// A single request's text: like [`http_text`], with no `###` except, sometimes,
+/// on the first line, and a request line somewhere.
+fn request_text_strategy() -> impl Strategy<Value = String> {
+    let body = prop::collection::vec(line().prop_filter("no separator", |l| !l.starts_with("###")), 0..16);
+    (prop::option::of(prop::sample::select(vec!["###", "### Named"])), body, "(GET|post|FOO) [a-z/:{} ]{1,12}")
+        .prop_flat_map(|(separator, mut lines, request_line)| {
+            let at = lines.len() / 2;
+            lines.insert(at, request_line);
+            lines.splice(0..0, separator.map(str::to_string));
+            let n = lines.len();
+            (Just(lines), endings(n), any::<bool>(), any::<bool>())
+        })
+        .prop_map(|(lines, endings, bom, final_ending)| join(&lines, &endings, bom, final_ending))
+}
+
+#[test]
+fn a_single_request_reads_as_the_first_request_of_a_file() {
+    let text = "### Get one\r\nGET https://x?a=1\r\nAccept: */*\r\n";
+    let req = parse_request(text).request.unwrap();
+    let in_file = parse(text).requests.remove(0);
+    assert_eq!(Request { raw: None, ..req.clone() }, Request { raw: None, ..in_file });
+    assert_eq!(request_source(&req), text);
+
+    // Text before the request is kept with it.
+    let text = "\u{FEFF}# notes\n@v = 1\n\n### Get one\nGET https://x\n";
+    let req = parse_request(text).request.unwrap();
+    assert_eq!(req.leading, "\u{FEFF}# notes\n@v = 1\n\n");
+    assert_eq!(request_source(&req), text);
+
+    assert_eq!(parse_request("# only a comment\n").request, None);
 }
