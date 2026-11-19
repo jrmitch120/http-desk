@@ -88,6 +88,9 @@ test("text that doesn't parse keeps the request as it last was, and reads unsave
   await page.keyboard.press("End");
   await page.keyboard.type(" and more");
   await expect(page.getByRole("button", { name: "Save", exact: true }).locator(".dot")).toBeVisible();
+  // The typed text's problem, at its place in that text (#165's strip and underline).
+  await expect(page.getByRole("region", { name: "Pre-send checks" }).getByRole("listitem")).toHaveText([/Line 6\s*Can't read this request line/]);
+  await expect(source(page).locator(".cm-underline-error")).toHaveText("GET {{baseUrl}}/pets?limit=20 and more");
 
   await page.keyboard.press(SWITCH);
   await page.locator(".subtab", { hasText: "Params" }).click();
