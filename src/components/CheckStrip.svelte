@@ -9,7 +9,7 @@
   // the lines of its source only one of VS Code and Rider reads (the core's portability
   // table; the source marks each). It never blocks sending, and it isn't there when
   // there's nothing to list. Each kind of check renders in its own branch below.
-  import { isNote, SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
+  import { differsText, isNote, SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
   import { folderLabel } from "../lib/envFolders";
   import { joinAnd } from "../lib/http";
   import Icon from "./Icon.svelte";
@@ -43,7 +43,7 @@
           {:else if check.kind === "portability" && check.note.kind === "differs"}
             {@const n = check.note.lines.length}
             <span class="message" role="note">
-              {n === 1 ? "1 line behaves" : `${n} lines behave`} differently in {check.note.editor === "vscode" ? "VS Code" : "Rider"}: {n === 1 ? "line" : "lines"}
+              {differsText(n, check.note.editor)}: {n === 1 ? "line" : "lines"}
               {joinAnd(check.note.lines.map(String))} of the <code class="name">.http</code> source
             </span>
           {:else if check.kind === "envMissing"}

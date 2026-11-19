@@ -3,9 +3,15 @@
 // reads them off the main thread: the whole workspace when it opens (and when a folder
 // changes), one file again when the watcher reports it, and an open document, as the
 // app has it (unsaved edits and a file view's text included), shortly after each edit.
+// The page adds each file's Undefined variables and shared `# @name`s, from what the
+// shell says its text reads as (problemsList.ts), knowing the environments and the
+// Session's Global variables; the panel's list and the toggle's count are read here.
 import { untrack } from "svelte";
 import { api } from "./api";
-import type { FileProblems, OpenText } from "./types";
+import type { OutsideScope, PortabilityLevel } from "./checks";
+import { problemCount, problemFiles, type ProblemFile } from "./problemsList";
+import type { EnvironmentSet, FileProblems, OpenText } from "./types";
+import { envVariables } from "./vars";
 
 /** How long edits to an open document pause before its problems are read again. */
 export const PROBLEMS_READ_DELAY_MS = 300;
@@ -20,15 +26,47 @@ export interface ProblemsHost {
    * file, each request whose Source view holds text that doesn't parse as written there.
    */
   openText(path: string): OpenText | null;
-  /** What `openText(path)` follows, as values that stay the same objects while it's unchanged (live state: reading it tracks it). */
+  /** What `openText(path)` follows, as strings that stay the same while it's unchanged (live state: reading it tracks it). */
   openVersion(path: string): string[];
+  /** The level portability notes show at (Settings → Portability). */
+  readonly portabilityLevel: PortabilityLevel;
+  /** The environments the file at `path`'s requests use: its folder's (ADR-0004; live state). */
+  environmentsOf(path: string): EnvironmentSet | null;
+  /** The selected environment. */
+  readonly envName: string | null;
+  /** Goes up whenever the Session may have changed (its Global variables among it). */
+  readonly sessionVersion: number;
 }
 
 export class WorkspaceProblems {
   constructor(private readonly host: ProblemsHost) {}
 
-  /** Each file with something to list, by path. */
-  files = $state<Record<string, FileProblems>>({});
+  /** Each file the shell found something in (or references to look at), by path. Raw: a file comes with what its text reads as. */
+  files = $state.raw<Record<string, FileProblems>>({});
+
+  /** The Session's Global variables, which every request can use: read again whenever the Session changes (`track`). */
+  private globals = $state.raw<Record<string, string>>({});
+  private globalsRead = -1;
+
+  /** The panel's files, by path, each with its entries by line. */
+  readonly list: ProblemFile[] = $derived.by(() => {
+    const { globals } = this;
+    const envName = this.host.envName;
+    // One per folder's environments, shared by the files that use them.
+    const outside = new Map<EnvironmentSet | null, OutsideScope>();
+    const scopeOf = (path: string) => {
+      const set = this.host.environmentsOf(path);
+      let scope = outside.get(set);
+      if (!scope) outside.set(set, (scope = { env: envVariables(set, envName), envName, globals }));
+      return scope;
+    };
+    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf);
+  });
+
+  /** The count on the panel's toggle. */
+  get count(): number {
+    return problemCount(this.list);
+  }
 
   /** Per open document, what it was (`openVersion`) when last asked about. */
   private seen = new Map<string, string[]>();
@@ -86,6 +124,9 @@ export class WorkspaceProblems {
    * from disk. Call it from an effect, which reruns on each change to the documents.
    */
   track() {
+    // Read here, so a change to the Session runs it again.
+    const session = this.host.sessionVersion;
+    untrack(() => this.readGlobals(session));
     const now = new Map<string, string[]>();
     // Compared, not copied into JSON on each edit (#168).
     for (const path of this.host.openPaths) now.set(path, this.host.openVersion(path));
@@ -122,7 +163,18 @@ export class WorkspaceProblems {
       return;
     }
     if (this.opens !== open || this.asked.get(path) !== ask) return;
-    if (found && (found.problems.length || found.portability.length)) this.files[path] = found;
-    else delete this.files[path];
+    const { [path]: _, ...others } = this.files;
+    this.files = found && (found.problems.length || found.portability.length || found.file) ? { ...others, [path]: found } : others;
+  }
+
+  /** Reads the Session's Global variables again if the Session changed (it's at `version`) since they were read. */
+  private readGlobals(version: number) {
+    if (version === this.globalsRead) return;
+    this.globalsRead = version;
+    // Never throws: Global variables it can't read are none.
+    Promise.resolve().then(() => api.sessionGlobals()).then(
+      (all) => version === this.globalsRead && (this.globals = Object.fromEntries(all.map((g) => [g.name, g.value]))),
+      () => {},
+    );
   }
 }

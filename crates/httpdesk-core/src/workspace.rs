@@ -293,11 +293,17 @@ pub struct FileProblems {
     /// them reads ([`Support::JetbrainsOnly`], [`Support::VscodeOnly`]). Portable lines
     /// and HttpDesk's own, which both ignore, aren't listed.
     pub portability: Vec<PortabilityMark>,
+    /// What the text reads as, when it has a `{{reference}}` or a `@name`: the page finds
+    /// the file's Undefined variables and shared `# @name`s in it itself, as it knows the
+    /// selected environment and the Session. Its verbatim text places each in the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<HttpFile>,
 }
 
 impl FileProblems {
+    /// Nothing to list, nor anything for the page to look for.
     pub fn is_empty(&self) -> bool {
-        self.problems.is_empty() && self.portability.is_empty()
+        self.problems.is_empty() && self.portability.is_empty() && self.file.is_none()
     }
 }
 
@@ -319,7 +325,8 @@ pub fn file_problems(path: &Path, text: &str) -> FileProblems {
         .into_iter()
         .filter(|m| matches!(m.support, Support::JetbrainsOnly | Support::VscodeOnly))
         .collect();
-    FileProblems { path: path.to_path_buf(), problems, portability }
+    let file = (text.contains("{{") || text.contains("@name")).then(|| crate::parse(text));
+    FileProblems { path: path.to_path_buf(), problems, portability, file }
 }
 
 /// [`file_problems`] of every `.http` file under `root` (as [`http_files`] lists them)

@@ -126,16 +126,14 @@
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
   const checks = $derived(
     req && variables
-      ? requestChecks(
-          req,
-          variables,
-          envSet,
-          app.envName,
-          app.folderOf(tab.path),
-          doc.file.requests,
-          { read: reading?.read, exists: (path) => sourceProblems.exists(tab.path, path) },
-          { marks: portability, level: app.portabilityLevel },
-        )
+      ? requestChecks(req, variables, {
+          set: envSet,
+          envName: app.envName,
+          dir: app.folderOf(tab.path),
+          file: doc.file.requests,
+          found: { read: reading?.read, exists: (path) => sourceProblems.exists(tab.path, path) },
+          portability: { marks: portability, level: app.portabilityLevel },
+        })
       : [],
   );
   function undefinedIn(s: Section): number {

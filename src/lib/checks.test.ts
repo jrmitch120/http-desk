@@ -129,7 +129,7 @@ describe("an environment the request's folder doesn't define", () => {
     privateFileIgnored: null,
   };
   const req = request((r) => (r.url = "{{baseUrl}}/users"));
-  const checks = (envName: string | null) => requestChecks(req, makeVarProvider(scope({ envName, env: {} })), set, envName, "api/users");
+  const checks = (envName: string | null) => requestChecks(req, makeVarProvider(scope({ envName, env: {} })), { set, envName, dir: "api/users" });
 
   it("is listed first, naming the folder, with a way to choose another environment", () => {
     expect(checks("qa")).toEqual([
@@ -147,7 +147,7 @@ describe("an environment the request's folder doesn't define", () => {
 
 describe("a # @name another request in the file also has", () => {
   const named = (name: string) => request((r) => r.directives.push({ name: "name", value: name }));
-  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), null, null, "", file).filter((c) => c.kind === "duplicateName");
+  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), { file }).filter((c) => c.kind === "duplicateName");
 
   it("is flagged on each of them, naming it and counting the others", () => {
     const [a, b, c] = [named("login"), named(" login "), named("me")];
@@ -166,7 +166,7 @@ describe("a # @name another request in the file also has", () => {
 });
 
 describe("the note that Rider refuses a Request variable", () => {
-  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })), null, null);
+  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })));
   const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "portability" && c.note.kind === "riderRefuses");
 
   it("is there whenever a request sends one, naming the first request read", () => {
@@ -196,7 +196,7 @@ describe("problems reading the request's source", () => {
   const unparseable: Problem = { line: 2, column: 1, severity: "error", code: "unparseable-request-line", message: "Can't read this request line" };
   const unknown: Problem = { line: 1, column: 3, severity: "warning", code: "unknown-directive", message: "Unknown directive @nmae" };
   const missing = (path: string, line = 5): BodyFile => ({ path, missing: { line, column: 1, severity: "error", code: "missing-file", message: `${path} doesn't exist` } });
-  const checksOf = (req: Request, found: SourceFindings, env: Scope["env"] = {}) => requestChecks(req, makeVarProvider(scope({ env })), null, null, "", [req], found);
+  const checksOf = (req: Request, found: SourceFindings, env: Scope["env"] = {}) => requestChecks(req, makeVarProvider(scope({ env })), { file: [req], found });
   const exists = (answers: Record<string, boolean>) => (path: string) => answers[path];
 
   it("lists each of the parser's problems, in the order of their lines, before the other checks", () => {
@@ -247,7 +247,7 @@ describe("the notes about lines that behave differently in VS Code or Rider", ()
     mark(7, "response-handler", "jetbrains-only"),
   ];
   const checksOf = (req: Request, marks: PortabilityMark[], level?: PortabilityLevel) =>
-    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), null, null, "", [], {}, { marks, level });
+    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), { portability: { marks, level } });
 
   it("count the lines VS Code and Rider each treat differently, after the problems", () => {
     const req = request((r) => (r.url = "{{base}}/items"));

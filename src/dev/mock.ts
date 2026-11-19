@@ -145,7 +145,9 @@ function fileProblemsOf(path: string, text: string): FileProblems {
   const missing = read.files.filter((f) => !f.path.includes("{{") && !bodyFileExists(path, f.path)).map((f) => f.missing);
   const problems = [...read.problems, ...missing].sort((a, b) => a.line - b.line || a.column - b.column);
   const portability = invokeCore<PortabilityMark[]>("portability_text", { text }).filter((m) => m.support === "jetbrains-only" || m.support === "vscode-only");
-  return { path, problems, portability };
+  // What the text reads as, for the page to find its Undefined variables and shared names in.
+  const refers = text.includes("{{") || text.includes("@name");
+  return { path, problems, portability, ...(refers ? { file: invokeCore<HttpFile>("parse_file", { text }) } : {}) };
 }
 /** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
  *  `.http` file at `filePath`, or (thrown) why it can't be used. */
@@ -1749,9 +1751,8 @@ mockIPC(
         return clone(files[args.path]);
       }
       case "create_file": {
-        // Parsing `args.content` needs the Rust core; one request from the fixture stands in.
-        const req = { ...clone((pets as any).requests[0]), name: "New request", raw: null, leading: "" };
-        files[args.path] = { ...clone(pets as any), requests: [req], trailing: "" };
+        // As the shell writes it and reads it back: the real core reads the content.
+        files[args.path] = invokeCore<HttpFile>("parse_file", { text: args.content });
         addNode(args.path, "file");
         return null;
       }
@@ -1791,7 +1792,7 @@ mockIPC(
           const file = fileAt(path);
           if (!doc && file === undefined) return [];
           const found = fileProblemsOf(path, doc ? openTextOf(doc) : invokeCore<string>("file_text", { file }));
-          return found.problems.length || found.portability.length ? [found] : [];
+          return found.problems.length || found.portability.length || found.file ? [found] : [];
         });
       }
       case "file_problems": {

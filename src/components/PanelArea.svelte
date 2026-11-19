@@ -14,9 +14,8 @@
   import SessionPanel from "./SessionPanel.svelte";
   import RunnerPanel from "./RunnerPanel.svelte";
   import ProblemsPanel from "./ProblemsPanel.svelte";
-  import { problemCount } from "../lib/problemsList";
 
-  const problems = $derived(problemCount(Object.values(app.problems.files), app.portabilityLevel));
+  const problems = $derived(app.problems.count);
   const PANELS: { value: PanelId; label: string; component: Component; command: CommandId; count?: number }[] = $derived([
     { value: "session", label: "Session", component: SessionPanel, command: "toggle-session" },
     { value: "runner", label: "Runner", component: RunnerPanel, command: "toggle-runner" },

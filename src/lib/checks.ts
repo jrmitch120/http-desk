@@ -5,9 +5,10 @@
 import type { LineMark } from "./codemirror/lineMarks";
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
-import { getDirective, segments, variableNameError } from "./http";
-import type { Auth, Body, BodyFile, EnvironmentSet, PortabilityMark, Problem, Request, RequestProblems } from "./types";
-import { requestVariable } from "./vars";
+import { fileVariables, getDirective, requestNames, requestPrompts, segments, variableNameError } from "./http";
+import { docSnapshot } from "./snapshots.svelte";
+import type { Auth, Body, BodyFile, EnvironmentSet, HttpFile, PortabilityMark, Problem, Request, RequestProblems, Support } from "./types";
+import { makeVarProvider, requestVariable, type Scope } from "./vars";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
 export type Section = "url" | "params" | "headers" | "auth" | "body";
@@ -61,7 +62,30 @@ export type PortabilityNote =
    * `lines` (1-based, in the request's `.http` source) behave differently in `editor`:
    * for VS Code, the lines only Rider reads; for Rider, those only VS Code reads.
    */
-  | { kind: "differs"; editor: "vscode" | "rider"; lines: number[] };
+  | { kind: "differs"; editor: EditorName; lines: number[] };
+
+/** The other editors a `.http` file is shared with, whose behaviour portability notes compare. */
+export type EditorName = "vscode" | "rider";
+
+export const EDITOR_NAMES: Record<EditorName, string> = { vscode: "VS Code", rider: "Rider" };
+
+/** What only the other editor reads, so it behaves differently in `editor`: for VS Code, what only Rider (JetBrains) reads. */
+const OTHERS_ONLY: Record<EditorName, Support> = { vscode: "jetbrains-only", rider: "vscode-only" };
+
+/**
+ * The lines (sorted, once each) of `marks` that behave differently in `editor`: those
+ * only the other editor reads. Without `requestVariables`, a Request variable's lines
+ * are left out (the strip has a note of its own for one).
+ */
+export function differingLines(marks: PortabilityMark[], editor: EditorName, { requestVariables = true } = {}): number[] {
+  const lines = marks.filter((m) => m.support === OTHERS_ONLY[editor] && (requestVariables || m.construct !== "request-variable")).map((m) => m.line);
+  return [...new Set(lines)].sort((a, b) => a - b);
+}
+
+/** "1 line behaves differently in VS Code", "3 lines behave differently in Rider". */
+export function differsText(n: number, editor: EditorName): string {
+  return `${n === 1 ? "1 line behaves" : `${n} lines behave`} differently in ${EDITOR_NAMES[editor]}`;
+}
 
 /** Whether `check` is only a note, not a problem with the send. */
 export const isNote = (check: Check) => check.kind === "portability" && check.level === "note";
@@ -77,9 +101,8 @@ export function portabilityChecks(req: Request, marks: PortabilityMark[], level:
   const notes: PortabilityNote[] = [];
   const [read] = requestVariableReads(req);
   if (read) notes.push({ kind: "riderRefuses", name: read });
-  const linesOf = (support: PortabilityMark["support"]) =>
-    [...new Set(marks.filter((m) => m.support === support && m.construct !== "request-variable").map((m) => m.line))].sort((a, b) => a - b);
-  for (const [editor, lines] of [["vscode", linesOf("jetbrains-only")], ["rider", linesOf("vscode-only")]] as const) {
+  for (const editor of ["vscode", "rider"] as const) {
+    const lines = differingLines(marks, editor, { requestVariables: false });
     if (lines.length) notes.push({ kind: "differs", editor, lines });
   }
   return notes.map((note) => ({ kind: "portability", level, note }));
@@ -127,37 +150,88 @@ export function bodyFilePaths(read: RequestProblems | undefined, variables: VarP
   });
 }
 
-/**
- * Everything the strip lists for a request, in order: problems first, then notes.
- * Empty: the strip is hidden. `set` is the request's own environments (its folder's)
- * and `dir` its folder, relative to the workspace root. `file` is every request of the
- * request's file (it included), whose `# @name`s it may share. `found` is what the
- * core and the shell found in its source: those problems come first, by line.
- * `portability` is the constructs in its source and the level its notes show at
- * (`portabilityChecks`): those notes come last.
- */
-export function requestChecks(
-  req: Request,
-  variables: VarProvider,
-  set: EnvironmentSet | null,
-  envName: string | null,
-  dir = "",
-  file: Request[] = [],
-  found: SourceFindings = {},
-  portability: { marks: PortabilityMark[]; level?: PortabilityLevel } = { marks: [] },
-): Check[] {
+/** What `requestChecks` checks a request against, besides the request and its variables. */
+export interface CheckContext {
+  /** The request's own environments (its folder's). */
+  set?: EnvironmentSet | null;
+  /** The selected environment. */
+  envName?: string | null;
+  /** The request's folder, relative to the workspace root. */
+  dir?: string;
+  /** Every request of the request's file (it included), whose `# @name`s it may share. */
+  file?: Request[];
+  /** What the core and the shell found in its source: those problems come first, by line. */
+  found?: SourceFindings;
+  /** The constructs in its source and the level its notes show at (`portabilityChecks`): those notes come last. */
+  portability?: { marks: PortabilityMark[]; level?: PortabilityLevel };
+}
+
+/** Everything the strip lists for a request, in order: problems first, then notes. Empty: the strip is hidden. */
+export function requestChecks(req: Request, variables: VarProvider, { set = null, envName = null, dir = "", file = [], found = {}, portability = { marks: [] } }: CheckContext = {}): Check[] {
   const missingFiles = bodyFilePaths(found.read, variables).flatMap(({ file, path }) => (found.exists?.(path) === false ? [file.missing] : []));
   const problems = [...(found.read?.problems ?? []), ...missingFiles].sort((a, b) => a.line - b.line || a.column - b.column);
   const checks: Check[] = problems.map((problem) => ({ kind: "problem", problem }));
   const missing = !!envName && !set?.environments.some((e) => e.name === envName);
   if (missing) checks.push({ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] });
+  const env = missing ? null : envName;
+  for (const check of referenceChecks(req, variables, file)) checks.push(check.kind === "undefined" ? { ...check, fixes: quickFixes(check.name, set, env) } : check);
+  checks.push(...portabilityChecks(req, portability.marks, portability.level));
+  return checks;
+}
+
+/**
+ * What a request's references are flagged for: a `# @name` it shares with others of
+ * `file` (its file's requests), then each Undefined variable it would be sent with (with
+ * no quick fixes). The strip lists them (`requestChecks`); the Problems panel and the file
+ * view, which show every request of a file, place them in its text (`fileReferenceFindings`).
+ */
+export function referenceChecks(req: Request, variables: VarProvider, file: Request[]): Check[] {
+  const checks: Check[] = [];
   const name = getDirective(req, "name")?.trim();
   const others = name ? file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length : 0;
   if (name && others) checks.push({ kind: "duplicateName", name, others });
-  const env = missing ? null : envName;
-  for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, env) });
-  checks.push(...portabilityChecks(req, portability.marks, portability.level));
+  for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: [] });
   return checks;
+}
+
+/** What every request of a file can see, besides what the file itself declares (`fileScope`). */
+export interface OutsideScope {
+  /** The file's folder's environment (`envVariables`). */
+  env: Scope["env"];
+  envName: string | null;
+  globals: Record<string, string>;
+}
+
+/** What request `req` of `file` sees, as its tab's provider does (`makeVarProvider`): Prompt variables count as defined. */
+export function requestScope(file: HttpFile, req: Request, outside: OutsideScope): VarProvider {
+  return makeVarProvider({
+    ...outside,
+    fileVars: fileVariables(file),
+    headerVars: file.header.variables,
+    requestVars: req.variables,
+    prompts: requestPrompts(req),
+    requestNames: requestNames(file),
+  });
+}
+
+const keptReferences = new WeakMap<Request, { outside: OutsideScope; declared: string; shot: string; checks: Check[] }>();
+
+/**
+ * `referenceChecks` of each request of `file`, in order, seeing `outside` too. Kept per
+ * request while it reads the same (`docSnapshot`), `outside` is the same object and what
+ * the file declares (its variables and each request's `# @name`) is unchanged: a file
+ * view of a thousand requests asks again after each edit, and most edits change one request.
+ */
+export function fileReferenceChecks(file: HttpFile, outside: OutsideScope): Check[][] {
+  const declared = JSON.stringify([fileVariables(file), file.header.variables, file.requests.map((r) => getDirective(r, "name")?.trim() ?? "")]);
+  return file.requests.map((req) => {
+    const shot = docSnapshot(req);
+    const known = keptReferences.get(req);
+    if (known && known.outside === outside && known.declared === declared && known.shot === shot) return known.checks;
+    const checks = referenceChecks(req, requestScope(file, req, outside), file.requests);
+    keptReferences.set(req, { outside, declared, shot, checks });
+    return checks;
+  });
 }
 
 /**

@@ -187,6 +187,8 @@ export interface FileProblems {
   problems: Problem[];
   /** The lines only one of VS Code and Rider reads (jetbrains-only or vscode-only constructs). */
   portability: PortabilityMark[];
+  /** What the text reads as, when it has a `{{reference}}` or a `@name`: the page finds its Undefined variables and shared `# @name`s. */
+  file?: HttpFile;
 }
 
 /** A document as the app has it, for the Problems panel: its file view's text, or else its file. */

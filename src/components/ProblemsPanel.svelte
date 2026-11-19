@@ -9,10 +9,9 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import { relativePath } from "../lib/http";
-  import { problemFiles } from "../lib/problemsList";
   import Icon from "./Icon.svelte";
 
-  const files = $derived(problemFiles(Object.values(app.problems.files), app.portabilityLevel));
+  const files = $derived(app.problems.list);
   const label = (path: string) => (app.root ? relativePath(app.root, path).replace(/^\.\//, "") : path);
 </script>
 

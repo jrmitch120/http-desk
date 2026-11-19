@@ -1684,6 +1684,16 @@ class AppStore {
       },
       openText: (path) => store.texts.openText(path),
       openVersion: (path) => store.texts.openVersion(path),
+      get portabilityLevel() {
+        return store.portabilityLevel;
+      },
+      environmentsOf: (path) => store.envSetFor(path),
+      get envName() {
+        return store.envName;
+      },
+      get sessionVersion() {
+        return store.sessionVersion;
+      },
     };
   }
 

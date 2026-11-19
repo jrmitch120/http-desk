@@ -977,7 +977,7 @@ describe("portability warnings (Settings → Portability)", () => {
   const marks: PortabilityMark[] = [{ line: 1, construct: "no-log", support: "jetbrains-only", label: "# @no-log", hover: "VS Code ignores it" }];
   /** The strip's portability entries and the source's markers, at the level the settings give. */
   const shown = () => {
-    const checks = requestChecks(req, makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: "dev" }), null, null, "", [], {}, { marks, level: app.portabilityLevel });
+    const checks = requestChecks(req, makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: "dev" }), { portability: { marks, level: app.portabilityLevel } });
     return { strip: checks.filter((c) => c.kind === "portability").map((c) => [isNote(c), c.level]), gutter: portabilityLineMarks(marks, app.portabilityLevel).map((m) => m.kind) };
   };
 
@@ -3639,7 +3639,12 @@ describe("the Problems panel (#172)", () => {
   /** The `.http` files on disk, by path. */
   let disk: Record<string, string>;
   /** The shell's `file_problems` of `text`, as far as these tests need: the real core (WASM) reads it (no body files here). */
-  const found = (path: string, text: string): FileProblems => ({ path, problems: invokeCore<RequestProblems>("text_problems", { text }).problems, portability: [] });
+  const found = (path: string, text: string): FileProblems => ({
+    path,
+    problems: invokeCore<RequestProblems>("text_problems", { text }).problems,
+    portability: [],
+    ...(text.includes("{{") ? { file: invokeCore<HttpFile>("parse_file", { text }) } : {}),
+  });
   const textOf = (has: { text?: string; file?: HttpFile }) => has.text ?? (has.file ? invokeCore<string>("file_text", { file: has.file }) : undefined);
   /** What the panel lists: each file's problems as [line, code], by path. */
   const listed = () =>
@@ -3658,7 +3663,7 @@ describe("the Problems panel (#172)", () => {
           const doc = open.find((o) => o.path === path);
           return found(path, (doc && textOf(doc)) ?? disk[path]);
         })
-        .filter((f) => f.problems.length),
+        .filter((f) => f.problems.length || f.file),
     );
     api.fileProblems.mockImplementation(async (path: string, has: { text?: string; file?: HttpFile } = {}) => {
       const text = textOf(has) ?? disk[path];
@@ -3670,6 +3675,18 @@ describe("the Problems panel (#172)", () => {
 
   it("lists every file with problems, by line in the file", () => {
     expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]]]);
+  });
+
+  it("lists a file's Undefined variables for the selected environment, and the count follows", async () => {
+    disk[AUTHORS] = "### Authors\nGET {{base}}/authors\n";
+    await app.problems.scan();
+    const authors = () => app.problems.list.find((f) => f.path === AUTHORS)?.entries.map((e) => [e.line, e.message]);
+    expect(authors()).toEqual([[2, "{{base}} is undefined"]]);
+    expect(app.problems.count).toBe(2);
+
+    app.envSet = { shared: [{ name: "base", value: "https://example.com", secret: false }], environments: [], privateFileIgnored: true };
+    expect(authors()).toBeUndefined();
+    expect(app.problems.count).toBe(1);
   });
 
   it("fixing a problem in an open document removes its entry without saving", async () => {

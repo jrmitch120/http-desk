@@ -10,7 +10,6 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { runCommand, shortcutHint } from "../lib/commands";
   import { updates } from "../lib/updates.svelte";
-  import { problemCount } from "../lib/problemsList";
 
   function workspaceMenu(e: MouseEvent) {
     const recent = app.otherRecentWorkspaces;
@@ -32,7 +31,7 @@
     ];
   });
   const layout = $derived(app.settings?.layout ?? "horizontal");
-  const problems = $derived(problemCount(Object.values(app.problems.files), app.portabilityLevel));
+  const problems = $derived(app.problems.count);
 
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();

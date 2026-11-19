@@ -118,6 +118,29 @@ fn every_files_problems_and_portability_notes_are_listed_by_line_in_the_file() {
     );
 }
 
+/// The page finds a file's Undefined variables and shared `# @name`s itself (it knows the
+/// selected environment and the Session): a file whose text has a `{{reference}}` or a
+/// `@name` comes with what its text reads as, even with nothing else to report.
+#[test]
+fn a_file_with_references_or_names_comes_with_its_requests_as_read() {
+    let h = Harness::new();
+    let (_ws, root) = workspace(&h);
+    std::fs::write(root.join("refs.http"), "### A\n# @name a\nGET {{host}}/{{missing}}\n").unwrap();
+    let all = h.ok("workspace_problems", json!({ "open": [] }));
+    let of = |name: &str| all.as_array().unwrap().iter().find(|f| f["path"].as_str().unwrap().ends_with(name)).cloned();
+
+    let refs = of("refs.http").expect("listed for its references");
+    assert_eq!(entries(&refs), (vec![], vec![]));
+    assert_eq!(refs["file"]["requests"][0]["url"], "{{host}}/{{missing}}");
+    assert_eq!(refs["file"]["requests"][0]["raw"], "### A\n# @name a\nGET {{host}}/{{missing}}\n");
+    // A file with none, and nothing else to report, isn't listed.
+    assert_eq!(of("fine.http"), None);
+    // As one file again, as the page has it.
+    let open = h.ok("file_problems", json!({ "path": root.join("refs.http"), "text": "GET {{other}}\n" }));
+    assert_eq!(open["file"]["requests"][0]["url"], "{{other}}");
+    assert_eq!(h.ok("file_problems", json!({ "path": root.join("fine.http") }))["file"], Value::Null);
+}
+
 #[test]
 fn an_open_document_is_read_as_the_page_has_it_and_a_file_again_from_disk_once_it_changes() {
     let h = Harness::new();
@@ -126,11 +149,14 @@ fn an_open_document_is_read_as_the_page_has_it_and_a_file_again_from_disk_once_i
 
     // The page has the request line fixed, unsaved: as text (a file view's) or as the file.
     let fixed = std::fs::read_to_string(&broken).unwrap().replace("search results", "search");
-    let listed_with =
-        |open: Value| listed(&h, &root, open).into_iter().any(|(p, _)| p == "unparseable-request-line.http");
-    assert!(!listed_with(json!([{ "path": broken, "text": fixed }])));
+    // (Listed for its `{{references}}`, with nothing to report.)
+    let listed_with = |open: Value| {
+        let found = listed(&h, &root, open).into_iter().find(|(p, _)| p == "unparseable-request-line.http");
+        found.map(|(_, e)| e).unwrap_or_default()
+    };
+    assert_eq!(listed_with(json!([{ "path": broken, "text": fixed }])), (vec![], vec![]));
     let file = h.ok("parse_file_text", json!({ "text": fixed }))["file"].clone();
-    assert!(!listed_with(json!([{ "path": broken, "file": file }])));
+    assert_eq!(listed_with(json!([{ "path": broken, "file": file }])), (vec![], vec![]));
     assert_eq!(entries(&h.ok("file_problems", json!({ "path": broken, "text": fixed }))), (vec![], vec![]));
 
     // A body file that turns up on disk is no longer missing.
