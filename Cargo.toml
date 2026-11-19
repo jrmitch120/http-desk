@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/httpdesk-core", "src-tauri"]
+members = ["crates/httpdesk-core", "crates/httpdesk-text", "crates/httpdesk-text-wasm", "src-tauri"]
 exclude = ["vendor"]
 
 [workspace.package]

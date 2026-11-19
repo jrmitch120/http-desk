@@ -3,15 +3,14 @@
 //! treat it and the documentation that says so: it is the one place to change when
 //! either editor adds support. [`portability`] finds the constructs in a text.
 //!
-//! Only text: this reads lines with the parser's own rules (blocks, preamble, header
-//! area, body, response handler) and depends on nothing but the parser and `{{…}}`
-//! splitting, so it can move with them (#173).
+//! It reads lines with the parser's own rules (blocks, preamble, header area, body,
+//! response handler). Only text, so the dev mock runs it too (httpdesk-text-wasm).
 
 use serde::{Serialize, Serializer};
 
-use crate::exchange::split_reference;
+use crate::model::Request;
 use crate::parser::{self, BOM, DISABLED_MARKER};
-use crate::vars::{segments, Segment};
+use crate::vars::{segments, split_reference, Segment};
 
 /// How the two editors treat a construct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -422,6 +421,12 @@ pub fn portability(text: &str) -> Vec<PortabilityMark> {
         first += raw.matches('\n').count();
     }
     marks.0
+}
+
+/// [`portability`] of `request`'s source as the Source view shows it: its text as
+/// the shell's `render_request` writes it (without the text before it).
+pub fn request_portability(request: &Request) -> Vec<PortabilityMark> {
+    portability(&crate::render_request(&Request { leading: String::new(), ..request.clone() }))
 }
 
 struct Marks(Vec<PortabilityMark>);

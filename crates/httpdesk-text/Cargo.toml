@@ -1,0 +1,12 @@
+[package]
+name = "httpdesk-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The `.http` text model, parser and serializer: no network, script, storage or
+# async dependencies, so it also builds to WASM (crates/httpdesk-text-wasm).
+[dependencies]
+base64 = "0.23.1"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"

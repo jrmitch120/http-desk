@@ -196,15 +196,7 @@ fn json_value(text: &str, path: &str) -> Result<String, String> {
     doc.first(path).map_err(|e| e.to_string())?.ok_or_else(|| format!("`{path}` matches nothing"))
 }
 
-/// For a `{{…}}` reference (trimmed, without braces): the request name and the path
-/// after it when it is a Request variable (`name.response…` or `name.request…`).
-/// A Request variable never falls back to a variable of the same name.
-pub(crate) fn split_reference(reference: &str) -> Option<(&str, &str)> {
-    let (name, path) = reference.split_once('.')?;
-    let side = path.split('.').next().unwrap_or("");
-    let named = !name.is_empty() && !name.starts_with('$') && !name.contains(char::is_whitespace);
-    (named && matches!(side, "response" | "request")).then_some((name, path))
-}
+pub(crate) use httpdesk_text::vars::split_reference;
 
 /// The `# @name`s of one file, each with its latest exchange in the Session (`None`
 /// when it hasn't been sent): what that file's Request variables can read.

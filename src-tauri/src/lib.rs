@@ -471,7 +471,7 @@ fn render_request(request: Request) -> String {
 /// the check strip's portability note.
 #[tauri::command]
 fn request_portability(request: Request) -> Vec<httpdesk_core::portability::PortabilityMark> {
-    httpdesk_core::portability::portability(&render_request(request))
+    httpdesk_core::portability::request_portability(&request)
 }
 
 /// The first request in `text` (a History entry's source text), parsed as in a file.

@@ -35,10 +35,12 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], colorScheme: "dark" },
     },
   ],
+  // Builds the mock's WASM core first (the dev server would build it on the first
+  // page load, but a cold build can outlast a test's timeout).
   webServer: {
-    command: `pnpm exec vite --port ${port}`,
+    command: `pnpm build:wasm && pnpm exec vite --port ${port}`,
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
-    timeout: 60_000,
+    timeout: 300_000,
   },
 });

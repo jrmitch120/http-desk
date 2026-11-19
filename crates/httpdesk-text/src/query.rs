@@ -9,7 +9,7 @@ use crate::vars::{segments, Segment};
 
 /// Which side of `name=value` a piece of text is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Part {
+pub enum Part {
     Name,
     Value,
 }
@@ -59,7 +59,7 @@ fn push_encoded(out: &mut String, c: char) {
 }
 
 /// Writes a decoded name or value for the file.
-pub(crate) fn escape(text: &str, part: Part) -> String {
+pub fn escape(text: &str, part: Part) -> String {
     let mut out = String::with_capacity(text.len());
     for segment in segments(text) {
         let s = match segment {
@@ -90,7 +90,7 @@ pub(crate) fn escape(text: &str, part: Part) -> String {
 /// percent-encodes the result for the wire. Existing `%XX` escapes are kept, so
 /// nothing is encoded twice. A `+` written in the file is kept (it reads as a space
 /// to most servers); one that comes from a variable is encoded, so it arrives as `+`.
-pub(crate) fn encode(text: &str, part: Part, resolve: impl Fn(&str) -> String) -> String {
+pub fn encode(text: &str, part: Part, resolve: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(text.len());
     for segment in segments(text) {
         match segment {
@@ -117,7 +117,7 @@ fn push_wire(out: &mut String, text: &str, part: Part, keep_plus: bool) {
 }
 
 /// Reads a name or value written by [`escape`] (or by hand) back to its decoded form.
-pub(crate) fn unescape(text: &str, part: Part) -> String {
+pub fn unescape(text: &str, part: Part) -> String {
     let mut out = String::with_capacity(text.len());
     for segment in segments(text) {
         let s = match segment {

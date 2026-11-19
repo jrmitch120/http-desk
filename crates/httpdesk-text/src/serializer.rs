@@ -165,7 +165,7 @@ fn split_lines(s: &str) -> impl Iterator<Item = &str> {
 /// space goes after the `@` (`@timeout 1` becomes `@ timeout 1`), so neither
 /// HttpDesk nor other clients read it as a directive. The OpenAPI generator
 /// uses the same rule. Other lines are returned as they are.
-pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
+pub fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
     let body = line.trim_start();
     match body.strip_prefix('@') {
         Some(rest) if rest.starts_with(|c: char| !c.is_whitespace() && c != '=') => {
