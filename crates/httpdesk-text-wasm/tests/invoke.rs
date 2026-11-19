@@ -112,14 +112,13 @@ fn portability_text_marks_the_lines_of_text_that_isnt_a_request_yet() {
 
 #[test]
 fn parse_file_text_gives_the_file_and_the_problems_found_reading_it() {
-    let parsed = call(
-        "parse_file_text",
-        json!({ "text": format!("@petId = 1\n\n{REQUEST}\n### Broken\nGET /pets/a b\n") }),
-    );
+    let parsed =
+        call("parse_file_text", json!({ "text": format!("@petId = 1\n\n{REQUEST}\n### Broken\nGET /pets/a b\n") }));
     assert_eq!(parsed["file"]["header"]["variables"], json!([{ "name": "petId", "value": "1" }]));
     let names: Vec<&Value> = parsed["file"]["requests"].as_array().unwrap().iter().map(|r| &r["name"]).collect();
     assert_eq!(names, ["List pets", "Broken"]);
-    let found: Vec<_> = parsed["problems"].as_array().unwrap().iter().map(|p| (p["line"].clone(), p["code"].clone())).collect();
+    let found: Vec<_> =
+        parsed["problems"].as_array().unwrap().iter().map(|p| (p["line"].clone(), p["code"].clone())).collect();
     assert_eq!(found, [(json!(10), json!("unparseable-request-line"))]);
 }
 

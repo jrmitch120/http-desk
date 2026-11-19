@@ -2016,6 +2016,7 @@ dependencies = [
  "dunce",
  "glob",
  "httpdesk-core",
+ "ignore",
  "notify-debouncer-mini",
  "objc2",
  "rusqlite",

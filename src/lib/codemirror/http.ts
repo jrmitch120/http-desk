@@ -27,7 +27,8 @@ import { segments } from "../http";
  *         Url                       an indented `?` / `&` continuation line
  *         Header                    HeaderName, Colon, HeaderValue
  *         Body | JsonBody | XmlBody | HtmlBody | GraphqlBody
- *                                   VariableRef and FileRef children; the rest is parsed in its language
+ *                                   VariableRef and FileRef children; the rest is parsed in its language;
+ *                                   folds when it has more than one line
  *         Handler                   `> {% %}` / `> path.js`: as PreRequestScript
  *         Redirect                  `>>` / `>>!` path: ScriptMark, FilePath
  *
@@ -103,8 +104,9 @@ const nodeSet = new NodeSet(
     "ScriptOpen ScriptClose": t.brace,
   }),
   foldNodeProp.add({
-    // A block folds from the end of its first line (its `###` line) to its last line that isn't blank.
-    Block(tree, state) {
+    // A block folds from the end of its first line (its `###` line) to its last line
+    // that isn't blank; so does a body of more than one line.
+    "Block Body JsonBody XmlBody HtmlBody GraphqlBody"(tree, state) {
       const from = state.doc.lineAt(tree.from).to;
       let to = tree.to;
       while (to > from && /\s/.test(state.sliceDoc(to - 1, to))) to--;

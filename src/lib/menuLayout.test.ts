@@ -34,7 +34,7 @@ describe("the menu layout", () => {
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, reopen-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: toggle-sidebar, toggle-session, toggle-runner, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
+      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Window: (minimize), (zoom), -, (bringAllToFront)",
       "Help: documentation, release-notes, -, report-issue",
     ]);
@@ -45,7 +45,7 @@ describe("the menu layout", () => {
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: toggle-sidebar, toggle-session, toggle-runner, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
+      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });
@@ -55,7 +55,7 @@ describe("the menu layout", () => {
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
       "Edit: undo, redo, -, cut, copy, paste, select-all",
       "View: toggle-sidebar, toggle-session, toggle-runner, -, zoom-in, zoom-out, zoom-reset, -, Response Layout ▸ [layout-right, layout-below], Theme ▸ [theme-system, theme-light, theme-dark]",
-      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, -, clear-session",
+      "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
   });

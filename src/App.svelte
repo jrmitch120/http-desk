@@ -6,6 +6,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import TabBar from "./components/TabBar.svelte";
   import RequestView from "./components/RequestView.svelte";
+  import FileView from "./components/FileView.svelte";
   import Welcome from "./components/Welcome.svelte";
   import Dialog from "./components/Dialog.svelte";
   import Toasts from "./components/Toasts.svelte";
@@ -119,7 +120,7 @@
                 <TabBar />
                 {#if app.activeTab}
                   {#key app.activeTab.id}
-                    <RequestView tab={app.activeTab} />
+                    {#if app.activeTab.kind === "file"}<FileView tab={app.activeTab} />{:else}<RequestView tab={app.activeTab} />{/if}
                   {/key}
                 {:else}
                   <div class="empty-state">

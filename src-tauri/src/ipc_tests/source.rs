@@ -1,6 +1,7 @@
 //! A request's Source view (#163): its text comes from `request_source` and what
 //! the user types is read back by `parse_request`, which gives the request and the
 //! problems found reading it. History's Restore request reads with it too.
+//! A file view (#166) reads its whole text with `parse_file_text`, and `file_text` writes it.
 
 use serde_json::{json, Value};
 
@@ -70,4 +71,46 @@ fn a_requests_source_is_its_text_as_written_until_it_changes() {
     let mut changed = requests[1].clone();
     changed["method"] = json!("DELETE");
     assert_eq!(h.ok("request_source", json!({ "request": changed })), "### Changed\nDELETE https://example.com/b\n");
+}
+
+// ---------------------------------------------------------------- the file view (#166)
+
+#[test]
+fn parse_file_text_gives_the_file_and_its_problems() {
+    let h = Harness::new();
+    let text = "@host = https://example.com\n\n### List\nGET {{host}}/pets\n\n### Broken\n# @nope\nGET {{host}}/a b\n";
+    let parsed = h.ok("parse_file_text", json!({ "text": text }));
+    assert_eq!(parsed["file"]["header"]["variables"], json!([{ "name": "host", "value": "https://example.com" }]));
+    let names: Vec<&Value> = parsed["file"]["requests"].as_array().unwrap().iter().map(|r| &r["name"]).collect();
+    assert_eq!(names, ["List", "Broken"]);
+    let found: Vec<_> = parsed["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["line"].clone(), p["severity"].clone(), p["code"].clone()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (json!(7), json!("warning"), json!("unknown-directive")),
+            (json!(8), json!("error"), json!("unparseable-request-line"))
+        ]
+    );
+}
+
+#[test]
+fn every_fixture_file_round_trips_byte_for_byte_through_parse_file_text() {
+    let h = Harness::new();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let files: Vec<_> = ignore::Walk::new(&root)
+        .filter_map(Result::ok)
+        .map(|e| e.into_path())
+        .filter(|p| p.extension().is_some_and(|e| e == "http"))
+        .collect();
+    assert!(files.len() >= 6, "found only {files:?}");
+    for path in files {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed = h.ok("parse_file_text", json!({ "text": text }));
+        assert_eq!(h.ok("file_text", json!({ "file": parsed["file"] })), text, "{}", path.display());
+    }
 }

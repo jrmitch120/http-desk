@@ -34,6 +34,7 @@ export type CommandId =
   | "duplicate-request"
   | "rename-request"
   | "show-source"
+  | "view-file-as-text"
   | "toggle-sidebar"
   | "toggle-session"
   | "toggle-runner"
@@ -254,6 +255,13 @@ const COMMANDS: Command[] = [
     enabled: withTab,
     checked: () => app.activeTabId !== null && app.settings?.showSource === true,
     run: () => app.activeTabId && app.toggleSource(),
+  },
+  {
+    // The whole file as one text, in a tab of its own (its file view).
+    id: "view-file-as-text",
+    label: "View File as Text",
+    enabled: () => app.activeTab?.kind === "request",
+    run: () => app.activeTab && void app.openFileView(app.activeTab.path),
   },
   {
     // Hiding never changes the stored width, so showing again restores it.

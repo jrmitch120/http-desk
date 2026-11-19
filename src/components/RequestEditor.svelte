@@ -320,6 +320,9 @@
       <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={`${showSource ? "Show the sections" : "Edit each request's .http source in place of its sections"} (${shortcutHint("show-source")})`}>
         <Icon name="code" size={14} />.http
       </button>
+      <button class="btn small ghost" aria-label="View file as text" onclick={() => app.openFileView(tab.path)} use:tooltip={`View all of ${basename(tab.path)} as text`}>
+        <Icon name="file" size={14} />File
+      </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>

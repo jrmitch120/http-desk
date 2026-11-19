@@ -254,4 +254,13 @@ describe("folding", () => {
     // A request line isn't a fold of its own.
     expect(foldable(state, state.doc.line(2).from, state.doc.line(2).to)).toBeNull();
   });
+
+  it("folds a body of more than one line from the end of its first line to its last line that isn't blank", () => {
+    const text = "### One\nPOST /one\nContent-Type: text/plain\n\nfirst\nsecond\nthird\n\n\n### Two\nPOST /two\n\none line\n";
+    const state = EditorState.create({ doc: text, extensions: [http()] });
+    const first = state.doc.line(5);
+    expect(foldable(state, first.from, first.to)).toEqual({ from: first.to, to: state.doc.line(7).to });
+    const only = state.doc.line(13);
+    expect(foldable(state, only.from, only.to)).toBeNull();
+  });
 });

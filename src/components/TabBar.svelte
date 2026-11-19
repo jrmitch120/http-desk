@@ -15,8 +15,13 @@
       { label: "Close", icon: "x", action: () => app.closeTab(tab.id) },
       { label: "Close others", icon: "close-others", action: () => app.closeTabs(app.tabs.filter((t) => t.id !== tab.id).map((t) => t.id)) },
       { label: "Close all", icon: "close-all", action: () => app.closeTabs(app.tabs.map((t) => t.id)) },
-      { separator: true },
-      { label: "Duplicate request", icon: "copy", action: () => app.duplicateRequest(tab.path, tab.key) },
+      ...(tab.kind === "file"
+        ? []
+        : [
+            { separator: true as const },
+            { label: "Duplicate request", icon: "copy" as const, action: () => app.duplicateRequest(tab.path, tab.key) },
+            { label: "View file as text", icon: "code" as const, action: () => app.openFileView(tab.path) },
+          ]),
     ]);
   }
 
@@ -51,9 +56,10 @@
 <div class="tabbar">
   <div class="strip" bind:this={strip} role="tablist" aria-label="Open requests" tabindex="-1" onwheel={(e) => strip && (strip.scrollLeft += e.deltaY)}>
     {#each app.tabs as tab (tab.id)}
+      {@const asText = tab.kind === "file"}
       {@const req = app.requestFor(tab)}
       {@const shown = req ? { method: req.method, name: displayName(req) } : tab.restoring}
-      {@const dirty = app.isRequestDirty(tab.path, tab.key)}
+      {@const dirty = asText ? app.isDocDirty(tab.path) : app.isRequestDirty(tab.path, tab.key)}
       {@const loading = app.runs[tab.id]?.loading}
       {@const orphaned = app.isOrphaned(tab)}
       {@const active = tab.id === app.activeTabId}
@@ -65,17 +71,20 @@
         role="tab"
         aria-selected={active}
         tabindex={active ? 0 : -1}
-        use:tooltip={`${shown?.name ?? ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
+        use:tooltip={asText ? `${tab.path} as text` : `${shown?.name ?? ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
         onclick={() => (app.activeTabId = tab.id)}
         onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
       >
-        {#if shown}
+        {#if asText}
+          <span class="file-icon"><Icon name="code" size={13} /></span>
+          <span class="name ellipsis">{basename(tab.path)}</span>
+        {:else if shown}
           <Badge method={shown.method} class="tab-method" />
           <span class="name ellipsis">{shown.name}</span>
         {/if}
-        <TestMark requestKey={tab.key} />
+        {#if !asText}<TestMark requestKey={tab.key} />{/if}
         {#if orphaned}<span class="orphan-icon"><Icon name="alert" size={12} /></span>{/if}
         <span class="end">
           {#if loading}<span class="spinner"></span>{/if}
@@ -173,6 +182,11 @@
     display: flex;
     flex: none;
     color: var(--danger);
+  }
+  .file-icon {
+    display: flex;
+    flex: none;
+    color: var(--accent);
   }
   .end {
     width: 22px;
