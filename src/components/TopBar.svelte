@@ -10,6 +10,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { runCommand, shortcutHint } from "../lib/commands";
   import { updates } from "../lib/updates.svelte";
+  import { problemCount } from "../lib/problemsList";
 
   function workspaceMenu(e: MouseEvent) {
     const recent = app.otherRecentWorkspaces;
@@ -31,6 +32,7 @@
     ];
   });
   const layout = $derived(app.settings?.layout ?? "horizontal");
+  const problems = $derived(problemCount(Object.values(app.problems.files), app.portabilityLevel));
 
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
@@ -94,6 +96,18 @@
       <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
     </span>
   {/if}
+  <!-- The Problems panel's toggle, with the workspace's problem count. -->
+  <button
+    class="icon-btn problems-btn"
+    class:active={app.panel === "problems"}
+    class:counted={problems > 0}
+    aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
+    aria-pressed={app.panel === "problems"}
+    use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
+    onclick={() => runCommand("toggle-problems")}
+  >
+    <Icon name="alert" />{#if problems}<span class="count">{problems}</span>{/if}
+  </button>
   <button
     class="icon-btn"
     class:active={app.sidebarShown}
@@ -128,6 +142,19 @@
 </header>
 
 <style>
+  /* Wide enough for its count beside the icon. */
+  .problems-btn.counted {
+    width: auto;
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .problems-btn.counted:not(.active) {
+    color: var(--warning);
+  }
+  .count {
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
   .theme-btn {
     position: relative;
   }

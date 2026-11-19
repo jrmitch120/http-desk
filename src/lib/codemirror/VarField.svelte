@@ -21,6 +21,7 @@
   import { EditorView } from "@codemirror/view";
   import { masked as maskedExt, singleLineExtensions, theme, varCard, variableExtensions, type VarProvider } from "./setup";
   import { isHeld } from "./holds";
+  import { inReadOnlyRegion } from "./readOnly";
   import { varSegments } from "../vars";
   import { popup } from "../popup/popup";
   import { hideTooltip, tip, tooltip } from "../popup/tooltip.svelte";
@@ -54,10 +55,14 @@
   /** Where a right-click that started editing was: the caret goes there. */
   let caretAt: { x: number; y: number } | null = null;
   const varC = new Compartment();
-  const vars = (p: VarProvider | null, masked: boolean, invalid: boolean) => [
+  /** In a read-only region (readOnly.ts), the text can be read, selected and copied, not changed. */
+  const readOnlyHere = inReadOnlyRegion();
+  const readOnly = $derived(readOnlyHere());
+  const vars = (p: VarProvider | null, masked: boolean, invalid: boolean, readOnly: boolean) => [
     p ? variableExtensions(p, { marks: !masked }) : [],
     masked ? maskedExt : [],
     invalid ? EditorView.contentAttributes.of({ "aria-invalid": "true" }) : [],
+    readOnly ? EditorState.readOnly.of(true) : [],
   ];
 
   const segments = $derived(masked ? (value ? [{ text: "•".repeat([...value].length) }] : []) : varSegments(value, variables));
@@ -95,7 +100,7 @@
             ".cm-line": { padding: "0" },
           }),
           singleLineExtensions({ placeholder, label, onenter }),
-          varC.of(vars(variables, masked, invalid)),
+          varC.of(vars(variables, masked, invalid, readOnly)),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange(u.state.doc.toString());
           }),
@@ -128,7 +133,7 @@
   }
 
   $effect(() => {
-    const ext = vars(variables, masked, invalid);
+    const ext = vars(variables, masked, invalid, readOnly);
     view?.dispatch({ effects: varC.reconfigure(ext) });
   });
 
@@ -229,6 +234,7 @@
       aria-placeholder={placeholder || undefined}
       aria-multiline="false"
       aria-invalid={invalid ? "true" : undefined}
+      aria-readonly={readOnly ? "true" : undefined}
       data-placeholder={placeholder}
       onfocus={() => (editing = true)}
       onmousedown={startFromPointer}

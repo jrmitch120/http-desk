@@ -84,6 +84,7 @@ export function menuLayout(os: OS): TopMenu[] {
     cmd("toggle-sidebar"),
     cmd("toggle-session"),
     cmd("toggle-runner"),
+    cmd("toggle-problems"),
     SEP,
     cmd("zoom-in"),
     cmd("zoom-out"),

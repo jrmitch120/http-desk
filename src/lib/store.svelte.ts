@@ -28,6 +28,7 @@ import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { FileReader } from "./fileReader";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
+import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
 import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
 import type {
   AppSettings,
@@ -111,6 +112,8 @@ export type FileText = SourceText;
  *  otherwise (an edit in a request tab), the text no longer stands for it. */
 interface FileTextEdit extends FileText {
   file: FileStamp;
+  /** What the parser recovered from the text last read: what Save as written saves while the text doesn't parse. */
+  recovered: HttpFile | null;
 }
 
 /**
@@ -129,6 +132,17 @@ export interface UnparsedText {
   saveAsWritten(): void;
   /** The text is dropped: the document stays at its last valid state, which is saved. */
   revert(): void;
+}
+
+/**
+ * Why a view of a file is read-only (`AppStore.viewLock`): another of the file's views
+ * holds text that doesn't parse, the file view or a request's Source view.
+ */
+export interface ViewLock {
+  /** Says why, for the view's banner. */
+  reason: string;
+  /** The view holding the text. */
+  heldBy: { kind: "file" } | { kind: "request"; key: string };
 }
 
 /** An answer to `AppStore.askWhatToKeep`. */
@@ -230,7 +244,7 @@ class PendingForm<S, C> {
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
-export type PanelId = "session" | "runner";
+export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
 /** A section of the Settings modal that can be opened scrolled into view. */
@@ -523,6 +537,8 @@ class AppStore {
       });
       // Saves the open workspace's Layout once its changes settle.
       $effect(() => this.layout.track());
+      // The Problems panel reads an open document again once its edits pause.
+      $effect(() => this.problems.track());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;
@@ -683,7 +699,10 @@ class AppStore {
       this.session.reset();
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
+      this.problems.reset();
       this.root = info.root;
+      // In the background: the shell reads every file off the main thread.
+      void this.problems.scan();
       this.trust.reset();
       this.tree = info.tree;
       // Reads still under way are the last workspace's: none is shared or kept.
@@ -856,15 +875,7 @@ class AppStore {
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
       const orphans = doc.orphans.filter((r) => !back.includes(r));
-      const saved = this.makeDoc(path, fresh, orphans, doc.saved);
-      // A file view's text that doesn't parse stays as typed (the file saved at its last
-      // valid state); #174 asks about it as `settleUnparsed` does about a request's.
-      const fileText = currentFileText(doc);
-      this.docs[path] = saved;
-      if (fileText?.parses === false) {
-        const after = this.docs[path];
-        after.fileText = { text: fileText.text, problems: $state.snapshot(fileText.problems), parses: false, file: FileStamp.of(after.file) };
-      }
+      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -928,10 +939,42 @@ class AppStore {
     return r.button === "written" || r.button === "revert" ? r.button : "cancel";
   }
 
-  /** The text that doesn't parse in `path`'s views: each request's Source view whose text doesn't. */
+  /**
+   * The text that doesn't parse in `path`'s views: each request's Source view whose text
+   * doesn't, then the file view's. Answers apply in this order and each drops its text,
+   * so where a request's source and the file view both hold some (typed in the moment
+   * before either was read), the file view's answer is the one the file is saved with.
+   */
   private unparsedTexts(path: string): UnparsedText[] {
     const doc = this.docs[path];
     if (!doc) return [];
+    return [...this.unparsedSources(doc), ...this.unparsedFileText(doc)];
+  }
+
+  /** The file view's text of `doc`, if it doesn't parse, and how to settle it. */
+  private unparsedFileText(doc: Doc): UnparsedText[] {
+    const edit = currentFileText(doc);
+    if (edit?.parses !== false) return [];
+    const path = doc.path;
+    const recovered = edit.recovered && ($state.snapshot(edit.recovered) as HttpFile);
+    return [
+      {
+        name: basename(path),
+        noun: "file",
+        canSaveAsWritten: !!recovered,
+        saveAsWritten: () => {
+          this.dropSource(path, FILE_VIEW);
+          const now = this.docs[path];
+          if (now && recovered) this.replaceFile(now, recovered);
+        },
+        revert: () => this.dropSource(path, FILE_VIEW),
+      },
+    ];
+  }
+
+  /** Each request Source view's text of `doc` that doesn't parse, and how to settle it. */
+  private unparsedSources(doc: Doc): UnparsedText[] {
+    const path = doc.path;
     return [...doc.file.requests, ...doc.orphans].flatMap((req) => {
       const edit = currentSource(doc, req);
       if (edit?.parses !== false) return [];
@@ -1011,6 +1054,7 @@ class AppStore {
   async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
+    this.problems.changed(paths);
     // An env file anywhere, or a folder (which may hold env files: moved in, renamed, deleted).
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p) || !/\.(http|rest)$/i.test(p))) await this.loadEnvironments();
     for (const p of paths) {
@@ -1160,6 +1204,7 @@ class AppStore {
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
     this.unshown.delete(id);
+    delete this.fileCursors[id];
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
@@ -1460,13 +1505,15 @@ class AppStore {
 
   /** A file view asked to show a line (`openFileView`), until it has. */
   fileLineWanted = $state<{ tabId: string; line: number } | null>(null);
+  /** A file view asked to show a request (`openFileView`), until it has. */
+  fileRequestWanted = $state<{ tabId: string; key: string } | null>(null);
 
   /**
    * Opens the file at `path` as one text (its file view, a tab of its own; the one
    * already open, if there is one), made active. With `line` (1-based), the view
-   * selects that line and scrolls it into view.
+   * selects that line and scrolls it into view; with `key`, it shows that request.
    */
-  async openFileView(path: string, at: { line?: number } = {}) {
+  async openFileView(path: string, at: { line?: number; key?: string } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
@@ -1477,6 +1524,47 @@ class AppStore {
     }
     this.activeTabId = tab.id;
     if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line };
+    if (at.key) this.fileRequestWanted = { tabId: tab.id, key: at.key };
+  }
+
+  /** The request under each file view's cursor (by tab id): its place among the requests of the text shown, null outside one. */
+  private fileCursors = $state<Record<string, number | null>>({});
+
+  /**
+   * The file view `tabId` has its cursor in the `index`th request of its text (0-based),
+   * or in none. That request is the explorer's selection while the view is active, and
+   * the one Send sends from it.
+   */
+  setFileCursor(tabId: string, index: number | null) {
+    this.fileCursors[tabId] = index;
+  }
+
+  /**
+   * The key of the request under file view `tab`'s cursor: none outside a request, or
+   * while the text doesn't parse (the file's requests are then as they last read, not
+   * those of the text shown).
+   */
+  private requestUnderCursor(tab: Tab): string | null {
+    const index = this.fileCursors[tab.id];
+    if (tab.kind !== "file" || index === null || index === undefined || this.isFileTextInvalid(tab.path)) return null;
+    return this.docs[tab.path]?.file.requests[index]?._key ?? null;
+  }
+
+  /**
+   * Sends the request under file view `tab`'s cursor the way its own tab sends it
+   * (opened, made active, and its response shown there), once the text typed in the
+   * view is read.
+   */
+  private async sendUnderCursor(tab: Tab) {
+    if (this.sourceReads.has(sourceId(tab.path, FILE_VIEW))) await this.readSources(tab.path);
+    if (this.isFileTextInvalid(tab.path)) {
+      this.toast("error", `${basename(tab.path)} doesn't read as a file yet. Fix the text to send a request from it.`);
+      return;
+    }
+    const key = this.requestUnderCursor(tab);
+    if (!key) return;
+    await this.openRequest(tab.path, { key });
+    if (this.activeTab?.key === key) await this.send(this.activeTab.id);
   }
 
   /**
@@ -1493,7 +1581,7 @@ class AppStore {
     // what reads whether the file is dirty or invalid doesn't run again for each keystroke.
     const last = currentFileText(doc);
     if (last) last.text = text;
-    else doc.fileText = { text, problems: [], parses: true, file: FileStamp.of(doc.file) };
+    else doc.fileText = { text, problems: [], parses: true, file: FileStamp.of(doc.file), recovered: null };
     return this.readLater(sourceId(path, FILE_VIEW), () => this.readFileText(path, text));
   }
 
@@ -1533,6 +1621,7 @@ class AppStore {
     if (!doc || !edit || edit.text !== text) return;
     edit.problems = parsed.problems;
     edit.parses = !parsed.problems.some((p) => p.severity === "error");
+    edit.recovered = edit.parses ? null : parsed.file;
     if (!edit.parses) return;
     this.replaceFile(doc, parsed.file);
     edit.file = FileStamp.of(doc.file);
@@ -1597,6 +1686,28 @@ class AppStore {
    */
   isFileTextInvalid(path: string): boolean {
     return this.fileText(path)?.parses === false;
+  }
+
+  /**
+   * Why `tab` is read-only now, or null when it can be edited: another view of its file
+   * holds text that doesn't parse. An edit here would change the document that text
+   * stands for, so the view stays read-only until the text parses again (or is saved
+   * as written, reverted or closed). Nothing is refused from opening.
+   */
+  viewLock(tab: Tab): ViewLock | null {
+    if (tab.kind === "request" && this.isFileTextInvalid(tab.path))
+      return {
+        reason: `The text in ${basename(tab.path)}'s file view doesn't parse. Until it does, this request can't be edited here.`,
+        heldBy: { kind: "file" },
+      };
+    const doc = this.docs[tab.path];
+    const held = tab.kind === "file" && doc ? doc.file.requests.find((r) => currentSource(doc, r)?.parses === false) : undefined;
+    if (held)
+      return {
+        reason: `The source of "${displayName(held)}" doesn't parse. Until it does, ${basename(tab.path)} can't be edited here.`,
+        heldBy: { kind: "request", key: held._key! },
+      };
+    return null;
   }
 
   /**
@@ -1833,6 +1944,7 @@ class AppStore {
 
   async send(tabId: string) {
     const typing = this.tabs.find((t) => t.id === tabId);
+    if (typing?.kind === "file") return this.sendUnderCursor(typing);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
     if (typing && this.sourceReads.has(sourceId(typing.path, typing.key))) await this.readSources(typing.path);
     const tab = this.tabs.find((t) => t.id === tabId);
@@ -1975,10 +2087,14 @@ class AppStore {
 
   // ---------------------------------------------------------------- explorer selection
 
-  /** The requests selected in the explorer: those picked, else the active request. */
+  /** The requests selected in the explorer: those picked, else the active request (in a file view, the one under its cursor). */
   get selectedRequests(): RequestRef[] {
     if (this.treeSelection.length) return this.treeSelection;
     const tab = this.activeTab;
+    if (tab?.kind === "file") {
+      const key = this.requestUnderCursor(tab);
+      return key ? [{ path: tab.path, key }] : [];
+    }
     return tab ? [{ path: tab.path, key: tab.key }] : [];
   }
 
@@ -2041,6 +2157,26 @@ class AppStore {
   readonly history: HistoryStore = new HistoryStore(this.historyHost());
   /** The open workspace's Layout: saved as it changes, restored when it opens (layoutStore.svelte.ts). */
   readonly layout: LayoutStore = new LayoutStore(this.layoutHost());
+  /** The Problems panel's list: every file's problems and portability notes (workspaceProblems.svelte.ts). */
+  readonly problems: WorkspaceProblems = new WorkspaceProblems(this.problemsHost());
+
+  private problemsHost(): ProblemsHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get openPaths() {
+        return Object.keys(store.docs);
+      },
+      openText(path) {
+        const doc = store.docs[path];
+        if (!doc) return null;
+        const typed = currentFileText(doc);
+        return typed ? { path, text: typed.text } : { path, file: doc.file };
+      },
+    };
+  }
 
   private layoutHost(): LayoutHost {
     const store = this;

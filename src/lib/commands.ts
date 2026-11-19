@@ -38,6 +38,7 @@ export type CommandId =
   | "toggle-sidebar"
   | "toggle-session"
   | "toggle-runner"
+  | "toggle-problems"
   | "clear-session"
   | "zoom-in"
   | "zoom-out"
@@ -286,6 +287,13 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     checked: () => app.panel === "runner",
     run: () => app.togglePanel("runner"),
+  },
+  {
+    id: "toggle-problems",
+    label: "Show Problems",
+    enabled: inWorkspace,
+    checked: () => app.panel === "problems",
+    run: () => app.togglePanel("problems"),
   },
   { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {

@@ -9,6 +9,7 @@
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
   import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
   import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
+  import { inReadOnlyRegion } from "./readOnly";
 
   interface Props {
     value?: string;
@@ -85,6 +86,14 @@
   const varC = new Compartment();
   /** The undo history, with `freshHistory` (otherwise it's in baseC's extensions). */
   const histC = new Compartment();
+  /**
+   * Read-only while in a read-only region (readOnly.ts): the text can't be changed, but
+   * unlike `readonly` the editor keeps its undo history (undo is refused meanwhile), so
+   * it's all there once the region can be edited again.
+   */
+  const lockC = new Compartment();
+  const readOnlyHere = inReadOnlyRegion();
+  const lockExt = (on: boolean) => (on ? EditorState.readOnly.of(true) : []);
   const ownHistory = untrack(() => freshHistory);
   const historyExt = (ro: boolean) => (ownHistory && !ro ? history() : []);
   const baseExt = (opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }) =>
@@ -192,6 +201,7 @@
         extensions: [
           baseC.of(baseExt({ readonly, wrap, placeholder, gutters })),
           histC.of(historyExt(readonly)),
+          lockC.of(lockExt(readOnlyHere())),
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
           Prec.highest(
@@ -228,6 +238,10 @@
     view?.destroy();
   });
 
+  $effect(() => {
+    const on = readOnlyHere();
+    view?.dispatch({ effects: lockC.reconfigure(lockExt(on)) });
+  });
   $effect(() => {
     const d = doc;
     if (d) {
@@ -305,6 +319,12 @@
     const line = view.state.doc.line(n);
     view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
     view.focus();
+  }
+  /** Puts the caret at offset `pos` and scrolls its line to the top of the view; with `focus`, focuses the editor too. */
+  export function revealAt(pos: number, { focus = false } = {}) {
+    if (!view || pos < 0 || pos > view.state.doc.length) return;
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "start", yMargin: 8 }) });
+    if (focus) view.focus();
   }
   /**
    * For a context menu at `e`: moves the caret to the clicked spot unless the

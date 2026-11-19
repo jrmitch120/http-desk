@@ -13,6 +13,7 @@
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
+  import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
@@ -37,6 +38,10 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
+  // Read-only while another view of the file holds text that doesn't parse (#174): its
+  // CodeMirror fields and editors through the region, its other controls disabled.
+  const lock = $derived(app.viewLock(tab));
+  setReadOnlyRegion(() => !!lock);
   // The request's own environments: its folder's (ADR-0004). An environment the folder
   // doesn't define gives none, like the send.
   const envSet = $derived(app.envSetFor(tab.path));
@@ -61,7 +66,8 @@
       ...makeVarProvider(scope),
       edit: (d: Definition) => app.editDefinition(tab.id, d),
       findUsages: (name: string) => app.findUsages(name),
-      extract: (value: string) => app.extractVariable(tab.id, value),
+      // Extract puts `{{name}}` in the text, so a read-only tab doesn't offer it.
+      extract: lock ? undefined : (value: string) => app.extractVariable(tab.id, value),
       readRequestVariable: async (reference: string) => {
         const reading = await api.requestVariable(tab.path, reference).catch(() => null);
         return reading && readingCard(reading, workspaceFile(app.root, tab.path));
@@ -295,11 +301,21 @@
         {/snippet}
       </Banner>
     {/if}
+    {#if lock}
+      <Banner severity="info">
+        {lock.reason}
+        {#snippet actions()}
+          {#if lock.heldBy.kind === "file"}
+            <button class="btn small" onclick={() => app.openFileView(tab.path)}>Show file view</button>
+          {/if}
+        {/snippet}
+      </Banner>
+    {/if}
 
     <div class="crumbs">
       <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <Icon name="chevron-right" size={12} />
-      <input class="name-input" value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
+      <input class="name-input" readonly={!!lock} value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" />
       <span class="spacer"></span>
       <button
         class="btn small ghost"
@@ -331,6 +347,7 @@
         label="HTTP method"
         tooltip="HTTP method"
         mono
+        disabled={!!lock}
       />
       <UrlInput
         bind:this={urlInput}
@@ -348,7 +365,10 @@
     </div>
 
     <ResolvedPreview {tab} />
-    <CheckStrip {checks} onfix={fix} />
+    <!-- Its quick fixes edit the request or the file. -->
+    <fieldset class="lockable" disabled={!!lock}>
+      <CheckStrip {checks} onfix={fix} />
+    </fieldset>
 
     {#if sourceMounted}
       <div class="source" hidden={!showSource}>
@@ -398,23 +418,25 @@
       </nav>
 
       <div class="panel" class:fill={section === "body"} bind:this={panel}>
-        {#if section === "params"}
-          <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
-          <KeyValueGrid bind:this={paramsGrid} bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" {variables} />
-          <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
-        {:else if section === "headers"}
-          <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
-          <KeyValueGrid bind:this={headersGrid} bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} {variables} />
-          {#if req.auth.kind !== "none" && req.auth.enabled}
-            <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
+        <fieldset class="lockable" disabled={!!lock}>
+          {#if section === "params"}
+            <SectionBar title="Query parameters" enabled={req.query.enabled} onchange={(v) => (req.query.enabled = v)} />
+            <KeyValueGrid bind:this={paramsGrid} bind:items={req.query.items} columns={documented} {showDescriptions} sectionEnabled={req.query.enabled} namePlaceholder="Key" valuePlaceholder="Value" separator="=" {variables} />
+            <p class="hint muted">Use <code>{"{{variable}}"}</code> anywhere. Path parameters are written as <code>{"{{name}}"}</code> in the URL.</p>
+          {:else if section === "headers"}
+            <SectionBar title="Headers" enabled={req.headers.enabled} onchange={(v) => (req.headers.enabled = v)} />
+            <KeyValueGrid bind:this={headersGrid} bind:items={req.headers.items} columns={documented} {showDescriptions} sectionEnabled={req.headers.enabled} namePlaceholder="Header" valuePlaceholder="Value" suggestions={HEADER_NAMES} nameError={headerNameError} {variables} />
+            {#if req.auth.kind !== "none" && req.auth.enabled}
+              <p class="hint muted">An authorization {req.auth.kind === "apiKey" && req.auth.keyLocation === "query" ? "query parameter" : "header"} is added from the Authorization tab.</p>
+            {/if}
+          {:else if section === "auth"}
+            <AuthEditor bind:auth={req.auth} {variables} />
+          {:else if section === "body"}
+            <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
+          {:else}
+            <RequestSettings {req} bind:file={doc.file} filePath={tab.path} {variables} />
           {/if}
-        {:else if section === "auth"}
-          <AuthEditor bind:auth={req.auth} {variables} />
-        {:else if section === "body"}
-          <BodyEditor {req} filePath={tab.path} {variables} onsend={() => app.send(tab.id)} />
-        {:else}
-          <RequestSettings {req} bind:file={doc.file} filePath={tab.path} {variables} />
-        {/if}
+        </fieldset>
       </div>
     {/if}
   </div>
@@ -500,9 +522,22 @@
     padding: 12px 16px 20px;
     min-height: 0;
   }
-  .panel.fill {
+  .panel.fill,
+  .panel.fill > .lockable {
     display: flex;
     flex-direction: column;
+  }
+  .panel.fill > .lockable {
+    flex: 1;
+    min-height: 0;
+  }
+  /* Only there to disable what's in it while the tab is read-only (#174). */
+  .lockable {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+    min-inline-size: 0;
   }
   .hint {
     font-size: 11.5px;

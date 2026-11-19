@@ -16,7 +16,7 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpFile, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, FileProblems, OpenText, PortabilityMark, RequestProblems, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpFile, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
@@ -131,6 +131,22 @@ function resolveFrom(filePath: string, path: string): string {
   }
   return parts.join("/");
 }
+/** The shell's `body_file_exists`, answered from the mock's own files. */
+function bodyFileExists(filePath: string, path: string): boolean {
+  const resolved = resolveFrom(filePath, path.trim());
+  return bodyFiles.has(resolved) || Object.hasOwn(scriptFiles, resolved) || fileAt(resolved) !== undefined;
+}
+/** An open document's text, as the shell reads it for the Problems panel. */
+const openTextOf = (doc: OpenText) => ("text" in doc ? doc.text : invokeCore<string>("file_text", { file: doc.file }));
+/** Like the shell's `workspace::file_problems`: the real core reads the text, and each body
+ *  file (one without `{{variables}}`) is looked for among the mock's own files. */
+function fileProblemsOf(path: string, text: string): FileProblems {
+  const read = invokeCore<RequestProblems>("text_problems", { text });
+  const missing = read.files.filter((f) => !f.path.includes("{{") && !bodyFileExists(path, f.path)).map((f) => f.missing);
+  const problems = [...read.problems, ...missing].sort((a, b) => a.line - b.line || a.column - b.column);
+  const portability = invokeCore<PortabilityMark[]>("portability_text", { text }).filter((m) => m.support === "jetbrains-only" || m.support === "vscode-only");
+  return { path, problems, portability };
+}
 /** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
  *  `.http` file at `filePath`, or (thrown) why it can't be used. */
 function locateScriptFile(filePath: string | null, path: string): string {
@@ -172,6 +188,24 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
   const requests = orders.requests.slice(0, 2).map((r, i) => ({ ...r, name: ["List orders", "Create order"][i], url: "{{baseUrl}}/orders", raw: null }));
   files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
   tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
+}
+// `?problems=1` adds problems/broken.http (a request line with a space in its URL) and
+// problems/upload.http (a body read from ./missing.json, which isn't there), for the
+// Problems panel.
+if (new URLSearchParams(location.search).get("problems") === "1") {
+  const broken = "### Search\nGET {{baseUrl}}/search for pets\nAccept: application/json\n";
+  const upload = "### Upload\nPOST {{baseUrl}}/pets/upload\nContent-Type: application/json\n\n< ./missing.json\n";
+  files[`${ROOT}/problems/broken.http`] = invokeCore("parse_file", { text: broken });
+  files[`${ROOT}/problems/upload.http`] = invokeCore("parse_file", { text: upload });
+  tree.children.push({
+    name: "problems",
+    path: `${ROOT}/problems`,
+    kind: "dir",
+    children: [
+      { name: "broken.http", path: `${ROOT}/problems/broken.http`, kind: "file" },
+      { name: "upload.http", path: `${ROOT}/problems/upload.http`, kind: "file" },
+    ],
+  });
 }
 // Files a test rewrote "on disk" with `__mock.writeFile` (another editor's changes
 // while the app was closed) are still there after a reload.
@@ -1745,10 +1779,26 @@ mockIPC(
       case "file_text":
       case "request_problems":
         return invokeCore(cmd, args);
-      case "body_file_exists": {
-        // Answered from the mock's own files.
-        const path = resolveFrom(args.file, String(args.path).trim());
-        return bodyFiles.has(path) || Object.hasOwn(scriptFiles, path) || fileAt(path) !== undefined;
+      case "body_file_exists":
+        return bodyFileExists(args.file, String(args.path));
+      case "workspace_problems": {
+        const open = (args.open ?? []) as OpenText[];
+        const paths: string[] = [];
+        const walk = (n: Node) => (n.kind === "file" ? paths.push(n.path) : n.children?.forEach(walk));
+        walk(openTree());
+        return paths.flatMap((path) => {
+          const doc = open.find((d) => d.path === path);
+          const file = fileAt(path);
+          if (!doc && file === undefined) return [];
+          const found = fileProblemsOf(path, doc ? openTextOf(doc) : invokeCore<string>("file_text", { file }));
+          return found.problems.length || found.portability.length ? [found] : [];
+        });
+      }
+      case "file_problems": {
+        const has = args as { path: string; text?: string; file?: HttpFile };
+        const file = fileAt(has.path);
+        if (has.text === undefined && !has.file && file === undefined) return null;
+        return fileProblemsOf(has.path, has.text ?? invokeCore<string>("file_text", { file: has.file ?? file }));
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.

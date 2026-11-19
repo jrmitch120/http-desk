@@ -24,5 +24,5 @@ use httpdesk_text::query;
 pub use httpdesk_text::{model, parser, portability, serializer};
 
 pub use model::*;
-pub use parser::{parse, parse_request, parse_with_problems, request_problems};
+pub use parser::{parse, parse_request, parse_with_problems, request_problems, text_problems};
 pub use serializer::{render_request, request_source, request_text, serialize, try_serialize, InvalidField};

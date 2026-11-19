@@ -2,7 +2,7 @@
 // file, refreshing documents the app itself rewrote), Orphaned tabs, search,
 // sending, settings, toasts, startup and watcher resilience.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppSettings, EnvironmentSet, ExchangeShape, HistoryEntry, HistorySummary, HttpFile, HttpResponse, PortabilityMark, RunProgress, TestResult, Usage } from "./types";
+import type { AppSettings, EnvironmentSet, ExchangeShape, FileProblems, HistoryEntry, HistorySummary, HttpFile, HttpResponse, OpenText, PortabilityMark, RequestProblems, RunProgress, TestResult, Usage } from "./types";
 import type { ExtractChoice } from "./store.svelte";
 import { basename, newRequest } from "./http";
 import { isNote, portabilityLineMarks, requestChecks } from "./checks";
@@ -55,6 +55,8 @@ const api = vi.hoisted(() => ({
   requestSource: vi.fn(),
   parseFileText: vi.fn(),
   fileText: vi.fn(),
+  workspaceProblems: vi.fn(),
+  fileProblems: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -123,6 +125,8 @@ beforeEach(() => {
   deletePath.mockResolvedValue("trashed");
   loadFolderEnvironments.mockResolvedValue([]);
   api.releaseResponse.mockResolvedValue(undefined);
+  api.workspaceProblems.mockResolvedValue([]);
+  api.fileProblems.mockResolvedValue(null);
   app.dialog = null;
   app.toasts = [];
   app.tree = null;
@@ -3598,5 +3602,264 @@ describe("viewing a whole file as text (#166)", () => {
     await openAll(parsed());
     await app.openFileView(PATH, { line: 8 });
     expect(app.fileLineWanted).toEqual({ tabId: fileTab()!.id, line: 8 });
+  });
+});
+
+describe("the Problems panel (#172)", () => {
+  const AUTHORS = "/ws/api/authors.http";
+  const BROKEN = "### List\nGET https://example.com/books\n\n### Search\nGET https://example.com/search for books\n";
+  const FINE = "### Authors\nGET https://example.com/authors\n";
+  /** The `.http` files on disk, by path. */
+  let disk: Record<string, string>;
+  /** The shell's `file_problems` of `text`, as far as these tests need: the real core (WASM) reads it (no body files here). */
+  const found = (path: string, text: string): FileProblems => ({ path, problems: invokeCore<RequestProblems>("text_problems", { text }).problems, portability: [] });
+  const textOf = (has: { text?: string; file?: HttpFile }) => has.text ?? (has.file ? invokeCore<string>("file_text", { file: has.file }) : undefined);
+  /** What the panel lists: each file's problems as [line, code], by path. */
+  const listed = () =>
+    Object.values(app.problems.files)
+      .map((f) => [f.path, f.problems.map((p) => [p.line, p.code])])
+      .sort(([a], [b]) => String(a).localeCompare(String(b)));
+
+  beforeEach(async () => {
+    disk = { [PATH]: BROKEN, [AUTHORS]: FINE };
+    readHttpFile.mockImplementation(async (path: string) => invokeCore<HttpFile>("parse_file", { text: disk[path] }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.workspaceProblems.mockImplementation(async (open: OpenText[]) =>
+      Object.keys(disk)
+        .map((path) => {
+          const doc = open.find((o) => o.path === path);
+          return found(path, (doc && textOf(doc)) ?? disk[path]);
+        })
+        .filter((f) => f.problems.length),
+    );
+    api.fileProblems.mockImplementation(async (path: string, has: { text?: string; file?: HttpFile } = {}) => {
+      const text = textOf(has) ?? disk[path];
+      return text === undefined ? null : found(path, text);
+    });
+    app.root = "/ws";
+    await app.problems.scan();
+  });
+
+  it("lists every file with problems, by line in the file", () => {
+    expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]]]);
+  });
+
+  it("fixing a problem in an open document removes its entry without saving", async () => {
+    await app.openRequest(PATH, { index: 1 });
+    app.requestFor(app.tabs[0])!.url = "https://example.com/search/books";
+
+    // What the app's effect does on each change.
+    await vi.waitFor(() => {
+      app.problems.track();
+      expect(listed()).toEqual([]);
+    });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("breaking an open document in its file view lists it before it's saved, at its line in the text", async () => {
+    await app.openFileView(AUTHORS);
+    void app.editFileText(AUTHORS, `${FINE}\n### Broken\n# @nmae x\nGET https://example.com/a b\n`);
+
+    await vi.waitFor(() => {
+      app.problems.track();
+      expect(listed()).toEqual([
+        [AUTHORS, [[5, "unknown-directive"], [6, "unparseable-request-line"]]],
+        [PATH, [[5, "unparseable-request-line"]]],
+      ]);
+    });
+    expect(saveHttpFile).not.toHaveBeenCalled();
+  });
+
+  it("an external change to a file updates its entries", async () => {
+    disk[AUTHORS] = "### Authors\n# @nmae authors\nGET https://example.com/authors\n";
+    await app.onExternalChange([AUTHORS]);
+    await vi.waitFor(() => expect(listed()).toEqual([[AUTHORS, [[2, "unknown-directive"]]], [PATH, [[5, "unparseable-request-line"]]]]));
+
+    // Fixed by another editor, then deleted.
+    disk[PATH] = BROKEN.replace("search for books", "search/books");
+    await app.onExternalChange([PATH]);
+    await vi.waitFor(() => expect(listed()).toEqual([[AUTHORS, [[2, "unknown-directive"]]]]));
+    delete disk[AUTHORS];
+    await app.onExternalChange([AUTHORS]);
+    await vi.waitFor(() => expect(listed()).toEqual([]));
+  });
+
+  it("reads the workspace again when a folder changes", async () => {
+    const MOVED_IN = "/ws/old/broken.http";
+    disk[MOVED_IN] = "GET https://example.com/a b\n";
+    await app.onExternalChange(["/ws/old"]);
+    await vi.waitFor(() => expect(listed()).toEqual([[PATH, [[5, "unparseable-request-line"]]], [MOVED_IN, [[1, "unparseable-request-line"]]]]));
+  });
+});
+
+describe("the file view and request tabs while text doesn't parse (#174)", () => {
+  // The real core (WASM) reads and writes the text, and saving writes and reads back the file as the shell does.
+  const TEXT = "@host = https://example.com\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n### Create\nPOST {{host}}/books\n";
+  const parsed = (text = TEXT) => invokeCore<HttpFile>("parse_file", { text });
+  /** The text the last save wrote. */
+  const written = () => invokeCore<string>("file_text", { file: saveHttpFile.mock.lastCall![1] });
+  beforeEach(() => {
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+    saveHttpFile.mockImplementation(async (_path: string, file: HttpFile) =>
+      invokeCore("parse_file", { text: invokeCore<string>("file_text", { file }) }),
+    );
+  });
+  const fileTab = () => app.tabs.find((t) => t.kind === "file" && t.path === PATH)!;
+  const BROKEN = TEXT.replace("POST {{host}}/books", "POST {{host}}/books and more");
+
+  it("text that doesn't parse in the file view makes the file's request tabs read-only, until it parses again", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    expect([app.viewLock(list), app.viewLock(create), app.viewLock(fileTab())]).toEqual([null, null, null]);
+
+    await app.editFileText(PATH, BROKEN);
+    expect(app.viewLock(list)).toEqual({
+      reason: "The text in books.http's file view doesn't parse. Until it does, this request can't be edited here.",
+      heldBy: { kind: "file" },
+    });
+    expect(app.viewLock(create)?.heldBy).toEqual({ kind: "file" });
+    // The view holding the text stays editable.
+    expect(app.viewLock(fileTab())).toBeNull();
+
+    await app.editFileText(PATH, TEXT.replace("POST {{host}}/books", "POST {{host}}/books/new"));
+    expect([app.viewLock(list), app.viewLock(create)]).toEqual([null, null]);
+  });
+
+  it("text that doesn't parse in a request's source makes the file view read-only, until it parses again", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+
+    await app.editSource(PATH, create.key, "### Create\nPOST {{host}}/books and more\n");
+    expect(app.viewLock(fileTab())).toEqual({
+      reason: `The source of "Create" doesn't parse. Until it does, books.http can't be edited here.`,
+      heldBy: { kind: "request", key: create.key },
+    });
+    // Another request of the file stays editable: an edit to it leaves that text as it is.
+    expect([app.viewLock(list), app.viewLock(create)]).toEqual([null, null]);
+
+    await app.editSource(PATH, create.key, "### Create\nPOST {{host}}/books/new\n");
+    expect(app.viewLock(fileTab())).toBeNull();
+  });
+
+  it("Save as written from the file view writes its text byte for byte", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    const broken = BROKEN.replace("Accept: application/json", "Accept application/json");
+    await app.editFileText(PATH, broken);
+
+    const saving = app.saveTab(fileTab());
+    expect(await answer("written")).toBe('Save "books.http" as written?');
+    expect(await saving).toBe(true);
+
+    expect(written()).toBe(broken);
+    expect(app.requestFor(create)!.url).toBe("{{host}}/books and more");
+    expect(app.isFileTextInvalid(PATH)).toBe(false);
+    expect(app.dirtyDocs()).toEqual([]);
+    expect(await app.fileTextFor(PATH)).toBe(broken);
+    expect(app.viewLock(list)).toBeNull();
+  });
+
+  it("Revert to last valid from the file view saves the file as it last parsed", async () => {
+    const [, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    const edited = TEXT.replace("POST {{host}}/books", "POST {{host}}/books/new");
+    await app.editFileText(PATH, edited);
+    await app.editFileText(PATH, BROKEN);
+
+    const saving = app.saveTab(fileTab());
+    expect(await answer("revert")).toBe('Save "books.http" as written?');
+    expect(await saving).toBe(true);
+
+    expect(written()).toBe(edited);
+    expect(app.requestFor(create)!.url).toBe("{{host}}/books/new");
+    expect(app.fileText(PATH)).toBeNull();
+    expect(await app.fileTextFor(PATH)).toBe(edited);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  it("asks about a request's source, then the file view, when both hold text that doesn't parse; the file view's answer is saved", async () => {
+    const [list] = await openAll(parsed());
+    await app.openFileView(PATH);
+    // Both typed in the moment before either was read (each view is read-only once the other's is).
+    void app.editSource(PATH, list.key, "### List\nGET {{host}}/books and less\n\n");
+    void app.editFileText(PATH, BROKEN);
+
+    const saving = app.saveTab(fileTab());
+    expect(await answer("written")).toBe('Save "List" as written?');
+    expect(await answer("written")).toBe('Save "books.http" as written?');
+    expect(await saving).toBe(true);
+    expect(written()).toBe(BROKEN);
+    expect([app.sourceText(PATH, list.key), app.fileText(PATH)]).toEqual([null, null]);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+});
+
+describe("the request under a file view's cursor (#167)", () => {
+  const TEXT = "@host = https://example.com\n\n### List\nGET {{host}}/books\n\n### Create\nPOST {{host}}/books\n";
+  beforeEach(() => {
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    readHttpFile.mockResolvedValue(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    app.clearTreeSelection();
+  });
+  const fileTab = () => app.tabs.find((t) => t.kind === "file" && t.path === PATH)!;
+  const keyOf = (name: string) => app.docs[PATH].file.requests.find((r) => r.name === name)!._key!;
+
+  it("is the explorer's selection while the file view is active", async () => {
+    await app.openFileView(PATH);
+    expect(app.selectedRequests).toEqual([]);
+    app.setFileCursor(fileTab().id, 1);
+    expect(app.selectedRequests).toEqual([{ path: PATH, key: keyOf("Create") }]);
+    app.setFileCursor(fileTab().id, null);
+    expect(app.selectedRequests).toEqual([]);
+  });
+
+  it("is sent from its own tab, opened and made active, when the file view sends", async () => {
+    await app.openFileView(PATH);
+    app.setFileCursor(fileTab().id, 1);
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 201 } as HttpResponse);
+    await app.send(fileTab().id);
+
+    expect(api.sendRequest).toHaveBeenCalledTimes(1);
+    expect(api.sendRequest.mock.lastCall![0]).toMatchObject({ request: { method: "POST", url: "{{host}}/books" } });
+    const tab = app.activeTab!;
+    expect([tab.kind, tab.key]).toEqual(["request", keyOf("Create")]);
+    expect(app.runs[tab.id].response).toMatchObject({ id: "r1" });
+  });
+
+  it("is read from text typed just before the send", async () => {
+    await app.openFileView(PATH);
+    void app.editFileText(PATH, TEXT + "\n### Delete\nDELETE {{host}}/books/1\n");
+    app.setFileCursor(fileTab().id, 2);
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 204 } as HttpResponse);
+    await app.send(fileTab().id);
+    expect(api.sendRequest.mock.lastCall![0]).toMatchObject({ request: { method: "DELETE", url: "{{host}}/books/1" } });
+  });
+
+  it("isn't sent while the text doesn't parse, and isn't selected", async () => {
+    await app.openFileView(PATH);
+    await app.editFileText(PATH, TEXT.replace("POST {{host}}/books", "POST {{host}}/books and more"));
+    app.setFileCursor(fileTab().id, 0);
+    expect(app.selectedRequests).toEqual([]);
+    await app.send(fileTab().id);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+    expect(app.activeTab).toBe(fileTab());
+  });
+
+  it("sends nothing outside a request", async () => {
+    await app.openFileView(PATH);
+    app.setFileCursor(fileTab().id, null);
+    await app.send(fileTab().id);
+    expect(api.sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("a file view can be asked to show a request", async () => {
+    await app.openFileView(PATH);
+    await app.openFileView(PATH, { key: keyOf("Create") });
+    expect(app.fileRequestWanted).toEqual({ tabId: fileTab().id, key: keyOf("Create") });
   });
 });
