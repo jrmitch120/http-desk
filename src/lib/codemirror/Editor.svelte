@@ -237,7 +237,8 @@
           untrack(() => marks) ? lineMarks() : [],
           keepLineEndings(initial.others),
           EditorView.updateListener.of((u) => {
-            if (!u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) return;
+            // Without an `onchange` there's no text to make: a response body may be 88 MB.
+            if (!onchange || !u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) return;
             const text = textOf(u.state);
             emitted = { doc: u.state.doc, text };
             onchange?.(text);
