@@ -1085,8 +1085,18 @@ Decisions made during implementation, beyond the plan above:
   where the edit left it (`carryKeys`: the requests before and after the edited part
   as they were, those between found as a reload finds them), so the file's request tabs
   follow and stay in sync both ways; a request gone from the text closes its tabs. Text
-  that doesn't parse leaves the file at its last valid state and reads dirty. A file
-  view is part of the Layout (`{ kind: "file", path }`). `app.openFileView(path, { line })`
+  that doesn't parse leaves the file at its last valid state and reads dirty.
+  **While one view holds text that doesn't parse, the views it would conflict with are
+  read-only** (#174, `app.viewLock(tab)`, which also says why for the view's banner): the
+  file view's text locks every request tab of the file, and a request's source text locks
+  the file view (other request tabs stay editable: an edit to another request leaves that
+  text standing). Nothing is refused from opening. A locked view is a read-only region
+  (`src/lib/codemirror/readOnly.ts`, a Svelte context): its CodeMirror fields and editors
+  take `EditorState.readOnly` (keeping their undo history), and its other controls sit in
+  a `<fieldset disabled>`; Send still sends the request as it last read. Saving the file
+  view in that state asks Save as written / Revert to last valid as a request does
+  (`unparsedTexts` gives it after the file's requests, so where both hold text the file
+  view's answer is applied last and is what's saved). A file view is part of the Layout (`{ kind: "file", path }`). `app.openFileView(path, { line })`
   opens it scrolled to a line.
 * **The resolved preview** (the Resolved button in the request's title row, beside .http, remembered as
   `showResolved` in app settings) shows the request as it will be sent: method, URL,

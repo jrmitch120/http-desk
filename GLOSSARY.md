@@ -82,6 +82,7 @@ _Avoid_: session, workbench, restore state
 **File view**:
 A tab showing a whole `.http` file as one editable text: file variables, comments between requests and every request together.
 It and the file's request tabs edit the same document, so each shows the other's edits; text that doesn't parse leaves the document as it last read.
+While its text doesn't parse, the file's request tabs are read-only and say why; while a request's Source view holds text that doesn't parse, the file view is.
 _Avoid_: file tab, raw view, file source
 
 **Orphaned tab**:

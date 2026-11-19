@@ -37,8 +37,10 @@
     tooltip?: string;
     /** Extra class on the trigger; style it from the parent with `:global(.x)`. */
     class?: string;
+    /** Shows the value but can't be opened (a read-only request tab, #174). */
+    disabled?: boolean;
   }
-  let { options, value, onchange, label, create, size = "md", mono = false, tooltip: tooltipText, class: className = "" }: Props = $props();
+  let { options, value, onchange, label, create, size = "md", mono = false, tooltip: tooltipText, class: className = "", disabled = false }: Props = $props();
 
   type Item = SelectOption<T> & { created?: boolean };
 
@@ -138,6 +140,7 @@
   class:mono
   class:open
   aria-label={label}
+  {disabled}
   aria-haspopup="listbox"
   aria-expanded={open}
   aria-controls={open ? listId : undefined}

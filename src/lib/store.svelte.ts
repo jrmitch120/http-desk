@@ -109,6 +109,8 @@ export type FileText = SourceText;
  *  changes otherwise (an edit in a request tab), the text no longer stands for it. */
 interface FileTextEdit extends FileText {
   file: string;
+  /** What the parser recovered from the text last read: what Save as written saves while the text doesn't parse. */
+  recovered: HttpFile | null;
 }
 
 /**
@@ -127,6 +129,17 @@ export interface UnparsedText {
   saveAsWritten(): void;
   /** The text is dropped: the document stays at its last valid state, which is saved. */
   revert(): void;
+}
+
+/**
+ * Why a view of a file is read-only (`AppStore.viewLock`): another of the file's views
+ * holds text that doesn't parse, the file view or a request's Source view.
+ */
+export interface ViewLock {
+  /** Says why, for the view's banner. */
+  reason: string;
+  /** The view holding the text. */
+  heldBy: { kind: "file" } | { kind: "request"; key: string };
 }
 
 /** An answer to `AppStore.askWhatToKeep`. */
@@ -774,12 +787,7 @@ class AppStore {
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
       const orphans = doc.orphans.filter((r) => !back.includes(r));
-      const saved = this.makeDoc(path, fresh, orphans, doc.saved);
-      // A file view's text that doesn't parse stays as typed (the file saved at its last
-      // valid state); #174 asks about it as `settleUnparsed` does about a request's.
-      const fileText = currentFileText(doc);
-      if (fileText?.parses === false) saved.fileText = { ...($state.snapshot(fileText) as FileTextEdit), file: fileSnapshot(saved.file) };
-      this.docs[path] = saved;
+      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -843,10 +851,42 @@ class AppStore {
     return r.button === "written" || r.button === "revert" ? r.button : "cancel";
   }
 
-  /** The text that doesn't parse in `path`'s views: each request's Source view whose text doesn't. */
+  /**
+   * The text that doesn't parse in `path`'s views: each request's Source view whose text
+   * doesn't, then the file view's. Answers apply in this order and each drops its text,
+   * so where a request's source and the file view both hold some (typed in the moment
+   * before either was read), the file view's answer is the one the file is saved with.
+   */
   private unparsedTexts(path: string): UnparsedText[] {
     const doc = this.docs[path];
     if (!doc) return [];
+    return [...this.unparsedSources(doc), ...this.unparsedFileText(doc)];
+  }
+
+  /** The file view's text of `doc`, if it doesn't parse, and how to settle it. */
+  private unparsedFileText(doc: Doc): UnparsedText[] {
+    const edit = currentFileText(doc);
+    if (edit?.parses !== false) return [];
+    const path = doc.path;
+    const recovered = edit.recovered && ($state.snapshot(edit.recovered) as HttpFile);
+    return [
+      {
+        name: basename(path),
+        noun: "file",
+        canSaveAsWritten: !!recovered,
+        saveAsWritten: () => {
+          this.dropSource(path, FILE_VIEW);
+          const now = this.docs[path];
+          if (now && recovered) this.replaceFile(now, recovered);
+        },
+        revert: () => this.dropSource(path, FILE_VIEW),
+      },
+    ];
+  }
+
+  /** Each request Source view's text of `doc` that doesn't parse, and how to settle it. */
+  private unparsedSources(doc: Doc): UnparsedText[] {
+    const path = doc.path;
     return [...doc.file.requests, ...doc.orphans].flatMap((req) => {
       const edit = currentSource(doc, req);
       if (edit?.parses !== false) return [];
@@ -1405,7 +1445,7 @@ class AppStore {
     const doc = this.docs[path];
     if (!doc) return Promise.resolve();
     const last = currentFileText(doc);
-    doc.fileText = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, file: fileSnapshot(doc.file) };
+    doc.fileText = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, file: fileSnapshot(doc.file), recovered: last?.recovered ?? null };
     return this.readLater(sourceId(path, FILE_VIEW), () => this.readFileText(path, text));
   }
 
@@ -1423,6 +1463,7 @@ class AppStore {
     if (!doc || !edit || edit.text !== text) return;
     edit.problems = parsed.problems;
     edit.parses = !parsed.problems.some((p) => p.severity === "error");
+    edit.recovered = edit.parses ? null : parsed.file;
     if (!edit.parses) return;
     this.replaceFile(doc, parsed.file);
     edit.file = fileSnapshot(doc.file);
@@ -1461,6 +1502,28 @@ class AppStore {
    */
   isFileTextInvalid(path: string): boolean {
     return this.fileText(path)?.parses === false;
+  }
+
+  /**
+   * Why `tab` is read-only now, or null when it can be edited: another view of its file
+   * holds text that doesn't parse. An edit here would change the document that text
+   * stands for, so the view stays read-only until the text parses again (or is saved
+   * as written, reverted or closed). Nothing is refused from opening.
+   */
+  viewLock(tab: Tab): ViewLock | null {
+    if (tab.kind === "request" && this.isFileTextInvalid(tab.path))
+      return {
+        reason: `The text in ${basename(tab.path)}'s file view doesn't parse. Until it does, this request can't be edited here.`,
+        heldBy: { kind: "file" },
+      };
+    const doc = this.docs[tab.path];
+    const held = tab.kind === "file" && doc ? doc.file.requests.find((r) => currentSource(doc, r)?.parses === false) : undefined;
+    if (held)
+      return {
+        reason: `The source of "${displayName(held)}" doesn't parse. Until it does, ${basename(tab.path)} can't be edited here.`,
+        heldBy: { kind: "request", key: held._key! },
+      };
+    return null;
   }
 
   /**

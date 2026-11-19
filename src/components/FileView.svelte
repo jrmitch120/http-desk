@@ -14,6 +14,7 @@
   import { portabilityLineMarks } from "../lib/checks";
   import { checkUnderlines } from "../lib/codemirror/underlines";
   import Editor from "../lib/codemirror/Editor.svelte";
+  import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -24,6 +25,9 @@
   const doc = $derived(app.docs[tab.path]);
   const dirty = $derived(app.isDocDirty(tab.path));
   const invalid = $derived(app.isFileTextInvalid(tab.path));
+  // Read-only while a request's Source view holds text that doesn't parse (#174).
+  const lock = $derived(app.viewLock(tab));
+  setReadOnlyRegion(() => !!lock);
   const envSet = $derived(app.envSetFor(tab.path));
   const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
   // Every `@name` line is a File variable here; no request's Prompt variables or answers apply.
@@ -120,6 +124,17 @@
         {#snippet actions()}
           <button class="btn small" onclick={() => app.reload(tab.path)}>Reload from disk</button>
           <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
+        {/snippet}
+      </Banner>
+    {/if}
+    {#if lock}
+      <Banner severity="info">
+        {lock.reason}
+        {#snippet actions()}
+          {#if lock.heldBy.kind === "request"}
+            {@const key = lock.heldBy.key}
+            <button class="btn small" onclick={() => app.openRequest(tab.path, { key })}>Show request</button>
+          {/if}
         {/snippet}
       </Banner>
     {/if}
