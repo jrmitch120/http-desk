@@ -34,6 +34,8 @@ const ROWS: &[(Construct, Support, usize)] = &[
     (C::JetbrainsDynamicVariable, JetbrainsOnly, 3),
     (C::RandomInt, JetbrainsOnly, 2),
     (C::VscodeDynamicVariable, VscodeOnly, 3),
+    (C::VscodeSignInVariable, VscodeOnly, 3),
+    (C::ExampleServer, JetbrainsOnly, 2),
     (C::RandomIntRange, VscodeOnly, 2),
     (C::TimestampOffset, VscodeOnly, 2),
     (C::GraphqlRequestTypeHeader, VscodeOnly, 4),

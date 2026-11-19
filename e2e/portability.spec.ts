@@ -4,7 +4,7 @@
 // is the core's portability table (crates/httpdesk-text/src/portability.rs), which
 // the mock runs too (WASM).
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest } from "./helpers";
+import { dialog, mockState, openApp, openRequest, treeItem, treeMenu } from "./helpers";
 
 const source = (page: Page) => page.locator(".source-code");
 const strip = (page: Page) => page.getByRole("region", { name: "Pre-send checks" });
@@ -14,13 +14,13 @@ async function showSource(page: Page) {
   await page.getByRole("button", { name: ".http", exact: true }).click();
 }
 
-/** The gutter marker beside the source line that is exactly `text`, once there is one. */
-async function markerOf(page: Page, text: string) {
-  await expect(source(page).locator(".cm-line", { hasText: text })).toBeVisible();
+/** The gutter marker beside the line of `editor` (the source, by default) that is exactly `text`, once there is one. */
+async function markerOf(page: Page, text: string, editor = source(page)) {
+  await expect(editor.locator(".cm-line", { hasText: text })).toBeVisible();
   // A marker is beside its line: the one whose middle is within the line's height.
   const marker = async () => {
-    const line = await source(page).locator(".cm-line").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).boundingBox();
-    const markers = source(page).locator(".cm-line-mark");
+    const line = await editor.locator(".cm-line").filter({ hasText: new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).boundingBox();
+    const markers = editor.locator(".cm-line-mark");
     for (let i = 0; i < (await markers.count()); i++) {
       const box = await markers.nth(i).boundingBox();
       if (line && box && box.y + box.height / 2 > line.y && box.y + box.height / 2 < line.y + line.height) return markers.nth(i);
@@ -31,9 +31,9 @@ async function markerOf(page: Page, text: string) {
   return (await marker())!;
 }
 
-/** Hovers the gutter marker beside the source line that is exactly `text`, from off the editor. */
-async function hoverMarkerOf(page: Page, text: string) {
-  const marker = await markerOf(page, text);
+/** Hovers the gutter marker beside the line of `editor` that is exactly `text`, from off the editor. */
+async function hoverMarkerOf(page: Page, text: string, editor = source(page)) {
+  const marker = await markerOf(page, text, editor);
   await page.mouse.move(0, 0);
   await marker.hover();
 }
@@ -114,4 +114,22 @@ test("turning on portability warnings makes a handler line's marker and the stri
   await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-warning/);
   await expect(strip(page).locator("li.note")).toHaveCount(0);
   await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 3 and 13 of the .http source");
+});
+
+test("the file view marks the lines that behave differently too, each with what both editors do", async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, "samples").click();
+  await treeMenu(page, "jetbrains.http", "View as text");
+  const fileView = page.locator(".file-view .file-code");
+  await hoverMarkerOf(page, "> {%", fileView);
+  await expect(page.getByRole("tooltip")).toHaveText("Rider runs this response handler; VS Code ignores the script and sends its lines as body text");
+
+  // A sign-in token only VS Code fetches, and the example server only Rider has.
+  await fileView.locator(".cm-line", { hasText: "> {%" }).first().click();
+  await page.keyboard.press("Home");
+  await page.keyboard.type("X-Token: {{$aadToken}}\nX-Server: {{$exampleServer}}\n");
+  await hoverMarkerOf(page, "X-Token: {{$aadToken}}", fileView);
+  await expect(page.getByRole("tooltip")).toContainText("VS Code signs in");
+  await hoverMarkerOf(page, "X-Server: {{$exampleServer}}", fileView);
+  await expect(page.getByRole("tooltip")).toContainText("Rider puts its built-in example server here");
 });

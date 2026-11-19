@@ -52,6 +52,8 @@ pub enum Construct {
     JetbrainsDynamicVariable,
     RandomInt,
     VscodeDynamicVariable,
+    VscodeSignInVariable,
+    ExampleServer,
     RandomIntRange,
     TimestampOffset,
     GraphqlRequestTypeHeader,
@@ -334,6 +336,24 @@ pub static TABLE: &[Row] = &[
         vscode: &[VSC_SYSTEM],
     },
     Row {
+        construct: Construct::VscodeSignInVariable,
+        id: "vscode-sign-in-variable",
+        support: Support::VscodeOnly,
+        label: "{{$aadToken}}, {{$aadV2Token}}, {{$oidcAccessToken}}",
+        hover: "VS Code signs in (Azure AD, the Microsoft identity platform or an OpenID Connect provider) and puts the token here; Rider doesn't know it and sends it as written",
+        jetbrains: &[JB_DYNAMIC],
+        vscode: &[VSC_SYSTEM, VSC_SYSTEM_SRC],
+    },
+    Row {
+        construct: Construct::ExampleServer,
+        id: "example-server",
+        support: Support::JetbrainsOnly,
+        label: "{{$exampleServer}}",
+        hover: "Rider puts its built-in example server here (only its HTTP Client reaches it); VS Code doesn't know it and sends it as written",
+        jetbrains: &[JB_DYNAMIC],
+        vscode: &[VSC_SYSTEM, VSC_SYSTEM_SRC],
+    },
+    Row {
         construct: Construct::RandomIntRange,
         id: "random-int-range",
         support: Support::VscodeOnly,
@@ -592,6 +612,8 @@ fn reference(name: &str) -> Option<Construct> {
         "uuid" | "isoTimestamp" => Construct::JetbrainsDynamicVariable,
         h if h.starts_with("random.") || h.starts_with("env.") => Construct::JetbrainsDynamicVariable,
         "guid" | "datetime" | "localDatetime" | "processEnv" | "dotenv" => Construct::VscodeDynamicVariable,
+        "aadToken" | "aadV2Token" | "oidcAccessToken" => Construct::VscodeSignInVariable,
+        "exampleServer" => Construct::ExampleServer,
         _ => return None,
     })
 }
