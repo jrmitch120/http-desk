@@ -33,6 +33,7 @@ import { popupLayer } from "../popup/layer";
 import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
+import { measureOnFontLoad } from "./fontLoads";
 import { extractExtension } from "./extract";
 import { http } from "./http";
 import { httpCompletion } from "./httpCompletion";
@@ -628,6 +629,7 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
   const ext: Extension[] = [
     layerTooltips(),
     scrollJumps,
+    measureOnFontLoad,
     theme,
     syntaxHighlighting(highlight),
     drawSelection(),
