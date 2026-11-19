@@ -4,10 +4,11 @@
 // reading the typed text into the file, once typing pauses, blocks nothing
 // either. Run with `pnpm test:perf`.
 //
-// Nine keystrokes in ten must fit in a frame, and none may take two: now and then
-// one is held up by what else the machine runs (a garbage collection, another
-// process), and when the text makes a request appear or go, the outline and the
-// explorer change with it.
+// Every keystroke must fit in a frame. What a request appearing or going costs (`@` at
+// the top reads as a request line until ` = ` follows) waits until typing pauses: the
+// outline and the explorer's selection follow the text once the editor is still, and the
+// text is read into the file after a pause too. Measured at PERF_CPU_THROTTLE=2 (about
+// CI's speed) on an M1 Pro, the slowest keystroke of each case is 10–12 ms.
 //
 // Timings come from a Chrome trace of the page's main thread (each task's
 // duration), not from timestamps taken in the page: those would also count the
@@ -106,7 +107,7 @@ function report(label: string, times: number[]): void {
 
 /**
  * Types `bursts` at the caret, a pause after each long enough for the text to be
- * read into the file, and checks nine keystrokes in ten fit in a frame and none takes two.
+ * read into the file, and checks every keystroke fits in a frame.
  */
 async function typeAndMeasure(page: Page, label: string, bursts: string[]): Promise<void> {
   // A character typed and taken back first: an editor's first edit runs its code for
@@ -127,11 +128,10 @@ async function typeAndMeasure(page: Page, label: string, bursts: string[]): Prom
   const work = keystrokes(tasks);
   expect(work).toHaveLength(bursts.join("").length);
   report(`${label}, each keystroke's work`, work);
+  console.log(`  ${work.map((t) => t.toFixed(1)).join(" ")}`);
   report(`${label}, every task`, tasks.map((t) => t.task.dur / 1000).filter((d) => d > 1));
   const all = `each keystroke's work (ms): ${work.map((t) => t.toFixed(1)).join(", ")}`;
-  const sorted = [...work].sort((a, b) => a - b);
-  expect(sorted[Math.floor(0.9 * sorted.length)], all).toBeLessThan(FRAME_MS);
-  expect(sorted[sorted.length - 1], all).toBeLessThan(2 * FRAME_MS);
+  expect(Math.max(...work), all).toBeLessThan(FRAME_MS);
 }
 
 test("typing in a request in the middle of a 1,000-request file", async ({ page }) => {

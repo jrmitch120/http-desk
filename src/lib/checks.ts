@@ -183,12 +183,14 @@ export function requestChecks(req: Request, variables: VarProvider, { set = null
  * What a request's references are flagged for: a `# @name` it shares with others of
  * `file` (its file's requests), then each Undefined variable it would be sent with (with
  * no quick fixes). The strip lists them (`requestChecks`); the Problems panel and the file
- * view, which show every request of a file, place them in its text (`fileReferenceFindings`).
+ * view, which show every request of a file, place them in its text (`ReferenceChecks`,
+ * `fileUnderlines`).
  */
-export function referenceChecks(req: Request, variables: VarProvider, file: Request[]): Check[] {
+export function referenceChecks(req: Request, variables: VarProvider, file: Request[] | ((name: string) => number)): Check[] {
   const checks: Check[] = [];
   const name = getDirective(req, "name")?.trim();
-  const others = name ? file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length : 0;
+  // `file` may count, for a name, the other requests that have it.
+  const others = !name ? 0 : typeof file === "function" ? file(name) : file.filter((r) => r !== req && getDirective(r, "name")?.trim() === name).length;
   if (name && others) checks.push({ kind: "duplicateName", name, others });
   for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: [] });
   return checks;
@@ -217,8 +219,9 @@ export function requestScope(file: HttpFile, req: Request, outside: OutsideScope
 /**
  * `referenceChecks` of each request of a file read from its text (each request's `raw`
  * is its block as written), seeing `outside` too. One per view that asks again after each
- * edit (a file view): a request's are kept, by its block's text, while `outside` is the
- * same object and what the file declares (its variables and each request's `# @name`) is
+ * edit (a file view, the Problems panel's file): a request's are kept, by its block's
+ * text, while `outside` is the same object and what the file declares (its variables'
+ * names, the values of those referencing others, and each request's `# @name`) is
  * unchanged, from the last two readings. A file of a thousand requests is mostly so.
  */
 export class ReferenceChecks {
@@ -227,16 +230,26 @@ export class ReferenceChecks {
   private scope: { outside: OutsideScope; declared: string } | null = null;
 
   of(file: HttpFile, outside: OutsideScope): Check[][] {
-    const declared = JSON.stringify([fileVariables(file), file.header.variables, file.requests.map((r) => getDirective(r, "name")?.trim() ?? "")]);
+    // A variable's value matters only when it references others (editing `@token = …` checks nothing again).
+    const vars = fileVariables(file).map((v) => (v.value.includes("{{") ? [v.name, v.value] : v.name));
+    const declared = JSON.stringify([vars, file.requests.map((r) => getDirective(r, "name")?.trim() ?? "")]);
     if (this.scope?.outside !== outside || this.scope.declared !== declared) {
       this.scope = { outside, declared };
       this.current = new Map();
       this.previous = new Map();
     }
+    // Made once: a request that declares nothing of its own (most) sees what the file does.
+    let shared: VarProvider | null = null;
+    const scopeOf = (req: Request) => (req.variables.length || requestPrompts(req).length ? requestScope(file, req, outside) : (shared ??= requestScope(file, { ...req, variables: [], directives: [] }, outside)));
+    const named = new Map<string, number>();
+    for (const r of file.requests) {
+      const name = getDirective(r, "name")?.trim();
+      if (name) named.set(name, (named.get(name) ?? 0) + 1);
+    }
     const found = new Map<string, Check[]>();
     const out = file.requests.map((req) => {
       const key = req.raw ?? docSnapshot(req);
-      const checks = this.current.get(key) ?? this.previous.get(key) ?? referenceChecks(req, requestScope(file, req, outside), file.requests);
+      const checks = this.current.get(key) ?? this.previous.get(key) ?? referenceChecks(req, scopeOf(req), (name) => (named.get(name) ?? 1) - 1);
       found.set(key, checks);
       return checks;
     });

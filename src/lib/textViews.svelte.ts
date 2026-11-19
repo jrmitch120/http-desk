@@ -146,6 +146,13 @@ interface Pending {
 
 const pendingId = (path: string, view: TextView) => (view.kind === "file" ? `${path}\nfile` : `${path}\nrequest\n${view.key}`);
 
+/**
+ * A request a file view's text put in a document, and its JSON then (`snapshot`): while it
+ * still has that, it reads as its block's text does. One loaded or saved has its
+ * document's `saved` JSON for that.
+ */
+const readAs = new WeakMap<Request, string>();
+
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
   return r._key;
@@ -507,18 +514,27 @@ export class TextViews {
   private replaceFile(doc: Doc, fresh: HttpFile) {
     const old = doc.file.requests;
     const oldShots = fileShot(doc.file).requests;
-    const shots = new Map<Request, string>([...old.map((r, i) => [r, oldShots[i]] as const), ...fresh.requests.map((r) => [r, snapshot(r)] as const)]);
-    const same = (a: Request, b: Request) => shots.get(a) === shots.get(b);
+    const oldShot = new Map(old.map((r, i) => [r, oldShots[i]]));
+    const freshShots = new Map<Request, string>();
+    const freshShot = (r: Request) => freshShots.get(r) ?? freshShots.set(r, snapshot(r)).get(r)!;
+    // Whether the document's `a` reads as `b`, read from the text: at once when `a` is still
+    // as it was read from the same block (most are), else by their JSON (#168).
+    const same = (a: Request, b: Request) =>
+      (a.raw !== null && a.raw === b.raw && a.leading === b.leading && oldShot.get(a) === (readAs.get(a) ?? doc.saved[a._key!])) || oldShot.get(a) === freshShot(b);
     const gone = carryKeys(old, fresh.requests, same);
     const byKey = new Map(old.map((r) => [r._key, r]));
-    const requests = fresh.requests.map((r) => {
+    const added = new Set<number>();
+    const requests = fresh.requests.map((r, i) => {
       const was = r._key ? byKey.get(r._key) : undefined;
       if (was && same(was, r)) return was;
       ensureKey(r);
+      added.add(i);
       return structuredClone(r);
     });
     const { head, tail } = sharedEnds(old.length, requests.length, (i, j) => old[i] === requests[j]);
     if (head + tail < Math.max(old.length, requests.length)) old.splice(head, old.length - head - tail, ...requests.slice(head, requests.length - tail));
+    // As put in (the document's own object for it).
+    for (const i of added) readAs.set(old[i], freshShot(fresh.requests[i]));
     if (JSON.stringify(fresh.header) !== JSON.stringify(doc.file.header)) doc.file.header = structuredClone(fresh.header);
     doc.file.trailing = fresh.trailing;
     if (doc.file.mixedEndings) {

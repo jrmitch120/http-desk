@@ -4,7 +4,7 @@
   // the other's edits: text typed here is read into the document after a short pause,
   // and any other change to the document renders the text again. Text that doesn't
   // parse leaves the document's file at its last valid state.
-  import { tick, untrack } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, HttpFile, PortabilityMark, Problem, Variable } from "../lib/types";
@@ -21,7 +21,7 @@
   import Badge from "./Badge.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
-  import { afterPause, fileView } from "../lib/textViews.svelte";
+  import { afterPause, fileView, VIEW_REFRESH_DELAY_MS } from "../lib/textViews.svelte";
   import FileBanners from "./FileBanners.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
@@ -124,8 +124,20 @@
   // explorer's selection, and the one Send (⌘Enter) sends.
   // Read from the editor's own tree, which keeps the blocks an edit didn't touch, so a
   // keystroke reads only its own block again, and the outline's other entries stay
-  // the objects they were (#168).
-  let outlineOf = $state.raw<{ doc: Text; tree: Tree } | null>(null);
+  // the objects they were (#168). It shows the text once the editor has been still for
+  // a moment (`VIEW_REFRESH_DELAY_MS`), as the explorer's selection follows it: typing
+  // that makes a request appear and go (`@` at the top reads as a request line until
+  // ` = ` follows) doesn't redraw the outline, and the explorer, on each keystroke.
+  interface EditorAt {
+    doc: Text;
+    tree: Tree;
+    cursor: number;
+  }
+  /** The editor as of its last update. */
+  let latest: EditorAt | null = null;
+  let settling: ReturnType<typeof setTimeout> | undefined;
+  /** The editor as the outline shows it. */
+  let outlineOf = $state.raw<EditorAt | null>(null);
   const blocks = $derived(outlineOf ? requestBlocks(outlineOf.doc, outlineOf.tree) : []);
   /** The outline's entries: the same array while they're the same, so a keystroke doesn't have the outline compare its thousand. */
   let lastEntries: OutlineEntry[] = [];
@@ -139,18 +151,26 @@
     if (next.length === lastEntries.length && next.every((e, i) => e === lastEntries[i])) return lastEntries;
     return (lastEntries = next);
   });
-  let cursor = $state(0);
   const followCursor = EditorView.updateListener.of((u) => {
-    if (u.selectionSet || u.docChanged) cursor = u.state.selection.main.head;
-    // Untracked: this runs inside whatever dispatched (an Editor effect among them), which mustn't come to depend on it.
     const tree = syntaxTree(u.state);
-    if (tree !== untrack(() => outlineOf?.tree)) outlineOf = { doc: u.state.doc, tree };
+    if (!u.selectionSet && !u.docChanged && tree === latest?.tree) return;
+    latest = { doc: u.state.doc, tree, cursor: u.state.selection.main.head };
+    clearTimeout(settling);
+    // Not from inside this update (it may run in an Editor effect, which mustn't come to depend on the outline).
+    settling = setTimeout(() => (outlineOf = latest), outlineOf ? VIEW_REFRESH_DELAY_MS : 0);
   });
-  const current = $derived(requestAt(blocks, cursor));
+  onDestroy(() => clearTimeout(settling));
+  const current = $derived(outlineOf ? requestAt(blocks, outlineOf.cursor) : null);
   const currentIndex = $derived(current?.index ?? null);
+  const currentEntry = $derived(currentIndex === null ? null : entries[currentIndex]);
   /** The key of the request under the cursor, while the text reads as the file's requests. */
   const underCursor = $derived(!invalid && currentIndex !== null ? (doc?.file.requests[currentIndex]?._key ?? null) : null);
   $effect(() => app.setFileCursor(tab.id, currentIndex));
+
+  /** The request under the cursor now, though the outline hasn't caught up (Send). */
+  function requestNow(): number | null {
+    return latest ? (requestAt(requestBlocks(latest.doc, latest.tree), latest.cursor)?.index ?? null) : null;
+  }
 
   function show(block: RequestBlock, focus: boolean) {
     editor?.revealAt(block.start, { focus });
@@ -159,7 +179,8 @@
   // Asked to show a request (the explorer, `app.openFileView(path, { key })`): once the text is shown.
   $effect(() => {
     const want = app.fileRequestWanted;
-    if (want?.tabId !== tab.id || !shown || !editor || !doc) return;
+    // Once the outline has read the text too: it finds the request's block.
+    if (want?.tabId !== tab.id || !shown || !editor || !doc || !outlineOf) return;
     app.fileRequestWanted = null;
     const block = blocks[doc.file.requests.findIndex((r) => r._key === want.key)];
     if (block) tick().then(() => show(block, false));
@@ -201,7 +222,12 @@
       <button
         class="btn small ghost"
         disabled={!underCursor}
-        onclick={() => underCursor && app.openRequest(tab.path, { key: underCursor })}
+        onclick={() => {
+          // The one under the cursor now, though the outline hasn't caught up.
+          const index = requestNow();
+          const key = !invalid && index !== null ? doc?.file.requests[index]?._key : underCursor;
+          if (key) void app.openRequest(tab.path, { key });
+        }}
         use:tooltip={underCursor ? "Open the request under the cursor in its own tab" : invalid ? "The text doesn't read as a file yet" : "Put the cursor in a request to open it in its own tab"}
       >
         <Icon name="file" size={14} />Request
@@ -220,8 +246,9 @@
     {#if shown}
       <div class="file-body">
         <nav class="outline" aria-label="Outline">
-          {#each entries as entry, i (entry)}
-            <button class="entry" class:current={i === currentIndex} aria-current={i === currentIndex ? "true" : undefined} onclick={() => show(blocks[i], true)} use:tooltip={entry.label}>
+          <!-- Nothing in a row reads its place: a request added or removed above moves the rest without touching them (#168). -->
+          {#each entries as entry (entry)}
+            <button class="entry" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
               <Badge method={entry.method} />
               <span class="label ellipsis">{entry.label}</span>
             </button>
@@ -234,7 +261,11 @@
             bind:this={editor}
             value={text}
             onchange={typed}
-            onsend={() => app.send(tab.id)}
+            onsend={() => {
+              // The request under the cursor now, not when the cursor last settled.
+              app.setFileCursor(tab.id, requestNow());
+              void app.send(tab.id);
+            }}
             freshHistory
             language="http"
             {variables}

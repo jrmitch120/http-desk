@@ -138,16 +138,22 @@ function bodyFileExists(filePath: string, path: string): boolean {
 }
 /** An open document's text, as the shell reads it for the Problems panel. */
 const openTextOf = (doc: OpenText) => ("text" in doc ? doc.text : invokeCore<string>("file_text", { file: doc.file }));
+/** Lets the page's other tasks run: the shell does this work off the page's thread, the mock on it. */
+const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve));
 /** Like the shell's `workspace::file_problems`: the real core reads the text, and each body
- *  file (one without `{{variables}}`) is looked for among the mock's own files. */
-function fileProblemsOf(path: string, text: string): FileProblems {
+ *  file (one without `{{variables}}`) is looked for among the mock's own files. A task per
+ *  read, so a large file's don't hold the page's thread as one long task. */
+async function fileProblemsOf(path: string, text: string): Promise<FileProblems> {
   const read = invokeCore<RequestProblems>("text_problems", { text });
   const missing = read.files.filter((f) => !f.path.includes("{{") && !bodyFileExists(path, f.path)).map((f) => f.missing);
   const problems = [...read.problems, ...missing].sort((a, b) => a.line - b.line || a.column - b.column);
+  await nextTask();
   const portability = invokeCore<PortabilityMark[]>("portability_text", { text }).filter((m) => m.support === "jetbrains-only" || m.support === "vscode-only");
   // What the text reads as, for the page to find its Undefined variables and shared names in.
   const refers = text.includes("{{") || text.includes("@name");
-  return { path, problems, portability, ...(refers ? { file: invokeCore<HttpFile>("parse_file", { text }) } : {}) };
+  if (!refers) return { path, problems, portability };
+  await nextTask();
+  return { path, problems, portability, file: invokeCore<HttpFile>("parse_file", { text }) };
 }
 /** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
  *  `.http` file at `filePath`, or (thrown) why it can't be used. */
@@ -1787,19 +1793,21 @@ mockIPC(
         const paths: string[] = [];
         const walk = (n: Node) => (n.kind === "file" ? paths.push(n.path) : n.children?.forEach(walk));
         walk(openTree());
-        return paths.flatMap((path) => {
+        const all: FileProblems[] = [];
+        for (const path of paths) {
           const doc = open.find((d) => d.path === path);
           const file = fileAt(path);
-          if (!doc && file === undefined) return [];
-          const found = fileProblemsOf(path, doc ? openTextOf(doc) : invokeCore<string>("file_text", { file }));
-          return found.problems.length || found.portability.length || found.file ? [found] : [];
-        });
+          if (!doc && file === undefined) continue;
+          const found = await fileProblemsOf(path, doc ? openTextOf(doc) : invokeCore<string>("file_text", { file }));
+          if (found.problems.length || found.portability.length || found.file) all.push(found);
+        }
+        return all;
       }
       case "file_problems": {
         const has = args as { path: string; text?: string; file?: HttpFile };
         const file = fileAt(has.path);
         if (has.text === undefined && !has.file && file === undefined) return null;
-        return fileProblemsOf(has.path, has.text ?? invokeCore<string>("file_text", { file: has.file ?? file }));
+        return await fileProblemsOf(has.path, has.text ?? invokeCore<string>("file_text", { file: has.file ?? file }));
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.

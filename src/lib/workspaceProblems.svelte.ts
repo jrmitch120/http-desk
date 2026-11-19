@@ -8,7 +8,7 @@
 // Session's Global variables; the panel's list and the toggle's count are read here.
 import { untrack } from "svelte";
 import { api } from "./api";
-import type { OutsideScope, PortabilityLevel } from "./checks";
+import { ReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
 import { problemCount, problemFiles, type ProblemFile } from "./problemsList";
 import type { EnvironmentSet, FileProblems, OpenText } from "./types";
 import { envVariables } from "./vars";
@@ -48,19 +48,27 @@ export class WorkspaceProblems {
   private globals = $state.raw<Record<string, string>>({});
   private globalsRead = -1;
 
+  /** Per folder's environments, what its files' requests see: the same object until the environments, the selection or the Global variables change. */
+  private scopes = new Map<EnvironmentSet | null, OutsideScope>();
+  /** Per file, its requests' reference checks, kept between readings of it. */
+  private kept = new Map<string, ReferenceChecks>();
+
   /** The panel's files, by path, each with its entries by line. */
   readonly list: ProblemFile[] = $derived.by(() => {
     const { globals } = this;
     const envName = this.host.envName;
-    // One per folder's environments, shared by the files that use them.
-    const outside = new Map<EnvironmentSet | null, OutsideScope>();
     const scopeOf = (path: string) => {
       const set = this.host.environmentsOf(path);
-      let scope = outside.get(set);
-      if (!scope) outside.set(set, (scope = { env: envVariables(set, envName), envName, globals }));
+      let scope = this.scopes.get(set);
+      if (!scope || scope.envName !== envName || scope.globals !== globals) this.scopes.set(set, (scope = { env: envVariables(set, envName), envName, globals }));
       return scope;
     };
-    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf);
+    const kept = (path: string) => {
+      let checks = this.kept.get(path);
+      if (!checks) this.kept.set(path, (checks = new ReferenceChecks()));
+      return checks;
+    };
+    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf, kept);
   });
 
   /** The count on the panel's toggle. */
@@ -81,6 +89,8 @@ export class WorkspaceProblems {
   reset() {
     this.opens++;
     this.files = {};
+    this.scopes.clear();
+    this.kept.clear();
     this.seen.clear();
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();

@@ -31,8 +31,8 @@ export interface ProblemFile {
  * and each `# @name` a request shares with another, by line in the file's text. `file`
  * is what that text reads as (the shell's), so its verbatim text places each.
  */
-function referenceEntries(file: HttpFile, outside: OutsideScope): ProblemEntry[] {
-  const underlines = fileUnderlines(file, new ReferenceChecks().of(file, outside));
+function referenceEntries(file: HttpFile, outside: OutsideScope, kept: ReferenceChecks): ProblemEntry[] {
+  const underlines = fileUnderlines(file, kept.of(file, outside));
   if (!underlines.length) return [];
   const text = textRead(file);
   let line = 1;
@@ -50,13 +50,18 @@ function referenceEntries(file: HttpFile, outside: OutsideScope): ProblemEntry[]
 /**
  * The panel's files, by path; one with nothing to show is left out. `outside` is what
  * the requests of the file at a path see besides the file itself; without it, a file's
- * references aren't looked at.
+ * references aren't looked at. `kept` keeps each file's reference checks between readings.
  */
-export function problemFiles(files: FileProblems[], level: PortabilityLevel, outside?: (path: string) => OutsideScope): ProblemFile[] {
+export function problemFiles(
+  files: FileProblems[],
+  level: PortabilityLevel,
+  outside?: (path: string) => OutsideScope,
+  kept: (path: string) => ReferenceChecks = () => new ReferenceChecks(),
+): ProblemFile[] {
   return [...files]
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     .flatMap((f) => {
-      const references = f.file && outside ? referenceEntries(f.file, outside(f.path)) : [];
+      const references = f.file && outside ? referenceEntries(f.file, outside(f.path), kept(f.path)) : [];
       const entries: ProblemEntry[] = [
         ...f.problems.map((p) => ({ line: p.line, tone: p.severity, message: p.message })),
         ...references,
