@@ -11,6 +11,9 @@ import type { PlacedRequest } from "./reattach";
  *  index in the file, if it's still there) and how the tab showed it. */
 export interface LayoutTab extends PlacedRequest {
   path: string;
+  /** What the tab was called (`displayName`, which may come from `# @name`), shown
+   *  until its file is read. Missing in a Layout saved before it was kept. */
+  title?: string;
   section: RequestSection;
   responseView: ResponseView;
 }
@@ -50,7 +53,7 @@ const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 function readTab(v: unknown): LayoutTab | null {
   if (!isObject(v)) return null;
-  const [path, name, method, url] = [str(v.path), str(v.name), str(v.method), str(v.url)];
+  const [path, name, method, url, title] = [str(v.path), str(v.name), str(v.method), str(v.url), str(v.title)];
   if (path === null || name === null || method === null || url === null) return null;
   const position = typeof v.position === "number" && Number.isInteger(v.position) && v.position >= 0 ? v.position : null;
   const section = SECTIONS.find((s) => s === v.section) ?? "params";
@@ -61,7 +64,7 @@ function readTab(v: unknown): LayoutTab | null {
     mode: MODES.find((m) => m === view.mode) ?? fallback.mode,
     wrap: typeof view.wrap === "boolean" ? view.wrap : fallback.wrap,
   };
-  return { path, name, method, url, position, section, responseView };
+  return { path, name, method, url, ...(title ? { title } : {}), position, section, responseView };
 }
 
 /** What `load_layout` returned, as a Layout: none, or anything damaged, is an empty

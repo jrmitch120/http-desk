@@ -86,6 +86,7 @@ export class LayoutStore {
         name: req.name,
         method: req.method,
         url: req.url,
+        title: displayName(req),
         position: position < 0 ? null : position,
         section: t.section,
         responseView: { ...t.responseView },
@@ -139,7 +140,7 @@ export class LayoutStore {
     }
     if (this.opens !== open) return;
     const layout = readLayout(saved);
-    const tabs = layout.tabs.map((t): Tab => ({ ...newTab(fromWorkspace(root, t.path), uid(), t), restoring: { method: t.method, name: displayName(t) } }));
+    const tabs = layout.tabs.map((t): Tab => ({ ...newTab(fromWorkspace(root, t.path), uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) } }));
     this.host.restoring(this.reattach(open, root, layout.tabs, tabs));
     this.host.tabs = tabs;
     this.host.activeTabId = (layout.active === null ? undefined : tabs[layout.active]?.id) ?? tabs.at(-1)?.id ?? null;

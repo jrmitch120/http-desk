@@ -154,6 +154,29 @@ test("restored tabs show at once from the Layout, before their files are read; a
   await expect(urlBar(page)).toBeVisible();
 });
 
+test("a restored tab whose request is named only by # @name shows that name before its file is read", async ({ page }) => {
+  await openApp(page);
+  // Create pet loses its ### title and is called createPet by its # @name alone.
+  await page.evaluate((path) => {
+    const mock = (window as unknown as { __mock: MockFiles }).__mock;
+    const file = mock.files[path];
+    const [list, create, image] = file.requests;
+    mock.writeFile(path, { ...file, requests: [list, { ...(create as object), name: "", directives: [{ name: "name", value: "createPet" }] }, image] });
+  }, PETS);
+  await restart(page);
+  await openRequest(page, ["api", "pets.http"], "createPet");
+  await expect(tabNames(page)).toHaveText(["createPet"]);
+  await expect.poll(() => savedTabs(page)).toEqual([""]);
+
+  await page.goto("/?reads=hold&platform=mac");
+  await expect(treeItem(page, "api")).toBeVisible();
+
+  await expect(tabNames(page)).toHaveText(["createPet"]);
+  await page.evaluate(() => (window as unknown as { __mock: { releaseReads: () => void } }).__mock.releaseReads());
+  await expect(urlBar(page)).toBeVisible();
+  await expect(tabNames(page)).toHaveText(["createPet"]);
+});
+
 test("switching to another workspace and back while the files are still being read restores the tabs, and the Layout keeps them", async ({ page }) => {
   await openApp(page, "?roots=/work/shop&recent=/work/shop");
   await openRequest(page, ["api", "pets.http"], "List pets");

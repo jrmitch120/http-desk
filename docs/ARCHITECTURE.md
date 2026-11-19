@@ -485,12 +485,12 @@ The output is ordinary `.http` text produced by the same serializer the editor u
   `src/lib/layout.ts`) is saved by the shell (`layout.rs`: `load_layout`, `save_layout`) as one
   small JSON file per workspace under the config folder, named after a hash of the canonical
   root and never inside the workspace. A tab is described by its file (relative to the root),
-  its request's name, method and URL as last saved, and its index in the file; a request
-  never saved isn't kept. The Layout store (`src/lib/layoutStore.svelte.ts`, Host-backed
+  its request's name, method and URL as last saved, its index in the file, and what the tab
+  was called (its title, which may come from `# @name`); a request never saved isn't kept. The Layout store (`src/lib/layoutStore.svelte.ts`, Host-backed
   like the Session, Runner and History stores) saves the Layout once changes settle
   (400 ms), one save after another, and saves a settling one at once before quitting or
   opening another workspace. Opening a workspace doesn't wait for the tabs' files: the
-  Layout's tabs show at once from what it says of them (method and name), so a 30-tab
+  Layout's tabs show at once from what it says of them (method and title), so a 30-tab
   Layout opens as fast as an empty workspace. Each distinct file is then read once, afresh,
   in the background, and that read becomes the tab's document (anything opening the same
   file meanwhile waits for the Layout's reads to start, then shares them); as soon as a
