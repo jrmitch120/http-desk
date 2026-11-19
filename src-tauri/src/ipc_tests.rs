@@ -16,6 +16,7 @@ mod layout;
 mod paths;
 mod pre_request;
 mod preview;
+mod problems;
 mod renaming;
 mod reply;
 mod request_variables;

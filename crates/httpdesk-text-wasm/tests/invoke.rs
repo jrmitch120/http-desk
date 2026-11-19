@@ -71,6 +71,20 @@ fn request_text_is_a_requests_text_as_history_keeps_it() {
 }
 
 #[test]
+fn request_problems_reads_a_requests_source_as_the_shell_does() {
+    let file = call("parse_file", json!({ "text": "### Broken\n# @nmae x\nPOST https://a b\n\n< ./payload.json\n" }));
+    let read = call("request_problems", json!({ "request": file["requests"][0] }));
+    let at = |p: &Value| (p["line"].clone(), p["column"].clone(), p["code"].clone());
+    let problems: Vec<_> = read["problems"].as_array().unwrap().iter().map(at).collect();
+    assert_eq!(
+        problems,
+        [(json!(2), json!(3), json!("unknown-directive")), (json!(3), json!(1), json!("unparseable-request-line"))]
+    );
+    assert_eq!(read["files"][0]["path"], "./payload.json");
+    assert_eq!(at(&read["files"][0]["missing"]), (json!(5), json!(1), json!("missing-file")));
+}
+
+#[test]
 fn an_unknown_command_or_bad_arguments_is_an_error() {
     assert!(invoke("send_request", "{}").unwrap_err().contains("send_request"));
     assert!(invoke("request_source", "{\"request\": 1}").is_err());

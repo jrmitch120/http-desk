@@ -21,6 +21,7 @@ import type {
   NamedExchange,
   ParsedRequest,
   Request,
+  RequestProblems,
   RequestPreview,
   RequestVariableReading,
   RunRequestReport,
@@ -83,6 +84,10 @@ export const api = {
   requestSource: (request: Request) => invoke<string>("request_source", { request }),
   /** The first request in `text` (a Source view's, a History entry's source text) and the problems found reading it. */
   parseRequest: (text: string) => invoke<ParsedRequest>("parse_request", { text }),
+  /** What reading `request`'s source (as the Source view shows it) finds: its problems, and the files its body reads. */
+  requestProblems: (request: Request) => invoke<RequestProblems>("request_problems", { request }),
+  /** Whether body file `path` (as written after `<`, variables resolved) exists, relative to `.http` file `file`'s folder. */
+  bodyFileExists: (file: string, path: string) => invoke<boolean>("body_file_exists", { file, path }),
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),

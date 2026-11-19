@@ -87,20 +87,6 @@ export interface Request {
   _key?: string;
 }
 
-/**
- * Something the core's parser couldn't read cleanly (httpdesk-text `Problem`). Reading
- * recovers anyway and keeps the text as written. Line and column are 1-based, the
- * column in characters.
- */
-export interface Problem {
-  line: number;
-  column: number;
-  /** "error": the text doesn't say what was meant; "warning": it reads, probably not as intended. */
-  severity: "error" | "warning";
-  code: "unparseable-request-line" | "header-after-body" | "unknown-directive";
-  message: string;
-}
-
 /** A single request's text read on its own (`parse_request`): null without a request line. */
 export interface ParsedRequest {
   request: Request | null;
@@ -120,6 +106,31 @@ export interface HttpFile {
   lineEnding: LineEnding;
   /** The file started with a UTF-8 BOM; written back on save. */
   bom: boolean;
+}
+
+/** Something the core couldn't read cleanly in a request's text (`httpdesk_text::Problem`). Reading recovers anyway. */
+export interface Problem {
+  /** 1-based line in the text read. */
+  line: number;
+  /** 1-based column, in characters. */
+  column: number;
+  severity: "error" | "warning";
+  code: ProblemCode;
+  message: string;
+}
+
+export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file";
+
+/** A file a request's body is read from (`< path`): as written, and the problem to report if it doesn't exist. */
+export interface BodyFile {
+  path: string;
+  missing: Problem;
+}
+
+/** What reading a request's source found (`request_problems`), placed in that text. */
+export interface RequestProblems {
+  problems: Problem[];
+  files: BodyFile[];
 }
 
 export interface TreeNode {

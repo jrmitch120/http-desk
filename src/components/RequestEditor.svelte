@@ -7,7 +7,9 @@
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { bodyFilePaths, requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { sourceProblems } from "../lib/problems.svelte";
+  import { checkUnderlines } from "../lib/codemirror/underlines";
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
@@ -67,8 +69,38 @@
     };
   });
 
+  // What the core found reading the request's source: asked when it's opened (at once)
+  // and after each edit (debounced like the source), for the strip and the underlines.
+  $effect(() => {
+    if (!req) return;
+    const key = tab.key;
+    const snap = JSON.stringify(req);
+    const t = setTimeout(() => sourceProblems.refresh(key, JSON.parse(snap)), untrack(() => sourceProblems.read(key)) ? 120 : 0);
+    return () => clearTimeout(t);
+  });
+  // While the source holds typed text that doesn't parse, the request stays at its last
+  // valid state, so the core's reading of it doesn't place anything in the text shown:
+  // the problems found reading the typed text do (#163).
+  const typedSource = $derived(app.sourceText(tab.path, tab.key));
+  const reading = $derived(
+    typedSource && !typedSource.parses ? { snap: JSON.stringify(req), read: { problems: typedSource.problems, files: [] } } : sourceProblems.read(tab.key),
+  );
+  // Whether each file the body reads exists: asked when the request is opened and when a path changes.
+  const bodyFiles = $derived(variables ? bodyFilePaths(reading?.read, variables).map((f) => f.path).join("\n") : "");
+  $effect(() => {
+    const [file, paths] = [tab.path, bodyFiles];
+    for (const path of paths ? paths.split("\n") : []) void sourceProblems.check(file, path);
+  });
+
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests) : []);
+  const checks = $derived(
+    req && variables
+      ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests, {
+          read: reading?.read,
+          exists: (path) => sourceProblems.exists(tab.path, path),
+        })
+      : [],
+  );
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
@@ -164,6 +196,8 @@
     );
     return () => clearTimeout(t);
   });
+  // The strip's checks in the source: the core's problems only when it read the version of the request shown.
+  const underlines = $derived(checkUnderlines(source, reading?.snap === sourceOf ? checks : checks.filter((c) => c.kind !== "problem")));
   // Shown again (the .http button, its shortcut): the cursor is where it was left.
   let sourceWasShown = untrack(() => showSource);
   $effect(() => {
@@ -299,7 +333,7 @@
           {/if}
         </div>
         <div class="source-code">
-          <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.editSource(tab.path, tab.key, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} />
+          <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.editSource(tab.path, tab.key, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} />
         </div>
       </div>
     {/if}

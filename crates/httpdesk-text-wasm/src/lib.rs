@@ -47,6 +47,11 @@ pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
             let RequestArgs { request } = args(command, args_json)?;
             json(&httpdesk_text::request_text(&request))
         }
+        // The shell's `request_problems`: what reading a request's source finds.
+        "request_problems" => {
+            let RequestArgs { request } = args(command, args_json)?;
+            json(&httpdesk_text::request_problems(&request))
+        }
         // A whole `.http` file, as the shell reads one from disk.
         "parse_file" => {
             let Text { text } = args(command, args_json)?;

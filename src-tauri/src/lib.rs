@@ -475,6 +475,23 @@ fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
     httpdesk_core::parse_request(&text)
 }
 
+/// What reading `request`'s source finds: its problems, and the files its body is
+/// read from (`httpdesk_core::request_problems`), for the check strip and the Source
+/// view's underlines.
+#[tauri::command]
+fn request_problems(request: Request) -> httpdesk_core::RequestProblems {
+    httpdesk_core::request_problems(&request)
+}
+
+/// Whether body file `path` (as written after `<`, variables resolved) exists, found as
+/// a send finds it: relative to the folder of `.http` file `file`, a workspace file.
+#[tauri::command]
+fn body_file_exists(state: State<'_, AppState>, file: PathBuf, path: String) -> CmdResult<bool> {
+    let file = state.confine_entry(&file)?;
+    let dir = file.parent().unwrap_or(&file);
+    Ok(httpdesk_core::exec::body_file_path(dir, &path).is_file())
+}
+
 #[tauri::command]
 fn create_file(state: State<'_, AppState>, path: PathBuf, content: String) -> CmdResult<()> {
     let path = state.confine_write(&path)?;
@@ -1482,6 +1499,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             save_http_file,
             request_source,
             parse_request,
+            request_problems,
+            body_file_exists,
             create_file,
             create_dir,
             rename_path,
