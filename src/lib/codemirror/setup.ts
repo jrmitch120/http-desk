@@ -8,7 +8,7 @@ import { xml } from "@codemirror/lang-xml";
 import { javascript } from "@codemirror/lang-javascript";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
+import { EditorState, Facet, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, segments } from "../http";
 import { dynamicUsage, dynamicVariable, MASK, requestVariable, varClass } from "../vars";
 import type { PathCompletion } from "../requestPaths";
@@ -35,6 +35,7 @@ import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
 import { http } from "./http";
+import { httpCompletion } from "./httpCompletion";
 import type { ReadingCard } from "../exchanges";
 
 export type Language = "json" | "xml" | "html" | "javascript" | "http" | "text";
@@ -385,38 +386,46 @@ export function varCard(
   return dom;
 }
 
-function varCompletion(provider: VarProvider) {
-  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
-    // Paths can hold brackets and quotes: `{{login.response.body.$.items[0]['odd key']`.
-    const m = ctx.matchBefore(/\{\{\s*[^{}\s][^{}]*|\{\{\s*/);
-    if (!m) return null;
-    const start = m.from + /\{\{\s*/.exec(m.text)![0].length;
-    const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
-    const close = after === "}}" ? "" : "}}";
-    const typed = ctx.state.sliceDoc(start, ctx.pos);
-    const path = await provider.pathCompletions?.(typed);
-    if (ctx.aborted) return null;
-    if (path) return pathResult(start, path, close);
-    // Names in scope are plain words: anything else isn't a reference being typed.
-    if (!/^[\w.$-]*$/.test(typed)) return null;
-    return {
-      from: start,
-      options: provider.completions().map((c): VarOption => {
-        // A named request goes on with its path (`{{login.|}}`), completed next.
-        if (c.source === "request") return { label: c.name, detail: "request", type: "variable", apply: applyWithCaret(c.name + ".", close), entry: c, reopen: true };
-        // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
-        const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
-        return {
-          label: c.name,
-          detail: c.source,
-          type: c.source === "dynamic" ? "function" : "variable",
-          // The names in scope before the dynamic variables, which would sort first (`$`).
-          boost: c.source === "dynamic" ? -1 : 0,
-          apply: c.required ? applyWithCaret(text, close) : text + close,
-          entry: c,
-        };
-      }),
-    };
+/**
+ * The VarProvider an editor's `variableExtensions` was given, which `varCompletion`
+ * reads when it runs. The completion source itself stays the same function when the
+ * provider changes (the Source view gets a new one each time its text is read), as a
+ * new source would close the list open at the time.
+ */
+const varProvider = Facet.define<VarProvider, VarProvider | null>({ combine: (ps) => ps.at(-1) ?? null });
+
+async function varCompletion(ctx: CompletionContext): Promise<CompletionResult | null> {
+  const provider = ctx.state.facet(varProvider);
+  if (!provider) return null;
+  // Paths can hold brackets and quotes: `{{login.response.body.$.items[0]['odd key']`.
+  const m = ctx.matchBefore(/\{\{\s*[^{}\s][^{}]*|\{\{\s*/);
+  if (!m) return null;
+  const start = m.from + /\{\{\s*/.exec(m.text)![0].length;
+  const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
+  const close = after === "}}" ? "" : "}}";
+  const typed = ctx.state.sliceDoc(start, ctx.pos);
+  const path = await provider.pathCompletions?.(typed);
+  if (ctx.aborted) return null;
+  if (path) return pathResult(start, path, close);
+  // Names in scope are plain words: anything else isn't a reference being typed.
+  if (!/^[\w.$-]*$/.test(typed)) return null;
+  return {
+    from: start,
+    options: provider.completions().map((c): VarOption => {
+      // A named request goes on with its path (`{{login.|}}`), completed next.
+      if (c.source === "request") return { label: c.name, detail: "request", type: "variable", apply: applyWithCaret(c.name + ".", close), entry: c, reopen: true };
+      // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
+      const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
+      return {
+        label: c.name,
+        detail: c.source,
+        type: c.source === "dynamic" ? "function" : "variable",
+        // The names in scope before the dynamic variables, which would sort first (`$`).
+        boost: c.source === "dynamic" ? -1 : 0,
+        apply: c.required ? applyWithCaret(text, close) : text + close,
+        entry: c,
+      };
+    }),
   };
 }
 
@@ -481,24 +490,30 @@ const completionColumns = [
  */
 export const layerTooltips = (): Extension => tooltips({ parent: popupLayer() });
 
+/** The autocompletion of `variableExtensions`, the same for every provider (see `varProvider`). */
+const completion = autocompletion({
+  override: [varCompletion, httpCompletion],
+  icons: false,
+  addToOptions: completionColumns,
+  // A named request or a path segment ending in `.` goes on with the next segment.
+  activateOnCompletion: (c) => !!(c as VarOption).reopen,
+  optionClass: (c) => ((c as VarOption).hint ? "cm-completionHint" : ""),
+});
+
 /**
  * `{{variable}}` marks, hover cards, autocompletion and Extract to variable
  * (when the provider has `extract`). With `marks: false` only the
  * autocompletion: for a masked field, where a mark, a card or extracting the
- * selection would give the hidden text away.
+ * selection would give the hidden text away. In a `.http` editor (the Source
+ * view, the file view) the autocompletion also offers methods, header names and
+ * directives where they're typed (`httpCompletion`).
  */
 export function variableExtensions(provider: VarProvider, { marks = true }: { marks?: boolean } = {}): Extension {
   return [
     layerTooltips(),
     marks ? [varDecorations(provider), varTooltip(provider), extractExtension(provider)] : [],
-    autocompletion({
-      override: [varCompletion(provider)],
-      icons: false,
-      addToOptions: completionColumns,
-      // A named request or a path segment ending in `.` goes on with the next segment.
-      activateOnCompletion: (c) => !!(c as VarOption).reopen,
-      optionClass: (c) => ((c as VarOption).hint ? "cm-completionHint" : ""),
-    }),
+    varProvider.of(provider),
+    completion,
   ];
 }
 

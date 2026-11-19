@@ -3,11 +3,11 @@
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
   import type { GlobalVariable, KeyValue, PortabilityMark } from "../lib/types";
-  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
+  import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, HEADER_NAMES, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { bodyFilePaths, portabilityLineMarks, requestChecks, type Check, type PortabilityLevel, type QuickFix, type Section } from "../lib/checks";
+  import { bodyFilePaths, portabilityLineMarks, requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import { sourceProblems } from "../lib/problems.svelte";
   import { checkUnderlines } from "../lib/codemirror/underlines";
   import { readingCard, workspaceFile } from "../lib/exchanges";
@@ -99,8 +99,6 @@
    * typed there, while it holds any (it may not read as a request), else the request's.
    */
   let portability = $state<PortabilityMark[]>([]);
-  /** How portability notes show (#171 makes this a setting). */
-  const portabilityLevel: PortabilityLevel = "note";
   $effect(() => {
     if (!req) return;
     const typed = typedSource?.text ?? null;
@@ -115,7 +113,7 @@
       clearTimeout(t);
     };
   });
-  const sourceMarks = $derived(portabilityLineMarks(portability, portabilityLevel));
+  const sourceMarks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
   const checks = $derived(
@@ -128,7 +126,7 @@
           app.folderOf(tab.path),
           doc.file.requests,
           { read: reading?.read, exists: (path) => sourceProblems.exists(tab.path, path) },
-          { marks: portability, level: portabilityLevel },
+          { marks: portability, level: app.portabilityLevel },
         )
       : [],
   );
@@ -251,11 +249,6 @@
     tick().then(() => sourceEditor?.revealLine(line));
   });
 
-  const HEADER_NAMES = [
-    "Accept", "Accept-Encoding", "Accept-Language", "Authorization", "Cache-Control", "Connection", "Content-Type",
-    "Content-Length", "Cookie", "Host", "If-Match", "If-None-Match", "If-Modified-Since", "Origin", "Referer",
-    "User-Agent", "X-Api-Key", "X-Request-Id", "X-Correlation-Id", "X-Forwarded-For",
-  ];
   /** Params and headers: every column, with descriptions (`# @param` / `# @header`). */
   const documented: Column<KeyValue>[] = ["enable", "name", "value", "description", "delete"];
   const showDescriptions = $derived(app.settings?.showDescriptions !== false);

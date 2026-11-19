@@ -674,6 +674,9 @@ export interface AppSettings {
   showResolved: boolean;
   /** Show the request's `.http` source in place of its sections (the .http button, Request → Show .http Source). */
   showSource: boolean;
+  /** Show non-portable constructs (the gutter's markers, the check strip's portability notes) as
+   *  warnings, for teams whose files must work in both VS Code and Rider. Off by default; never blocks a send. */
+  portabilityWarnings: boolean;
   /** How the Environments modal shows variables: every environment side by side, or one at a time. */
   envView: "matrix" | "list";
   /** Per workspace root: the Environments matrix's column widths, as resized. */

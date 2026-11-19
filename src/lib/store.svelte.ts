@@ -16,6 +16,7 @@ import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFol
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
+import type { PortabilityLevel } from "./checks";
 import { SHARED } from "./vars";
 import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
@@ -285,6 +286,9 @@ class AppStore {
   /** The zoom of the whole interface. A missing, non-numeric or out-of-range
    *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
   zoom = $derived(zoomOf(this.settings?.zoom));
+  /** How non-portable constructs show (Settings → Editor): as warnings only when the
+   *  setting is `true`; missing or anything else in a hand-edited settings file, notes. */
+  portabilityLevel = $derived<PortabilityLevel>(this.settings?.portabilityWarnings === true ? "warning" : "note");
   /** The webview zoom last asked for, to skip repeat calls. */
   private webviewZoom: number | undefined = undefined;
   /** The theme in effect, with System resolved through the OS appearance. */

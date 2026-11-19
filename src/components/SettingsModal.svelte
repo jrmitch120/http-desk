@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Application settings: appearance, request defaults, TLS, response limits, History, Trusted workspaces.
+  // Application settings: appearance, portability, request defaults, TLS, response limits, History, Trusted workspaces.
   // A section can be a component of its own (HistorySettings): the styles below reach into it.
   import { open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
@@ -106,6 +106,17 @@
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>
           <Toggle ariaLabel="Show parameter descriptions" checked={settings.showDescriptions} onchange={(v) => set({ showDescriptions: v })} />
+        </div>
+      </section>
+
+      <section>
+        <h3>Portability</h3>
+        <div class="setting">
+          <div class="label">
+            <span>Show portability notes as warnings</span>
+            <small class="muted">For teams whose <span class="mono">.http</span> files must work in both VS Code and Rider. Lines only one of them reads are marked as warnings; they never block a send.</small>
+          </div>
+          <Toggle ariaLabel="Show portability notes as warnings" checked={settings.portabilityWarnings === true} onchange={(v) => set({ portabilityWarnings: v })} />
         </div>
       </section>
 
