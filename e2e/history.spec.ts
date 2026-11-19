@@ -6,7 +6,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, seedHistory, setMockResponse } from "./helpers";
 
 const status = (page: Page) => page.locator(".statusbar").first();
-const historyButton = (page: Page) => page.getByRole("button", { name: "History", exact: true });
+const paneSwitch = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" });
+const historyButton = (page: Page) => paneSwitch(page).getByRole("radio", { name: "History" });
+const responseButton = (page: Page) => paneSwitch(page).getByRole("radio", { name: "Response" });
 const entries = (page: Page) => page.getByRole("list", { name: "History entries" }).getByRole("listitem");
 
 async function send(page: Page) {
@@ -20,7 +22,7 @@ test("a request with no response yet has a History view, empty until it's sent",
 
   await historyButton(page).click();
 
-  await expect(historyButton(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(historyButton(page)).toHaveAttribute("aria-checked", "true");
   await expect(page.getByText("No History for this request yet")).toBeVisible();
 });
 
@@ -57,27 +59,33 @@ test("sending twice lists two entries newest first, and an entry opens read-only
   expect(released.filter((id) => id.startsWith("h-"))).toHaveLength(1);
 });
 
-test("History, pressed with an entry open, goes back to the list; pressed on the list, back to the response", async ({ page }) => {
+test("the pane's title switches between the response and History; an entry stays open until Back or Response", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
   await historyButton(page).click();
   await entries(page).first().getByRole("button").click();
-  await expect(page.getByRole("region", { name: "History entry" })).toBeVisible();
+  const entry = page.getByRole("region", { name: "History entry" });
+  await expect(entry).toBeVisible();
 
+  // History is already showing: choosing it again changes nothing.
   await historyButton(page).click();
+  await expect(entry).toBeVisible();
+  await expect(historyButton(page)).toHaveAttribute("aria-checked", "true");
 
-  await expect(page.getByRole("region", { name: "History entry" })).toHaveCount(0);
-  await expect(entries(page)).toHaveCount(1);
-  await expect(historyButton(page)).toHaveAttribute("aria-pressed", "true");
+  // Response leaves History, releasing the entry it had open.
+  await responseButton(page).click();
+  await expect(entry).toHaveCount(0);
+  await expect(entries(page)).toHaveCount(0);
+  await expect(responseButton(page)).toHaveAttribute("aria-checked", "true");
+  await expect(status(page).locator(".metric", { hasText: "Size" })).toBeVisible();
   const released = await mockState(page, "releasedResponses");
   expect(released.filter((id) => id.startsWith("h-"))).toHaveLength(1);
 
+  // Back in History, the list shows, not the entry.
   await historyButton(page).click();
-
-  await expect(entries(page)).toHaveCount(0);
-  await expect(historyButton(page)).toHaveAttribute("aria-pressed", "false");
-  await expect(status(page).locator(".metric", { hasText: "Size" })).toBeVisible();
+  await expect(entries(page)).toHaveCount(1);
+  await expect(entry).toHaveCount(0);
 });
 
 test("a binary entry previews like a live response, and its body saves to a file", async ({ page }) => {

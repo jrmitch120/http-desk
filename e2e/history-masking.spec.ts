@@ -24,7 +24,7 @@ test("an entry's Request view shows a Secret's value and a prompt answer masked"
   await page.getByRole("radio", { name: "Request" }).click();
   await expect(page.locator(".sent-line")).toContainText("key=dev-token-123&code=842913");
 
-  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" }).click();
   await page.getByRole("list", { name: "History entries" }).getByRole("listitem").first().getByRole("button").click();
   const entry = page.getByRole("region", { name: "History entry" });
   await entry.getByRole("radio", { name: "Request" }).click();

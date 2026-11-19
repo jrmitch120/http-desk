@@ -6,7 +6,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { dialog, mockState, openApp, openRequest } from "./helpers";
 
-const historyButton = (page: Page) => page.getByRole("button", { name: "History", exact: true });
+const historyButton = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" });
 const entries = (page: Page) => page.getByRole("list", { name: "History entries" }).getByRole("listitem");
 
 async function send(page: Page) {

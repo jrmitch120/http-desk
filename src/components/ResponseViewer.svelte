@@ -63,6 +63,11 @@
   const historyTab = $derived(tab && app.tabs.some((t) => t.id === tab.id) ? tab : null);
   const showingHistory = $derived(!!historyTab && app.history.isShown(historyTab.id));
   const openedEntry = $derived(historyTab && showingHistory ? app.history.openedIn({ tab: historyTab.id }) : undefined);
+  type Pane = "response" | "history";
+  const PANES: SegmentedOption<Pane>[] = [
+    { value: "response", label: "Response" },
+    { value: "history", label: "History" },
+  ];
 
   // The viewer tab, body mode and wrap: the tab's own, or this result's.
   const resultView = $state(untrack(() => (tab ? null : (resultViews.get(viewId) ?? newResponseView()))));
@@ -149,8 +154,9 @@
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
-{#snippet historySwitch(t: Tab)}
-  <button class="btn small ghost history-switch" class:on={showingHistory} aria-pressed={showingHistory} onclick={() => app.history.toggle(t.id)}>History</button>
+<!-- The pane's title: which of the tab's response and its request's History it shows. -->
+{#snippet paneSwitch(t: Tab)}
+  <div class="pane-switch"><SegmentedControl label="Response pane" options={PANES} value={showingHistory ? "history" : "response"} onchange={(v) => app.history.show(t.id, v === "history")} /></div>
 {/snippet}
 
 {#snippet fromHistory()}
@@ -162,14 +168,12 @@
 <div class="viewer">
   {#if historyTab && showingHistory}
     <div class="statusbar">
+      {@render paneSwitch(historyTab)}
       {#if openedEntry}
         <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close({ tab: historyTab.id })}><Icon name="chevron-left" />Back</button>
-        <span class="muted small">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
+        <span class="muted small sent">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
         <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
-      {:else}
-        <span class="title">History</span>
       {/if}
-      {@render historySwitch(historyTab)}
     </div>
     {#if openedEntry}
       <section class="entry" aria-label="History entry">
@@ -181,8 +185,7 @@
   {:else if !run}
     {#if historyTab}
       <div class="statusbar">
-        <span class="title">Response</span>
-        {@render historySwitch(historyTab)}
+        {@render paneSwitch(historyTab)}
       </div>
     {/if}
     <div class="empty-state">
@@ -196,7 +199,7 @@
     </div>
   {:else}
     <div class="statusbar">
-      <span class="title">Response</span>
+      {#if historyTab}{@render paneSwitch(historyTab)}{:else}<span class="title">Response</span>{/if}
       {#if run.loading}
         <span class="loading">
           <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
@@ -215,14 +218,15 @@
         {@render fromHistory()}
         <span class="spacer"></span>
         {#if !noBody}
-        <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
-        <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+        <span class="body-actions">
+          <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
+          <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+        </span>
         {/if}
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
         {@render fromHistory()}
       {/if}
-      {#if historyTab}{@render historySwitch(historyTab)}{/if}
     </div>
 
     {#if run.cancelled && !res}
@@ -268,12 +272,14 @@
   .small {
     font-size: 12px;
   }
+  /* In a narrow pane, what doesn't fit moves to a second row rather than out of sight. */
   .statusbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    gap: 6px 12px;
     min-height: 40px;
-    padding: 0 10px 0 16px;
+    padding: 4px 10px 4px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
   }
@@ -285,9 +291,29 @@
   .tip {
     display: flex;
   }
+  /* In a narrow pane, when the entry was sent gives way first, on one line. */
+  .sent {
+    flex: 1 1 0;
+    min-width: 80px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Copy and save stay together, on whichever row they land. */
+  .body-actions {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+  /* Its options side by side, never squeezed onto two rows. */
+  .pane-switch {
+    flex: none;
+    display: flex;
+  }
   .metric {
     font-size: 12px;
     font-family: var(--mono);
+    white-space: nowrap;
   }
   .metric .muted {
     font-family: var(--font);
@@ -324,10 +350,6 @@
     padding: 6px 10px 6px 16px;
     border-bottom: 1px solid var(--border);
     flex: none;
-  }
-  /* The view switch sits at the end of the title row, whatever comes before it. */
-  .history-switch {
-    margin-left: auto;
   }
   .entry {
     flex: 1;

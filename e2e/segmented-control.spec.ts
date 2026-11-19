@@ -101,6 +101,10 @@ test("the response view and Settings switches are the same radiogroup", async ({
   const tabs = page.getByRole("radiogroup", { name: "Response tabs" });
   expect(await pick(tabs, "Request")).toBe(look);
   expect(await pick(tabs, "Body")).toBe(look);
+  // The pane's title: the response or its request's History.
+  const pane = page.getByRole("radiogroup", { name: "Response pane" });
+  expect(await pick(pane, "History")).toBe(look);
+  expect(await pick(pane, "Response")).toBe(look);
 
   await page.keyboard.press("Meta+Comma");
   const settings = dialog(page, "Settings");

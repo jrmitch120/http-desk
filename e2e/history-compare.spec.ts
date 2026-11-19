@@ -7,7 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dialog, mockState, openApp, openRequest, setMockResponse } from "./helpers";
 
 const status = (page: Page) => page.locator(".statusbar").first();
-const historyButton = (page: Page) => page.getByRole("button", { name: "History", exact: true });
+const historyButton = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" });
 const entries = (page: Page) => page.getByRole("list", { name: "History entries" }).getByRole("listitem");
 const compare = (page: Page) => dialog(page, "Compare");
 /** The lines the merge view marks as changed on side `a` (older) or `b` (newer). */

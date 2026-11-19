@@ -7,7 +7,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dialog, mockState, openApp, openRequest, seedHistory } from "./helpers";
 
 const status = (page: Page) => page.locator(".statusbar").first();
-const historyButton = (page: Page) => page.getByRole("button", { name: "History", exact: true });
+const historyButton = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" });
 const requestEntries = (page: Page) => page.locator(".viewer").getByRole("list", { name: "History entries" }).getByRole("listitem");
 const sidebarHistory = (page: Page) => page.getByRole("region", { name: "Workspace History" });
 const sidebarEntries = (page: Page) => sidebarHistory(page).getByRole("list", { name: "History entries" }).getByRole("listitem");

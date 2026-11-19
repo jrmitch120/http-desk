@@ -30,7 +30,7 @@ async function setHeaders(page: Page, text: string) {
 }
 
 async function openHistoryEntry(page: Page, nth: number) {
-  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" }).click();
   await entries(page).nth(nth).getByRole("button").click();
 }
 

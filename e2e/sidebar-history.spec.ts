@@ -70,7 +70,7 @@ test("an entry opens read-only in the response viewer, and closing it releases i
   // The request as sent, its credentials masked.
   await expect(viewer.getByText("••••••••")).toBeVisible();
   // Nothing to send again or browse from here: it's an entry, not a request.
-  await expect(viewer.getByRole("button", { name: "History", exact: true })).toHaveCount(0);
+  await expect(viewer.getByRole("radiogroup", { name: "Response pane" })).toHaveCount(0);
   await expect(entries(page).first().getByRole("button")).toHaveAttribute("aria-current", "true");
 
   await page.keyboard.press("Escape");

@@ -69,8 +69,8 @@ pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
   Leave it out and nothing shows; pass `0` only where an empty option says something
   (a response with no headers), so empty tabs don't fill up with zeros.
 - One look and one size, on purpose: every switch in the app (body type, the response
-  viewer's tabs, response view, Settings theme and layout, OpenAPI source and grouping)
-  must match.
+  viewer's tabs, response view, the response pane's Response | History, Settings theme
+  and layout, OpenAPI source and grouping) must match.
   `e2e/segmented-control.spec.ts` compares their computed styles, so don't restyle one
   from its parent.
 - Keyboard: Tab reaches the checked option; arrows and Home/End move and select (wrapping).
