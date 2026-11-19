@@ -1,0 +1,3 @@
+### Stateless
+# @no-cookie-jar
+GET https://example.com/session

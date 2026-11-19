@@ -237,6 +237,12 @@ fn vertical_slice_over_ipc() {
     // Source preview command.
     let src = h.ok("render_request", json!({ "request": r }));
     assert!(src.as_str().unwrap().contains("#~ X-Debug: on"));
+
+    // Portability marks, placed on the lines of that same source text.
+    let marks = h.ok("request_portability", json!({ "request": r }));
+    let line = src.as_str().unwrap().lines().position(|l| l == "#~ X-Debug: on").unwrap() + 1;
+    let mark = marks.as_array().unwrap().iter().find(|m| m["line"] == line).expect("the disabled header is marked");
+    assert_eq!((&mark["construct"], &mark["support"]), (&json!("disabled-line"), &json!("httpdesk-only")));
 }
 
 #[test]

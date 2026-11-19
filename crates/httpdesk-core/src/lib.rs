@@ -21,7 +21,7 @@ pub mod workspace;
 // The text model, parser and serializer live in their own crate (it also builds
 // to WASM for the dev mock); they read as part of the core.
 use httpdesk_text::query;
-pub use httpdesk_text::{model, parser, serializer};
+pub use httpdesk_text::{model, parser, portability, serializer};
 
 pub use model::*;
 pub use parser::{parse, parse_request, parse_with_problems, request_problems};

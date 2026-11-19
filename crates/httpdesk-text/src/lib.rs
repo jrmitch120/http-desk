@@ -4,6 +4,7 @@
 
 pub mod model;
 pub mod parser;
+pub mod portability;
 pub mod query;
 pub mod serializer;
 pub mod vars;

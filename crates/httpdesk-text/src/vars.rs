@@ -30,3 +30,13 @@ pub fn segments(text: &str) -> Vec<Segment<'_>> {
     out.push(Segment::Text(rest));
     out
 }
+
+/// For a `{{…}}` reference (trimmed, without braces): the request name and the path
+/// after it when it is a Request variable (`name.response…` or `name.request…`).
+/// A Request variable never falls back to a variable of the same name.
+pub fn split_reference(reference: &str) -> Option<(&str, &str)> {
+    let (name, path) = reference.split_once('.')?;
+    let side = path.split('.').next().unwrap_or("");
+    let named = !name.is_empty() && !name.starts_with('$') && !name.contains(char::is_whitespace);
+    (named && matches!(side, "response" | "request")).then_some((name, path))
+}

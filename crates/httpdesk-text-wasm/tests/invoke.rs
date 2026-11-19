@@ -75,6 +75,22 @@ fn request_problems_reads_a_requests_source_as_the_shell_does() {
 }
 
 #[test]
+fn request_portability_marks_the_lines_of_the_rendered_source() {
+    let request = call("parse_request", json!({ "text": REQUEST }));
+    let marks = call("request_portability", json!({ "request": request }));
+    assert_eq!(
+        marks,
+        json!([{
+            "line": 5,
+            "construct": "disabled-line",
+            "support": "httpdesk-only",
+            "label": "#~",
+            "hover": "Turned off in HttpDesk: VS Code and Rider both ignore this line",
+        }])
+    );
+}
+
+#[test]
 fn an_unknown_command_or_bad_arguments_is_an_error() {
     assert!(invoke("send_request", "{}").unwrap_err().contains("send_request"));
     assert!(invoke("render_request", "{\"request\": 1}").is_err());

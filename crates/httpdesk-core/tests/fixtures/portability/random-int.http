@@ -1,0 +1,2 @@
+### Lucky
+GET https://example.com/?n={{$randomInt}}

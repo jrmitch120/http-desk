@@ -1728,6 +1728,7 @@ mockIPC(
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
+      case "request_portability":
       case "parse_request":
       case "request_problems":
         return invokeCore(cmd, args);

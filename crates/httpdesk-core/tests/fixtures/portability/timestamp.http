@@ -1,0 +1,2 @@
+### Now
+GET https://example.com/?t={{$timestamp}}

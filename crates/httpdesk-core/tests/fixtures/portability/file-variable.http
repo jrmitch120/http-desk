@@ -1,0 +1,4 @@
+@host = example.com
+
+### Home
+GET https://{{host}}/

@@ -1,0 +1,3 @@
+### Far away
+# @connection-timeout 2 m
+GET https://example.com/far

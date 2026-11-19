@@ -2,10 +2,11 @@
 // the Undefined variables a send would leave as written, where each is used, and
 // the quick fixes for it. Computed synchronously from the frontend resolver
 // (`makeVarProvider`), which gives the core's answers, so they follow every edit.
+import type { LineMark } from "./codemirror/lineMarks";
 import type { VarProvider } from "./codemirror/setup";
 import { writeFolder } from "./envFolders";
 import { getDirective, segments, variableNameError } from "./http";
-import type { Auth, Body, BodyFile, EnvironmentSet, Problem, Request, RequestProblems } from "./types";
+import type { Auth, Body, BodyFile, EnvironmentSet, PortabilityMark, Problem, Request, RequestProblems } from "./types";
 import { requestVariable } from "./vars";
 
 /** Where in the request editor a reference is written: the URL bar or a section tab. */
@@ -21,7 +22,7 @@ export interface UndefinedVariable {
 
 /**
  * One entry of the strip. Each kind is a problem the request would be sent with, or
- * (`riderRefuses`) a note about the file; the strip renders each kind its own way, so
+ * (`portability`) a note about the file; the strip renders each kind its own way, so
  * a new kind of check adds a variant here, adds its entries in `requestChecks`, and a
  * branch in CheckStrip.svelte.
  */
@@ -41,14 +42,65 @@ export type Check =
    */
   | { kind: "duplicateName"; name: string; others: number }
   /**
-   * The request has a Request variable (the first reads `name`'s exchange), which Rider
-   * refuses to send (IJPL-253135, ADR-0007). A note, always there while it has one, not
-   * a problem: HttpDesk sends it.
+   * The request behaves differently in VS Code or Rider (ADR-0007, the core's
+   * portability table). HttpDesk sends it all the same, so at the `note` level (the
+   * default) it isn't a problem with the send.
    */
-  | { kind: "riderRefuses"; name: string };
+  | { kind: "portability"; level: PortabilityLevel; note: PortabilityNote };
+
+/** How portability notes show: quietly (`note`), or as warnings, for teams that need files to work in both editors. */
+export type PortabilityLevel = "note" | "warning";
+
+export type PortabilityNote =
+  /**
+   * The request has a Request variable (the first reads `name`'s exchange), which Rider
+   * refuses to send (IJPL-253135). There while it sends one.
+   */
+  | { kind: "riderRefuses"; name: string }
+  /**
+   * `lines` (1-based, in the request's `.http` source) behave differently in `editor`:
+   * for VS Code, the lines only Rider reads; for Rider, those only VS Code reads.
+   */
+  | { kind: "differs"; editor: "vscode" | "rider"; lines: number[] };
 
 /** Whether `check` is only a note, not a problem with the send. */
-export const isNote = (check: Check) => check.kind === "riderRefuses";
+export const isNote = (check: Check) => check.kind === "portability" && check.level === "note";
+
+/**
+ * The portability notes for a request: a Request variable it sends (which Rider
+ * refuses), then the lines of its source (`marks`, from `request_portability`) only
+ * Rider reads, then those only VS Code reads. A Request variable is left to the
+ * first, which counts only what is sent; portable and HttpDesk-only lines behave the
+ * same in both editors.
+ */
+export function portabilityChecks(req: Request, marks: PortabilityMark[], level: PortabilityLevel = "note"): Check[] {
+  const notes: PortabilityNote[] = [];
+  const [read] = requestVariableReads(req);
+  if (read) notes.push({ kind: "riderRefuses", name: read });
+  const linesOf = (support: PortabilityMark["support"]) =>
+    [...new Set(marks.filter((m) => m.support === support && m.construct !== "request-variable").map((m) => m.line))].sort((a, b) => a - b);
+  for (const [editor, lines] of [["vscode", linesOf("jetbrains-only")], ["rider", linesOf("vscode-only")]] as const) {
+    if (lines.length) notes.push({ kind: "differs", editor, lines });
+  }
+  return notes.map((note) => ({ kind: "portability", level, note }));
+}
+
+/**
+ * The `.http` source's gutter markers for `marks`: one per line that isn't portable,
+ * in line order, its hover each construct's on that line. HttpDesk's own lines are
+ * marked apart from the others, which at the `warning` level are warnings.
+ */
+export function portabilityLineMarks(marks: PortabilityMark[], level: PortabilityLevel = "note"): LineMark[] {
+  const byLine = new Map<number, PortabilityMark[]>();
+  for (const m of marks) if (m.support !== "portable") byLine.set(m.line, [...(byLine.get(m.line) ?? []), m]);
+  return [...byLine]
+    .sort(([a], [b]) => a - b)
+    .map(([line, on]) => {
+      const differs = on.find((m) => m.support !== "httpdesk-only");
+      const kind = !differs ? "httpdesk-only" : level === "warning" ? "warning" : differs.support;
+      return { line, kind, text: on.map((m) => m.hover).join("\n") };
+    });
+}
 
 /**
  * What the core and the shell last answered about a request's source (kept by
@@ -81,8 +133,19 @@ export function bodyFilePaths(read: RequestProblems | undefined, variables: VarP
  * and `dir` its folder, relative to the workspace root. `file` is every request of the
  * request's file (it included), whose `# @name`s it may share. `found` is what the
  * core and the shell found in its source: those problems come first, by line.
+ * `portability` is the constructs in its source and the level its notes show at
+ * (`portabilityChecks`): those notes come last.
  */
-export function requestChecks(req: Request, variables: VarProvider, set: EnvironmentSet | null, envName: string | null, dir = "", file: Request[] = [], found: SourceFindings = {}): Check[] {
+export function requestChecks(
+  req: Request,
+  variables: VarProvider,
+  set: EnvironmentSet | null,
+  envName: string | null,
+  dir = "",
+  file: Request[] = [],
+  found: SourceFindings = {},
+  portability: { marks: PortabilityMark[]; level?: PortabilityLevel } = { marks: [] },
+): Check[] {
   const missingFiles = bodyFilePaths(found.read, variables).flatMap(({ file, path }) => (found.exists?.(path) === false ? [file.missing] : []));
   const problems = [...(found.read?.problems ?? []), ...missingFiles].sort((a, b) => a.line - b.line || a.column - b.column);
   const checks: Check[] = problems.map((problem) => ({ kind: "problem", problem }));
@@ -93,8 +156,7 @@ export function requestChecks(req: Request, variables: VarProvider, set: Environ
   if (name && others) checks.push({ kind: "duplicateName", name, others });
   const env = missing ? null : envName;
   for (const u of undefinedVariables(req, variables)) checks.push({ kind: "undefined", ...u, fixes: quickFixes(u.name, set, env) });
-  const [read] = requestVariableReads(req);
-  if (read) checks.push({ kind: "riderRefuses", name: read });
+  checks.push(...portabilityChecks(req, portability.marks, portability.level));
   return checks;
 }
 

@@ -42,6 +42,11 @@ pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
             let Text { text } = args(command, args_json)?;
             json(&httpdesk_text::parse(&text).requests.into_iter().next())
         }
+        // The shell's `request_portability`.
+        "request_portability" => {
+            let RequestArgs { request } = args(command, args_json)?;
+            json(&httpdesk_text::portability::request_portability(&request))
+        }
         // What History keeps as a send's source text (`history::Pending::begin`).
         "request_text" => {
             let RequestArgs { request } = args(command, args_json)?;

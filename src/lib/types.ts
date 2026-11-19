@@ -59,6 +59,28 @@ export interface Body {
   text: string;
 }
 
+/**
+ * How VS Code (REST Client) and Rider (JetBrains) treat a construct: both alike, only
+ * one of them, or neither (HttpDesk's own lines, written as comments).
+ */
+export type Support = "portable" | "jetbrains-only" | "vscode-only" | "httpdesk-only";
+
+/**
+ * A construct on a line of a request's `.http` source (`request_portability`), from
+ * the core's portability table (crates/httpdesk-text/src/portability.rs).
+ */
+export interface PortabilityMark {
+  /** 1-based, in the source as `render_request` writes it. */
+  line: number;
+  /** The table row, e.g. `response-handler`. */
+  construct: string;
+  support: Support;
+  /** The construct as written, e.g. `> {% %}`. */
+  label: string;
+  /** What each editor does with it. */
+  hover: string;
+}
+
 /** An unrecognized header-area line, kept verbatim and in place. */
 export interface ExtraLine {
   text: string;

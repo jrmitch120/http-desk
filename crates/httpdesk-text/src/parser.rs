@@ -188,6 +188,16 @@ pub(crate) fn is_variable_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
 }
 
+/// The directive a preamble comment's body (after `#` or `//`) is: `# @name` or
+/// `#@name`. An indented `#   @x` is description text.
+pub(crate) fn preamble_directive(c: &str) -> Option<Directive> {
+    if strip_one_space(c).starts_with('@') {
+        parse_directive(c)
+    } else {
+        None
+    }
+}
+
 fn parse_directive(c: &str) -> Option<Directive> {
     let rest = c.trim_start().strip_prefix('@')?;
     let end = rest.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(rest.len());
@@ -442,9 +452,7 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
             continue;
         }
         if let Some(c) = comment_body(t) {
-            // `# @name` or `#@name`. An indented `#   @x` is description text.
-            let directive = if strip_one_space(c).starts_with('@') { parse_directive(c) } else { None };
-            match directive {
+            match preamble_directive(c) {
                 Some(d) if d.name == SECTION_DIRECTIVE => {
                     let mut unknown = Vec::new();
                     for s in section_names(&d.value) {

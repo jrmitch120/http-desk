@@ -62,8 +62,10 @@ test("a body file the workspace has isn't flagged", async ({ page }) => {
   await openRequest(page, ["samples", "jetbrains.http"], "Send a form with the text and file fields");
   await toggleSource(page);
   await expect(source(page)).toContainText("< ./request-form-data.json");
-  // Give the shell's answers time to arrive; nothing is flagged.
+  // Give the shell's answers time to arrive; nothing is flagged. The strip only notes
+  // its `>> response.json` redirect, which VS Code doesn't run (#170).
   await page.waitForTimeout(500);
-  await expect(strip(page)).toHaveCount(0);
+  await expect(strip(page).getByRole("listitem")).toHaveText([/1 line behaves differently in VS Code: line\s+17 of/]);
+  await expect(strip(page).locator("li:not(.note)")).toHaveCount(0);
   await expect(source(page).locator(".cm-underline")).toHaveCount(0);
 });

@@ -1,0 +1,2 @@
+### Yesterday
+GET https://example.com/?since={{$timestamp -1 d}}

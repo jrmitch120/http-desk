@@ -31,6 +31,7 @@ crates/httpdesk-text/   the .http text alone (no network, scripts, storage or as
   serializer.rs         HttpFile → .http text (lossless for untouched requests)
   query.rs              query param escaping, unescaping and send-time encoding (ADR-0001)
   vars.rs               where {{variable}} references sit in text
+  portability.rs        the portability table: each construct, how VS Code and Rider treat it, the docs that say so
 crates/httpdesk-text-wasm/  httpdesk-text built to WASM for the dev mock only (never shipped)
 crates/httpdesk-core/   pure Rust library — all domain logic + tests
   env.rs                http-client.env.json / http-client.private.env.json, per-directory lookup, gitignore check
@@ -795,7 +796,22 @@ Decisions made during implementation, beyond the plan above:
   received and the status; `readingCard` in `src/lib/exchanges.ts`). Every Request
   variable's card also carries a quiet note that Rider refuses to send it (ADR-0007),
   and so does the request's check strip, for as long as the request sends one
-  (`riderRefuses`, a note in the info tone after any problems, not a warning).
+  (a `portability` check, `riderRefuses`, a note in the info tone after any problems,
+  not a warning).
+* **Portability.** `crates/httpdesk-text/src/portability.rs` holds the portability
+  table: every construct HttpDesk reads that the editors might treat differently
+  (directives, dynamic variables, `> {% %}` handlers and `< {% %}` pre-request
+  scripts, `>>` redirects, the GraphQL request types, `<@` file bodies, Request
+  variables and HttpDesk's own comment lines), classified portable, JetBrains-only,
+  VS Code-only or HttpDesk-only, each row citing the documentation (or, where the docs
+  are silent, docs/research/http-comment-compat.md) it relies on. It is the one place
+  to change when either editor adds support; the core's `tests/portability.rs` has a
+  fixture per row. `portability(text)` finds the constructs line by line with the
+  parser's rules, and `request_portability` gives them for a request's source as the
+  Source view shows it. The Source view marks each line that isn't portable in a
+  gutter of its own (`lineMarks.ts`), whose hover says what each editor does, and the
+  check strip adds a `portability` note per editor the request behaves differently in.
+  HttpDesk-only lines behave alike in both editors, so they are marked but not noted.
   A `# @name` two requests in a file share is flagged in the request's check strip
   (`duplicateName` in `src/lib/checks.ts`); it never blocks the send.
 * **Undefined-variable checks** catch them before sending, without blocking it.

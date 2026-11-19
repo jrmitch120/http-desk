@@ -1,0 +1,3 @@
+### Slow
+# @timeout 600
+GET https://example.com/slow

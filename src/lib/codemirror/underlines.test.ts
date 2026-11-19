@@ -32,7 +32,8 @@ describe("underlines in the request's source", () => {
       { kind: "undefined", name: "baseUrl", sections: ["url"], fixes: [] },
       { kind: "undefined", name: "token", sections: ["headers"], fixes: [] },
       { kind: "duplicateName", name: "login", others: 1 },
-      { kind: "riderRefuses", name: "login" },
+      { kind: "portability", level: "note", note: { kind: "riderRefuses", name: "login" } },
+      { kind: "portability", level: "note", note: { kind: "differs", editor: "vscode", lines: [2] } },
     ];
     expect(marked(SOURCE, checks)).toEqual([
       ["@name login", "warning", "# @name login is also the name of another request in this file"],

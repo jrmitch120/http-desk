@@ -1,0 +1,4 @@
+### Save it
+GET https://example.com/report
+
+>> report.json

@@ -7,6 +7,7 @@
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
   import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
+  import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
 
   interface Props {
     value?: string;
@@ -33,8 +34,10 @@
     canFoldAll?: boolean;
     /** Wavy underlines with a message on hover (`underlines.ts`), at offsets into `value`. Only for an editor given them at mount. */
     underlines?: Underline[];
+    /** Markers in a gutter of their own, with hovers (`lineMarks.ts`). Given at mount, the gutter is there and follows this. */
+    lineMarks?: LineMark[];
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -170,6 +173,7 @@
           }),
           extensions,
           untrack(() => underlines) ? underlineExtension() : [],
+          untrack(() => marks) ? lineMarks() : [],
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
           }),
@@ -220,6 +224,10 @@
   $effect(() => {
     const p = variables;
     view?.dispatch({ effects: varC.reconfigure(p ? variableExtensions(p) : []) });
+  });
+  $effect(() => {
+    const m = marks;
+    if (m) view?.dispatch({ effects: setLineMarks.of(m) });
   });
 
   export function openSearch() {

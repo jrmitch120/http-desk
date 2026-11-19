@@ -1,0 +1,4 @@
+### Items
+GET https://example.com/items
+#~ &limit=5
+Accept: */*
