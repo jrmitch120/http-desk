@@ -6,6 +6,7 @@
   import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
+  import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
 
   interface Props {
     value?: string;
@@ -30,8 +31,10 @@
     folding?: boolean;
     /** Out: whether the document is small enough for Fold all (`foldAll.ts`). */
     canFoldAll?: boolean;
+    /** Markers in a gutter of their own, with hovers (`lineMarks.ts`). Given at mount, the gutter is there and follows this. */
+    lineMarks?: LineMark[];
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
+  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), lineMarks: marks }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -166,6 +169,7 @@
             return { update: (u) => void (u.docChanged && (canFoldAll = canFoldAllOf(u.state.doc.length))) };
           }),
           extensions,
+          untrack(() => marks) ? lineMarks() : [],
           EditorView.updateListener.of((u) => {
             if (u.docChanged) onchange?.(u.state.doc.toString());
           }),
@@ -211,6 +215,10 @@
   $effect(() => {
     const p = variables;
     view?.dispatch({ effects: varC.reconfigure(p ? variableExtensions(p) : []) });
+  });
+  $effect(() => {
+    const m = marks;
+    if (m) view?.dispatch({ effects: setLineMarks.of(m) });
   });
 
   export function openSearch() {

@@ -16,6 +16,7 @@ import type {
   HistoryQuery,
   HistorySummary,
   HttpFile,
+  PortabilityMark,
   Usage,
   HttpResponse,
   NamedExchange,
@@ -79,6 +80,8 @@ export const api = {
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
   renderRequest: (request: Request) => invoke<string>("render_request", { request }),
+  /** The constructs in `request`'s source (as `renderRequest` writes it) and how VS Code and Rider treat each. */
+  requestPortability: (request: Request) => invoke<PortabilityMark[]>("request_portability", { request }),
   /** The first request in `text` (a History entry's source text), parsed as in a file; null without one. */
   parseRequest: (text: string) => invoke<Request | null>("parse_request", { text }),
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),

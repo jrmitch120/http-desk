@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { isNote, quickFixes, requestChecks, undefinedVariables } from "./checks";
-import type { EnvironmentSet, Request } from "./types";
+import { isNote, portabilityLineMarks, quickFixes, requestChecks, undefinedVariables, type PortabilityLevel } from "./checks";
+import type { EnvironmentSet, PortabilityMark, Request, Support } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
 const request = (edit: (r: Request) => void): Request => {
@@ -167,14 +167,14 @@ describe("a # @name another request in the file also has", () => {
 
 describe("the note that Rider refuses a Request variable", () => {
   const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })), null, null);
-  const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "riderRefuses");
+  const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "portability" && c.note.kind === "riderRefuses");
 
   it("is there whenever a request sends one, naming the first request read", () => {
     const req = request((r) => {
       r.url = "https://example.com/{{me.response.body.$.id}}";
       r.headers.items.push({ enabled: true, name: "Authorization", value: "Bearer {{login.response.body.$.token}}" });
     });
-    expect(notes(req)).toEqual([{ kind: "riderRefuses", name: "me" }]);
+    expect(notes(req)).toEqual([{ kind: "portability", level: "note", note: { kind: "riderRefuses", name: "me" } }]);
   });
 
   it("isn't there for a request with none, or with one only in a disabled header", () => {
@@ -186,7 +186,80 @@ describe("the note that Rider refuses a Request variable", () => {
     const req = request((r) => (r.url = "{{base}}/{{login.response.body.$.id}}"));
     expect(checksOf(req).map((c) => [c.kind, isNote(c)])).toEqual([
       ["undefined", false],
-      ["riderRefuses", true],
+      ["portability", true],
     ]);
+  });
+});
+
+describe("the notes about lines that behave differently in VS Code or Rider", () => {
+  const mark = (line: number, construct: string, support: Support): PortabilityMark => ({ line, construct, support, label: construct, hover: `${construct} hover` });
+  const MARKS = [
+    mark(1, "name-directive", "portable"),
+    mark(2, "timeout-directive", "jetbrains-only"),
+    mark(3, "httpdesk-disabled-directive", "httpdesk-only"),
+    mark(4, "note-directive", "vscode-only"),
+    mark(5, "request-variable", "vscode-only"),
+    mark(7, "response-handler", "jetbrains-only"),
+  ];
+  const checksOf = (req: Request, marks: PortabilityMark[], level?: PortabilityLevel) =>
+    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), null, null, "", [], { marks, level });
+
+  it("count the lines VS Code and Rider each treat differently, after the problems", () => {
+    const req = request((r) => (r.url = "{{base}}/items"));
+    expect(checksOf(req, MARKS)).toEqual([
+      expect.objectContaining({ kind: "undefined", name: "base" }),
+      { kind: "portability", level: "note", note: { kind: "differs", editor: "vscode", lines: [2, 7] } },
+      { kind: "portability", level: "note", note: { kind: "differs", editor: "rider", lines: [4] } },
+    ]);
+  });
+
+  it("leave out portable and HttpDesk-only lines, which behave the same in both editors", () => {
+    const req = request(() => {});
+    expect(checksOf(req, [MARKS[0], MARKS[2]])).toEqual([]);
+  });
+
+  it("leave a Request variable to the note that Rider refuses it, which reads only what is sent", () => {
+    const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.id}}"));
+    expect(checksOf(req, [MARKS[4]]).map((c) => c.kind === "portability" && c.note)).toEqual([{ kind: "riderRefuses", name: "login" }]);
+  });
+
+  it("count a line once, though it has two constructs", () => {
+    const req = request(() => {});
+    const twice = [mark(3, "jetbrains-dynamic-variable", "jetbrains-only"), mark(3, "random-int", "jetbrains-only")];
+    expect(checksOf(req, twice)).toEqual([{ kind: "portability", level: "note", note: { kind: "differs", editor: "vscode", lines: [3] } }]);
+  });
+
+  it("are warnings, not notes, at the warning level", () => {
+    const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.id}}"));
+    const checks = checksOf(req, MARKS, "warning");
+    expect(checks.map((c) => [c.kind, isNote(c)])).toEqual([
+      ["portability", false],
+      ["portability", false],
+      ["portability", false],
+    ]);
+  });
+});
+
+describe("the source's gutter markers for portability", () => {
+  const mark = (line: number, construct: string, support: Support): PortabilityMark => ({ line, construct, support, label: construct, hover: `${construct} hover` });
+
+  it("mark each line that isn't portable once, with every construct's hover, in line order", () => {
+    const marks = [
+      mark(7, "response-handler", "jetbrains-only"),
+      mark(1, "name-directive", "portable"),
+      mark(3, "jetbrains-dynamic-variable", "jetbrains-only"),
+      mark(3, "vscode-dynamic-variable", "vscode-only"),
+      mark(4, "disabled-line", "httpdesk-only"),
+    ];
+    expect(portabilityLineMarks(marks)).toEqual([
+      { line: 3, kind: "jetbrains-only", text: "jetbrains-dynamic-variable hover\nvscode-dynamic-variable hover" },
+      { line: 4, kind: "httpdesk-only", text: "disabled-line hover" },
+      { line: 7, kind: "jetbrains-only", text: "response-handler hover" },
+    ]);
+  });
+
+  it("are warnings at the warning level, except HttpDesk's own lines", () => {
+    const marks = [mark(2, "note-directive", "vscode-only"), mark(4, "disabled-line", "httpdesk-only")];
+    expect(portabilityLineMarks(marks, "warning").map((m) => m.kind)).toEqual(["warning", "httpdesk-only"]);
   });
 });

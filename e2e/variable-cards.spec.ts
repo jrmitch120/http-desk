@@ -11,14 +11,21 @@ async function openSection(page: Page, section: "Headers" | "Settings"): Promise
   await page.locator(".subtab", { hasText: section }).click();
 }
 
-/** The first header's value cell, retyped to `text`, left without focus (its static rendering). */
-async function headerValue(page: Page, text: string): Promise<Locator> {
+/**
+ * The first header's value cell, retyped to `text`, left without focus (its static
+ * rendering). `differsIn`: the editors a dynamic variable in `text` makes the request
+ * behave differently in. The strip notes each a moment later (#170), moving the grid
+ * down, so this waits for them before anything is hovered.
+ */
+async function headerValue(page: Page, text: string, differsIn: ("VS Code" | "Rider")[] = []): Promise<Locator> {
   await page.locator(".subtab", { hasText: "Headers" }).click();
   const cell = page.locator(".kv-row").first().locator(".c-value");
   await cell.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type(text);
   await page.keyboard.press("Tab");
+  const notes = page.getByRole("region", { name: "Pre-send checks" }).getByRole("note");
+  await expect(notes).toHaveText(differsIn.map((editor) => new RegExp(`differently in ${editor}:`)));
   return cell;
 }
 
@@ -141,7 +148,7 @@ test("Edit on a File variable declared in a request shows its line in that reque
 
 test("an undefined variable, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
   await openSection(page, "Headers");
-  const cell = await headerValue(page, "{{nope}} {{$uuid}}");
+  const cell = await headerValue(page, "{{nope}} {{$uuid}}", ["VS Code"]);
   for (const [name, buttons] of [
     ["{{nope}}", ["Find usages"]],
     ["{{$uuid}}", []],
@@ -156,7 +163,7 @@ test("an undefined variable, or a dynamic one, has no Edit; only a named one has
 
 test("a dynamic variable's card says what it generates and the arguments it takes", async ({ page }) => {
   await openSection(page, "Headers");
-  const cell = await headerValue(page, "{{$uuid}} {{$timestamp -1 d}}");
+  const cell = await headerValue(page, "{{$uuid}} {{$timestamp -1 d}}", ["VS Code", "Rider"]);
 
   await cell.locator(".cm-var", { hasText: "{{$uuid}}" }).hover();
   await expect(card(page).locator(".var-card-value")).toHaveText("Random UUID (v4)");
@@ -172,7 +179,7 @@ test("a dynamic variable's card says what it generates and the arguments it take
   await expect(card(page)).toHaveCount(0);
 
   // One that reads a value instead of generating one.
-  const reading = await headerValue(page, "{{$processEnv HOME}}");
+  const reading = await headerValue(page, "{{$processEnv HOME}}", ["Rider"]);
   await reading.locator(".cm-var").hover();
   await expect(card(page).locator(".var-card-kind")).toHaveText("Dynamic variable: reads a value that's already there");
   await expect(card(page).locator(".var-card-args")).toHaveText("$processEnv NAME");

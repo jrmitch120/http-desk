@@ -2,12 +2,12 @@
   import { tick } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import type { GlobalVariable, KeyValue } from "../lib/types";
+  import type { GlobalVariable, KeyValue, PortabilityMark } from "../lib/types";
   import { applyUrlText, basename, composeUrl, displayName, fileVariables, headerNameError, methodClass, customMethod, requestNames, requestPrompts, STANDARD_METHODS } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
+  import { portabilityLineMarks, requestChecks, type Check, type PortabilityLevel, type QuickFix, type Section } from "../lib/checks";
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
@@ -67,8 +67,27 @@
     };
   });
 
+  /**
+   * The constructs in the request's source and how VS Code and Rider treat each
+   * (`request_portability`), for the strip's portability notes and the source's gutter.
+   */
+  let portability = $state<PortabilityMark[]>([]);
+  /** How portability notes show (#171 makes this a setting). */
+  const portabilityLevel: PortabilityLevel = "note";
+  $effect(() => {
+    if (!req) return;
+    const snap = JSON.stringify(req);
+    const t = setTimeout(async () => {
+      portability = await api.requestPortability(JSON.parse(snap)).catch(() => []);
+    }, 120);
+    return () => clearTimeout(t);
+  });
+  const sourceMarks = $derived(portabilityLineMarks(portability, portabilityLevel));
+
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
-  const checks = $derived(req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests) : []);
+  const checks = $derived(
+    req && variables ? requestChecks(req, variables, envSet, app.envName, app.folderOf(tab.path), doc.file.requests, { marks: portability, level: portabilityLevel }) : [],
+  );
   function undefinedIn(s: Section): number {
     return checks.filter((c) => c.kind === "undefined" && c.sections.includes(s)).length;
   }
@@ -257,7 +276,7 @@
     {#if showSource}
       <div class="source">
         <div class="source-note muted">Read-only preview of how this request is written to <code>{basename(tab.path)}</code>.</div>
-        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} /></div>
+        <div class="source-code"><Editor bind:this={sourceEditor} value={source} readonly language="http" {variables} lineMarks={sourceMarks} /></div>
       </div>
     {:else}
       {#snippet undefinedCount(s: Section)}
