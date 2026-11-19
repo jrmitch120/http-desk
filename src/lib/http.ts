@@ -47,9 +47,11 @@ export function newRequest(name = "New request"): Request {
 /** The method as sent: upper-cased, GET when blank. */
 export const verbOf = (method: string) => method.trim().toUpperCase() || "GET";
 
-export function displayName(req: Request): string {
+/** What a request is called in the UI: its `###` title, else its `# @name`, else its method and URL. (A
+ *  restored tab, described only by its title, method and URL, has no directives yet.) */
+export function displayName(req: Pick<Request, "name" | "method" | "url"> & { directives?: Request["directives"] }): string {
   if (req.name.trim()) return req.name.trim();
-  const n = req.directives.find((d) => d.name === "name")?.value;
+  const n = req.directives?.find((d) => d.name === "name")?.value;
   if (n) return n;
   return req.url ? `${req.method} ${req.url}` : "Untitled request";
 }

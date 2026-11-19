@@ -491,10 +491,14 @@ The output is ordinary `.http` text produced by the same serializer the editor u
   (400 ms), one save after another, and saves a settling one at once before quitting or
   opening another workspace. Opening a workspace doesn't wait for the tabs' files: the
   Layout's tabs show at once from what it says of them (method and name), so a 30-tab
-  Layout opens as fast as an empty workspace. Each distinct file is then read once, in the
-  background, and that read becomes the tab's document (shared with anything opening the
-  same file meanwhile); tabs re-attach with the reload matching above, and those that don't
-  match are dropped, counted in one info toast. The Layout is saved again once that's done.
+  Layout opens as fast as an empty workspace. Each distinct file is then read once, afresh,
+  in the background, and that read becomes the tab's document (anything opening the same
+  file meanwhile waits for the Layout's reads to start, then shares them); as soon as a
+  file is read its tabs re-attach with the reload matching above and are ready, and those
+  that don't match are dropped. Once every file is read, one info toast counts the dropped
+  tabs and the Layout is saved again. Each opening of a workspace is its own: reads a
+  superseded opening started are ignored (even when the same workspace opens again), and
+  it neither re-attaches nor saves anything.
   Only the active tab's request editor and response viewer are ever built, so the others
   cost nothing until first shown. Responses, unsaved edits, the sidebar search, response
   filters and pane sizes aren't part of it.

@@ -493,6 +493,9 @@ class AppStore {
       this.root = info.root;
       this.trust.reset();
       this.tree = info.tree;
+      // Reads still under way are the last workspace's: none is shared or kept.
+      this.opens++;
+      this.loading.clear();
       this.docs = {};
       this.tabs = [];
       this.unshown.clear();
@@ -505,7 +508,13 @@ class AppStore {
       this.activeTabId = null;
       this.expanded = { [info.root]: true };
       this.clearTreeSelection();
-      await this.layout.restore(info.root, info.tree);
+      let restored!: () => void;
+      this.restored = new Promise((r) => (restored = r));
+      try {
+        await this.layout.restore(info.root, info.tree);
+      } finally {
+        restored();
+      }
       this.settings = await api.getSettings();
       await this.loadEnvironments();
       const saved = this.settings?.environments[info.root] ?? null;
@@ -545,40 +554,53 @@ class AppStore {
     };
   }
 
+  /** The reads of the open workspace's files under way, which a load of the same file shares. */
   private loading = new Map<string, Promise<Doc | null>>();
+  /** Goes up as each workspace opens, so a read the last one started knows it's stale. */
+  private opens = 0;
+  /** Settles once the opening workspace's Layout has started reading its tabs' files. */
+  private restored: Promise<void> = Promise.resolve();
 
   /** Loads (once) and caches a document. Concurrent callers share one read so
-   *  request keys stay stable; a second parse would orphan open tabs. */
-  loadDoc(path: string): Promise<Doc | null> {
+   *  request keys stay stable; a second parse would orphan open tabs. While a
+   *  workspace opens, it waits for the Layout's reads to start, so a file the
+   *  Layout re-attaches tabs to is read by it first. Null if another workspace
+   *  opened meanwhile. */
+  async loadDoc(path: string): Promise<Doc | null> {
+    const open = this.opens;
+    await this.restored;
+    if (this.opens !== open) return null;
     return this.readDoc(path, { report: true });
   }
 
   /**
-   * `loadDoc`, with `prepare` seeing the requests read before they get keys (the
-   * Layout's restore re-attaches them), and a failed read reported only with `report`.
-   * Null if another workspace opened meanwhile.
+   * `loadDoc`, and a failed read reported only with `report`. With `prepare` (the
+   * Layout's restore re-attaching tabs), the file is read afresh, never an earlier
+   * read's, and `prepare` sees its requests before they get keys. Null if another
+   * workspace opened meanwhile.
    */
   private readDoc(path: string, how: { prepare?: (requests: Request[]) => void; report?: boolean }): Promise<Doc | null> {
-    if (this.docs[path]) return Promise.resolve(this.docs[path]);
-    let pending = this.loading.get(path);
-    if (!pending) {
-      const root = this.root;
-      pending = (async () => {
-        try {
-          const file = await api.readHttpFile(path);
-          if (this.root !== root) return null;
-          how.prepare?.(file.requests);
-          this.docs[path] ??= this.makeDoc(path, file);
-          return this.docs[path];
-        } catch (e) {
-          if (how.report) this.toast("error", errorMessage(e));
-          return null;
-        } finally {
-          this.loading.delete(path);
-        }
-      })();
-      this.loading.set(path, pending);
+    if (!how.prepare) {
+      if (this.docs[path]) return Promise.resolve(this.docs[path]);
+      const reading = this.loading.get(path);
+      if (reading) return reading;
     }
+    const open = this.opens;
+    const read = async () => {
+      try {
+        const file = await api.readHttpFile(path);
+        if (this.opens !== open) return null;
+        how.prepare?.(file.requests);
+        this.docs[path] ??= this.makeDoc(path, file);
+        return this.docs[path];
+      } catch (e) {
+        if (how.report && this.opens === open) this.toast("error", errorMessage(e));
+        return null;
+      }
+    };
+    // Another workspace's read of the same path may have taken its place meanwhile.
+    const pending = read().finally(() => this.loading.get(path) === pending && this.loading.delete(path));
+    this.loading.set(path, pending);
     return pending;
   }
 
@@ -944,8 +966,8 @@ class AppStore {
 
   /** Restored tabs (Layout restore) not shown yet: each loads its last response when it first shows. */
   private unshown = new Set<string>();
-  /** Settles once the restored tabs have re-attached to their requests (or been dropped). */
-  private reattached: Promise<void> = Promise.resolve();
+  /** By tab id, what settles once a restored tab has re-attached to its request (or been dropped). */
+  private reattaching = new Map<string, Promise<void>>();
 
   /**
    * Shows tab `tabId`'s last response from History (a restored or reopened tab),
@@ -953,7 +975,7 @@ class AppStore {
    * releases it (ADR-0006), but not into the Session (ADR-0009).
    */
   private async showLastResponse(tabId: string) {
-    await this.reattached;
+    await this.reattaching.get(tabId);
     const tab = this.tabs.find((t) => t.id === tabId);
     const req = this.requestFor(tab ?? null);
     if (!tab || !req) return;
@@ -1439,9 +1461,6 @@ class AppStore {
   private layoutHost(): LayoutHost {
     const store = this;
     return {
-      get root() {
-        return store.root;
-      },
       get tabs() {
         return store.tabs;
       },
@@ -1465,9 +1484,9 @@ class AppStore {
       },
       readDoc: (path, prepare) => store.readDoc(path, { prepare }),
       removeTab: (id) => store.removeTab(id),
-      restoring: (tabs, reattached) => {
-        store.unshown = new Set(tabs.map((t) => t.id));
-        store.reattached = reattached;
+      restoring: (ready) => {
+        store.unshown = new Set(ready.keys());
+        store.reattaching = ready;
       },
       toast: (kind, message) => store.toast(kind, message),
     };

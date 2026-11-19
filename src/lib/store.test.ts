@@ -411,6 +411,56 @@ describe("closing an Orphaned tab", () => {
   });
 });
 
+describe("restoring a workspace's Layout", () => {
+  const WS = "/ws";
+  const placed = (path: string, name: string, position: number) => ({ path, name, method: "GET", url: `https://x/${name}`, position, section: "params", responseView: { tab: "body", mode: "pretty", wrap: false } });
+  /** A promise and what settles it. */
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+  const restoring = () => app.tabs.map((t) => [t.restoring?.name ?? null, !!t.restoring]);
+
+  beforeEach(() => {
+    openWorkspace.mockResolvedValue({ root: WS, tree: { name: "ws", path: WS, kind: "dir", children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+    api.saveLayout.mockResolvedValue(undefined);
+  });
+
+  it("makes each tab ready once its own file is read, and notes the dropped ones once all are", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("b.http", "Gone", 3)], active: 0, expanded: [] });
+    const slow = deferred<HttpFile>();
+    readHttpFile.mockImplementation(async (path: string) => (path === `${WS}/a.http` ? fileOf(["GET", "List", "https://x/List"]) : slow.promise));
+
+    await app.openWorkspace(WS);
+
+    await vi.waitFor(() => expect(restoring()).toEqual([[null, false], ["Gone", true]]));
+    expect(app.toasts).toEqual([]);
+    slow.resolve(fileOf(["GET", "Other", "https://x/Other"]));
+    await vi.waitFor(() => expect(app.toasts.map((t) => t.message)).toEqual(["1 tab wasn't restored: its request no longer exists."]));
+    expect(restoring()).toEqual([[null, false]]);
+  });
+
+  it("re-attaches a tab whose file was opened while the Layout was loading", async () => {
+    const layout = deferred<unknown>();
+    api.loadLayout.mockReturnValue(layout.promise);
+    readHttpFile.mockImplementation(async () => fileOf(["GET", "List", "https://x/List"]));
+
+    const opening = app.openWorkspace(WS);
+    await vi.waitFor(() => expect(api.loadLayout).toHaveBeenCalled());
+    const loading = app.loadDoc(`${WS}/a.http`);
+    layout.resolve({ tabs: [placed("a.http", "List", 0)], active: 0, expanded: [] });
+    await opening;
+    await loading;
+
+    await vi.waitFor(() => expect(restoring()).toEqual([[null, false]]));
+    expect(app.requestFor(app.tabs[0])?.name).toBe("List");
+    expect(app.toasts).toEqual([]);
+  });
+});
+
 describe("a tab's request section and response view", () => {
   it("start on Params, and on the Body tab in Pretty without wrap", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
