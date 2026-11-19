@@ -10,6 +10,7 @@
   import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
   import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
   import { inReadOnlyRegion } from "./readOnly";
+  import { sharedEnds } from "../splice";
 
   interface Props {
     value?: string;
@@ -110,10 +111,7 @@
    */
   function setValue(v: EditorView, text: string) {
     const old = v.state.doc.toString();
-    let from = 0;
-    while (from < old.length && from < text.length && old.charCodeAt(from) === text.charCodeAt(from)) from++;
-    let end = 0;
-    while (end < old.length - from && end < text.length - from && old.charCodeAt(old.length - 1 - end) === text.charCodeAt(text.length - 1 - end)) end++;
+    const { head: from, tail: end } = sharedEnds(old.length, text.length, (i, j) => old.charCodeAt(i) === text.charCodeAt(j));
     const change = v.state.update({ changes: { from, to: old.length - end, insert: text.slice(from, text.length - end) }, annotations: fromValue.of(true) });
     if (!ownHistory || untrack(() => readonly)) return v.dispatch(change);
     const forget = change.state.update({ effects: histC.reconfigure([]), annotations: fromValue.of(true) });

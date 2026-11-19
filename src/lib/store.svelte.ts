@@ -26,8 +26,9 @@ import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
-import { FileReader } from "./fileReader";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
+import { docSnapshot, kept, snapshot } from "./snapshots.svelte";
+import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
 import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
 import type {
@@ -70,93 +71,17 @@ export interface Doc {
   /** Requests of Orphaned tabs: gone from the file on disk but still open, with
    *  their edits. Saving appends them back to the file (see `save`). */
   orphans: Request[];
-  /** Per request key: the text the user typed in its Source view (see `SourceText`). */
+  /** Per request key: the text the user typed in its Source view (textViews.svelte.ts). */
   sources: Record<string, SourceEdit>;
-  /** The text the user typed in the file's file view, and the file it goes with (see `FileText`). */
-  fileText: FileTextEdit | null;
-}
-
-/**
- * What a request's Source view holds once the user has typed in it, rather than
- * text rendered from the request. The request stays authoritative: text that
- * parses replaces it, text that doesn't leaves it at its last valid state.
- */
-export interface SourceText {
-  /** The text as typed (the latest keystroke; it's read after a short pause). */
-  text: string;
-  /** The problems the core found reading the text last read. */
-  problems: Problem[];
-  /** False while the text doesn't parse (no request line, or an error): the
-   *  request keeps its last valid state and reads as dirty. */
-  parses: boolean;
-}
-
-/** A `SourceText` and the request it goes with (a snapshot): once the request
- *  changes otherwise (a structured edit), the text no longer stands for it. */
-interface SourceEdit extends SourceText {
-  request: string;
-  /** What the parser recovered from the text last read (null: no request line):
-   *  what Save as written saves while the text doesn't parse. */
-  recovered: Request | null;
-}
-
-/**
- * What a file view (the whole file as one text) holds once the user has typed in it,
- * rather than the file rendered. Like a request's Source view: the document stays
- * authoritative, text that parses replaces the document's file (so its request tabs
- * follow), and text that doesn't leaves the file at its last valid state.
- */
-export type FileText = SourceText;
-
-/** A `FileText` and the file it goes with (`FileStamp`): once the file changes
- *  otherwise (an edit in a request tab), the text no longer stands for it. */
-interface FileTextEdit extends FileText {
-  file: FileStamp;
-  /** What the parser recovered from the text last read: what Save as written saves while the text doesn't parse. */
-  recovered: HttpFile | null;
-}
-
-/**
- * Text that doesn't parse, held in one of a file's views, and the two ways to
- * settle it before the file is saved (`AppStore.settleUnparsed`). A request's
- * Source view gives one (`unparsedTexts`); a view of the whole file can too.
- */
-export interface UnparsedText {
-  /** What holds the text, for the dialog: the request's or the file's name. */
-  name: string;
-  /** What the last valid state is of: "request" or "file". */
-  noun: string;
-  /** False when the parser recovered nothing to save (no request line): only Revert is offered. */
-  canSaveAsWritten: boolean;
-  /** The document takes what the parser recovered from the text, which is saved as the text, byte for byte. */
-  saveAsWritten(): void;
-  /** The text is dropped: the document stays at its last valid state, which is saved. */
-  revert(): void;
-}
-
-/**
- * Why a view of a file is read-only (`AppStore.viewLock`): another of the file's views
- * holds text that doesn't parse, the file view or a request's Source view.
- */
-export interface ViewLock {
-  /** Says why, for the view's banner. */
-  reason: string;
-  /** The view holding the text. */
-  heldBy: { kind: "file" } | { kind: "request"; key: string };
+  /** The text the user typed in the file's file view, and the file it goes with (textViews.svelte.ts). */
+  fileText: FileEdit | null;
 }
 
 /** An answer to `AppStore.askWhatToKeep`. */
 export type KeepChoice = "written" | "revert" | "cancel";
 
-/** How long typing in a Source view pauses before the text is read. */
-export const SOURCE_READ_DELAY_MS = 150;
-
-/** Whether `parsed` text can replace a request: it has a request line and no error. */
-export function sourceParses(parsed: ParsedRequest): parsed is ParsedRequest & { request: Request } {
-  return parsed.request !== null && !parsed.problems.some((p) => p.severity === "error");
-}
-
 export type { Tab } from "./tabView";
+export type { TextView, TypedText, UnparsedText, ViewLock } from "./textViews.svelte";
 
 export interface RunState {
   runId: string;
@@ -253,40 +178,6 @@ export type SettingsSection = "tls" | "history";
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/** `req` as JSON, its key left out (only a request has one). No replacer function: one makes stringifying a file's requests several times slower. */
-function snapshot(req: Request): string {
-  const { _key, ...rest } = req;
-  return JSON.stringify(rest);
-}
-
-/**
- * `compute(of)`, kept up to date by Svelte as what it reads of `of` (a document's
- * state) changes: a derived per `of`, in `cache`. Reading it again costs nothing
- * until then, and every reader shares one computation. A file of a thousand
- * requests would otherwise be walked through, every property, on each check of
- * whether it's dirty, by each part of the window that shows it (#168).
- */
-function kept<K extends object, V>(cache: WeakMap<K, () => V>, of: K, compute: (of: K) => V): V {
-  const known = cache.get(of);
-  if (known) return known();
-  // Made from a microtask, outside whatever reads it now (an effect, a derived): one
-  // made inside would stop following `of` once that reader is destroyed.
-  queueMicrotask(() => {
-    if (!cache.has(of)) cache.set(of, keep(of, compute));
-  });
-  return compute(of);
-}
-
-function keep<K, V>(of: K, compute: (of: K) => V): () => V {
-  const value = $derived(compute(of));
-  return () => value;
-}
-
-const keptSnapshots = new WeakMap<Request, () => string>();
-
-/** `snapshot` of `req`, a request of a document (its state, which Svelte sees change). */
-const docSnapshot = (req: Request): string => kept(keptSnapshots, req, snapshot);
-
 const keptByKey = new WeakMap<Request[], () => Map<string, Request>>();
 
 /** A document's requests (its state) by key. */
@@ -301,73 +192,16 @@ const keptOrders = new WeakMap<Request[], () => string>();
 function docDirty(doc: Doc): boolean {
   if (kept(keptOrders, doc.file.requests, (rs) => rs.map((r) => r._key).join(",")) !== doc.savedOrder) return true;
   if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-  if (currentFileText(doc)?.parses === false) return true;
+  if (fileEdit(doc)?.parses === false) return true;
   // Kept apart, so text typed in the file view doesn't have every request checked again.
   return kept(keptRequestsDirty, doc, (d) => [...d.file.requests, ...d.orphans].some((r) => requestDirty(d, r)));
-}
-
-/** `doc`'s typed source text for `req`, while `req` is still as that text left it. */
-function currentSource(doc: Doc, req: Request, shot = docSnapshot(req)): SourceEdit | null {
-  const edit = doc.sources[req._key!];
-  return edit && edit.request === shot ? edit : null;
 }
 
 /** `req` (of `doc`) was edited since loaded or saved; source text that doesn't parse counts as an edit. */
 function requestDirty(doc: Doc, req: Request): boolean {
   const shot = docSnapshot(req);
-  return doc.saved[req._key!] !== shot || currentSource(doc, req, shot)?.parses === false;
+  return doc.saved[req._key!] !== shot || sourceEdit(doc, req, shot)?.parses === false;
 }
-
-/** A document's file as JSON, request keys left out: its header, each request's `docSnapshot`, and the rest. */
-interface FileShot {
-  header: string;
-  requests: string[];
-  rest: string;
-}
-
-const keptFileShots = new WeakMap<HttpFile, () => FileShot>();
-
-/** `file` (a document's state) as JSON: a new value only once something in it changed. */
-const fileShot = (file: HttpFile): FileShot =>
-  kept(keptFileShots, file, (f) => ({
-    header: JSON.stringify(f.header),
-    requests: f.requests.map(docSnapshot),
-    rest: JSON.stringify([f.trailing, f.lineEnding, f.bom]),
-  }));
-
-/**
- * A document's file as a file view's typed text left it (`fileShot`). Checking it
- * against the file costs one comparison while the file is unchanged, and the
- * requests' strings Svelte keeps after it changed. A class, so the document's
- * state doesn't make it reactive.
- */
-export class FileStamp {
-  private constructor(private readonly shot: FileShot) {}
-
-  /** `file`, a document's (its state). */
-  static of(file: HttpFile): FileStamp {
-    return new FileStamp(fileShot(file));
-  }
-
-  /** Whether `file` (a document's) is still as stamped. */
-  matches(file: HttpFile): boolean {
-    const now = fileShot(file);
-    const then = this.shot;
-    if (now === then) return true;
-    return now.header === then.header && now.rest === then.rest && now.requests.length === then.requests.length && now.requests.every((s, i) => s === then.requests[i]);
-  }
-}
-
-/** `doc`'s file view text, while the file is still as that text left it. */
-function currentFileText(doc: Doc): FileTextEdit | null {
-  const edit = doc.fileText;
-  return edit && edit.file.matches(doc.file) ? edit : null;
-}
-
-/** A request's id among the source texts waiting to be read. */
-const sourceId = (path: string, key: string) => `${path}\n${key}`;
-/** The id of a file view's text among the source texts waiting to be read (no request has this key). */
-const FILE_VIEW = "";
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -906,9 +740,9 @@ class AppStore {
    * Cancel, and then nothing changes. Text typed but not yet read is read first.
    */
   async settleUnparsed(paths: string[]): Promise<boolean> {
-    await Promise.all(paths.map((p) => this.readSources(p)));
+    await Promise.all(paths.map((p) => this.texts.readNow(p)));
     const answers: [UnparsedText, KeepChoice][] = [];
-    for (const text of paths.flatMap((p) => this.unparsedTexts(p))) {
+    for (const text of paths.flatMap((p) => this.texts.unparsed(p))) {
       const choice = await this.askWhatToKeep(text);
       if (choice === "cancel") return false;
       answers.push([text, choice]);
@@ -937,63 +771,6 @@ class AppStore {
       [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
     );
     return r.button === "written" || r.button === "revert" ? r.button : "cancel";
-  }
-
-  /**
-   * The text that doesn't parse in `path`'s views: each request's Source view whose text
-   * doesn't, then the file view's. Answers apply in this order and each drops its text,
-   * so where a request's source and the file view both hold some (typed in the moment
-   * before either was read), the file view's answer is the one the file is saved with.
-   */
-  private unparsedTexts(path: string): UnparsedText[] {
-    const doc = this.docs[path];
-    if (!doc) return [];
-    return [...this.unparsedSources(doc), ...this.unparsedFileText(doc)];
-  }
-
-  /** The file view's text of `doc`, if it doesn't parse, and how to settle it. */
-  private unparsedFileText(doc: Doc): UnparsedText[] {
-    const edit = currentFileText(doc);
-    if (edit?.parses !== false) return [];
-    const path = doc.path;
-    const recovered = edit.recovered && ($state.snapshot(edit.recovered) as HttpFile);
-    return [
-      {
-        name: basename(path),
-        noun: "file",
-        canSaveAsWritten: !!recovered,
-        saveAsWritten: () => {
-          this.dropSource(path, FILE_VIEW);
-          const now = this.docs[path];
-          if (now && recovered) this.replaceFile(now, recovered);
-        },
-        revert: () => this.dropSource(path, FILE_VIEW),
-      },
-    ];
-  }
-
-  /** Each request Source view's text of `doc` that doesn't parse, and how to settle it. */
-  private unparsedSources(doc: Doc): UnparsedText[] {
-    const path = doc.path;
-    return [...doc.file.requests, ...doc.orphans].flatMap((req) => {
-      const edit = currentSource(doc, req);
-      if (edit?.parses !== false) return [];
-      const key = req._key!;
-      const recovered = edit.recovered && ($state.snapshot(edit.recovered) as Request);
-      return [
-        {
-          name: displayName(req),
-          noun: "request",
-          canSaveAsWritten: !!recovered,
-          saveAsWritten: () => {
-            this.dropSource(path, key);
-            const now = this.docs[path];
-            if (now && recovered) this.putRequest(now, { ...recovered, _key: key });
-          },
-          revert: () => this.dropSource(path, key),
-        },
-      ];
-    });
   }
 
   /** Reloads from disk, keeping tabs attached to the same requests where possible.
@@ -1027,6 +804,7 @@ class AppStore {
       JSON.stringify(file.header) === doc.savedHeader &&
       file.trailing === doc.file.trailing &&
       file.lineEnding === doc.file.lineEnding &&
+      !file.mixedEndings === !doc.file.mixedEndings &&
       file.requests.length === keys.length &&
       file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
     );
@@ -1209,11 +987,13 @@ class AppStore {
     delete this.runs[id];
     this.history.forget(id);
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
-    // An orphaned request lives only in its tab, and so does the text typed in its Source view.
+    // A file view's text lives only in its tab. An orphaned request lives only in its
+    // tabs, and so does the text typed in its Source view.
     const doc = this.docs[tab.path];
-    if (doc && !this.tabs.some((t) => t.path === tab.path && t.key === tab.key)) {
+    if (doc && tab.kind === "file") this.texts.drop(tab.path, fileView);
+    else if (doc && !this.tabs.some((t) => t.kind === "request" && t.path === tab.path && t.key === tab.key)) {
       doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
-      this.dropSource(tab.path, tab.key);
+      this.texts.drop(tab.path, sourceView(tab.key));
     }
   }
 
@@ -1249,7 +1029,7 @@ class AppStore {
    */
   private async closingFileView(tab: Tab): Promise<boolean> {
     const others = this.tabs.some((t) => t !== tab && t.path === tab.path);
-    if (!this.isFileTextInvalid(tab.path) && (others || !this.isDocDirty(tab.path))) return true;
+    if (!this.texts.isInvalid(tab.path, fileView) && (others || !this.isDocDirty(tab.path))) return true;
     const r = await this.choose(`Save changes to ${basename(tab.path)}?`, "Your changes will be lost if you don't save them.", [
       CANCEL,
       { label: "Don't save", value: "discard", role: "destructive", danger: true },
@@ -1257,7 +1037,7 @@ class AppStore {
     ]);
     if (r.button === "cancel") return false;
     if (r.button === "save") return this.save(tab.path);
-    this.dropSource(tab.path, FILE_VIEW);
+    this.texts.drop(tab.path, fileView);
     if (!others) await this.reload(tab.path);
     return true;
   }
@@ -1331,7 +1111,7 @@ class AppStore {
   revertRequest(path: string, key: string) {
     const doc = this.docs[path];
     if (!doc) return;
-    this.dropSource(path, key);
+    this.texts.drop(path, sourceView(key));
     const idx = doc.file.requests.findIndex((r) => r._key === key);
     if (idx < 0) return;
     if (doc.saved[key]) {
@@ -1370,135 +1150,6 @@ class AppStore {
       doc.file.requests.push(req);
     }
     await this.openRequest(path, { key: req._key });
-  }
-
-  // ---------------------------------------------------------------- request source
-
-  /** The latest source text typed per request (by `sourceId`) until it's read: after a pause, or at once on Save. */
-  private sourceReads = new Map<string, { timer: ReturnType<typeof setTimeout>; settle: (() => void)[]; read: () => Promise<void> }>();
-
-  /**
-   * The user typed `text` in request `key`'s Source view. It's kept as typed at once
-   * and read by the core after a short pause (`SOURCE_READ_DELAY_MS`): text that
-   * parses replaces the request (so the structured editors follow), text that
-   * doesn't leaves the request at its last valid state. Settles once `text` is read,
-   * or once later typing replaced it.
-   */
-  editSource(path: string, key: string, text: string): Promise<void> {
-    const doc = this.docs[path];
-    const req = this.findRequest(path, key);
-    if (!doc || !req) return Promise.resolve();
-    const last = this.sourceEdit(path, key);
-    doc.sources[key] = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, request: snapshot(req), recovered: last?.recovered ?? null };
-    return this.readLater(sourceId(path, key), () => this.readSource(path, key, text));
-  }
-
-  /**
-   * Reads typed text (`read`) after a short pause (`SOURCE_READ_DELAY_MS`), unless
-   * more typing in the same view (`id`) comes first, or a Save or Send reads it at
-   * once. Settles once read, or once later typing replaced it.
-   */
-  private readLater(id: string, read: () => Promise<void>): Promise<void> {
-    const pending = this.sourceReads.get(id);
-    if (pending) clearTimeout(pending.timer);
-    // Text replaced before it was read settles when the text replacing it is read.
-    const settle: (() => void)[] = pending?.settle ?? [];
-    const done = new Promise<void>((s) => settle.push(s));
-    let reading: Promise<void> | null = null;
-    const entry = {
-      settle,
-      timer: setTimeout(() => void entry.read(), SOURCE_READ_DELAY_MS),
-      read: () => {
-        clearTimeout(entry.timer);
-        reading ??= read().finally(() => {
-          if (this.sourceReads.get(id) === entry) this.sourceReads.delete(id);
-          settle.forEach((s) => s());
-        });
-        return reading;
-      },
-    };
-    this.sourceReads.set(id, entry);
-    return done;
-  }
-
-  /** Forgets the text typed in request `key`'s Source view (`FILE_VIEW`: in the file view), read or not. */
-  private dropSource(path: string, key: string) {
-    const id = sourceId(path, key);
-    const pending = this.sourceReads.get(id);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.sourceReads.delete(id);
-      pending.settle.forEach((s) => s());
-    }
-    const doc = this.docs[path];
-    if (doc && key === FILE_VIEW) doc.fileText = null;
-    else if (doc) delete doc.sources[key];
-  }
-
-  /** Reads now the source texts of `path`'s requests and file view still waiting to be read. */
-  private async readSources(path: string) {
-    const reads = [...this.sourceReads].filter(([id]) => id.startsWith(sourceId(path, ""))).map(([, e]) => e.read());
-    await Promise.all(reads);
-  }
-
-  /** Reads typed `text` into request `key`, unless more typing or a structured edit came since. */
-  private async readSource(path: string, key: string, text: string) {
-    let parsed: ParsedRequest;
-    try {
-      parsed = await api.parseRequest(text);
-    } catch (e) {
-      this.toast("error", errorMessage(e));
-      return;
-    }
-    const doc = this.docs[path];
-    const edit = this.sourceEdit(path, key);
-    if (!doc || !edit || edit.text !== text) return;
-    edit.problems = parsed.problems;
-    edit.parses = sourceParses(parsed);
-    edit.recovered = parsed.request;
-    if (!sourceParses(parsed)) return;
-    const req: Request = { ...parsed.request, _key: key };
-    this.putRequest(doc, req);
-    edit.request = snapshot(req);
-  }
-
-  /** `req` replaces the request of `doc` (or its orphan) with the same key. */
-  private putRequest(doc: Doc, req: Request) {
-    const at = doc.file.requests.findIndex((r) => r._key === req._key);
-    if (at >= 0) doc.file.requests[at] = req;
-    else doc.orphans = doc.orphans.map((r) => (r._key === req._key ? req : r));
-  }
-
-  /** The source text typed for request `key`, while the request is still as that text left it. */
-  private sourceEdit(path: string, key: string): SourceEdit | null {
-    const doc = this.docs[path];
-    const req = this.findRequest(path, key);
-    return doc && req ? currentSource(doc, req) : null;
-  }
-
-  /**
-   * What request `key`'s Source view holds when the user typed it: null when its
-   * text is the request rendered (nothing typed, or a structured edit since).
-   */
-  sourceText(path: string, key: string): SourceText | null {
-    return this.sourceEdit(path, key);
-  }
-
-  /** Whether request `key`'s Source view holds text that doesn't parse: the request is at its last valid state. */
-  isSourceInvalid(path: string, key: string): boolean {
-    return this.sourceEdit(path, key)?.parses === false;
-  }
-
-  /**
-   * The text request `key`'s Source view shows: what the user typed, or the request
-   * rendered by the core (as written where it still matches its text). Null without
-   * the request.
-   */
-  async sourceFor(path: string, key: string): Promise<string | null> {
-    const typed = this.sourceEdit(path, key);
-    if (typed) return typed.text;
-    const req = this.findRequest(path, key);
-    return req ? api.requestSource($state.snapshot(req) as Request) : null;
   }
 
   // ---------------------------------------------------------------- file view
@@ -1546,7 +1197,7 @@ class AppStore {
    */
   private requestUnderCursor(tab: Tab): string | null {
     const index = this.fileCursors[tab.id];
-    if (tab.kind !== "file" || index === null || index === undefined || this.isFileTextInvalid(tab.path)) return null;
+    if (tab.kind !== "file" || index === null || index === undefined || this.texts.isInvalid(tab.path, fileView)) return null;
     return this.docs[tab.path]?.file.requests[index]?._key ?? null;
   }
 
@@ -1556,8 +1207,8 @@ class AppStore {
    * view is read.
    */
   private async sendUnderCursor(tab: Tab) {
-    if (this.sourceReads.has(sourceId(tab.path, FILE_VIEW))) await this.readSources(tab.path);
-    if (this.isFileTextInvalid(tab.path)) {
+    if (this.texts.waiting(tab.path, fileView)) await this.texts.readNow(tab.path, fileView);
+    if (this.texts.isInvalid(tab.path, fileView)) {
       this.toast("error", `${basename(tab.path)} doesn't read as a file yet. Fix the text to send a request from it.`);
       return;
     }
@@ -1565,162 +1216,6 @@ class AppStore {
     if (!key) return;
     await this.openRequest(tab.path, { key });
     if (this.activeTab?.key === key) await this.send(this.activeTab.id);
-  }
-
-  /**
-   * The user typed `text` in the file view of `path`. It's kept as typed at once and
-   * read by the core after a short pause, as a request's source is (`editSource`):
-   * text that parses replaces the document's file, so the file's request tabs follow,
-   * and text that doesn't leaves the file at its last valid state. Settles once `text`
-   * is read, or once later typing replaced it.
-   */
-  editFileText(path: string, text: string): Promise<void> {
-    const doc = this.docs[path];
-    if (!doc) return Promise.resolve();
-    // Typed on from text that still stands for the file: only the text changes, so
-    // what reads whether the file is dirty or invalid doesn't run again for each keystroke.
-    const last = currentFileText(doc);
-    if (last) last.text = text;
-    else doc.fileText = { text, problems: [], parses: true, file: FileStamp.of(doc.file), recovered: null };
-    return this.readLater(sourceId(path, FILE_VIEW), () => this.readFileText(path, text));
-  }
-
-  /** Each document's reader of its file view's text, which reads only the `###` blocks an edit touched (#168). Gone with the document. */
-  private fileReaders = new WeakMap<Doc, FileReader>();
-
-  private fileReader(path: string): FileReader {
-    const doc = this.docs[path];
-    if (!doc) return new FileReader(api);
-    let reader = this.fileReaders.get(doc);
-    if (!reader) this.fileReaders.set(doc, (reader = new FileReader(api)));
-    return reader;
-  }
-
-  /**
-   * What the core finds in `text`, shown in the file view of `path`: its problems,
-   * and the lines that behave differently in VS Code or Rider. Read a block at a
-   * time, as typed text is read into the document.
-   */
-  async fileTextFindings(path: string, text: string): Promise<{ problems: Problem[]; portability: PortabilityMark[] }> {
-    const reader = this.fileReader(path);
-    const [parsed, portability] = await Promise.all([reader.parse(text), reader.portability(text)]);
-    return { problems: parsed.problems, portability };
-  }
-
-  /** Reads typed `text` into the document at `path`, unless more typing or another edit came since. */
-  private async readFileText(path: string, text: string) {
-    let parsed: ParsedFile;
-    try {
-      parsed = await this.fileReader(path).parse(text);
-    } catch (e) {
-      this.toast("error", errorMessage(e));
-      return;
-    }
-    const doc = this.docs[path];
-    const edit = doc ? currentFileText(doc) : null;
-    if (!doc || !edit || edit.text !== text) return;
-    edit.problems = parsed.problems;
-    edit.parses = !parsed.problems.some((p) => p.severity === "error");
-    edit.recovered = edit.parses ? null : parsed.file;
-    if (!edit.parses) return;
-    this.replaceFile(doc, parsed.file);
-    edit.file = FileStamp.of(doc.file);
-  }
-
-  /**
-   * Puts `fresh` (read from the file view's text) in place of `doc`'s file. Each
-   * request keeps its key where the edit left it (`carryKeys`), and its object where
-   * it's unchanged; only the requests the edit changed are put in, so only what shows
-   * them is updated. A request gone from the text closes its tabs, as deleting it does.
-   * The text has no line endings or byte order mark of its own: the file's stay.
-   * `fresh` shares its values with the reader's (`FileReader.parse`): what goes in is a copy.
-   */
-  private replaceFile(doc: Doc, fresh: HttpFile) {
-    const old = doc.file.requests;
-    const oldShots = fileShot(doc.file).requests;
-    const shots = new Map<Request, string>([...old.map((r, i) => [r, oldShots[i]] as const), ...fresh.requests.map((r) => [r, snapshot(r)] as const)]);
-    const same = (a: Request, b: Request) => shots.get(a) === shots.get(b);
-    const gone = carryKeys(old, fresh.requests, same);
-    const byKey = new Map(old.map((r) => [r._key, r]));
-    const requests = fresh.requests.map((r) => {
-      const was = r._key ? byKey.get(r._key) : undefined;
-      if (was && same(was, r)) return was;
-      ensureKey(r);
-      return structuredClone(r);
-    });
-    let head = 0;
-    while (head < old.length && head < requests.length && requests[head] === old[head]) head++;
-    let tail = 0;
-    while (tail < old.length - head && tail < requests.length - head && requests[requests.length - 1 - tail] === old[old.length - 1 - tail]) tail++;
-    if (head + tail < Math.max(old.length, requests.length)) old.splice(head, old.length - head - tail, ...requests.slice(head, requests.length - tail));
-    if (JSON.stringify(fresh.header) !== JSON.stringify(doc.file.header)) doc.file.header = structuredClone(fresh.header);
-    doc.file.trailing = fresh.trailing;
-    for (const t of this.tabs.filter((t) => t.kind === "request" && t.path === doc.path && gone.has(t.key))) this.removeTab(t.id);
-  }
-
-  /**
-   * The file at `path` as it is now, null without its document. Reading it in an
-   * effect makes the effect run again whenever the file changes, for one
-   * comparison while it doesn't (`FileStamp`).
-   */
-  fileStamp(path: string): FileStamp | null {
-    const doc = this.docs[path];
-    return doc ? FileStamp.of(doc.file) : null;
-  }
-
-  /** Whether the file at `path` is still as `stamp` (`fileStamp`) found it. */
-  isFileAsStamped(path: string, stamp: FileStamp): boolean {
-    const doc = this.docs[path];
-    return !!doc && stamp.matches(doc.file);
-  }
-
-  /** What the file view of `path` holds when the user typed it: null when its text is the file rendered. */
-  fileText(path: string): FileText | null {
-    const doc = this.docs[path];
-    return doc ? currentFileText(doc) : null;
-  }
-
-  /**
-   * Whether the file view of `path` holds text that doesn't parse: the document's file
-   * is at its last valid state (and reads as dirty) until it does.
-   */
-  isFileTextInvalid(path: string): boolean {
-    return this.fileText(path)?.parses === false;
-  }
-
-  /**
-   * Why `tab` is read-only now, or null when it can be edited: another view of its file
-   * holds text that doesn't parse. An edit here would change the document that text
-   * stands for, so the view stays read-only until the text parses again (or is saved
-   * as written, reverted or closed). Nothing is refused from opening.
-   */
-  viewLock(tab: Tab): ViewLock | null {
-    if (tab.kind === "request" && this.isFileTextInvalid(tab.path))
-      return {
-        reason: `The text in ${basename(tab.path)}'s file view doesn't parse. Until it does, this request can't be edited here.`,
-        heldBy: { kind: "file" },
-      };
-    const doc = this.docs[tab.path];
-    const held = tab.kind === "file" && doc ? doc.file.requests.find((r) => currentSource(doc, r)?.parses === false) : undefined;
-    if (held)
-      return {
-        reason: `The source of "${displayName(held)}" doesn't parse. Until it does, ${basename(tab.path)} can't be edited here.`,
-        heldBy: { kind: "request", key: held._key! },
-      };
-    return null;
-  }
-
-  /**
-   * The text the file view of `path` shows: what the user typed, or the file rendered
-   * by the core (untouched requests as written), with `\n` line breaks and no byte
-   * order mark (the file keeps its own). Null without the document.
-   */
-  async fileTextFor(path: string): Promise<string | null> {
-    const doc = this.docs[path];
-    if (!doc) return null;
-    const typed = currentFileText(doc);
-    if (typed) return typed.text;
-    return api.fileText({ ...($state.snapshot(doc.file) as HttpFile), lineEnding: "lf", bom: false });
   }
 
   // ---------------------------------------------------------------- request ops
@@ -1946,7 +1441,7 @@ class AppStore {
     const typing = this.tabs.find((t) => t.id === tabId);
     if (typing?.kind === "file") return this.sendUnderCursor(typing);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
-    if (typing && this.sourceReads.has(sourceId(typing.path, typing.key))) await this.readSources(typing.path);
+    if (typing && this.texts.waiting(typing.path, sourceView(typing.key))) await this.texts.readNow(typing.path, sourceView(typing.key));
     const tab = this.tabs.find((t) => t.id === tabId);
     const req = this.requestFor(tab ?? null);
     const doc = tab && this.docs[tab.path];
@@ -2159,6 +1654,8 @@ class AppStore {
   readonly layout: LayoutStore = new LayoutStore(this.layoutHost());
   /** The Problems panel's list: every file's problems and portability notes (workspaceProblems.svelte.ts). */
   readonly problems: WorkspaceProblems = new WorkspaceProblems(this.problemsHost());
+  /** Text typed in each document's views, its Source views and file view (textViews.svelte.ts). */
+  readonly texts: TextViews = new TextViews(this.textViewsHost());
 
   private problemsHost(): ProblemsHost {
     const store = this;
@@ -2169,12 +1666,22 @@ class AppStore {
       get openPaths() {
         return Object.keys(store.docs);
       },
-      openText(path) {
-        const doc = store.docs[path];
-        if (!doc) return null;
-        const typed = currentFileText(doc);
-        return typed ? { path, text: typed.text } : { path, file: doc.file };
+      openText: (path) => store.texts.openText(path),
+      openVersion: (path) => store.texts.openVersion(path),
+    };
+  }
+
+  private textViewsHost(): TextViewsHost {
+    const store = this;
+    return {
+      get docs() {
+        return store.docs;
       },
+      findRequest: (path, key) => store.findRequest(path, key),
+      requestsGone: (path, keys) => {
+        for (const t of store.tabs.filter((t) => t.kind === "request" && t.path === path && keys.has(t.key))) store.removeTab(t.id);
+      },
+      toast: (kind, message) => store.toast(kind, message),
     };
   }
 

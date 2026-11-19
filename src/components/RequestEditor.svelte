@@ -14,6 +14,9 @@
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
   import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
+  import ReadOnlyRegion from "../lib/codemirror/ReadOnlyRegion.svelte";
+  import { afterPause, sourceView, VIEW_REFRESH_DELAY_MS } from "../lib/textViews.svelte";
+  import FileBanners from "./FileBanners.svelte";
   import UrlInput from "../lib/codemirror/UrlInput.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import KeyValueGrid, { type Column } from "./KeyValueGrid.svelte";
@@ -38,10 +41,14 @@
   const dirty = $derived(app.isRequestDirty(tab.path, tab.key));
   const docDirty = $derived(app.isDocDirty(tab.path));
   const orphaned = $derived(app.isOrphaned(tab));
-  // Read-only while another view of the file holds text that doesn't parse (#174): its
-  // CodeMirror fields and editors through the region, its other controls disabled.
-  const lock = $derived(app.viewLock(tab));
+  // Read-only while a view of the file holds text that doesn't parse (#174): its
+  // CodeMirror fields and editors through the region, its other controls disabled. While
+  // only its own source does (`ownSource`), that source can still be edited.
+  const lock = $derived(app.texts.lock(tab));
+  const ownSource = $derived(lock?.heldBy.kind === "request" && lock.heldBy.key === tab.key);
   setReadOnlyRegion(() => !!lock);
+  /** The request's Source view, among the views of its file holding typed text. */
+  const view = $derived(sourceView(tab.key));
   // The request's own environments: its folder's (ADR-0004). An environment the folder
   // doesn't define gives none, like the send.
   const envSet = $derived(app.envSetFor(tab.path));
@@ -81,15 +88,15 @@
     if (!req) return;
     const key = tab.key;
     const snap = JSON.stringify(req);
-    const t = setTimeout(() => sourceProblems.refresh(key, JSON.parse(snap)), untrack(() => sourceProblems.read(key)) ? 120 : 0);
+    const t = setTimeout(() => sourceProblems.refresh(key, JSON.parse(snap)), untrack(() => sourceProblems.read(key)) ? VIEW_REFRESH_DELAY_MS : 0);
     return () => clearTimeout(t);
   });
   // While the source holds typed text that doesn't parse, the request stays at its last
   // valid state, so the core's reading of it doesn't place anything in the text shown:
-  // the problems found reading the typed text do (#163).
-  const typedSource = $derived(app.sourceText(tab.path, tab.key));
+  // the problems and body files found reading the typed text do (#163, #165).
+  const typedSource = $derived(app.texts.typed(tab.path, view));
   const reading = $derived(
-    typedSource && !typedSource.parses ? { snap: JSON.stringify(req), read: { problems: typedSource.problems, files: [] } } : sourceProblems.read(tab.key),
+    typedSource && !typedSource.parses ? { snap: JSON.stringify(req), read: { problems: typedSource.problems, files: typedSource.files } } : sourceProblems.read(tab.key),
   );
   // Whether each file the body reads exists: asked when the request is opened and when a path changes.
   const bodyFiles = $derived(variables ? bodyFilePaths(reading?.read, variables).map((f) => f.path).join("\n") : "");
@@ -109,15 +116,10 @@
     if (!req) return;
     const typed = typedSource?.text ?? null;
     const snap = JSON.stringify(req);
-    let stale = false;
-    const t = setTimeout(async () => {
-      const marks = await (typed !== null ? api.portabilityText(typed) : api.requestPortability(JSON.parse(snap))).catch(() => []);
-      if (!stale) portability = marks;
-    }, 120);
-    return () => {
-      stale = true;
-      clearTimeout(t);
-    };
+    return afterPause(
+      () => (typed !== null ? api.portabilityText(typed) : api.requestPortability(JSON.parse(snap))).catch((): PortabilityMark[] => []),
+      (marks) => (portability = marks),
+    );
   });
   const sourceMarks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
 
@@ -170,7 +172,7 @@
   let source = $state("");
   /** The request (as JSON) `source` is up to date with. */
   let sourceOf = $state<string | null>(null);
-  const sourceInvalid = $derived(app.isSourceInvalid(tab.path, tab.key));
+  const sourceInvalid = $derived(app.texts.isInvalid(tab.path, view));
   let sourceEditor = $state<Editor>();
   /** One of the request's own `@name` lines (index into `variables`) to select once the source shows it. */
   let declaration = $state<number | null>(null);
@@ -206,30 +208,20 @@
       else if (field.kind === "auth") panel?.querySelector<HTMLElement>(`[role="textbox"][aria-label="${AUTH_FIELDS[field.part].label}"]`)?.focus();
     });
   });
-  // The source follows the request. A change that came from the source itself (the
-  // text the user typed, read into the request) shows that text as it is, so the
-  // editor isn't touched and its cursor never jumps. Any other change (an edit in
-  // the sections or the URL bar) renders the request again, shortly after, or at
+  // The source follows the request (`follow`): its own typed text as it is, any other
+  // change (an edit in the sections or the URL bar) rendered again, shortly after, or at
   // once when the source has just been shown.
   $effect(() => {
-    if (!showSource || !req) return;
-    const snap = JSON.stringify(req);
-    const typed = app.sourceText(tab.path, tab.key);
-    if (typed) {
-      source = typed.text;
-      sourceOf = snap;
-      return;
-    }
-    const t = setTimeout(
-      async () => {
-        const text = await app.sourceFor(tab.path, tab.key).catch((e) => `# ${e}`);
-        if (text === null || JSON.stringify(app.requestFor(tab)) !== snap) return;
+    if (!showSource) return;
+    return app.texts.follow(
+      tab.path,
+      view,
+      (text) => {
         source = text;
-        sourceOf = snap;
+        sourceOf = JSON.stringify(app.requestFor(tab));
       },
-      untrack(() => sourceOf) === null ? 0 : 120,
+      untrack(() => sourceOf) !== null,
     );
-    return () => clearTimeout(t);
   });
   // The strip's checks in the source: the core's problems only when it read the version of the request shown.
   const underlines = $derived(checkUnderlines(source, reading?.snap === sourceOf ? checks : checks.filter((c) => c.kind !== "problem")));
@@ -276,37 +268,22 @@
       color: `var(--${methodClass(m)})`,
     })),
   );
-
-  async function reloadFromDisk() {
-    await app.reload(tab.path);
-  }
 </script>
 
 {#if !doc || !req}
   <div class="empty-state">This request is no longer available.</div>
 {:else}
   <div class="editor">
-    {#if doc.missing}
-      <Banner severity="error">{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</Banner>
-    {:else if orphaned}
-      <Banner severity="error">
-        This request no longer exists in {basename(tab.path)}; it was changed or removed on disk. Saving will add it back to the end of the file.
-      </Banner>
-    {:else if doc.externalChange}
-      <Banner severity="warning">
-        {basename(tab.path)} changed on disk while you have unsaved edits.
-        {#snippet actions()}
-          <button class="btn small" onclick={reloadFromDisk}>Reload from disk</button>
-          <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
-        {/snippet}
-      </Banner>
-    {/if}
-    {#if lock}
+    <FileBanners {doc} {orphaned} />
+    <!-- While only its own source doesn't parse, the source says so itself. -->
+    {#if lock && !(ownSource && showSource)}
       <Banner severity="info">
         {lock.reason}
         {#snippet actions()}
           {#if lock.heldBy.kind === "file"}
-            <button class="btn small" onclick={() => app.openFileView(tab.path)}>Show file view</button>
+            <button class="btn small" onclick={() => app.openFileView(tab.path, { key: tab.key })}>Show file view</button>
+          {:else if ownSource}
+            <button class="btn small" onclick={() => app.toggleSource()}>Show source</button>
           {/if}
         {/snippet}
       </Banner>
@@ -329,7 +306,7 @@
       <button class="btn small ghost" class:on={showSource} aria-pressed={showSource} onclick={() => app.toggleSource()} use:tooltip={`${showSource ? "Show the sections" : "Edit each request's .http source in place of its sections"} (${shortcutHint("show-source")})`}>
         <Icon name="code" size={14} />.http
       </button>
-      <button class="btn small ghost" aria-label="View file as text" onclick={() => app.openFileView(tab.path)} use:tooltip={`View all of ${basename(tab.path)} as text`}>
+      <button class="btn small ghost" aria-label="View file as text" onclick={() => app.openFileView(tab.path, { key: tab.key })} use:tooltip={`View all of ${basename(tab.path)} as text, at this request`}>
         <Icon name="file" size={14} />File
       </button>
       <button class="btn small" disabled={!docDirty && !orphaned} onclick={() => app.saveTab(tab)} use:tooltip={`Save (${shortcutHint("save")})`}>
@@ -374,13 +351,15 @@
       <div class="source" hidden={!showSource}>
         <div class="source-note muted">
           {#if sourceInvalid}
-            This text doesn't read as a request yet. Until it does, the request stays as it last read.
+            This text doesn't read as a request yet. Until it does, the request stays as it last read, and can be edited only here.
           {:else}
             This request as it's written to <code>{basename(tab.path)}</code>. Edit it here or in the sections.
           {/if}
         </div>
         <div class="source-code">
-          <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.editSource(tab.path, tab.key, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} />
+          <ReadOnlyRegion when={() => !!lock && !ownSource}>
+            <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.texts.edit(tab.path, view, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} />
+          </ReadOnlyRegion>
         </div>
       </div>
     {/if}

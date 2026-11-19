@@ -108,7 +108,7 @@ export class FileReader {
       header: file.requests.length ? null : file.header,
       problems,
     }));
-    const file: ParsedFile["file"] = { header: NO_HEADER, requests: [], trailing: "", lineEnding: "lf", bom: false };
+    const file: ParsedFile["file"] = { header: NO_HEADER, requests: [], trailing: "", lineEnding: "lf", mixedEndings: false, bom: false };
     const problems: Problem[] = [];
     let pending = "";
     blocks.forEach((block, i) => {

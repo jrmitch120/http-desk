@@ -21,6 +21,8 @@
   import Badge from "./Badge.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
+  import { afterPause, fileView } from "../lib/textViews.svelte";
+  import FileBanners from "./FileBanners.svelte";
   import Banner from "./Banner.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -30,9 +32,9 @@
 
   const doc = $derived(app.docs[tab.path]);
   const dirty = $derived(app.isDocDirty(tab.path));
-  const invalid = $derived(app.isFileTextInvalid(tab.path));
+  const invalid = $derived(app.texts.isInvalid(tab.path, fileView));
   // Read-only while a request's Source view holds text that doesn't parse (#174).
-  const lock = $derived(app.viewLock(tab));
+  const lock = $derived(app.texts.lock(tab));
   setReadOnlyRegion(() => !!lock);
   const envSet = $derived(app.envSetFor(tab.path));
   const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
@@ -70,56 +72,38 @@
   /** The user typed: the text is kept here and in the document, which reads it shortly. */
   function typed(t: string) {
     text = t;
-    void app.editFileText(tab.path, t);
+    void app.texts.edit(tab.path, fileView, t);
   }
 
-  // The text follows the document. A change that came from this view (the text the
-  // user typed, read into the document) shows that text as it is, so the editor isn't
-  // touched and its cursor never jumps. Any other change (an edit in a request tab)
-  // renders the file again, shortly after, or at once when the view first shows.
-  // Typing itself doesn't run this: only the document changing does (#168).
-  $effect(() => {
-    const stamp = app.fileStamp(tab.path);
-    if (!stamp) return;
-    const typedText = app.fileText(tab.path);
-    if (typedText) {
-      untrack(() => {
-        if (text !== typedText.text) text = typedText.text;
-        shown = true;
-      });
-      return;
-    }
-    const t = setTimeout(
-      async () => {
-        const rendered = await app.fileTextFor(tab.path).catch((e) => `# ${e}`);
-        if (rendered === null || !app.isFileAsStamped(tab.path, stamp)) return;
-        text = rendered;
+  // The text follows the document (`follow`): its own typed text as it is, any other
+  // change (an edit in a request tab) rendered again, shortly after, or at once when the
+  // view first shows.
+  $effect(() =>
+    app.texts.follow(
+      tab.path,
+      fileView,
+      (t) => {
+        if (text !== t) text = t;
         shown = true;
       },
-      untrack(() => shown) ? 120 : 0,
-    );
-    return () => clearTimeout(t);
-  });
+      untrack(() => shown),
+    ),
+  );
 
   /**
    * What the core found reading the text shown, and the text it read: its problems,
    * and the lines that behave differently in VS Code or Rider. Read a block at a time
-   * (`app.fileTextFindings`), shortly after typing stops; the editor moves them with
+   * (`app.texts.findings`), shortly after typing stops; the editor moves them with
    * its edits meanwhile. Raw state: a large file has thousands of marks, each read.
    */
   let found = $state.raw<{ text: string; problems: Problem[]; portability: PortabilityMark[] } | null>(null);
   $effect(() => {
     if (!shown) return;
     const read = text;
-    let stale = false;
-    const t = setTimeout(async () => {
-      const findings = await app.fileTextFindings(tab.path, read).catch(() => ({ problems: [], portability: [] }));
-      if (!stale) found = { text: read, ...findings };
-    }, 120);
-    return () => {
-      stale = true;
-      clearTimeout(t);
-    };
+    return afterPause(
+      () => app.texts.findings(tab.path, read).catch(() => ({ problems: [], portability: [] })),
+      (findings) => (found = { text: read, ...findings }),
+    );
   });
   const underlines = $derived(found ? checkUnderlines(found.text, found.problems.map((problem) => ({ kind: "problem" as const, problem }))) : []);
   const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portabilityLevel));
@@ -183,17 +167,7 @@
   <div class="empty-state">This file is no longer available.</div>
 {:else}
   <div class="file-view">
-    {#if doc.missing}
-      <Banner severity="error">{basename(tab.path)} was deleted or moved on disk. Saving will recreate it.</Banner>
-    {:else if doc.externalChange}
-      <Banner severity="warning">
-        {basename(tab.path)} changed on disk while you have unsaved edits.
-        {#snippet actions()}
-          <button class="btn small" onclick={() => app.reload(tab.path)}>Reload from disk</button>
-          <button class="btn small" onclick={() => (doc.externalChange = false)}>Keep my version</button>
-        {/snippet}
-      </Banner>
-    {/if}
+    <FileBanners {doc} />
     {#if lock}
       <Banner severity="info">
         {lock.reason}

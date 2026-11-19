@@ -15,8 +15,13 @@ export interface ProblemsHost {
   readonly root: string | null;
   /** The paths of the open documents. */
   readonly openPaths: string[];
-  /** The open document at `path` as the app has it: its file view's text, or else its file (live state: reading it tracks it). */
+  /**
+   * The open document at `path` as the app has it: its file view's text, or else its
+   * file, each request whose Source view holds text that doesn't parse as written there.
+   */
   openText(path: string): OpenText | null;
+  /** What `openText(path)` follows, as values that stay the same objects while it's unchanged (live state: reading it tracks it). */
+  openVersion(path: string): string[];
 }
 
 export class WorkspaceProblems {
@@ -25,8 +30,8 @@ export class WorkspaceProblems {
   /** Each file with something to list, by path. */
   files = $state<Record<string, FileProblems>>({});
 
-  /** Per open document, what it was (as JSON) when last asked about. */
-  private seen = new Map<string, string>();
+  /** Per open document, what it was (`openVersion`) when last asked about. */
+  private seen = new Map<string, string[]>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Goes up per question about a file, so an older answer arriving late is dropped. */
   private asked = new Map<string, number>();
@@ -81,14 +86,12 @@ export class WorkspaceProblems {
    * from disk. Call it from an effect, which reruns on each change to the documents.
    */
   track() {
-    const now = new Map<string, string>();
-    for (const path of this.host.openPaths) {
-      const doc = this.host.openText(path);
-      // Typed text as it is: compared, not copied into JSON on each keystroke (#168).
-      if (doc) now.set(path, "text" in doc ? doc.text : JSON.stringify(doc));
-    }
+    const now = new Map<string, string[]>();
+    // Compared, not copied into JSON on each edit (#168).
+    for (const path of this.host.openPaths) now.set(path, this.host.openVersion(path));
+    const same = (a: string[] | undefined, b: string[]) => !!a && a.length === b.length && a.every((v, i) => v === b[i]);
     untrack(() => {
-      for (const [path, was] of now) if (this.seen.get(path) !== was) this.later(path);
+      for (const [path, was] of now) if (!same(this.seen.get(path), was)) this.later(path);
       for (const path of this.seen.keys()) if (!now.has(path)) this.later(path);
       this.seen = now;
     });

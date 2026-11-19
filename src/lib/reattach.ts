@@ -1,6 +1,7 @@
 // Finding requests again after their file was read anew: a reload after another
 // editor changed the file, a workspace opening with its Layout, or a search result.
 import type { Request } from "./types";
+import { sharedEnds } from "./splice";
 
 /** How a request is found again: its name (the `###` title), method and URL as written. */
 export interface RequestIdentity {
@@ -60,11 +61,7 @@ export function reattach(known: KnownRequest[], fresh: Request[]): Set<string> {
  * by name, by position). Returns the old keys left unmatched.
  */
 export function carryKeys(old: Request[], fresh: Request[], same: (a: Request, b: Request) => boolean): Set<string> {
-  let head = 0;
-  while (head < old.length && head < fresh.length && same(old[head], fresh[head])) head++;
-  let tail = 0;
-  const fits = () => tail < old.length - head && tail < fresh.length - head;
-  while (fits() && same(old[old.length - 1 - tail], fresh[fresh.length - 1 - tail])) tail++;
+  const { head, tail } = sharedEnds(old.length, fresh.length, (i, j) => same(old[i], fresh[j]));
   for (let i = 0; i < head; i++) fresh[i]._key = old[i]._key;
   for (let i = 1; i <= tail; i++) fresh[fresh.length - i]._key = old[old.length - i]._key;
   const known = old.slice(head, old.length - tail).map((r, position) => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position }));
