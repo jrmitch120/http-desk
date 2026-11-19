@@ -111,6 +111,21 @@ test("a file with mixed line endings keeps each line's own through an edit in th
   expect(await fileText(page, "/demo/api/pets.http")).toBe(text.replace("POST {{baseUrl}}/pets\r\n", "POST {{baseUrl}}/pets\r\nX-Trace: on\r\n"));
 });
 
+test("a new .http file is read from the text it's created with, as the shell reads it", async ({ page }) => {
+  await openApp(page);
+  await treeMenu(page, "api", "New .http file");
+  await page.keyboard.type("fresh");
+  await page.keyboard.press("Enter");
+  // Its one request opens, as the core reads the new file's text.
+  await expect(activeTab(page)).toContainText("New request");
+  await viewAsText(page).click();
+  await expect(activeTab(page)).toContainText("fresh.http");
+  await expect.poll(() => fileView(page).evaluate((el) => [...el.querySelectorAll(".cm-line")].map((l) => l.textContent).join("\n"))).toBe(
+    "### New request\nGET https://httpbin.org/get\nAccept: application/json\n",
+  );
+  expect(await fileText(page, "/demo/api/fresh.http")).toBe("### New request\nGET https://httpbin.org/get\nAccept: application/json\n");
+});
+
 test("the file view underlines an Undefined variable and a shared # @name, as each request's tab does", async ({ page }) => {
   await openApp(page);
   await treeItem(page, "api").click();

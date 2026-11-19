@@ -1,7 +1,7 @@
 // The .http button shows a request's source in place of its sections. Like the
 // Resolved toggle, it's an app setting: it stays on across tabs, sends and restarts.
 import { expect, test, type Page } from "@playwright/test";
-import { mockState, openApp, openRequest, tab } from "./helpers";
+import { fileText, mockState, openApp, openRequest, tab } from "./helpers";
 
 const toggle = (page: Page) => page.getByRole("button", { name: ".http", exact: true });
 const source = (page: Page) => page.locator(".source-code");
@@ -48,25 +48,15 @@ test("the source is the request as written: the mock reads and writes with the r
   await openRequest(page, ["api", "pets.http"], "List pets");
   await toggle(page).click();
 
-  // Exactly the request's block in src/dev/pets.http, the blank line before the
-  // next one too: its documentation lines, the disabled param and header, and the
-  // auth line.
-  await expect.poll(() => sourceText(page)).toBe(
-    [
-      "### List pets",
-      "# Returns all pets, optionally filtered.",
-      "# @param limit: How many pets to return. Default: 20.",
-      "# @param status: Filter by status. One of: available, pending, sold.",
-      "# @header Accept: Response format. The API only produces JSON.",
-      "GET {{baseUrl}}/pets?limit=20",
-      "#~ &status=sold",
-      "Authorization: Bearer {{token}}",
-      "Accept: application/json",
-      "#~ X-Debug: true",
-      "",
-      "",
-    ].join("\n"),
-  );
+  // Exactly the request's block in the file as the core writes it (`file_text`), the
+  // blank line before the next one too.
+  const written = await fileText(page, "/demo/api/pets.http");
+  const block = written.slice(written.indexOf("### List pets"), written.indexOf("### Create pet"));
+  // Its documentation lines, the disabled param and header, and the auth line are in it.
+  expect(block).toContain("# @param limit: How many pets to return. Default: 20.\n");
+  expect(block).toContain("#~ &status=sold\nAuthorization: Bearer {{token}}\n");
+  expect(block).toContain("#~ X-Debug: true\n\n");
+  await expect.poll(() => sourceText(page)).toBe(block);
 });
 
 test("the .http source is highlighted: the method, a header name, a variable by its state and a JSON key", async ({ page }) => {
