@@ -1019,8 +1019,8 @@ class AppStore {
     if (!restored) return this.toast("error", "This History entry has no request to restore");
     const doc = await this.loadDoc(path);
     if (!doc) return;
-    const linked = historyLinkKey(historyLink(path, restored));
-    const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(historyLink(path, r)) === linked : r._key === key));
+    const linked = historyLinkKey(path, historyLink(path, restored));
+    const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(path, historyLink(path, r)) === linked : r._key === key));
     const req: Request = { ...restored, leading: "", _key: at >= 0 ? doc.file.requests[at]._key! : uid() };
     if (at >= 0) {
       // Text that preceded the request in its file stays as it is.

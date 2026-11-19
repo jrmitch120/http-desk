@@ -72,7 +72,7 @@
   const filtered = $derived(status !== "all" || !!text);
 
   // What the list depends on: a named request's URL can change under it.
-  const requestKey = $derived(request && historyLinkKey(request));
+  const requestKey = $derived(request && historyLinkKey(request.filePath, request));
 
   // The entries selected for Compare, in the order they were selected; none for another request.
   let selected = $state<number[]>([]);

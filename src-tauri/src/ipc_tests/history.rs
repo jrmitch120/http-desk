@@ -127,7 +127,7 @@ fn a_send_from_a_tab_is_recorded_with_the_request_as_sent_its_source_response_an
     assert_eq!(entries.len(), 1, "{entries:?}");
     let entry = &entries[0];
     assert_eq!(
-        (&entry["file"], &entry["name"], &entry["method"], &entry["url"], &entry["status"]),
+        (&entry["link"]["file"], &entry["link"]["name"], &entry["method"], &entry["url"], &entry["status"]),
         (&json!("api.http"), &json!("login"), &json!("POST"), &json!(format!("{url}/login?x=1")), &json!(200))
     );
     assert_eq!(entry["size"], sent["bodySize"]);
@@ -253,6 +253,30 @@ fn a_named_requests_history_survives_editing_its_url_and_an_unnamed_one_follows_
     let mut moved = owners.clone();
     moved["url"] = json!(format!("{server}/people"));
     assert_eq!(urls(&moved), Vec::<Value>::new(), "an unnamed request is its method and URL");
+}
+
+#[test]
+fn a_listed_entry_carries_what_links_it_to_its_request_as_written_beside_its_url_as_sent() {
+    let h = Harness::new();
+    let server = super::keep_alive_server(3);
+    let (_ws, root) = workspace(&h, "GET {{host}}/x\n\n###\n# @name other\nGET {{other}}/x\n");
+    let env =
+        json!({ "a": { "host": server, "other": server }, "b": { "host": format!("{server}/v2"), "other": server } });
+    std::fs::write(root.join("http-client.env.json"), env.to_string()).unwrap();
+    h.ok("send_request", send_in(&root, &request(&h, &root, 0), "a"));
+    h.ok("send_request", send_in(&root, &request(&h, &root, 0), "b"));
+    h.ok("send_request", send_in(&root, &request(&h, &root, 1), "a"));
+
+    let listed: Vec<(Value, Value)> = all_history(&h).iter().map(|e| (e["url"].clone(), e["link"].clone())).collect();
+    let link = |name: Value, url: &str| json!({ "file": "api.http", "name": name, "method": "GET", "url": url });
+    assert_eq!(
+        listed,
+        [
+            (json!(format!("{server}/x")), link(json!("other"), "{{other}}/x")),
+            (json!(format!("{server}/v2/x")), link(Value::Null, "{{host}}/x")),
+            (json!(format!("{server}/x")), link(Value::Null, "{{host}}/x")),
+        ]
+    );
 }
 
 /// Every entry of the open workspace, newest first.
