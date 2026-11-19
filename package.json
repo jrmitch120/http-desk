@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test --project=chromium",
-    "test:perf": "playwright test --project=perf"
+    "test:perf": "playwright test --project=perf",
+    "test:webkit": "playwright test --project=webkit"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",

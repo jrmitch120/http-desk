@@ -65,8 +65,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:wasm
-      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
+      # What only WebKit (the app's webview on macOS and Linux) gets wrong.
+      - run: pnpm test:webkit
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:

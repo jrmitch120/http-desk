@@ -348,7 +348,11 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    contain: strict;
+    /* Laid out and painted apart from the outline (#168), but not size-contained:
+       with `strict`, WebKit (the app's webview) sometimes resolves the editor's
+       height: 100% as its content height, so the text grows past this box and
+       neither the wheel nor the cursor can scroll it. */
+    contain: content;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--panel);

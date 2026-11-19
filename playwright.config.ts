@@ -20,7 +20,10 @@ export default defineConfig({
   // design that most tests were written against. Tests change it with
   // `page.emulateMedia({ colorScheme })`.
   projects: [
-    { name: "chromium", testIgnore: "perf/**", use: { ...devices["Desktop Chrome"], colorScheme: "dark" } },
+    { name: "chromium", testIgnore: ["perf/**", "webkit/**"], use: { ...devices["Desktop Chrome"], colorScheme: "dark" } },
+    // What only WebKit (the app's webview on macOS and Linux) gets wrong, in WebKit
+    // (`pnpm test:webkit`). Chromium runs everything else.
+    { name: "webkit", testMatch: "webkit/**/*.spec.ts", use: { ...devices["Desktop Safari"], colorScheme: "dark" } },
     // Large responses keep the window responsive (`pnpm test:perf`). One step
     // at a time, so steps don't skew each other's timings (one worker: not
     // fully parallel still runs each file in a worker of its own), and with longer

@@ -144,6 +144,7 @@ pnpm test               # frontend helpers (URL⇄params sync, form/multipart ed
 pnpm check              # svelte-check / TypeScript
 pnpm test:e2e           # browser tests (Playwright, headless Chromium)
 pnpm test:perf          # large responses keep the window responsive (e2e/perf)
+pnpm test:webkit        # what only WebKit gets wrong (e2e/webkit; `pnpm exec playwright install webkit` once)
 cargo fmt --all         # format Rust (CI runs `cargo fmt --all --check`; config in rustfmt.toml)
 ```
 
