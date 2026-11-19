@@ -272,10 +272,14 @@ export class HistoryStore {
     return !!this.shownIn[tabId];
   }
 
-  /** Shows or hides tab `tabId`'s History view; hiding it closes the entry it opened. */
+  /**
+   * Shows or hides tab `tabId`'s History view. With an entry open, goes back to the
+   * list instead (like Back), so pressing History never leaves History from an entry.
+   */
   toggle(tabId: string) {
-    if (this.shownIn[tabId]) {
+    if (this.openedIn({ tab: tabId })) {
       this.close({ tab: tabId });
+    } else if (this.shownIn[tabId]) {
       delete this.shownIn[tabId];
     } else {
       this.shownIn[tabId] = true;

@@ -57,6 +57,29 @@ test("sending twice lists two entries newest first, and an entry opens read-only
   expect(released.filter((id) => id.startsWith("h-"))).toHaveLength(1);
 });
 
+test("History, pressed with an entry open, goes back to the list; pressed on the list, back to the response", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await historyButton(page).click();
+  await entries(page).first().getByRole("button").click();
+  await expect(page.getByRole("region", { name: "History entry" })).toBeVisible();
+
+  await historyButton(page).click();
+
+  await expect(page.getByRole("region", { name: "History entry" })).toHaveCount(0);
+  await expect(entries(page)).toHaveCount(1);
+  await expect(historyButton(page)).toHaveAttribute("aria-pressed", "true");
+  const released = await mockState(page, "releasedResponses");
+  expect(released.filter((id) => id.startsWith("h-"))).toHaveLength(1);
+
+  await historyButton(page).click();
+
+  await expect(entries(page)).toHaveCount(0);
+  await expect(historyButton(page)).toHaveAttribute("aria-pressed", "false");
+  await expect(status(page).locator(".metric", { hasText: "Size" })).toBeVisible();
+});
+
 test("a binary entry previews like a live response, and its body saves to a file", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "Get pet image");
