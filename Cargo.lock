@@ -2048,6 +2048,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http",
+ "httpdesk-text",
  "hyper",
  "hyper-util",
  "ignore",
@@ -2076,6 +2077,15 @@ dependencies = [
  "uuid",
  "wiremock",
  "zstd",
+]
+
+[[package]]
+name = "httpdesk-text"
+version = "0.1.3"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

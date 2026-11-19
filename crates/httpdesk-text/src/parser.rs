@@ -70,7 +70,7 @@ pub(crate) fn split_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-pub(crate) fn is_separator(line: &str) -> bool {
+pub fn is_separator(line: &str) -> bool {
     line.starts_with("###")
 }
 
@@ -91,7 +91,7 @@ pub(crate) fn parse_header(raw: &str) -> FileHeader {
 }
 
 /// Returns the text after a `#` or `//` comment prefix.
-pub(crate) fn comment_body(t: &str) -> Option<&str> {
+pub fn comment_body(t: &str) -> Option<&str> {
     t.strip_prefix("//").or_else(|| t.strip_prefix('#'))
 }
 
@@ -206,7 +206,7 @@ fn split_header(s: &str) -> Option<(String, String)> {
 
 /// A response handler or output redirect starts at column 0 (JetBrains), so an
 /// indented `>` line is body content.
-pub(crate) fn is_handler_start(line: &str) -> bool {
+pub fn is_handler_start(line: &str) -> bool {
     if line.starts_with(">>") {
         return true;
     }
