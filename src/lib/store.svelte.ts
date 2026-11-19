@@ -229,7 +229,7 @@ class PendingForm<S, C> {
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
-export type PanelId = "session" | "runner";
+export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
 /** A section of the Settings modal that can be opened scrolled into view. */
