@@ -44,10 +44,11 @@
   --radius: 6px;
   --radius-sm: 4px;
 
-  /* control heights: inputs, selects and buttons; small buttons; icon buttons */
+  /* control heights: inputs, selects and buttons; small buttons; icon buttons; small icon buttons */
   --control-h: 30px;
   --control-h-sm: 24px;
   --control-h-icon: 26px;
+  --control-h-icon-sm: 22px;
 
   /* the one focus ring every control uses: outline: var(--focus-ring);
      outline-offset: var(--focus-ring-offset). A control flush against an edge
@@ -306,6 +307,12 @@ textarea.input {
 }
 .icon-btn.active[aria-disabled="true"] {
   color: var(--accent);
+}
+/* A notch smaller, for a row of them that must fit a narrow pane (the Explorer's
+   buttons beside the sidebar's view switch). */
+.icon-btn.small {
+  width: var(--control-h-icon-sm);
+  height: var(--control-h-icon-sm);
 }
 /* A short text glyph instead of an icon (the find bar's Aa, .*, ab toggles). */
 .icon-btn.glyph {

@@ -384,6 +384,9 @@ Global classes in `src/app.css`, not components:
   is reachable from the keyboard and read out as its description. It shows dimmed.
   `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
   conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
+  `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must
+  fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
+  `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
   toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
@@ -635,7 +638,8 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 ## Tokens
 
 New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
-`--control-h` (30px), `--control-h-sm` (24px) and `--control-h-icon` (26px) for heights;
+`--control-h` (30px), `--control-h-sm` (24px), `--control-h-icon` (26px) and
+`--control-h-icon-sm` (22px) for heights;
 `--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
 also for the size of small fixed elements that are not controls (a badge's height, a
 Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared
