@@ -1,0 +1,17 @@
+[package]
+name = "httpdesk-text-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# httpdesk-text built to WASM for the dev mock (src/dev/textCore.ts), so browser
+# tests parse and render `.http` text with the real core. Never shipped: only the
+# Vite dev server loads it. `pnpm build:wasm` builds it.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+httpdesk-text = { path = "../httpdesk-text" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

@@ -1,11 +1,12 @@
 // Dev-only: lets the UI run in a plain browser (`pnpm dev`, open localhost:1420)
-// for visual testing. Fixtures are produced by the real Rust parser
-// (`cargo run -p httpdesk-core --example dump -- file.http`). Never bundled in
-// production builds (imported behind `import.meta.env.DEV`).
+// for visual testing. `.http` text is parsed and rendered by the real core, built
+// to WASM (./textCore.ts), so the sample files are plain `.http` text. Never
+// bundled in production builds (imported behind `import.meta.env.DEV`).
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import pets from "./pets.json";
-import jetbrains from "./jetbrains.json";
+import { invokeCore } from "./textCore";
+import petsText from "./pets.http?raw";
+import jetbrainsText from "./jetbrains.http?raw";
 import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { responseRedirects } from "../lib/scripts";
 import { requestVariableReads } from "../lib/checks";
@@ -15,10 +16,14 @@ import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpFile, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
+
+/** The sample files, read as the shell reads them from disk. */
+const pets = invokeCore<HttpFile>("parse_file", { text: petsText });
+const jetbrains = invokeCore<HttpFile>("parse_file", { text: jetbrainsText });
 
 const ROOT = "/demo";
 const files: Record<string, unknown> = {
@@ -698,7 +703,7 @@ window.addEventListener(
   get settings() {
     return clone(settings);
   },
-  /** The `.http` file models as last saved, by path (the mock has no serializer). */
+  /** The `.http` file models as last saved, by path (the mock keeps models, not text). */
   get files() {
     return clone(files);
   },
@@ -839,8 +844,6 @@ type MockHistoryEntry = Omit<HistorySummary, "link"> & {
   writtenMethod: string;
   writtenUrl: string;
   source: string;
-  /** The request `source` was rendered from: what `parse_request` gives back for it (the mock has no parser). */
-  model: Request;
   request: SentRequest;
   response: Omit<HttpResponse, "id"> | null;
   sendError: SendError | null;
@@ -903,12 +906,6 @@ const masked = (request: SentRequest, values: string[]): SentRequest => ({
   bodyPreview: request.bodyPreview === null ? null : maskValues(request.bodyPreview, values),
 });
 
-/** A request's text, as the mock renders it (it has no serializer). */
-function requestText(r: any): string {
-  const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
-  return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
-}
-
 /** Where the mock says History is kept (`history_location`). */
 const MOCK_HISTORY_LOCATION = "/Users/me/Library/Application Support/io.github.jrmitch120.httpdesk/history.sqlite3";
 
@@ -931,7 +928,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
       writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: maskValues(outcome.request.url, values),
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
-      error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
+      error: outcome.sendError?.message ?? null, source: invokeCore<string>("request_text", { request: r }), ...outcome,
       request: masked(capRequest(outcome.request), values),
     });
     try {
@@ -1000,7 +997,7 @@ function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
   historyOpened.push(id);
-  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
+  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, body, response, bodyKept = "whole", ...entry } = clone(e);
   const request = previewedRequest(entry.request);
   const link = linkOf(e);
   if (!response) return { ...entry, link, request, response: null, bodyKept };
@@ -1719,12 +1716,8 @@ mockIPC(
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
       case "render_request":
-        return requestText(args.request);
-      case "parse_request": {
-        // No parser: a History entry's source text gives back the request it was rendered from.
-        const model = historyEntries.find((e) => e.source === args.text)?.model;
-        return model ? clone(model) : null;
-      }
+      case "parse_request":
+        return invokeCore(cmd, args);
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.
         const terms = String(args.query).toLowerCase().split(/\s+/).filter(Boolean);

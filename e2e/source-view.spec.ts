@@ -38,3 +38,32 @@ test("the .http source stays shown across tabs, sends and a reload, and is remem
   await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
   expect((await mockState(page, "settings")).showSource).toBe(false);
 });
+
+/** The source editor's text, lines joined with newlines. */
+const sourceText = (page: Page) =>
+  source(page).evaluate((el) => [...el.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\n"));
+
+test("the source is the request as the core writes it: the mock renders with the real serializer (#173)", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await toggle(page).click();
+
+  // Exactly the request's block in src/dev/pets.http (less the blank line before
+  // the next one), as the core renders it: its documentation lines, the disabled
+  // param and header, and the auth line where the serializer puts it.
+  await expect.poll(() => sourceText(page)).toBe(
+    [
+      "### List pets",
+      "# Returns all pets, optionally filtered.",
+      "# @param limit: How many pets to return. Default: 20.",
+      "# @param status: Filter by status. One of: available, pending, sold.",
+      "# @header Accept: Response format. The API only produces JSON.",
+      "GET {{baseUrl}}/pets?limit=20",
+      "#~ &status=sold",
+      "Authorization: Bearer {{token}}",
+      "Accept: application/json",
+      "#~ X-Debug: true",
+      "",
+    ].join("\n"),
+  );
+});

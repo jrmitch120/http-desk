@@ -33,13 +33,20 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+      # The mocked backend and the core's WASM build of it are dev-only (#173).
+      - name: The production build has no mock and no WASM
+        shell: bash
+        run: |
+          if grep -rlE '__mock|AGFzbQ' dist || find dist -name '*.wasm' | grep .; then exit 1; fi
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # --no-fail-fast: a failing test binary doesn't hide the results of the rest.
       - run: cargo test --workspace --no-fail-fast
 
   # Playwright drives the real UI under the Vite dev server with the mocked
-  # backend (src/dev/mock.ts). No Rust or WebKitGTK needed; one OS is enough.
+  # backend (src/dev/mock.ts). It parses and renders .http text with the core
+  # built to WASM, so Rust is needed (with the wasm32 target), but not WebKitGTK.
+  # One OS is enough.
   browser:
     runs-on: ubuntu-22.04
     steps:
@@ -49,7 +56,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:wasm
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -71,7 +84,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:wasm
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:perf
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

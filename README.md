@@ -125,11 +125,12 @@ optional except `NAME`.
 
 ## Development
 
-Prerequisites: Rust (stable), Node 22.12+, pnpm, and the
+Prerequisites: Rust (stable) with the WASM target, Node 22.12+, pnpm, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) (on Linux:
 `libwebkit2gtk-4.1-dev librsvg2-dev patchelf`).
 
 ```sh
+rustup target add wasm32-unknown-unknown   # once: the browser tests' mocked backend
 pnpm install
 pnpm tauri dev          # run the app
 pnpm tauri build        # native bundles (.dmg/.app, .msi/.exe, .deb/.rpm/.AppImage)
@@ -160,14 +161,21 @@ failing step on its own before believing it.
 
 UI-only work: `pnpm dev` and open <http://localhost:1420>. Outside Tauri the app
 runs against a mocked backend (`src/dev/mock.ts`, never shipped in production
-builds). Its fixtures are real parser output, regenerated with
+builds). It parses and renders `.http` text with the core's own parser and
+serializer, built to WASM (`crates/httpdesk-text-wasm`), and its sample files
+are plain `.http` text (`src/dev/*.http`). The dev server builds the WASM when
+the mock first loads, and `pnpm test:e2e` builds it before starting (or run
+`pnpm build:wasm`); restart `pnpm dev` after changing the Rust. The build output
+stays in `target/` and is never committed. To see the model a file parses into:
 `cargo run -p httpdesk-core --example dump -- file.http`.
 
 ### Layout
 
 ```
-crates/httpdesk-core/   all domain logic (no Tauri): model, parser, serializer,
-                        vars, env, exec, openapi, workspace — and their tests
+crates/httpdesk-text/   the .http text model, parser and serializer (re-exported by the core)
+crates/httpdesk-text-wasm/  that crate built to WASM, for the mocked backend only
+crates/httpdesk-core/   all domain logic (no Tauri): vars, env, exec, openapi,
+                        workspace — and their tests (parser/serializer ones too)
 src-tauri/              thin command layer, file watcher, IPC tests
 src/                    Svelte 5 UI (lib/ = store, API, helpers; components/)
 docs/ARCHITECTURE.md    design and decisions
@@ -180,7 +188,7 @@ docs/ARCHITECTURE.md    design and decisions
    - `version` in `src-tauri/tauri.conf.json`
    - `version` under `[workspace.package]` in `Cargo.toml`
    - `Cargo.lock`: run `cargo update --workspace` so the lockfile picks up the
-     new version of the `httpdesk` and `httpdesk-core` crates
+     new version of the workspace's crates (`httpdesk`, `httpdesk-core`, `httpdesk-text`, …)
 2. Check that they agree: `node scripts/check-release-version.mjs v0.2.0`.
 3. Commit the bump, merge it to `main`, then tag and push:
    `git tag v0.2.0 && git push origin v0.2.0`.

@@ -76,7 +76,7 @@ export function sentRequests(page: Page): Promise<{ method: string; url: string 
   return mockState(page, "sent");
 }
 
-/** A `.http` file model as the mock last saved it (it has no serializer). */
+/** A `.http` file model as the mock last saved it (it keeps models, not text). */
 export type SavedFile = { requests: { name: string; body: { text: string } }[] };
 type EnvFile = Record<string, Record<string, unknown>>;
 

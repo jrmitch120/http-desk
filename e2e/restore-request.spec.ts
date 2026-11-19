@@ -38,11 +38,12 @@ test("restoring an older entry brings back its URL, headers and body as unsaved 
   // Create pet is `# @name createPet`, so its History follows it through a URL edit.
   await openApp(page, "?chain=1");
   await openRequest(page, ["api", "pets.http"], "Create pet");
-  await setHeaders(page, "Content-Type: application/json\nAuthorization: Bearer {{token}}");
+  // Not `Authorization`, which the core reads back as the request's Auth rather than a header.
+  await setHeaders(page, "Content-Type: application/json\nX-Pet-Token: {{token}}");
   await page.keyboard.press("Meta+S");
   await send(page);
 
-  // A later version: another URL and body, without the Authorization header.
+  // A later version: another URL and body, without the X-Pet-Token header.
   await urlBar(page).click();
   await page.keyboard.press("End");
   await page.keyboard.type("/v2");
@@ -65,8 +66,8 @@ test("restoring an older entry brings back its URL, headers and body as unsaved 
   await page.locator(".subtab", { hasText: "Headers" }).click();
   const names = page.locator(".kv-row:not(.ghost) input.c-name");
   await expect(names).toHaveCount(2);
-  await expect(names.last()).toHaveValue("Authorization");
-  await expect(page.locator(".kv-row:not(.ghost) .c-value").last()).toHaveText("Bearer {{token}}");
+  await expect(names.last()).toHaveValue("X-Pet-Token");
+  await expect(page.locator(".kv-row:not(.ghost) .c-value").last()).toHaveText("{{token}}");
 
   // The file keeps the later version until the user saves.
   let pet = (await onDisk(page))[1];
@@ -74,7 +75,7 @@ test("restoring an older entry brings back its URL, headers and body as unsaved 
   await page.keyboard.press("Meta+S");
   await expect.poll(async () => (await onDisk(page))[1].url).toBe("{{baseUrl}}/pets");
   pet = (await onDisk(page))[1];
-  expect(pet.headers.items.map((h) => `${h.name}: ${h.value}`)).toEqual(["Content-Type: application/json", "Authorization: Bearer {{token}}"]);
+  expect(pet.headers.items.map((h) => `${h.name}: ${h.value}`)).toEqual(["Content-Type: application/json", "X-Pet-Token: {{token}}"]);
   expect(pet.body.text).toContain('"name": "Rex"');
 });
 
