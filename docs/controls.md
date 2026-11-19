@@ -47,6 +47,8 @@ a line there for a new kind of field.
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
+| A row of a list that opens or shows what it names | [`.list-row`](#buttons-inputs-and-links) |
+| An icon button with a count beside it | [`.icon-btn.counted`](#buttons-inputs-and-links) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A grid column the user can resize | a [KeyValueGrid](#keyvaluegrid) column's `resize` ([ColumnResizer](#columnresizer)) |
 | A short label next to an item (method, status, OFF, version) | [Badge](#badge) |
@@ -387,6 +389,15 @@ Global classes in `src/app.css`, not components:
   `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
+  `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
+  the top bar's Problems toggle, whose `aria-label` says the count too. With
+  `.attention` it's warning-toned while not pressed (there are problems to see).
+- `.list-row`: a full-width row of a list that opens or shows what it names when
+  clicked: the Problems panel's entries (each opening the file view at its line) and the
+  file view's outline (each scrolling to its request). Its height is at least
+  `--control-h-icon`; it hovers like a row, and `.current` with `aria-current="true"`
+  marks the row for where the user is (the outline's request under the cursor) with an
+  accent bar. A list sets only its own inset (the panel indents rows under their file).
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
   toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
@@ -583,8 +594,15 @@ private env file isn't git-ignored, TLS checks are off, a send failed.
 
 `CheckStrip.svelte`. The pre-send checks above a request's sections: one entry per
 problem the request would be sent with, each with its quick fixes as `.btn.small.ghost`
-buttons under the message. Today every entry is an Undefined variable ("`{{token}}` is
-undefined, used in Headers and Authorization"; ARCHITECTURE §10).
+buttons under the message, then its notes. The kinds (`Check` in `src/lib/checks.ts`):
+a problem the core found reading its source (`problem`: the line and the parser's
+message, a missing `< file` among them), an Undefined variable ("`{{token}}` is
+undefined, used in Headers and Authorization", with its fixes; ARCHITECTURE §10), an
+environment the request's folder doesn't define (`envMissing`), a `# @name` other
+requests in the file share (`duplicateName`), and the portability notes (`portability`:
+how many lines behave differently in VS Code or Rider, and a Request variable Rider
+refuses to send). Notes show info-toned (`li.note`), or as warnings at the warning level
+(Settings → Portability).
 
 - Props: `checks` (`Check[]` from `src/lib/checks.ts`; empty renders nothing) and
   `onfix(check, fix)`. It is a `region` named "Pre-send checks", with a list item per

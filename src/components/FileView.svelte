@@ -248,7 +248,7 @@
         <nav class="outline" aria-label="Outline">
           <!-- Nothing in a row reads its place: a request added or removed above moves the rest without touching them (#168). -->
           {#each entries as entry (entry)}
-            <button class="entry" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
+            <button class="list-row" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
               <Badge method={entry.method} />
               <span class="label ellipsis">{entry.label}</span>
             </button>
@@ -319,8 +319,8 @@
     flex: 1;
     min-height: 0;
     display: flex;
-    gap: 8px;
-    margin: 0 16px 16px;
+    gap: var(--space-2);
+    margin: 0 var(--space-4) var(--space-4);
   }
   .outline {
     flex: none;
@@ -332,33 +332,12 @@
     flex-direction: column;
     gap: 1px;
   }
-  .entry {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 26px;
+  /* A narrow column: rows hold a method badge and a label. */
+  .outline .list-row {
     flex: none;
-    padding: 0 6px;
-    border: none;
-    border-left: 2px solid transparent;
-    border-radius: 0;
-    background: none;
-    color: var(--text-2);
-    font: inherit;
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
+    padding: 0 var(--space-2);
   }
-  .entry:hover {
-    background: var(--hover);
-    color: var(--text);
-  }
-  .entry.current {
-    background: var(--accent-soft);
-    border-left-color: var(--accent);
-    color: var(--text);
-  }
-  .entry .label {
+  .list-row .label {
     min-width: 0;
   }
   .none {

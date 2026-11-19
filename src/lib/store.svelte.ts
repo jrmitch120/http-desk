@@ -244,7 +244,7 @@ class AppStore {
   /** The zoom of the whole interface. A missing, non-numeric or out-of-range
    *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
   zoom = $derived(zoomOf(this.settings?.zoom));
-  /** How non-portable constructs show (Settings → Editor): as warnings only when the
+  /** How non-portable constructs show (Settings → Portability): as warnings only when the
    *  setting is `true`; missing or anything else in a hand-edited settings file, notes. */
   portabilityLevel = $derived<PortabilityLevel>(this.settings?.portabilityWarnings === true ? "warning" : "note");
   /** The webview zoom last asked for, to skip repeat calls. */

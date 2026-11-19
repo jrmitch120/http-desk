@@ -319,6 +319,54 @@ textarea.input {
   font-family: var(--mono);
   font-size: 12px;
 }
+/* With a count beside its icon (the Problems toggle): as wide as both. */
+.icon-btn.counted {
+  width: auto;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+}
+.icon-btn.counted .count {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* Something in it wants attention (problems to see): warning-toned until it's pressed. */
+.icon-btn.counted.attention:not(.active) {
+  color: var(--warning);
+}
+
+/* A full-width row of a list that does something when clicked (opens what it names):
+   the Problems panel's entries, the file view's outline. `.current` marks the row for
+   where the user is, with `aria-current`. */
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h-icon);
+  padding: 0 var(--space-3);
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.list-row:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.list-row.current {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+.list-row:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-inset);
+}
 
 .link {
   color: var(--focus);

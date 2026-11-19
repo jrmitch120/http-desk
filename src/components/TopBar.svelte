@@ -97,9 +97,10 @@
   {/if}
   <!-- The Problems panel's toggle, with the workspace's problem count. -->
   <button
-    class="icon-btn problems-btn"
+    class="icon-btn"
     class:active={app.panel === "problems"}
     class:counted={problems > 0}
+    class:attention={problems > 0}
     aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
     aria-pressed={app.panel === "problems"}
     use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
@@ -141,19 +142,6 @@
 </header>
 
 <style>
-  /* Wide enough for its count beside the icon. */
-  .problems-btn.counted {
-    width: auto;
-    gap: 4px;
-    padding: 0 6px;
-  }
-  .problems-btn.counted:not(.active) {
-    color: var(--warning);
-  }
-  .count {
-    font-size: 11.5px;
-    font-variant-numeric: tabular-nums;
-  }
   .theme-btn {
     position: relative;
   }

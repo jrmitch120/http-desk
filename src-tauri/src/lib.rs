@@ -94,7 +94,7 @@ struct AppSettings {
     /// Show the request's `.http` source in place of its sections.
     #[serde(deserialize_with = "or_default")]
     show_source: bool,
-    /// Show non-portable constructs as warnings rather than notes (Settings → Editor).
+    /// Show non-portable constructs as warnings rather than notes (Settings → Portability).
     /// Off by default; kept here, never in the workspace.
     #[serde(deserialize_with = "or_default")]
     portability_warnings: bool,

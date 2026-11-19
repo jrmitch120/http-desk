@@ -89,6 +89,24 @@ test("every kind of text field opens the app's edit menu, never the webview's", 
   await expectMenu(page, modal.getByPlaceholder("Filter variables"), EDIT);
 });
 
+test("the file view's editor has the edit menu, and only Copy and Select all while it's read-only", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.getByRole("button", { name: "View file as text" }).click();
+  const fileView = page.locator(".file-view .file-code .cm-content");
+  await expectMenu(page, fileView, EDIT);
+
+  // Text that doesn't parse in the request's source makes the file view read-only (#174).
+  await page.getByRole("tablist", { name: "Open requests" }).getByRole("tab", { name: /List pets/ }).click();
+  await page.locator(".btn", { hasText: ".http" }).click();
+  await page.locator(".source-code .cm-line", { hasText: "GET {{baseUrl}}/pets" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" and more");
+  await page.getByRole("tablist", { name: "Open requests" }).getByRole("tab", { name: /pets\.http/ }).click();
+  await expect(page.locator(".file-view")).toContainText(`The source of "List pets" doesn't parse.`);
+  await expectMenu(page, fileView, READ_ONLY);
+});
+
 test("Cut, Copy, Paste and Select all work in a text input, and are disabled when they can't apply", async ({ page }) => {
   await openApp(page);
   const box = searchBox(page);
