@@ -234,18 +234,25 @@ explorer lists them), and `file_problems { path, text?, file? }` one file again
 (`workspace::file_problems`: `text_problems(text)`, the parser's problems and body files
 placed in the file's text, each body file without a `{{variable}}` looked for as a send
 looks for it, and `portability(text)` kept to the jetbrains-only and vscode-only lines).
+A file whose text has a `{{reference}}` or a `@name` comes with what it reads as
+(`FileProblems.file`), even with nothing else to list: the page finds its Undefined
+variables and the `# @name`s its requests share itself, as it knows each folder's
+environments, the selected one and the Session's Global variables, with the check
+strip's own rules (`referenceChecks`, placed in the text by `fileUnderlines`).
 An open document is read as the app has it, unsaved edits included: its file view's
-text while that stands for the file (text that doesn't parse too), else its file. The
+text while that stands for the file (text that doesn't parse too), else its file, with
+each request whose Source view holds text that doesn't parse as that text is written
+(what Save as written would save; `app.texts.openText`). The
 page's side (`src/lib/workspaceProblems.svelte.ts`, a host-backed store like the Layout's)
 reads the whole workspace when it opens and when the watcher reports a folder, one file
 when the watcher reports it, and an open document 300 ms after its edits pause (`track`,
-from an effect). `src/lib/problemsList.ts` turns them into the panel's entries, each
-file's summary ("2 lines behave differently in VS Code") and the toggle's count (the
-problems, and the differing lines once the portability setting makes them warnings);
-portability notes take `app.portabilityLevel`. A request's Source view text that doesn't
-parse isn't read until it does (the request's check strip shows its problems), and a
-body file path with variables is never reported missing here, as it depends on the
-environment.
+from an effect, comparing each document's kept JSON strings, `openVersion`, rather than
+stringifying it). It owns the panel's list and the toggle's count (`list`, `count`, which
+the top bar and the panel area read): `src/lib/problemsList.ts` turns each file into its
+entries, its summary ("2 lines behave differently in VS Code") and its part of the count
+(the problems and Undefined variables, and the differing lines once the portability
+setting makes them warnings); portability notes take `app.portabilityLevel`. A body file
+path with variables is never reported missing here, as it depends on the environment.
 
 ---
 
