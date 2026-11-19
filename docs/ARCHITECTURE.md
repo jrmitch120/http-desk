@@ -1096,7 +1096,8 @@ Decisions made during implementation, beyond the plan above:
   included (`run::RequestReport`: file from the root, name, method, URL as sent, status,
   time, outcome, failure `{reason: network | script | test | blocked, message}`, tests).
   The core builds it as the run goes and masks each Secret value of the request's
-  environment (`send::secret_values`) in the URL and every message, percent-encoded or
+  environment (`MaskedValues::for_run_export`: Secrets, not prompt answers, which a Run's
+  sends never have) in the URL and every message, percent-encoded or
   not; it never holds a response body. The Runner panel's Export (JUnit XML… / JSON…)
   asks for a path with the dialog plugin's save (`dialog:default` allows it) and passes
   the reports back to `export_run(requests, format, path)`, which renders them with the

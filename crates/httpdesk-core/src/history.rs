@@ -81,7 +81,7 @@ pub type Result<T> = std::result::Result<T, HistoryError>;
 
 /// What is masked in a recorded request before it is written (ADR-0009): the values
 /// of [`CREDENTIAL_HEADERS`], and every Secret value and prompt answer the send used
-/// (as the send resolved them: [`send::RequestScope::masked_values`]), wherever it
+/// (as the send resolved them: [`MaskedValues::for_history`]), wherever it
 /// shows. The one place masking happens.
 struct Masking {
     values: MaskedValues,
@@ -162,7 +162,7 @@ impl Pending {
     /// its body up to [`BODY_CAP`], more than the request as sent shows.
     pub fn finish(self, attempt: &Attempt, finished: Finished<'_>) -> Option<NewEntry> {
         let elapsed = self.started.elapsed();
-        let send::ForHistory { body, masked } = attempt.take_for_history()?;
+        let send::BodyAndMaskedValues { body, masked } = attempt.take_for_history()?;
         let masking = &Masking { values: masked };
         let request = |mut request: SentRequest| {
             if let (Some(_), Some(body)) = (&request.body_preview, &body) {
