@@ -56,7 +56,7 @@ fn a_directive_no_editor_knows_is_unknown() {
 
 /// What [`request_problems`] finds in each request of `fixtures/problems/<name>`: its
 /// problems, then the files its body reads, as (request, line, column, code), placed
-/// in the request's text as the Source view shows it ([`render_request`]).
+/// in the request's text as the Source view shows it ([`request_source`]).
 fn request_problems_in(name: &str) -> Vec<(usize, usize, usize, ProblemCode)> {
     let path = format!("{}/tests/fixtures/problems/{name}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));

@@ -49,6 +49,8 @@ const api = vi.hoisted(() => ({
   deleteHistoryEntry: vi.fn(),
   clearWorkspaceHistory: vi.fn(),
   requestVariable: vi.fn(),
+  parseRequest: vi.fn(),
+  requestSource: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -82,6 +84,7 @@ import { WORKSPACE_HISTORY } from "./history.svelte";
 import { forceOS } from "./platform";
 import { canRun, command, runCommand } from "./commands";
 import { trackModal } from "./modal.svelte";
+import { invokeCore } from "../dev/textCore";
 
 const PATH = "/ws/api/books.http";
 
@@ -3126,5 +3129,117 @@ describe("Run folder and Run selection", () => {
     // From the same start, upwards; zoo.http is collapsed, so its request isn't in reach.
     app.selectRequest(ORDERS, keyOf(ORDERS, "Orders"), "range");
     expect(selected()).toEqual(["orders.http/Orders", "orders.http/Order"]);
+  });
+});
+
+describe("editing a request's source (#163)", () => {
+  // The real core (WASM) reads and writes the text, as the shell does.
+  const TEXT = "@host = https://example.com\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n### Create\nPOST {{host}}/books\n";
+  const parsed = () => invokeCore<HttpFile>("parse_file", { text: TEXT });
+  beforeEach(() => {
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+  });
+
+  it("updates the request from what the user types", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, "### List\nPUT {{host}}/books/1\nAccept: text/plain\nX-Trace: on\n");
+    const req = app.requestFor(list)!;
+    expect([req.method, req.url]).toEqual(["PUT", "{{host}}/books/1"]);
+    expect(req.headers.items.map((h) => `${h.name}: ${h.value}`)).toEqual(["Accept: text/plain", "X-Trace: on"]);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
+  });
+
+  it("shows a request as written, and an edit in the structured editors renders it again", async () => {
+    const [list] = await openAll(parsed());
+    expect(await app.sourceFor(PATH, list.key)).toBe("### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n");
+
+    await app.editSource(PATH, list.key, "### List\n// hand formatted\nGET  {{host}}/books\nAccept: application/json\n\n");
+    app.requestFor(list)!.headers.items.push({ enabled: true, name: "X-Trace", value: "on" });
+
+    expect(app.sourceText(PATH, list.key)).toBeNull();
+    // Rendered afresh: the serializer's own spacing and comment marker.
+    expect(await app.sourceFor(PATH, list.key)).toBe("### List\n# hand formatted\nGET {{host}}/books\nAccept: application/json\nX-Trace: on\n");
+  });
+
+  it("keeps the last valid request while the text doesn't parse, and reads dirty", async () => {
+    const [list] = await openAll(parsed());
+    const before = JSON.parse(JSON.stringify(app.requestFor(list)));
+
+    const broken = "### List\nGET {{host}}/books and more\n";
+    await app.editSource(PATH, list.key, broken);
+    expect(JSON.parse(JSON.stringify(app.requestFor(list)))).toEqual(before);
+    expect(app.isSourceInvalid(PATH, list.key)).toBe(true);
+    expect(app.sourceText(PATH, list.key)).toMatchObject({ text: broken, parses: false, problems: [{ line: 2, code: "unparseable-request-line" }] });
+    expect(await app.sourceFor(PATH, list.key)).toBe(broken);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
+    expect(app.isDocDirty(PATH)).toBe(true);
+
+    // No request line at all.
+    await app.editSource(PATH, list.key, "### List\n# not yet\n");
+    expect(app.isSourceInvalid(PATH, list.key)).toBe(true);
+    expect(JSON.parse(JSON.stringify(app.requestFor(list)))).toEqual(before);
+  });
+
+  it("reads clean again once the text is back to what was saved", async () => {
+    const [list] = await openAll(parsed());
+    const saved = (await app.sourceFor(PATH, list.key))!;
+
+    await app.editSource(PATH, list.key, saved.replace("Accept", "X-Accept"));
+    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
+    await app.editSource(PATH, list.key, saved);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(false);
+
+    await app.editSource(PATH, list.key, saved.replace("/books", "/books and"));
+    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
+    await app.editSource(PATH, list.key, saved);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(false);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  const savedRequest = (i: number) => (saveHttpFile.mock.lastCall![1] as HttpFile).requests[i];
+
+  it("sends text typed just before Send, without waiting for the pause", async () => {
+    const [list] = await openAll(parsed());
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    void app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
+    await app.send(list.id);
+    expect(api.sendRequest.mock.lastCall![0].request.headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
+  });
+
+  it("saves text typed just before Save, without waiting for the pause", async () => {
+    const [list] = await openAll(parsed());
+    void app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
+    await app.saveTab(list);
+    expect(savedRequest(0).headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("saves the last valid request while the text doesn't parse, and keeps the text", async () => {
+    const [list] = await openAll(parsed());
+    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books\nX-Trace: on\n");
+    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books and\nX-Trace: on\n");
+    await app.saveTab(list);
+    expect(savedRequest(0).headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
+    expect(app.sourceText(PATH, list.key)?.text).toBe("### List\nGET {{host}}/books and\nX-Trace: on\n");
+    expect(app.isRequestDirty(PATH, list.key)).toBe(true);
+  });
+
+  it("forgets text that doesn't parse when its tab closes", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books and\n");
+    const closing = app.closeTab(list.id);
+    app.closeDialog("discard");
+    await closing;
+    expect(app.dirtyDocs()).toEqual([]);
+
+    // Saved first: the last valid request is in the file, and the text goes with the tab.
+    await app.editSource(PATH, create.key, "### Create\nPOST {{host}}/books and\n");
+    const saving = app.closeTab(create.id);
+    app.closeDialog("save");
+    await saving;
+    expect(saveHttpFile).toHaveBeenCalledOnce();
+    expect(app.dirtyDocs()).toEqual([]);
   });
 });

@@ -20,6 +20,7 @@ import type {
   Usage,
   HttpResponse,
   NamedExchange,
+  ParsedRequest,
   Request,
   RequestProblems,
   RequestPreview,
@@ -80,11 +81,14 @@ export const api = {
 
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
-  renderRequest: (request: Request) => invoke<string>("render_request", { request }),
-  /** The constructs in `request`'s source (as `renderRequest` writes it) and how VS Code and Rider treat each. */
+  /** A request's Source view text: the text before it and its block, as written where the request still matches it. */
+  requestSource: (request: Request) => invoke<string>("request_source", { request }),
+  /** The constructs in `request`'s source (as `requestSource` gives it) and how VS Code and Rider treat each. */
   requestPortability: (request: Request) => invoke<PortabilityMark[]>("request_portability", { request }),
-  /** The first request in `text` (a History entry's source text), parsed as in a file; null without one. */
-  parseRequest: (text: string) => invoke<Request | null>("parse_request", { text }),
+  /** The constructs in `text` (a Source view's typed text) and how VS Code and Rider treat each. */
+  portabilityText: (text: string) => invoke<PortabilityMark[]>("portability_text", { text }),
+  /** The first request in `text` (a Source view's, a History entry's source text) and the problems found reading it. */
+  parseRequest: (text: string) => invoke<ParsedRequest>("parse_request", { text }),
   /** What reading `request`'s source (as the Source view shows it) finds: its problems, and the files its body reads. */
   requestProblems: (request: Request) => invoke<RequestProblems>("request_problems", { request }),
   /** Whether body file `path` (as written after `<`, variables resolved) exists, relative to `.http` file `file`'s folder. */

@@ -69,9 +69,9 @@ test("every kind of text field opens the app's edit menu, never the webview's", 
   // The response body is read-only (a JSON one adds Copy path).
   await send(page);
   await expectMenu(page, page.locator(".body .cm-content .cm-line").first(), [...READ_ONLY, "Copy path"]);
-  // The .http source is read-only too.
+  // The .http source is editable (#163).
   await page.locator(".btn", { hasText: ".http" }).click();
-  await expectMenu(page, page.locator(".source-code .cm-content"), READ_ONLY);
+  await expectMenu(page, page.locator(".source-code .cm-content"), EDIT);
   // The source view lasts across requests (an app setting): back to the sections for the body editor.
   await page.locator(".btn", { hasText: ".http" }).click();
 

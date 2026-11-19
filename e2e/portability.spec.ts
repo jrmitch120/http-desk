@@ -66,3 +66,25 @@ test("HttpDesk's own lines are marked as ignored by both editors, and the strip 
   // Both editors ignore them alike, so the request doesn't behave differently in either.
   await expect(strip(page)).toHaveCount(0);
 });
+
+test("the marks follow text typed in the source, even while it doesn't read as a request", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await showSource(page);
+
+  // A Rider-only directive typed above the request line is marked, on the line typed.
+  await source(page).locator(".cm-line", { hasText: "GET {{baseUrl}}/pets" }).click();
+  await page.keyboard.press("Home");
+  await page.keyboard.type("# @timeout 5\n");
+  await hoverMarkerOf(page, "# @timeout 5");
+  await expect(page.getByRole("tooltip")).toHaveText("Rider uses this read timeout; VS Code ignores @timeout");
+  await expect(strip(page).getByRole("note")).toHaveText("1 line behaves differently in VS Code: line 6 of the .http source");
+
+  // Text that doesn't parse leaves the request as it was; the marks stay on the text shown.
+  await page.keyboard.type("# @no-log\n");
+  await page.keyboard.press("End");
+  await page.keyboard.type(" and more");
+  await hoverMarkerOf(page, "# @no-log");
+  await expect(page.getByRole("tooltip")).toHaveText("Rider keeps this request out of its history; VS Code ignores @no-log");
+  await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 6 and 7 of the .http source");
+});

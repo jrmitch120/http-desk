@@ -120,14 +120,19 @@ pub fn parse_request(text: &str) -> ParsedRequest {
     ParsedRequest { request: None, problems: Vec::new() }
 }
 
-/// What reading `req`'s text as the Source view shows it ([`crate::serializer::render_request`]) finds:
-/// its problems, and the files its body is read from, placed in that text. Its
-/// rendered text, not its text as written, so a request edited in the structured
-/// editors is read as it now is.
+/// What reading `req`'s text as the Source view shows it ([`crate::serializer::request_source`])
+/// finds: its problems, and the files its body is read from, placed in that text. Its
+/// block is read as written where the request still matches it, else rendered, so a
+/// request edited in the structured editors is read as it now is.
 pub fn request_problems(req: &Request) -> RequestProblems {
-    let text = crate::serializer::render_request(req);
+    let text = crate::serializer::request_text(req);
     let (mut problems, mut files) = (Vec::new(), Vec::new());
     read_block(&text, &mut problems, &mut files);
+    // The text before the block (`leading`) comes first in the Source view.
+    let below = req.leading.matches('\n').count();
+    for p in problems.iter_mut().chain(files.iter_mut().map(|f| &mut f.missing)) {
+        p.line += below;
+    }
     RequestProblems { problems, files }
 }
 

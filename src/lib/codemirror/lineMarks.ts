@@ -1,7 +1,7 @@
 // A gutter of line markers, each with a hover in the app's tooltip: the Source
 // view's portability markers (#170). An Editor given `lineMarks` has it, and
 // follows the prop.
-import { RangeSet, StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
+import { RangeSet, StateEffect, StateField, type EditorState, type Extension, type Text } from "@codemirror/state";
 import { EditorView, GutterMarker, gutter } from "@codemirror/view";
 import { tooltip } from "../popup/tooltip.svelte";
 
@@ -18,7 +18,10 @@ const marksField = StateField.define<LineMark[]>({
   create: () => [],
   update(marks, tr) {
     for (const e of tr.effects) if (e.is(setLineMarks)) return e.value;
-    return marks;
+    if (!tr.docChanged) return marks;
+    // Typed text moves each marker with its line until the next marks arrive.
+    const [before, after] = [tr.startState.doc, tr.state.doc];
+    return marks.map((m) => (m.line >= 1 && m.line <= before.lines ? { ...m, line: after.lineAt(tr.changes.mapPos(before.line(m.line).from, 1)).number } : m));
   },
 });
 
@@ -63,3 +66,6 @@ export const lineMarks = (): Extension => [
     ".cm-line-mark-warning": { backgroundColor: "var(--warning)" },
   }),
 ];
+
+/** The markers in `state` (an editor's with `lineMarks()`), on the lines they're on now. */
+export const lineMarksIn = (state: EditorState): LineMark[] => state.field(marksField, false) ?? [];

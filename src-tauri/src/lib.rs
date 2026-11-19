@@ -461,12 +461,14 @@ fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> 
     Ok(httpdesk_core::parse(&text))
 }
 
+/// A request's Source view text: the text before it and its block, as written
+/// where the request still matches it, else rendered. [`parse_request`] reads it back.
 #[tauri::command]
-fn render_request(request: Request) -> String {
-    httpdesk_core::render_request(&Request { leading: String::new(), ..request })
+fn request_source(request: Request) -> String {
+    httpdesk_core::request_source(&request)
 }
 
-/// The constructs in `request`'s source (as `render_request` writes it, so lines
+/// The constructs in `request`'s source (as [`request_source`] gives it, so lines
 /// match) and how VS Code and Rider treat each: the Source view's gutter markers and
 /// the check strip's portability note.
 #[tauri::command]
@@ -474,10 +476,18 @@ fn request_portability(request: Request) -> Vec<httpdesk_core::portability::Port
     httpdesk_core::portability::request_portability(&request)
 }
 
-/// The first request in `text` (a History entry's source text), parsed as in a file.
+/// The constructs in `text` (a Source view's typed text, which may not read as a
+/// request) and how VS Code and Rider treat each, as [`request_portability`] gives them.
 #[tauri::command]
-fn parse_request(text: String) -> Option<Request> {
-    httpdesk_core::parse(&text).requests.into_iter().next()
+fn portability_text(text: String) -> Vec<httpdesk_core::portability::PortabilityMark> {
+    httpdesk_core::portability::portability(&text)
+}
+
+/// The first request in `text` (a Source view's, a History entry's source text) and
+/// the problems found reading it; no request when the text has no request line.
+#[tauri::command]
+fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
+    httpdesk_core::parse_request(&text)
 }
 
 /// What reading `request`'s source finds: its problems, and the files its body is
@@ -1502,8 +1512,9 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             find_usages,
             read_http_file,
             save_http_file,
-            render_request,
+            request_source,
             request_portability,
+            portability_text,
             parse_request,
             request_problems,
             body_file_exists,

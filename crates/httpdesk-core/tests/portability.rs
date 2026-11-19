@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use httpdesk_core::portability::{portability, Construct, Support, TABLE};
+use httpdesk_core::portability::{portability, request_portability, Construct, Support, TABLE};
 
 use Construct as C;
 use Support::*;
@@ -129,4 +129,15 @@ fn marks_are_sent_to_the_page_as_json_with_their_hover() {
     assert_eq!(json["support"], "jetbrains-only");
     let hover = json["hover"].as_str().unwrap();
     assert!(hover.contains("Rider runs") && hover.contains("VS Code ignores"), "{hover}");
+}
+
+#[test]
+fn a_requests_marks_are_placed_in_its_source_as_the_source_view_shows_it() {
+    // The text before the request comes first, and the block is as written (its blank
+    // line and spacing kept), so the marks fall on the lines shown.
+    let text = "# Notes\n\n### Pets\n\n# @no-log\nGET   https://example.com/\n#~ X-Debug: on\n";
+    let request = httpdesk_core::parse_request(text).request.unwrap();
+    assert_eq!(httpdesk_core::request_source(&request), text);
+    let found: Vec<_> = request_portability(&request).iter().map(|m| (m.line, m.construct)).collect();
+    assert_eq!(found, [(5, C::NoLogDirective), (7, C::DisabledLine)]);
 }

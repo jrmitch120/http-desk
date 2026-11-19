@@ -423,10 +423,11 @@ pub fn portability(text: &str) -> Vec<PortabilityMark> {
     marks.0
 }
 
-/// [`portability`] of `request`'s source as the Source view shows it: its text as
-/// the shell's `render_request` writes it (without the text before it).
+/// [`portability`] of `request`'s source as the Source view shows it
+/// ([`crate::request_source`]): the text before it, then its block as written where
+/// the request still matches it, else rendered.
 pub fn request_portability(request: &Request) -> Vec<PortabilityMark> {
-    portability(&crate::render_request(&Request { leading: String::new(), ..request.clone() }))
+    portability(&crate::request_source(request))
 }
 
 struct Marks(Vec<PortabilityMark>);

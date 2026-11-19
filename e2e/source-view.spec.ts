@@ -33,7 +33,7 @@ test("the .http source stays shown across tabs, sends and a reload, and is remem
   await expect(source(page)).toContainText("### List pets");
 
   await toggle(page).click();
-  await expect(source(page)).toHaveCount(0);
+  await expect(source(page)).toBeHidden();
   await openRequest(page, ["api", "pets.http"], "Create pet");
   await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
   expect((await mockState(page, "settings")).showSource).toBe(false);
@@ -43,14 +43,14 @@ test("the .http source stays shown across tabs, sends and a reload, and is remem
 const sourceText = (page: Page) =>
   source(page).evaluate((el) => [...el.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\n"));
 
-test("the source is the request as the core writes it: the mock renders with the real serializer (#173)", async ({ page }) => {
+test("the source is the request as written: the mock reads and writes with the real core (#173, #163)", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await toggle(page).click();
 
-  // Exactly the request's block in src/dev/pets.http (less the blank line before
-  // the next one), as the core renders it: its documentation lines, the disabled
-  // param and header, and the auth line where the serializer puts it.
+  // Exactly the request's block in src/dev/pets.http, the blank line before the
+  // next one too: its documentation lines, the disabled param and header, and the
+  // auth line.
   await expect.poll(() => sourceText(page)).toBe(
     [
       "### List pets",
@@ -63,6 +63,7 @@ test("the source is the request as the core writes it: the mock renders with the
       "Authorization: Bearer {{token}}",
       "Accept: application/json",
       "#~ X-Debug: true",
+      "",
       "",
     ].join("\n"),
   );

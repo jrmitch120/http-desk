@@ -63,9 +63,10 @@ test("a body file the workspace has isn't flagged", async ({ page }) => {
   await toggleSource(page);
   await expect(source(page)).toContainText("< ./request-form-data.json");
   // Give the shell's answers time to arrive; nothing is flagged. The strip only notes
-  // its `>> response.json` redirect, which VS Code doesn't run (#170).
+  // its `>> response.json` redirect, which VS Code doesn't run (#170): line 20 of the
+  // source, below the notes-only block before the request.
   await page.waitForTimeout(500);
-  await expect(strip(page).getByRole("listitem")).toHaveText([/1 line behaves differently in VS Code: line\s+17 of/]);
+  await expect(strip(page).getByRole("listitem")).toHaveText([/1 line behaves differently in VS Code: line\s+20 of/]);
   await expect(strip(page).locator("li:not(.note)")).toHaveCount(0);
   await expect(source(page).locator(".cm-underline")).toHaveCount(0);
 });

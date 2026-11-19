@@ -11,9 +11,14 @@ fn call(command: &str, args: Value) -> Value {
     serde_json::from_str(&invoke(command, &args.to_string()).unwrap()).unwrap()
 }
 
+/// The request `parse_request` reads in `text`.
+fn parse(text: &str) -> Value {
+    call("parse_request", json!({ "text": text }))["request"].clone()
+}
+
 #[test]
 fn parse_request_reads_the_first_request_in_text() {
-    let request = call("parse_request", json!({ "text": REQUEST }));
+    let request = parse(REQUEST);
     assert_eq!(request["method"], "GET");
     assert_eq!(request["url"], "{{baseUrl}}/pets");
     assert_eq!(request["query"]["items"], json!([{ "enabled": true, "name": "limit", "value": "20" }]));
@@ -21,22 +26,32 @@ fn parse_request_reads_the_first_request_in_text() {
 }
 
 #[test]
-fn parse_request_gives_null_for_text_with_no_request() {
-    assert_eq!(call("parse_request", json!({ "text": "# just a comment\n" })), Value::Null);
+fn parse_request_gives_no_request_for_text_with_none() {
+    assert_eq!(
+        call("parse_request", json!({ "text": "# just a comment\n" })),
+        json!({ "request": null, "problems": [] })
+    );
 }
 
 #[test]
-fn a_parsed_request_renders_back_as_written() {
-    let request = call("parse_request", json!({ "text": REQUEST }));
-    assert_eq!(call("render_request", json!({ "request": request })), REQUEST);
+fn parse_request_gives_the_problems_found_reading_the_text() {
+    let parsed = call("parse_request", json!({ "text": "GET https://example.com/a b\n" }));
+    assert_eq!(parsed["request"]["method"], "GET");
+    assert_eq!(parsed["problems"][0]["code"], "unparseable-request-line");
+    assert_eq!((&parsed["problems"][0]["line"], &parsed["problems"][0]["severity"]), (&json!(1), &json!("error")));
 }
 
 #[test]
-fn render_request_writes_an_edited_request() {
-    let mut request = call("parse_request", json!({ "text": REQUEST }));
+fn a_parsed_requests_source_is_its_text_as_written() {
+    let edited = format!("// a comment block before it\n\n{}", REQUEST.replace("GET ", "GET   "));
+    assert_eq!(call("request_source", json!({ "request": parse(&edited) })), edited);
+}
+
+#[test]
+fn request_source_writes_an_edited_request() {
+    let mut request = parse(REQUEST);
     request["method"] = json!("DELETE");
-    request["raw"] = Value::Null;
-    let text = call("render_request", json!({ "request": request }));
+    let text = call("request_source", json!({ "request": request }));
     assert!(text.as_str().unwrap().contains("DELETE {{baseUrl}}/pets?limit=20\n"), "{text}");
 }
 
@@ -54,9 +69,7 @@ fn parse_file_reads_a_whole_file() {
 #[test]
 fn request_text_is_a_requests_text_as_history_keeps_it() {
     let edited = "### List pets\n# Returns all pets.\nGET   {{baseUrl}}/pets?limit=20\nAccept: application/json\n";
-    let request = call("parse_request", json!({ "text": edited }));
-    // As written, though rendering it closes up the spaces.
-    assert_ne!(call("render_request", json!({ "request": request })), edited);
+    let request = parse(edited);
     assert_eq!(call("request_text", json!({ "request": request })), edited);
 }
 
@@ -75,13 +88,13 @@ fn request_problems_reads_a_requests_source_as_the_shell_does() {
 }
 
 #[test]
-fn request_portability_marks_the_lines_of_the_rendered_source() {
-    let request = call("parse_request", json!({ "text": REQUEST }));
+fn request_portability_marks_the_lines_of_the_source() {
+    let request = parse(&format!("# Pets\n\n{REQUEST}"));
     let marks = call("request_portability", json!({ "request": request }));
     assert_eq!(
         marks,
         json!([{
-            "line": 5,
+            "line": 7,
             "construct": "disabled-line",
             "support": "httpdesk-only",
             "label": "#~",
@@ -91,7 +104,14 @@ fn request_portability_marks_the_lines_of_the_rendered_source() {
 }
 
 #[test]
+fn portability_text_marks_the_lines_of_text_that_isnt_a_request_yet() {
+    let marks = call("portability_text", json!({ "text": "### Draft\n# @no-log\nGET\n#~ X-Debug: true\n" }));
+    let found: Vec<_> = marks.as_array().unwrap().iter().map(|m| (m["line"].clone(), m["construct"].clone())).collect();
+    assert_eq!(found, [(json!(2), json!("no-log-directive")), (json!(4), json!("disabled-line"))]);
+}
+
+#[test]
 fn an_unknown_command_or_bad_arguments_is_an_error() {
     assert!(invoke("send_request", "{}").unwrap_err().contains("send_request"));
-    assert!(invoke("render_request", "{\"request\": 1}").is_err());
+    assert!(invoke("request_source", "{\"request\": 1}").is_err());
 }

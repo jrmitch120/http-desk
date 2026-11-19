@@ -70,7 +70,7 @@ export type Support = "portable" | "jetbrains-only" | "vscode-only" | "httpdesk-
  * the core's portability table (crates/httpdesk-text/src/portability.rs).
  */
 export interface PortabilityMark {
-  /** 1-based, in the source as `render_request` writes it. */
+  /** 1-based, in the source as the Source view shows it (`request_source`, or the text typed there). */
   line: number;
   /** The table row, e.g. `response-handler`. */
   construct: string;
@@ -107,6 +107,12 @@ export interface Request {
   raw: string | null;
   /** Frontend-only stable identity (ignored by the backend). */
   _key?: string;
+}
+
+/** A single request's text read on its own (`parse_request`): null without a request line. */
+export interface ParsedRequest {
+  request: Request | null;
+  problems: Problem[];
 }
 
 export interface FileHeader {

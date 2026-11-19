@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
-  import { Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
+  import { Annotation, Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
+  import { history } from "@codemirror/commands";
   import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
   import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
@@ -17,7 +18,13 @@
      * turned back into a string.
      */
     doc?: Text;
+    /** The user changed the text (never for a new `value`). */
     onchange?: (value: string) => void;
+    /**
+     * A new `value` starts a new undo history, so undo can't take back what came
+     * from outside (the Source view: an edit in the structured editors clears it).
+     */
+    freshHistory?: boolean;
     language?: Language;
     readonly?: boolean;
     wrap?: boolean;
@@ -37,7 +44,7 @@
     /** Markers in a gutter of their own, with hovers (`lineMarks.ts`). Given at mount, the gutter is there and follows this. */
     lineMarks?: LineMark[];
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks }: Props = $props();
+  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks }: Props = $props();
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -76,6 +83,31 @@
   const baseC = new Compartment();
   const langC = new Compartment();
   const varC = new Compartment();
+  /** The undo history, with `freshHistory` (otherwise it's in baseC's extensions). */
+  const histC = new Compartment();
+  const ownHistory = untrack(() => freshHistory);
+  const historyExt = (ro: boolean) => (ownHistory && !ro ? history() : []);
+  const baseExt = (opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }) =>
+    editorExtensions({ ...opts, history: !ownHistory });
+  /** Marks a change that puts a new `value` in: not the user's, so no `onchange`. */
+  const fromValue = Annotation.define<boolean>();
+
+  /**
+   * Puts `text` in place of `v`'s, changing only the span that differs, so a
+   * selection outside it stays where it was. With `freshHistory`, the undo
+   * history starts again (taking the history out and putting it back).
+   */
+  function setValue(v: EditorView, text: string) {
+    const old = v.state.doc.toString();
+    let from = 0;
+    while (from < old.length && from < text.length && old.charCodeAt(from) === text.charCodeAt(from)) from++;
+    let end = 0;
+    while (end < old.length - from && end < text.length - from && old.charCodeAt(old.length - 1 - end) === text.charCodeAt(text.length - 1 - end)) end++;
+    const change = v.state.update({ changes: { from, to: old.length - end, insert: text.slice(from, text.length - end) }, annotations: fromValue.of(true) });
+    if (!ownHistory || untrack(() => readonly)) return v.dispatch(change);
+    const forget = change.state.update({ effects: histC.reconfigure([]), annotations: fromValue.of(true) });
+    v.dispatch([change, forget, forget.state.update({ effects: histC.reconfigure(historyExt(false)), annotations: fromValue.of(true) })]);
+  }
 
   // A prebuilt document goes into a wrapped view only once the view has
   // measured itself without it, so it's laid out like a document replaced in
@@ -156,7 +188,8 @@
       state: EditorState.create({
         doc: deferDoc ? STAND_IN : (doc ?? value),
         extensions: [
-          baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
+          baseC.of(baseExt({ readonly, wrap, placeholder, gutters })),
+          histC.of(historyExt(readonly)),
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
           Prec.highest(
@@ -175,7 +208,7 @@
           untrack(() => underlines) ? underlineExtension() : [],
           untrack(() => marks) ? lineMarks() : [],
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) onchange?.(u.state.doc.toString());
+            if (u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) onchange?.(u.state.doc.toString());
           }),
         ],
       }),
@@ -197,9 +230,7 @@
       return;
     }
     const v = value;
-    if (view && v !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });
-    }
+    if (view && v !== view.state.doc.toString()) setValue(view, v);
   });
   $effect(() => {
     const l = language;
@@ -210,11 +241,15 @@
   $effect(() => {
     const opts = { readonly, wrap, placeholder, gutters };
     if (!view) return;
-    const effects = baseC.reconfigure(editorExtensions(opts));
+    const effects = baseC.reconfigure(baseExt(opts));
+    // The same history kept (its state goes on), or none while read-only.
+    const hist = histC.reconfigure(historyExt(readonly));
     const rewrap = wrap !== wrapped;
     wrapped = wrap;
-    if (rewrap && untrack(() => doc) && !docPending) relayOut(view, effects);
-    else view.dispatch({ effects });
+    if (rewrap && untrack(() => doc) && !docPending) {
+      relayOut(view, effects);
+      view.dispatch({ effects: hist });
+    } else view.dispatch({ effects: [effects, hist] });
   });
   $effect(() => {
     // After the document effect above, so they're placed in the text they were found in.
