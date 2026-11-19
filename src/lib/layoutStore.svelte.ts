@@ -14,10 +14,10 @@ import { api, errorMessage } from "./api";
 import { findNode } from "./tree";
 import { reattach, type KnownRequest } from "./reattach";
 import { fromWorkspace, inWorkspace, LAYOUT_SETTLE_MS, readLayout, type Layout, type LayoutTab } from "./layout";
-import { newTab, type Tab } from "./tabView";
+import { newFileTab, newTab, type Tab } from "./tabView";
 import type { Doc } from "./store.svelte";
 import type { Request, TreeNode } from "./types";
-import { displayName, uid } from "./http";
+import { basename, displayName, uid } from "./http";
 
 /** What the Layout needs from the rest of the store. */
 export interface LayoutHost {
@@ -77,6 +77,12 @@ export class LayoutStore {
       const doc = docs[t.path];
       const saved = doc?.saved[t.key];
       const path = inWorkspace(root, t.path);
+      if (t.kind === "file") {
+        if (!doc || path === null) continue;
+        if (t.id === activeTabId) active = tabs.length;
+        tabs.push({ kind: "file", path });
+        continue;
+      }
       if (!saved || path === null) continue;
       const req = JSON.parse(saved) as Request;
       const position = doc.savedOrder.split(",").indexOf(t.key);
@@ -140,7 +146,11 @@ export class LayoutStore {
     }
     if (this.opens !== open) return;
     const layout = readLayout(saved);
-    const tabs = layout.tabs.map((t): Tab => ({ ...newTab(fromWorkspace(root, t.path), uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) } }));
+    const tabs = layout.tabs.map((t): Tab => {
+      const path = fromWorkspace(root, t.path);
+      if (t.kind === "file") return { ...newFileTab(path), restoring: { method: "", name: basename(path) } };
+      return { ...newTab(path, uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) } };
+    });
     this.host.restoring(this.reattach(open, root, layout.tabs, tabs));
     this.host.tabs = tabs;
     this.host.activeTabId = (layout.active === null ? undefined : tabs[layout.active]?.id) ?? tabs.at(-1)?.id ?? null;
@@ -152,26 +162,31 @@ export class LayoutStore {
   /**
    * Reads restored `tabs`' files (each once, together). As each is read, its tabs
    * (described by `described`) re-attach to their requests, or are dropped if theirs
-   * is gone. Once all are read, says how many were dropped and saves the Layout again.
-   * Nothing of it happens once another workspace has opened since `open`. Returns, by
-   * tab id, when each tab is ready.
+   * is gone; a file view is ready once its file is read, or dropped (unnoted) if it
+   * can't be. Once all are read, says how many requests' tabs were dropped and saves
+   * the Layout again. Nothing of it happens once another workspace has opened since
+   * `open`. Returns, by tab id, when each tab is ready.
    */
   private reattach(open: number, root: string, described: LayoutTab[], tabs: Tab[]): Map<string, Promise<void>> {
     const known = new Map<string, KnownRequest[]>();
     tabs.forEach((t, i) => {
-      const { name, method, url, position } = described[i];
-      known.set(t.path, [...(known.get(t.path) ?? []), { key: t.key, name, method, url, position }]);
+      const d = described[i];
+      const requests = known.get(t.path) ?? [];
+      known.set(t.path, d.kind === "file" ? requests : [...requests, { key: t.key, name: d.name, method: d.method, url: d.url, position: d.position }]);
     });
     const ready = new Map<string, Promise<void>>();
     let dropped = 0;
     const reads = [...known].map(([path, requests]) => {
       const read = this.host.readDoc(path, (fresh) => reattach(requests, fresh)).then(() => {
         if (this.opens !== open) return;
-        for (const { id, key } of tabs.filter((t) => t.path === path)) {
+        for (const { id, key, kind } of tabs.filter((t) => t.path === path)) {
           const shown = this.host.tabs.find((t) => t.id === id);
           if (!shown) continue; // closed meanwhile
-          if (this.host.docs[path]?.file.requests.some((r) => r._key === key)) {
+          const doc = this.host.docs[path];
+          if (kind === "file" ? !!doc : doc?.file.requests.some((r) => r._key === key)) {
             shown.restoring = undefined;
+          } else if (kind === "file") {
+            this.host.removeTab(id);
           } else {
             // The active tab's place goes to the one after it.
             this.host.removeTab(id);

@@ -20,6 +20,7 @@ import type {
   Usage,
   HttpResponse,
   NamedExchange,
+  ParsedFile,
   ParsedRequest,
   Request,
   RequestProblems,
@@ -89,6 +90,10 @@ export const api = {
   portabilityText: (text: string) => invoke<PortabilityMark[]>("portability_text", { text }),
   /** The first request in `text` (a Source view's, a History entry's source text) and the problems found reading it. */
   parseRequest: (text: string) => invoke<ParsedRequest>("parse_request", { text }),
+  /** A file view's text read as a whole file, with the problems found reading it. `fileText` writes it back byte for byte. */
+  parseFileText: (text: string) => invoke<ParsedFile>("parse_file_text", { text }),
+  /** A whole file's text, as saving would write it (untouched requests as written). */
+  fileText: (file: HttpFile) => invoke<string>("file_text", { file }),
   /** What reading `request`'s source (as the Source view shows it) finds: its problems, and the files its body reads. */
   requestProblems: (request: Request) => invoke<RequestProblems>("request_problems", { request }),
   /** Whether body file `path` (as written after `<`, variables resolved) exists, relative to `.http` file `file`'s folder. */

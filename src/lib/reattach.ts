@@ -51,3 +51,22 @@ export function reattach(known: KnownRequest[], fresh: Request[]): Set<string> {
   }
   return new Set(unused.keys());
 }
+
+/**
+ * Gives `fresh` requests, read from a file view's text, the keys of the `old` ones
+ * (the document's) they stand for, as an edit to the text leaves them: the requests
+ * before and after the edited part are as they were (`same`), and each keeps its
+ * key; in between they're found as `reattach` finds them (by name + method + URL,
+ * by name, by position). Returns the old keys left unmatched.
+ */
+export function carryKeys(old: Request[], fresh: Request[], same: (a: Request, b: Request) => boolean): Set<string> {
+  let head = 0;
+  while (head < old.length && head < fresh.length && same(old[head], fresh[head])) head++;
+  let tail = 0;
+  const fits = () => tail < old.length - head && tail < fresh.length - head;
+  while (fits() && same(old[old.length - 1 - tail], fresh[fresh.length - 1 - tail])) tail++;
+  for (let i = 0; i < head; i++) fresh[i]._key = old[i]._key;
+  for (let i = 1; i <= tail; i++) fresh[fresh.length - i]._key = old[old.length - i]._key;
+  const known = old.slice(head, old.length - tail).map((r, position) => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position }));
+  return reattach(known, fresh.slice(head, fresh.length - tail));
+}

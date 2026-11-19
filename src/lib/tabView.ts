@@ -13,9 +13,17 @@ export interface ResponseView {
   wrap: boolean;
 }
 
-/** An editor tab: a request of a document (by file and the document's key for it) and how the tab shows it. */
+/**
+ * What a tab shows: a request of a document (`"request"`), or the whole file as one
+ * text (`"file"`, the file view: one per file, with no request of its own, `key` "").
+ */
+export type TabKind = "request" | "file";
+
+/** An editor tab: a request of a document (by file and the document's key for it), or
+ *  a file view of the document, and how the tab shows it. */
 export interface Tab {
   id: string;
+  kind: TabKind;
   path: string;
   key: string;
   /** The request section shown (part of the Layout). */
@@ -38,8 +46,12 @@ export const newTabView = (): { section: RequestSection; responseView: ResponseV
 /** A new tab on request `key` of the file at `path`, with a new view unless given one. */
 export const newTab = (path: string, key: string, view: Pick<Tab, "section" | "responseView"> = newTabView()): Tab => ({
   id: uid(),
+  kind: "request",
   path,
   key,
   section: view.section,
   responseView: { ...view.responseView },
 });
+
+/** A file view of the file at `path`: the whole file as one text. */
+export const newFileTab = (path: string): Tab => ({ ...newTab(path, ""), kind: "file" });

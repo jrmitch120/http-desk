@@ -115,6 +115,12 @@ export interface ParsedRequest {
   problems: Problem[];
 }
 
+/** A whole file's text read by the core (`parse_file_text`): the file and the problems found reading it. */
+export interface ParsedFile {
+  file: HttpFile;
+  problems: Problem[];
+}
+
 export interface FileHeader {
   comments: string[];
   variables: Variable[];

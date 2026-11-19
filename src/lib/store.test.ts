@@ -51,6 +51,8 @@ const api = vi.hoisted(() => ({
   requestVariable: vi.fn(),
   parseRequest: vi.fn(),
   requestSource: vi.fn(),
+  parseFileText: vi.fn(),
+  fileText: vi.fn(),
 }));
 const {
   readHttpFile,
@@ -444,6 +446,29 @@ describe("restoring a workspace's Layout", () => {
     slow.resolve(fileOf(["GET", "Other", "https://x/Other"]));
     await vi.waitFor(() => expect(app.toasts.map((t) => t.message)).toEqual(["1 tab wasn't restored: its request no longer exists."]));
     expect(restoring()).toEqual([[null, false]]);
+  });
+
+  it("brings back a file view, and saves it with the Layout", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), { kind: "file", path: "a.http" }, { kind: "file", path: "gone.http" }], active: 1, expanded: [] });
+    readHttpFile.mockImplementation(async (path: string) => {
+      if (path !== `${WS}/a.http`) throw new Error("No such file");
+      return fileOf(["GET", "List", "https://x/List"]);
+    });
+
+    await app.openWorkspace(WS);
+
+    // A file view whose file is gone is dropped.
+    await vi.waitFor(() => expect(app.tabs.map((t) => [t.kind, t.path])).toEqual([["request", `${WS}/a.http`], ["file", `${WS}/a.http`]]));
+    expect(app.activeTab?.kind).toBe("file");
+    app.activeTabId = app.tabs[0].id;
+    // What the app's effect does on each change.
+    await vi.waitFor(async () => {
+      app.layout.track();
+      await app.layout.flush();
+      expect(api.saveLayout).toHaveBeenCalled();
+    });
+    const [, saved] = api.saveLayout.mock.lastCall!;
+    expect(saved).toMatchObject({ active: 0, tabs: [{ path: "a.http", name: "List" }, { kind: "file", path: "a.http" }] });
   });
 
   it("re-attaches a tab whose file was opened while the Layout was loading", async () => {
@@ -3241,5 +3266,153 @@ describe("editing a request's source (#163)", () => {
     await saving;
     expect(saveHttpFile).toHaveBeenCalledOnce();
     expect(app.dirtyDocs()).toEqual([]);
+  });
+});
+
+describe("viewing a whole file as text (#166)", () => {
+  // The real core (WASM) reads and writes the text, as the shell does.
+  const TEXT = "@host = https://example.com\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n### Create\nPOST {{host}}/books\n";
+  const parsed = (text = TEXT) => invokeCore<HttpFile>("parse_file", { text });
+  beforeEach(() => {
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+  });
+  const fileTab = () => app.tabs.find((t) => t.kind === "file" && t.path === PATH);
+
+  it("opens the file as one text, in a tab of its own", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    expect(app.activeTab).toBe(fileTab());
+    expect(await app.fileTextFor(PATH)).toBe(TEXT);
+    // Once: opening it again shows the same tab.
+    await app.openFileView(PATH);
+    expect(app.tabs.filter((t) => t.kind === "file")).toHaveLength(1);
+  });
+
+  it("an edit in the file view updates an open request tab of that file", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    const typed = TEXT.replace("POST {{host}}/books\n", "POST {{host}}/books\nX-Trace: on\n");
+    await app.editFileText(PATH, typed);
+
+    expect(app.requestFor(create)!.headers.items).toEqual([{ enabled: true, name: "X-Trace", value: "on" }]);
+    expect(app.isRequestDirty(PATH, create.key)).toBe(true);
+    expect(app.isRequestDirty(PATH, list.key)).toBe(false);
+    // The change came from the text, so the text stays as typed.
+    expect(app.fileText(PATH)?.text).toBe(typed);
+    expect(await app.fileTextFor(PATH)).toBe(typed);
+  });
+
+  it("an edit in a request tab shows in the file view", async () => {
+    const [list] = await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.editFileText(PATH, TEXT.replace("### Create", "### Create it"));
+    app.requestFor(list)!.headers.items.push({ enabled: true, name: "X-Trace", value: "on" });
+
+    expect(app.fileText(PATH)).toBeNull();
+    expect(await app.fileTextFor(PATH)).toBe(
+      "@host = https://example.com\n\n### List\n# hand formatted\nGET {{host}}/books\nAccept: application/json\nX-Trace: on\n\n### Create it\nPOST {{host}}/books\n",
+    );
+  });
+
+  it("an edit in a request's source shows in the file view, and the file view's in the source", async () => {
+    const [list] = await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.editSource(PATH, list.key, "### List\nGET {{host}}/books/1\n\n");
+    expect(await app.fileTextFor(PATH)).toBe("@host = https://example.com\n\n### List\nGET {{host}}/books/1\n\n### Create\nPOST {{host}}/books\n");
+
+    await app.editFileText(PATH, TEXT.replace("GET   {{host}}/books", "GET   {{host}}/books/2"));
+    expect(app.sourceText(PATH, list.key)).toBeNull();
+    expect(await app.sourceFor(PATH, list.key)).toBe("### List\n// hand formatted\nGET   {{host}}/books/2\nAccept: application/json\n\n");
+  });
+
+  it("keeps the last valid file while the text doesn't parse, and reads dirty", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    const before = JSON.parse(JSON.stringify(app.docs[PATH].file));
+
+    const broken = TEXT.replace("POST {{host}}/books", "POST {{host}}/books and more");
+    await app.editFileText(PATH, broken);
+    expect(JSON.parse(JSON.stringify(app.docs[PATH].file))).toEqual(before);
+    expect(app.isFileTextInvalid(PATH)).toBe(true);
+    expect(app.fileText(PATH)).toMatchObject({ text: broken, parses: false, problems: [{ line: 9, code: "unparseable-request-line" }] });
+    expect(await app.fileTextFor(PATH)).toBe(broken);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    expect([app.isRequestDirty(PATH, list.key), app.isRequestDirty(PATH, create.key)]).toEqual([false, false]);
+
+    // Back to the saved text: clean again.
+    await app.editFileText(PATH, TEXT);
+    expect(app.isFileTextInvalid(PATH)).toBe(false);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("keeps each request's tab on its request as requests come and go around it", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    const added = TEXT.replace("### List", "### First\nGET {{host}}/first\n\n### List").replace("POST {{host}}/books", "POST {{host}}/books/new");
+    await app.editFileText(PATH, added);
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["First", "List", "Create"]);
+    expect(app.requestFor(list)!.name).toBe("List");
+    expect(app.requestFor(create)!.url).toBe("{{host}}/books/new");
+
+    // A request removed from the text closes its tab, as deleting it does.
+    await app.editFileText(PATH, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n");
+    expect(app.tabs.map((t) => t.id)).toEqual([create.id, fileTab()!.id]);
+    expect(app.isRequestDirty(PATH, create.key)).toBe(false);
+  });
+
+  it("keeps a CRLF file's line endings and its byte order mark", async () => {
+    const crlf = "﻿" + TEXT.replaceAll("\n", "\r\n");
+    const [list, create] = await openAll(parsed(crlf));
+    await app.openFileView(PATH);
+    // The editor shows lines; the file's line endings and BOM aren't part of the text.
+    expect(await app.fileTextFor(PATH)).toBe(TEXT);
+
+    await app.editFileText(PATH, TEXT.replace("POST {{host}}/books", "POST {{host}}/books/new"));
+    expect(app.isRequestDirty(PATH, list.key)).toBe(false);
+    expect(app.isRequestDirty(PATH, create.key)).toBe(true);
+    await app.save(PATH);
+    const written = saveHttpFile.mock.lastCall![1] as HttpFile;
+    expect([written.lineEnding, written.bom]).toEqual(["crlf", true]);
+    expect(invokeCore("file_text", { file: written })).toBe(crlf.replace("POST {{host}}/books", "POST {{host}}/books/new"));
+  });
+
+  it("saves text typed just before Save, without waiting for the pause", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    void app.editFileText(PATH, TEXT.replace("@host = https://example.com", "@host = https://example.org"));
+    await app.saveTab(fileTab()!);
+    expect((saveHttpFile.mock.lastCall![1] as HttpFile).header.variables).toEqual([{ name: "host", value: "https://example.org" }]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("asks before closing a file view with unsaved edits when no other tab shows the file", async () => {
+    readHttpFile.mockResolvedValue(parsed());
+    await app.openFileView(PATH);
+    await app.editFileText(PATH, TEXT.replace("### Create", "### Create it"));
+    const closing = app.closeTab(fileTab()!.id);
+    await vi.waitFor(() => expect(app.dialog?.title).toBe("Save changes to books.http?"));
+    app.closeDialog("discard");
+    expect(await closing).toBe(true);
+    expect(app.tabs).toEqual([]);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
+
+  it("reopens a closed file view", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.closeTab(fileTab()!.id);
+    expect(fileTab()).toBeUndefined();
+    app.reopenClosedTab();
+    expect(app.activeTab).toBe(fileTab());
+  });
+
+  it("can be asked to show a line", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH, { line: 8 });
+    expect(app.fileLineWanted).toEqual({ tabId: fileTab()!.id, line: 8 });
   });
 });

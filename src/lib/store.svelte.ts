@@ -24,9 +24,9 @@ import { HistoryStore, historyLink, historyLinkKey, type HistoryHost } from "./h
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
-import { reattach, signature, type KnownRequest } from "./reattach";
+import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
-import { newTab, type RequestSection, type Tab } from "./tabView";
+import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -39,6 +39,7 @@ import type {
   HttpFile,
   HttpResponse,
   NamedExchange,
+  ParsedFile,
   ParsedRequest,
   Problem,
   Request,
@@ -67,6 +68,8 @@ export interface Doc {
   orphans: Request[];
   /** Per request key: the text the user typed in its Source view (see `SourceText`). */
   sources: Record<string, SourceEdit>;
+  /** The text the user typed in the file's file view, and the file it goes with (see `FileText`). */
+  fileText: FileTextEdit | null;
 }
 
 /**
@@ -88,6 +91,20 @@ export interface SourceText {
  *  changes otherwise (a structured edit), the text no longer stands for it. */
 interface SourceEdit extends SourceText {
   request: string;
+}
+
+/**
+ * What a file view (the whole file as one text) holds once the user has typed in it,
+ * rather than the file rendered. Like a request's Source view: the document stays
+ * authoritative, text that parses replaces the document's file (so its request tabs
+ * follow), and text that doesn't leaves the file at its last valid state.
+ */
+export type FileText = SourceText;
+
+/** A `FileText` and the file it goes with (a snapshot, `fileSnapshot`): once the file
+ *  changes otherwise (an edit in a request tab), the text no longer stands for it. */
+interface FileTextEdit extends FileText {
+  file: string;
 }
 
 /** How long typing in a Source view pauses before the text is read. */
@@ -211,8 +228,21 @@ function requestDirty(doc: Doc, req: Request): boolean {
   return doc.saved[req._key!] !== shot || currentSource(doc, req, shot)?.parses === false;
 }
 
+/** A whole file as JSON, request keys left out: what a file view's typed text goes with. */
+function fileSnapshot(file: HttpFile): string {
+  return JSON.stringify(file, (k, v) => (k === "_key" ? undefined : v));
+}
+
+/** `doc`'s file view text, while the file is still as that text left it. */
+function currentFileText(doc: Doc): FileTextEdit | null {
+  const edit = doc.fileText;
+  return edit && edit.file === fileSnapshot(doc.file) ? edit : null;
+}
+
 /** A request's id among the source texts waiting to be read. */
 const sourceId = (path: string, key: string) => `${path}\n${key}`;
+/** The id of a file view's text among the source texts waiting to be read (no request has this key). */
+const FILE_VIEW = "";
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -600,6 +630,7 @@ class AppStore {
       missing: false,
       orphans,
       sources: {},
+      fileText: null,
     };
   }
 
@@ -689,6 +720,7 @@ class AppStore {
     if (!doc) return false;
     if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
     if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
+    if (currentFileText(doc)?.parses === false) return true;
     return [...doc.file.requests, ...doc.orphans].some((r) => requestDirty(doc, r));
   }
 
@@ -720,6 +752,8 @@ class AppStore {
       for (const r of [...saved.file.requests, ...saved.orphans]) {
         if (sources[r._key!]) saved.sources[r._key!] = { ...sources[r._key!], request: snapshot(r) };
       }
+      const fileText = currentFileText(doc);
+      if (fileText?.parses === false) saved.fileText = { ...($state.snapshot(fileText) as FileTextEdit), file: fileSnapshot(saved.file) };
       this.docs[path] = saved;
       return true;
     } catch (e) {
@@ -967,7 +1001,9 @@ class AppStore {
     const tab = this.tabs.find((t) => t.id === id);
     if (!tab) return true;
     const req = this.requestFor(tab);
-    if (req && this.isRequestDirty(tab.path, tab.key)) {
+    if (tab.kind === "file") {
+      if (!(await this.closingFileView(tab))) return false;
+    } else if (req && this.isRequestDirty(tab.path, tab.key)) {
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
         CANCEL,
         { label: "Don't save", value: "discard", role: "destructive", danger: true },
@@ -978,8 +1014,29 @@ class AppStore {
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     const index = this.tabs.indexOf(tab);
-    if (index >= 0) this.closed = [{ path: tab.path, key: tab.key, index }, ...this.closed].slice(0, CLOSED_TABS_KEPT);
+    if (index >= 0) this.closed = [{ kind: tab.kind, path: tab.path, key: tab.key, index }, ...this.closed].slice(0, CLOSED_TABS_KEPT);
     this.removeTab(id);
+    return true;
+  }
+
+  /**
+   * Before file view `tab` closes: asks what to do with edits that would show nowhere
+   * else, the file's when no other tab shows it, or its text that doesn't parse. Don't
+   * save reads the file from disk again (or, with other tabs open, drops the text).
+   * False if it stays open.
+   */
+  private async closingFileView(tab: Tab): Promise<boolean> {
+    const others = this.tabs.some((t) => t !== tab && t.path === tab.path);
+    if (!this.isFileTextInvalid(tab.path) && (others || !this.isDocDirty(tab.path))) return true;
+    const r = await this.choose(`Save changes to ${basename(tab.path)}?`, "Your changes will be lost if you don't save them.", [
+      CANCEL,
+      { label: "Don't save", value: "discard", role: "destructive", danger: true },
+      { label: "Save", value: "save", role: "primary" },
+    ]);
+    if (r.button === "cancel") return false;
+    if (r.button === "save") return this.save(tab.path);
+    this.dropSource(tab.path, FILE_VIEW);
+    if (!others) await this.reload(tab.path);
     return true;
   }
 
@@ -991,8 +1048,8 @@ class AppStore {
   }
 
   /** The tabs the user closed in this workspace, the last closed first: each one's
-   *  request and where it sat in the tab bar. In memory only. */
-  private closed = $state<(RequestRef & { index: number })[]>([]);
+   *  request (or file, for a file view) and where it sat in the tab bar. In memory only. */
+  private closed = $state<(RequestRef & { kind: Tab["kind"]; index: number })[]>([]);
 
   /** Whether Reopen Closed Tab has a tab to reopen. */
   get canReopenTab(): boolean {
@@ -1007,12 +1064,15 @@ class AppStore {
    */
   reopenClosedTab() {
     while (this.closed.length) {
-      const [{ path, key, index }, ...rest] = this.closed;
+      const [{ kind, path, key, index }, ...rest] = this.closed;
       this.closed = rest;
       const doc = this.docs[path];
-      if (!doc || doc.missing || !doc.file.requests.some((r) => r._key === key)) continue;
-      let tab = this.tabs.find((t) => t.path === path && t.key === key);
-      if (!tab) {
+      if (!doc || doc.missing || (kind === "request" && !doc.file.requests.some((r) => r._key === key))) continue;
+      let tab = this.tabs.find((t) => t.kind === kind && t.path === path && t.key === key);
+      if (!tab && kind === "file") {
+        tab = newFileTab(path);
+        this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
+      } else if (!tab) {
         tab = newTab(path, key);
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
         void this.showLastResponse(tab.id);
@@ -1108,7 +1168,15 @@ class AppStore {
     if (!doc || !req) return Promise.resolve();
     const last = this.sourceEdit(path, key);
     doc.sources[key] = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, request: snapshot(req) };
-    const id = sourceId(path, key);
+    return this.readLater(sourceId(path, key), () => this.readSource(path, key, text));
+  }
+
+  /**
+   * Reads typed text (`read`) after a short pause (`SOURCE_READ_DELAY_MS`), unless
+   * more typing in the same view (`id`) comes first, or a Save or Send reads it at
+   * once. Settles once read, or once later typing replaced it.
+   */
+  private readLater(id: string, read: () => Promise<void>): Promise<void> {
     const pending = this.sourceReads.get(id);
     if (pending) clearTimeout(pending.timer);
     // Text replaced before it was read settles when the text replacing it is read.
@@ -1120,7 +1188,7 @@ class AppStore {
       timer: setTimeout(() => void entry.read(), SOURCE_READ_DELAY_MS),
       read: () => {
         clearTimeout(entry.timer);
-        reading ??= this.readSource(path, key, text).finally(() => {
+        reading ??= read().finally(() => {
           if (this.sourceReads.get(id) === entry) this.sourceReads.delete(id);
           settle.forEach((s) => s());
         });
@@ -1131,7 +1199,7 @@ class AppStore {
     return done;
   }
 
-  /** Forgets the text typed in request `key`'s Source view, read or not. */
+  /** Forgets the text typed in request `key`'s Source view (`FILE_VIEW`: in the file view), read or not. */
   private dropSource(path: string, key: string) {
     const id = sourceId(path, key);
     const pending = this.sourceReads.get(id);
@@ -1141,10 +1209,11 @@ class AppStore {
       pending.settle.forEach((s) => s());
     }
     const doc = this.docs[path];
-    if (doc) delete doc.sources[key];
+    if (doc && key === FILE_VIEW) doc.fileText = null;
+    else if (doc) delete doc.sources[key];
   }
 
-  /** Reads now the source texts of `path`'s requests still waiting to be read. */
+  /** Reads now the source texts of `path`'s requests and file view still waiting to be read. */
   private async readSources(path: string) {
     const reads = [...this.sourceReads].filter(([id]) => id.startsWith(sourceId(path, ""))).map(([, e]) => e.read());
     await Promise.all(reads);
@@ -1202,6 +1271,111 @@ class AppStore {
     if (typed) return typed.text;
     const req = this.findRequest(path, key);
     return req ? api.requestSource($state.snapshot(req) as Request) : null;
+  }
+
+  // ---------------------------------------------------------------- file view
+
+  /** A file view asked to show a line (`openFileView`), until it has. */
+  fileLineWanted = $state<{ tabId: string; line: number } | null>(null);
+
+  /**
+   * Opens the file at `path` as one text (its file view, a tab of its own; the one
+   * already open, if there is one), made active. With `line` (1-based), the view
+   * selects that line and scrolls it into view.
+   */
+  async openFileView(path: string, at: { line?: number } = {}) {
+    const doc = await this.loadDoc(path);
+    if (!doc) return;
+    let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
+    if (!tab) {
+      tab = newFileTab(path);
+      const i = this.tabs.findIndex((t) => t.id === this.activeTabId);
+      this.tabs.splice(i < 0 ? this.tabs.length : i + 1, 0, tab);
+    }
+    this.activeTabId = tab.id;
+    if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line };
+  }
+
+  /**
+   * The user typed `text` in the file view of `path`. It's kept as typed at once and
+   * read by the core after a short pause, as a request's source is (`editSource`):
+   * text that parses replaces the document's file, so the file's request tabs follow,
+   * and text that doesn't leaves the file at its last valid state. Settles once `text`
+   * is read, or once later typing replaced it.
+   */
+  editFileText(path: string, text: string): Promise<void> {
+    const doc = this.docs[path];
+    if (!doc) return Promise.resolve();
+    const last = currentFileText(doc);
+    doc.fileText = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, file: fileSnapshot(doc.file) };
+    return this.readLater(sourceId(path, FILE_VIEW), () => this.readFileText(path, text));
+  }
+
+  /** Reads typed `text` into the document at `path`, unless more typing or another edit came since. */
+  private async readFileText(path: string, text: string) {
+    let parsed: ParsedFile;
+    try {
+      parsed = await api.parseFileText(text);
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+      return;
+    }
+    const doc = this.docs[path];
+    const edit = doc ? currentFileText(doc) : null;
+    if (!doc || !edit || edit.text !== text) return;
+    edit.problems = parsed.problems;
+    edit.parses = !parsed.problems.some((p) => p.severity === "error");
+    if (!edit.parses) return;
+    this.replaceFile(doc, parsed.file);
+    edit.file = fileSnapshot(doc.file);
+  }
+
+  /**
+   * Puts `fresh` (read from the file view's text) in place of `doc`'s file. Each
+   * request keeps its key where the edit left it (`carryKeys`), and its object where
+   * it's unchanged; a request gone from the text closes its tabs, as deleting it does.
+   * The text has no line endings or byte order mark of its own: the file's stay.
+   */
+  private replaceFile(doc: Doc, fresh: HttpFile) {
+    const old = doc.file.requests;
+    const gone = carryKeys(old, fresh.requests, (a, b) => snapshot(a) === snapshot(b));
+    const requests = fresh.requests.map((r) => {
+      const was = r._key ? old.find((o) => o._key === r._key) : undefined;
+      if (was && snapshot(was) === snapshot(r)) return was;
+      ensureKey(r);
+      return r;
+    });
+    if (JSON.stringify(fresh.header) !== JSON.stringify(doc.file.header)) doc.file.header = fresh.header;
+    doc.file.requests = requests;
+    doc.file.trailing = fresh.trailing;
+    for (const t of this.tabs.filter((t) => t.kind === "request" && t.path === doc.path && gone.has(t.key))) this.removeTab(t.id);
+  }
+
+  /** What the file view of `path` holds when the user typed it: null when its text is the file rendered. */
+  fileText(path: string): FileText | null {
+    const doc = this.docs[path];
+    return doc ? currentFileText(doc) : null;
+  }
+
+  /**
+   * Whether the file view of `path` holds text that doesn't parse: the document's file
+   * is at its last valid state (and reads as dirty) until it does.
+   */
+  isFileTextInvalid(path: string): boolean {
+    return this.fileText(path)?.parses === false;
+  }
+
+  /**
+   * The text the file view of `path` shows: what the user typed, or the file rendered
+   * by the core (untouched requests as written), with `\n` line breaks and no byte
+   * order mark (the file keeps its own). Null without the document.
+   */
+  async fileTextFor(path: string): Promise<string | null> {
+    const doc = this.docs[path];
+    if (!doc) return null;
+    const typed = currentFileText(doc);
+    if (typed) return typed.text;
+    return api.fileText({ ...($state.snapshot(doc.file) as HttpFile), lineEnding: "lf", bom: false });
   }
 
   // ---------------------------------------------------------------- request ops

@@ -1731,6 +1731,8 @@ mockIPC(
       case "request_portability":
       case "portability_text":
       case "parse_request":
+      case "parse_file_text":
+      case "file_text":
       case "request_problems":
         return invokeCore(cmd, args);
       case "body_file_exists": {
