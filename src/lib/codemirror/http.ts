@@ -145,9 +145,9 @@ interface Line {
   from: number;
 }
 
-function linesOf(text: string): Line[] {
+/** The lines of `text`, which starts at `from` in the document. */
+function linesOf(text: string, from = 0): Line[] {
   const out: Line[] = [];
-  let from = 0;
   for (const l of text.split("\n")) {
     out.push({ text: l, from });
     from += l.length + 1;
@@ -433,29 +433,41 @@ function bodyKind(method: string, headers: Map<string, string>, lines: Line[]): 
  * tree's Block, nested languages and all: only the blocks an edit touched are read
  * again, and `parseMixed` parses their bodies and scripts only (#168).
  */
-function parseText(text: string, fragments: readonly TreeFragment[]): Tree {
-  const blocks: Line[][] = [[]];
-  for (const line of linesOf(text)) {
-    if (line.text.startsWith("###")) blocks.push([]);
-    blocks[blocks.length - 1].push(line);
-  }
+function parseText(input: { read(from: number, to: number): string }, length: number, fragments: readonly TreeFragment[]): Tree {
   const children: Tree[] = [];
   const positions: number[] = [];
   let f = 0;
-  for (const lines of blocks) {
-    if (!lines.length) continue;
-    const from = lines[0].from;
-    const to = end(lines[lines.length - 1]);
-    while (f < fragments.length && fragments[f].to < to) f++;
-    const kept = f < fragments.length && fragments[f].from <= from ? keptBlock(fragments[f], from, to) : null;
-    children.push(kept ?? toTree(block(lines)));
+  // Each block starts at the start of the text or of a `###` line, and ends at the end
+  // of the line before the next one. A kept block is taken whole, its text not read.
+  for (let from = 0; ; ) {
+    while (f < fragments.length && fragments[f].to <= from) f++;
+    let tree = f < fragments.length && fragments[f].from <= from ? keptBlock(fragments[f], from) : null;
+    // Kept only if a `###` line (or the text's end) still follows it.
+    if (tree && from + tree.length !== length && input.read(from + tree.length, from + tree.length + 4) !== "\n###") tree = null;
+    const to = tree ? from + tree.length : blockEnd(input, from, length);
+    children.push(tree ?? toTree(block(linesOf(input.read(from, to), from))));
     positions.push(from);
+    if (to >= length) break;
+    from = to + 1;
   }
-  return new Tree(type("Document"), children, positions, text.length);
+  return new Tree(type("Document"), children, positions, length);
 }
 
-/** The Block of `fragment`'s tree that is now at `from`–`to`, if it has one there. */
-function keptBlock(fragment: TreeFragment, from: number, to: number): Tree | null {
+/** How much of the text is looked through at a time for the next `###` line. */
+const SCAN = 4096;
+
+/** Where the block starting at `from` ends: the end of the line before the next line starting with `###`, else the text's end. */
+function blockEnd(input: { read(from: number, to: number): string }, from: number, length: number): number {
+  for (let at = from; at < length; at += SCAN) {
+    // Three characters on, for a `\n###` that starts inside this piece.
+    const found = input.read(at, Math.min(length, at + SCAN + 3)).indexOf("\n###");
+    if (found >= 0 && found < SCAN) return at + found;
+  }
+  return length;
+}
+
+/** The Block of `fragment`'s tree that is now at `from`, if it has one there that `fragment` holds all of. */
+function keptBlock(fragment: TreeFragment, from: number): Tree | null {
   const { tree, offset } = fragment;
   const at = from + offset;
   // Its Blocks, in order: the one starting at `at`, by binary search.
@@ -468,7 +480,7 @@ function keptBlock(fragment: TreeFragment, from: number, to: number): Tree | nul
     else if (pos > at) hi = mid - 1;
     else {
       const child = tree.children[mid];
-      return child instanceof Tree && child.type === BLOCK && child.length === to - from ? child : null;
+      return child instanceof Tree && child.type === BLOCK && from + child.length <= fragment.to ? child : null;
     }
   }
   return null;
@@ -480,7 +492,7 @@ function keptBlock(fragment: TreeFragment, from: number, to: number): Tree | nul
  * outside an editor.
  */
 export function httpLineTree(text: string): Tree {
-  return parseText(text, []);
+  return parseText({ read: (from, to) => text.slice(from, to) }, text.length, []);
 }
 
 /** The parsers of the languages nested in `.http`, by the node they parse. */
@@ -540,7 +552,7 @@ class LineParse implements PartialParse {
   }
   advance(): Tree {
     this.parsedPos = this.to;
-    return parseText(this.input.read(0, this.to), this.fragments);
+    return parseText(this.input, this.to, this.fragments);
   }
   stopAt(pos: number) {
     this.stoppedAt = pos;

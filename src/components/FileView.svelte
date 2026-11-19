@@ -13,8 +13,11 @@
   import { sessionView } from "../lib/sessionView.svelte";
   import { portabilityLineMarks } from "../lib/checks";
   import { checkUnderlines } from "../lib/codemirror/underlines";
-  import { requestAt, requestBlocks, type RequestBlock } from "../lib/codemirror/outline";
+  import { requestAt, requestBlocks, type OutlineEntry, type RequestBlock } from "../lib/codemirror/outline";
   import { EditorView } from "@codemirror/view";
+  import { syntaxTree } from "@codemirror/language";
+  import type { Text } from "@codemirror/state";
+  import type { Tree } from "@lezer/common";
   import Badge from "./Badge.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
   import { setReadOnlyRegion } from "../lib/codemirror/readOnly";
@@ -123,13 +126,33 @@
 
   // The outline: the requests of the text shown. The one under the cursor is the
   // explorer's selection, and the one Send (⌘Enter) sends.
-  const blocks = $derived(requestBlocks(text));
+  // Read from the editor's own tree, which keeps the blocks an edit didn't touch, so a
+  // keystroke reads only its own block again, and the outline's other entries stay
+  // the objects they were (#168).
+  let outlineOf = $state.raw<{ doc: Text; tree: Tree } | null>(null);
+  const blocks = $derived(outlineOf ? requestBlocks(outlineOf.doc, outlineOf.tree) : []);
+  /** The outline's entries: the same array while they're the same, so a keystroke doesn't have the outline compare its thousand. */
+  let lastEntries: OutlineEntry[] = [];
+  const entries = $derived.by(() => {
+    // A request typed in has a new entry; it keeps the one it had while it reads the same, so its row stays.
+    const kept = new Set(blocks.map((b) => b.entry));
+    const next = blocks.map((b, i) => {
+      const was = lastEntries[i];
+      return was && !kept.has(was) && was.method === b.method && was.label === b.label ? was : b.entry;
+    });
+    if (next.length === lastEntries.length && next.every((e, i) => e === lastEntries[i])) return lastEntries;
+    return (lastEntries = next);
+  });
   let cursor = $state(0);
   const followCursor = EditorView.updateListener.of((u) => {
     if (u.selectionSet || u.docChanged) cursor = u.state.selection.main.head;
+    // Untracked: this runs inside whatever dispatched (an Editor effect among them), which mustn't come to depend on it.
+    const tree = syntaxTree(u.state);
+    if (tree !== untrack(() => outlineOf?.tree)) outlineOf = { doc: u.state.doc, tree };
   });
   const current = $derived(requestAt(blocks, cursor));
-  $effect(() => app.setFileCursor(tab.id, current?.index ?? null));
+  const currentIndex = $derived(current?.index ?? null);
+  $effect(() => app.setFileCursor(tab.id, currentIndex));
 
   function show(block: RequestBlock, focus: boolean) {
     editor?.revealAt(block.start, { focus });
@@ -200,10 +223,10 @@
     {#if shown}
       <div class="file-body">
         <nav class="outline" aria-label="Outline">
-          {#each blocks as block (block.index)}
-            <button class="entry" class:current={block === current} aria-current={block === current ? "true" : undefined} onclick={() => show(block, true)} use:tooltip={block.label}>
-              <Badge method={block.method} />
-              <span class="label ellipsis">{block.label}</span>
+          {#each entries as entry, i (entry)}
+            <button class="entry" class:current={i === currentIndex} aria-current={i === currentIndex ? "true" : undefined} onclick={() => show(blocks[i], true)} use:tooltip={entry.label}>
+              <Badge method={entry.method} />
+              <span class="label ellipsis">{entry.label}</span>
             </button>
           {:else}
             <div class="none muted">No requests</div>
@@ -273,6 +296,8 @@
   .outline {
     flex: none;
     width: 200px;
+    /* Its size is the layout's, not its entries': typing in the text lays out and paints none of it (#168). */
+    contain: strict;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -315,6 +340,7 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+    contain: strict;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--panel);

@@ -84,7 +84,8 @@ export class WorkspaceProblems {
     const now = new Map<string, string>();
     for (const path of this.host.openPaths) {
       const doc = this.host.openText(path);
-      if (doc) now.set(path, JSON.stringify(doc));
+      // Typed text as it is: compared, not copied into JSON on each keystroke (#168).
+      if (doc) now.set(path, "text" in doc ? doc.text : JSON.stringify(doc));
     }
     untrack(() => {
       for (const [path, was] of now) if (this.seen.get(path) !== was) this.later(path);

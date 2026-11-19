@@ -330,4 +330,22 @@ describe("re-parsing after an edit (#168)", () => {
     const { tree, text } = reparse(TEXT, ...edit(TEXT));
     expect(nodes(tree)).toEqual(nodes(httpLanguage.parser.parse(text)));
   });
+
+  it("reads random edits, each parsed from the tree before it, as parsing from scratch does", () => {
+    // Long enough that the text is read in more than one piece, and fragments are kept.
+    let text = Array.from({ length: 60 }, (_, i) => TEXT.replace("### List", `### List ${i}`)).join("\n");
+    let tree = httpLanguage.parser.parse(text);
+    let seed = 168;
+    const random = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31), seed % n);
+    const pieces = ["###", "\n###", "### X\n", "\n", "GET /a\n", "{\n", "x", "#", ">"];
+    for (let step = 0; step < 200; step++) {
+      const from = random(text.length + 1);
+      const to = Math.min(text.length, from + (random(3) === 0 ? random(30) : 0));
+      const insert = random(4) === 0 ? "" : pieces[random(pieces.length)];
+      const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [{ fromA: from, toA: to, fromB: from, toB: from + insert.length }]);
+      text = text.slice(0, from) + insert + text.slice(to);
+      tree = httpLanguage.parser.parse(text, fragments);
+      expect(nodes(tree)).toEqual(nodes(httpLanguage.parser.parse(text)));
+    }
+  });
 });
