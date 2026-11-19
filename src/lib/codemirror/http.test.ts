@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { classHighlighter, highlightTree } from "@lezer/highlight";
 import { EditorState } from "@codemirror/state";
 import { foldable } from "@codemirror/language";
+import { Tree, TreeFragment } from "@lezer/common";
 import { bodySyntaxWarnings } from "../http";
 import { http, httpLanguage } from "./http";
 
@@ -262,5 +263,71 @@ describe("folding", () => {
     expect(foldable(state, first.from, first.to)).toEqual({ from: first.to, to: state.doc.line(7).to });
     const only = state.doc.line(13);
     expect(foldable(state, only.from, only.to)).toBeNull();
+  });
+});
+
+describe("re-parsing after an edit (#168)", () => {
+  const TEXT = [
+    "@host = https://example.com",
+    "",
+    "### List",
+    "GET {{host}}/pets",
+    "Accept: application/json",
+    "",
+    "### Create",
+    "POST {{host}}/pets",
+    "Content-Type: application/json",
+    "",
+    '{ "name": "{{name}}" }',
+    "",
+    "> {%",
+    '  client.global.set("id", response.body.id);',
+    "%}",
+    "",
+    "### Delete",
+    "DELETE {{host}}/pets/1",
+    "",
+  ].join("\n");
+
+  /** `text` parsed again after an edit (`insert` at `from`–`to`), from the tree of the text before it. */
+  function reparse(text: string, from: number, to: number, insert: string) {
+    const before = httpLanguage.parser.parse(text);
+    const after = text.slice(0, from) + insert + text.slice(to);
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(before), [{ fromA: from, toA: to, fromB: from, toB: from + insert.length }]);
+    return { before, tree: httpLanguage.parser.parse(after, fragments), text: after };
+  }
+
+  /** Every node of `tree` with its place, and every highlighted span (nested languages' too). */
+  function nodes(tree: Tree): string[] {
+    const out: string[] = [];
+    tree.iterate({ enter: (n) => void out.push(`${n.name}@${n.from}-${n.to}`) });
+    highlightTree(tree, classHighlighter, (from, to, cls) => void out.push(`${cls}@${from}-${to}`));
+    return out;
+  }
+
+  it("reuses the blocks an edit didn't touch, and reads the same as parsing from scratch", () => {
+    const at = TEXT.indexOf('"{{name}}"') + 1;
+    const { before, tree, text } = reparse(TEXT, at, at, "pet-");
+    expect(nodes(tree)).toEqual(nodes(httpLanguage.parser.parse(text)));
+    const blocks = (t: Tree) => t.children as Tree[];
+    expect(blocks(tree)).toHaveLength(4);
+    expect(blocks(tree)[0]).toBe(blocks(before)[0]);
+    expect(blocks(tree)[1]).toBe(blocks(before)[1]);
+    expect(blocks(tree)[2]).not.toBe(blocks(before)[2]);
+    expect(blocks(tree)[3]).toBe(blocks(before)[3]);
+  });
+
+  const edits: [string, (t: string) => [number, number, string]][] = [
+    ["a `###` added in a body", (t) => [t.indexOf('{ "name"'), t.indexOf('{ "name"'), "### Split\nGET /x\n\n"]],
+    ["a `###` removed", (t) => [t.indexOf("### Delete"), t.indexOf("### Delete") + 11, ""]],
+    ["a `###` line no longer at the start of its line", (t) => [t.indexOf("### Create"), t.indexOf("### Create"), "x"]],
+    ["a line joined to the `###` line below it", (t) => [t.indexOf("### Create") - 1, t.indexOf("### Create"), ""]],
+    ["the File variables at the top changed", (t) => [0, t.indexOf("\n"), "@host = https://example.org\n@token = t"]],
+    ["text typed at the end of a block's last line", (t) => [t.indexOf("\n\n### Create"), t.indexOf("\n\n### Create"), "X-Trace: on"]],
+    ["everything after the first block removed", (t) => [t.indexOf("### List"), t.length, ""]],
+  ];
+  it.each(edits)("reads %s as parsing from scratch does", (_, edit) => {
+    const { tree, text } = reparse(TEXT, ...edit(TEXT));
+    expect(nodes(tree)).toEqual(nodes(httpLanguage.parser.parse(text)));
   });
 });

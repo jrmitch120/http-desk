@@ -7,7 +7,7 @@
   import { tick, untrack } from "svelte";
   import { app, type Tab } from "../lib/store.svelte";
   import { api } from "../lib/api";
-  import type { GlobalVariable, PortabilityMark, Problem } from "../lib/types";
+  import type { GlobalVariable, PortabilityMark, Problem, Variable } from "../lib/types";
   import { basename, fileVariables, requestNames } from "../lib/http";
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { sessionView } from "../lib/sessionView.svelte";
@@ -26,18 +26,25 @@
   const invalid = $derived(app.isFileTextInvalid(tab.path));
   const envSet = $derived(app.envSetFor(tab.path));
   const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
+  /**
+   * The file's variables and request names, as JSON: what `variables` follows, so an
+   * edit that leaves them as they were (most do) doesn't give the editor new ones,
+   * which would have it colour every reference again (#168).
+   */
+  const declared = $derived(doc ? JSON.stringify([fileVariables(doc.file), doc.file.header.variables, requestNames(doc.file)]) : null);
   // Every `@name` line is a File variable here; no request's Prompt variables or answers apply.
   const variables = $derived.by(() => {
-    if (!doc) return null;
+    if (!declared) return null;
+    const [fileVars, headerVars, names] = JSON.parse(declared) as [Variable[], Variable[], string[]];
     return {
       ...makeVarProvider({
         env: envVariables(envSet, app.envName),
-        fileVars: fileVariables(doc.file),
-        headerVars: doc.file.header.variables,
+        fileVars,
+        headerVars,
         requestVars: [],
         globals: Object.fromEntries((globals.current ?? []).map((g) => [g.name, g.value])),
         envName: app.envName,
-        requestNames: requestNames(doc.file),
+        requestNames: names,
         exchange: (name: string) => app.exchangeShape(tab.path, name),
       }),
       findUsages: (name: string) => app.findUsages(name),
@@ -46,60 +53,71 @@
 
   /** The text shown: what the user typed, or the file rendered by the core. */
   let text = $state("");
-  /** The file (as JSON) `text` is up to date with; null until the text is first shown. */
-  let textOf = $state<string | null>(null);
+  /** Whether the text has been shown (rendered, or as typed) since the view opened. */
+  let shown = $state(false);
   let editor = $state<Editor>();
+
+  /** The user typed: the text is kept here and in the document, which reads it shortly. */
+  function typed(t: string) {
+    text = t;
+    void app.editFileText(tab.path, t);
+  }
 
   // The text follows the document. A change that came from this view (the text the
   // user typed, read into the document) shows that text as it is, so the editor isn't
   // touched and its cursor never jumps. Any other change (an edit in a request tab)
   // renders the file again, shortly after, or at once when the view first shows.
+  // Typing itself doesn't run this: only the document changing does (#168).
   $effect(() => {
-    if (!doc) return;
-    const snap = JSON.stringify(doc.file);
-    const typed = app.fileText(tab.path);
-    if (typed) {
-      text = typed.text;
-      textOf = snap;
+    const stamp = app.fileStamp(tab.path);
+    if (!stamp) return;
+    const typedText = app.fileText(tab.path);
+    if (typedText) {
+      untrack(() => {
+        if (text !== typedText.text) text = typedText.text;
+        shown = true;
+      });
       return;
     }
     const t = setTimeout(
       async () => {
         const rendered = await app.fileTextFor(tab.path).catch((e) => `# ${e}`);
-        if (rendered === null || JSON.stringify(app.docs[tab.path]?.file) !== snap) return;
+        if (rendered === null || !app.isFileAsStamped(tab.path, stamp)) return;
         text = rendered;
-        textOf = snap;
+        shown = true;
       },
-      untrack(() => textOf) === null ? 0 : 120,
+      untrack(() => shown) ? 120 : 0,
     );
     return () => clearTimeout(t);
   });
 
-  /** What the core finds reading the text shown: its problems, and the lines that behave differently in VS Code or Rider. */
-  let problems = $state<Problem[]>([]);
-  let portability = $state<PortabilityMark[]>([]);
+  /**
+   * What the core found reading the text shown, and the text it read: its problems,
+   * and the lines that behave differently in VS Code or Rider. Read a block at a time
+   * (`app.fileTextFindings`), shortly after typing stops; the editor moves them with
+   * its edits meanwhile. Raw state: a large file has thousands of marks, each read.
+   */
+  let found = $state.raw<{ text: string; problems: Problem[]; portability: PortabilityMark[] } | null>(null);
   $effect(() => {
-    if (textOf === null) return;
-    const shown = text;
+    if (!shown) return;
+    const read = text;
     let stale = false;
     const t = setTimeout(async () => {
-      const [parsed, marks] = await Promise.all([api.parseFileText(shown).catch(() => null), api.portabilityText(shown).catch(() => [])]);
-      if (stale) return;
-      problems = parsed?.problems ?? [];
-      portability = marks;
+      const findings = await app.fileTextFindings(tab.path, read).catch(() => ({ problems: [], portability: [] }));
+      if (!stale) found = { text: read, ...findings };
     }, 120);
     return () => {
       stale = true;
       clearTimeout(t);
     };
   });
-  const underlines = $derived(checkUnderlines(text, problems.map((problem) => ({ kind: "problem" as const, problem }))));
-  const marks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
+  const underlines = $derived(found ? checkUnderlines(found.text, found.problems.map((problem) => ({ kind: "problem" as const, problem }))) : []);
+  const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portabilityLevel));
 
   // Asked to show a line (`app.openFileView(path, { line })`): once the text is shown.
   $effect(() => {
     const want = app.fileLineWanted;
-    if (want?.tabId !== tab.id || textOf === null || !editor) return;
+    if (want?.tabId !== tab.id || !shown || !editor) return;
     app.fileLineWanted = null;
     tick().then(() => editor?.revealLine(want.line));
   });
@@ -138,9 +156,9 @@
         The whole of <code>{basename(tab.path)}</code> as it's written. Edits here show in its requests' tabs, and theirs here.
       {/if}
     </div>
-    {#if textOf !== null}
+    {#if shown}
       <div class="file-code">
-        <Editor bind:this={editor} value={text} onchange={(t) => app.editFileText(tab.path, t)} freshHistory language="http" {variables} {underlines} lineMarks={marks} />
+        <Editor bind:this={editor} value={text} onchange={typed} freshHistory language="http" {variables} {underlines} lineMarks={marks} />
       </div>
     {/if}
   </div>

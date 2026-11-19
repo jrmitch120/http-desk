@@ -78,3 +78,29 @@ export function toBase64(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i += piece) parts.push(btoa(String.fromCharCode(...bytes.subarray(i, i + piece))));
   return parts.join("");
 }
+
+/**
+ * A `.http` file of `requests` requests (the large-file perf test, #168): File
+ * variables at the top, then requests of the common shapes in turn (a GET with a
+ * query and a disabled header, a JSON POST, a PUT with a response handler, a
+ * DELETE with directives), about 8 lines each.
+ */
+export function largeHttpFile(requests: number): string {
+  const out = ["@host = http://localhost:8765", "@token = secret-token", ""];
+  for (let i = 0; i < requests; i++) {
+    switch (i % 4) {
+      case 0:
+        out.push(`### List items ${i}`, `# Returns page ${i} of the items.`, `GET {{host}}/items?page=${i}&limit=20`, "Accept: application/json", "#~ X-Debug: true", "");
+        break;
+      case 1:
+        out.push(`### Create item ${i}`, `POST {{host}}/items`, "Content-Type: application/json", "Authorization: Bearer {{token}}", "", "{", `  "name": "item ${i}",`, '  "tags": ["a", "b"],', `  "price": ${i}.50`, "}", "");
+        break;
+      case 2:
+        out.push(`### Update item ${i}`, `PUT {{host}}/items/${i}`, "Content-Type: application/json", "", `{ "name": "renamed ${i}" }`, "", "> {%", '  client.global.set("last", response.body.id);', "%}", "");
+        break;
+      default:
+        out.push(`### Delete item ${i}`, `# @name delete${i}`, "# @no-log", `DELETE {{host}}/items/${i}`, "Authorization: Bearer {{token}}", "");
+    }
+  }
+  return out.join("\n");
+}

@@ -19,17 +19,22 @@ interface Place {
   from: number;
 }
 
-/** The `.http` tree of `state`, parsed to the end (a request's source is small). */
-function treeOf(state: EditorState) {
-  return ensureSyntaxTree(state, state.doc.length, 50) ?? syntaxTree(state);
+/**
+ * The `.http` tree of `state`, parsed to the end of line `to` ends on: every block
+ * is there (the `.http` lines are parsed in one go), and bodies and scripts further
+ * on, a file view's thousand of them, aren't parsed for nothing (#168).
+ */
+function treeOf(state: EditorState, to: number) {
+  return ensureSyntaxTree(state, to, 50) ?? syntaxTree(state);
 }
 
 function placeAt(state: EditorState, pos: number): Place | null {
   if (state.facet(language) !== httpLanguage) return null;
   const line = state.doc.lineAt(pos);
   const before = line.text.slice(0, pos - line.from);
-  const block = treeOf(state).topNode.getChildren("Block").find((b) => b.from <= pos && pos <= b.to);
-  if (!block) return null;
+  // The block the caret is in: the last starting at or before it (blocks don't overlap).
+  const block = treeOf(state, line.to).topNode.childBefore(pos + 1);
+  if (!block || block.name !== "Block" || block.to < pos) return null;
   const request = block.getChild("RequestLine");
   // The node on the caret's line, if the line reads as one (a header without its colon yet doesn't).
   let covering = null;

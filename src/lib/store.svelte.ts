@@ -26,6 +26,7 @@ import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
+import { FileReader } from "./fileReader";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
 import { newFileTab, newTab, type RequestSection, type Tab } from "./tabView";
 import type {
@@ -42,6 +43,7 @@ import type {
   NamedExchange,
   ParsedFile,
   ParsedRequest,
+  PortabilityMark,
   Problem,
   Request,
   RequestPreview,
@@ -105,10 +107,10 @@ interface SourceEdit extends SourceText {
  */
 export type FileText = SourceText;
 
-/** A `FileText` and the file it goes with (a snapshot, `fileSnapshot`): once the file
- *  changes otherwise (an edit in a request tab), the text no longer stands for it. */
+/** A `FileText` and the file it goes with (`FileStamp`): once the file changes
+ *  otherwise (an edit in a request tab), the text no longer stands for it. */
 interface FileTextEdit extends FileText {
-  file: string;
+  file: FileStamp;
 }
 
 /**
@@ -237,31 +239,115 @@ export type SettingsSection = "tls" | "history";
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+/** `req` as JSON, its key left out (only a request has one). No replacer function: one makes stringifying a file's requests several times slower. */
 function snapshot(req: Request): string {
-  return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
+  const { _key, ...rest } = req;
+  return JSON.stringify(rest);
+}
+
+/**
+ * `compute(of)`, kept up to date by Svelte as what it reads of `of` (a document's
+ * state) changes: a derived per `of`, in `cache`. Reading it again costs nothing
+ * until then, and every reader shares one computation. A file of a thousand
+ * requests would otherwise be walked through, every property, on each check of
+ * whether it's dirty, by each part of the window that shows it (#168).
+ */
+function kept<K extends object, V>(cache: WeakMap<K, () => V>, of: K, compute: (of: K) => V): V {
+  const known = cache.get(of);
+  if (known) return known();
+  // Made from a microtask, outside whatever reads it now (an effect, a derived): one
+  // made inside would stop following `of` once that reader is destroyed.
+  queueMicrotask(() => {
+    if (!cache.has(of)) cache.set(of, keep(of, compute));
+  });
+  return compute(of);
+}
+
+function keep<K, V>(of: K, compute: (of: K) => V): () => V {
+  const value = $derived(compute(of));
+  return () => value;
+}
+
+const keptSnapshots = new WeakMap<Request, () => string>();
+
+/** `snapshot` of `req`, a request of a document (its state, which Svelte sees change). */
+const docSnapshot = (req: Request): string => kept(keptSnapshots, req, snapshot);
+
+const keptByKey = new WeakMap<Request[], () => Map<string, Request>>();
+
+/** A document's requests (its state) by key. */
+const byKey = (requests: Request[]) => new Map(requests.map((r) => [r._key!, r]));
+
+const keptDirty = new WeakMap<Doc, () => boolean>();
+const keptRequestsDirty = new WeakMap<Doc, () => boolean>();
+/** A document's requests' keys, in order, joined (as `savedOrder`). */
+const keptOrders = new WeakMap<Request[], () => string>();
+
+/** `doc` (a document's state) was edited since loaded or saved. Edits in an Orphaned tab count too: they exist nowhere on disk. */
+function docDirty(doc: Doc): boolean {
+  if (kept(keptOrders, doc.file.requests, (rs) => rs.map((r) => r._key).join(",")) !== doc.savedOrder) return true;
+  if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
+  if (currentFileText(doc)?.parses === false) return true;
+  // Kept apart, so text typed in the file view doesn't have every request checked again.
+  return kept(keptRequestsDirty, doc, (d) => [...d.file.requests, ...d.orphans].some((r) => requestDirty(d, r)));
 }
 
 /** `doc`'s typed source text for `req`, while `req` is still as that text left it. */
-function currentSource(doc: Doc, req: Request, shot = snapshot(req)): SourceEdit | null {
+function currentSource(doc: Doc, req: Request, shot = docSnapshot(req)): SourceEdit | null {
   const edit = doc.sources[req._key!];
   return edit && edit.request === shot ? edit : null;
 }
 
 /** `req` (of `doc`) was edited since loaded or saved; source text that doesn't parse counts as an edit. */
 function requestDirty(doc: Doc, req: Request): boolean {
-  const shot = snapshot(req);
+  const shot = docSnapshot(req);
   return doc.saved[req._key!] !== shot || currentSource(doc, req, shot)?.parses === false;
 }
 
-/** A whole file as JSON, request keys left out: what a file view's typed text goes with. */
-function fileSnapshot(file: HttpFile): string {
-  return JSON.stringify(file, (k, v) => (k === "_key" ? undefined : v));
+/** A document's file as JSON, request keys left out: its header, each request's `docSnapshot`, and the rest. */
+interface FileShot {
+  header: string;
+  requests: string[];
+  rest: string;
+}
+
+const keptFileShots = new WeakMap<HttpFile, () => FileShot>();
+
+/** `file` (a document's state) as JSON: a new value only once something in it changed. */
+const fileShot = (file: HttpFile): FileShot =>
+  kept(keptFileShots, file, (f) => ({
+    header: JSON.stringify(f.header),
+    requests: f.requests.map(docSnapshot),
+    rest: JSON.stringify([f.trailing, f.lineEnding, f.bom]),
+  }));
+
+/**
+ * A document's file as a file view's typed text left it (`fileShot`). Checking it
+ * against the file costs one comparison while the file is unchanged, and the
+ * requests' strings Svelte keeps after it changed. A class, so the document's
+ * state doesn't make it reactive.
+ */
+export class FileStamp {
+  private constructor(private readonly shot: FileShot) {}
+
+  /** `file`, a document's (its state). */
+  static of(file: HttpFile): FileStamp {
+    return new FileStamp(fileShot(file));
+  }
+
+  /** Whether `file` (a document's) is still as stamped. */
+  matches(file: HttpFile): boolean {
+    const now = fileShot(file);
+    const then = this.shot;
+    if (now === then) return true;
+    return now.header === then.header && now.rest === then.rest && now.requests.length === then.requests.length && now.requests.every((s, i) => s === then.requests[i]);
+  }
 }
 
 /** `doc`'s file view text, while the file is still as that text left it. */
 function currentFileText(doc: Doc): FileTextEdit | null {
   const edit = doc.fileText;
-  return edit && edit.file === fileSnapshot(doc.file) ? edit : null;
+  return edit && edit.file.matches(doc.file) ? edit : null;
 }
 
 /** A request's id among the source texts waiting to be read. */
@@ -727,7 +813,7 @@ class AppStore {
   /** A request of the document: in the file, or held by an Orphaned tab. */
   private findRequest(path: string, key: string): Request | undefined {
     const doc = this.docs[path];
-    return doc?.file.requests.find((r) => r._key === key) ?? doc?.orphans.find((r) => r._key === key);
+    return doc && (kept(keptByKey, doc.file.requests, byKey).get(key) ?? doc.orphans.find((r) => r._key === key));
   }
 
   /** True for an Orphaned tab: its request is no longer in the file on disk. */
@@ -746,11 +832,7 @@ class AppStore {
   /** Edits in an Orphaned tab count too: they exist nowhere on disk. */
   isDocDirty(path: string): boolean {
     const doc = this.docs[path];
-    if (!doc) return false;
-    if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
-    if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-    if (currentFileText(doc)?.parses === false) return true;
-    return [...doc.file.requests, ...doc.orphans].some((r) => requestDirty(doc, r));
+    return !!doc && kept(keptDirty, doc, docDirty);
   }
 
   dirtyDocs(): string[] {
@@ -778,8 +860,11 @@ class AppStore {
       // A file view's text that doesn't parse stays as typed (the file saved at its last
       // valid state); #174 asks about it as `settleUnparsed` does about a request's.
       const fileText = currentFileText(doc);
-      if (fileText?.parses === false) saved.fileText = { ...($state.snapshot(fileText) as FileTextEdit), file: fileSnapshot(saved.file) };
       this.docs[path] = saved;
+      if (fileText?.parses === false) {
+        const after = this.docs[path];
+        after.fileText = { text: fileText.text, problems: $state.snapshot(fileText.problems), parses: false, file: FileStamp.of(after.file) };
+      }
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -1404,16 +1489,41 @@ class AppStore {
   editFileText(path: string, text: string): Promise<void> {
     const doc = this.docs[path];
     if (!doc) return Promise.resolve();
+    // Typed on from text that still stands for the file: only the text changes, so
+    // what reads whether the file is dirty or invalid doesn't run again for each keystroke.
     const last = currentFileText(doc);
-    doc.fileText = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, file: fileSnapshot(doc.file) };
+    if (last) last.text = text;
+    else doc.fileText = { text, problems: [], parses: true, file: FileStamp.of(doc.file) };
     return this.readLater(sourceId(path, FILE_VIEW), () => this.readFileText(path, text));
+  }
+
+  /** Each document's reader of its file view's text, which reads only the `###` blocks an edit touched (#168). Gone with the document. */
+  private fileReaders = new WeakMap<Doc, FileReader>();
+
+  private fileReader(path: string): FileReader {
+    const doc = this.docs[path];
+    if (!doc) return new FileReader(api);
+    let reader = this.fileReaders.get(doc);
+    if (!reader) this.fileReaders.set(doc, (reader = new FileReader(api)));
+    return reader;
+  }
+
+  /**
+   * What the core finds in `text`, shown in the file view of `path`: its problems,
+   * and the lines that behave differently in VS Code or Rider. Read a block at a
+   * time, as typed text is read into the document.
+   */
+  async fileTextFindings(path: string, text: string): Promise<{ problems: Problem[]; portability: PortabilityMark[] }> {
+    const reader = this.fileReader(path);
+    const [parsed, portability] = await Promise.all([reader.parse(text), reader.portability(text)]);
+    return { problems: parsed.problems, portability };
   }
 
   /** Reads typed `text` into the document at `path`, unless more typing or another edit came since. */
   private async readFileText(path: string, text: string) {
     let parsed: ParsedFile;
     try {
-      parsed = await api.parseFileText(text);
+      parsed = await this.fileReader(path).parse(text);
     } catch (e) {
       this.toast("error", errorMessage(e));
       return;
@@ -1425,28 +1535,54 @@ class AppStore {
     edit.parses = !parsed.problems.some((p) => p.severity === "error");
     if (!edit.parses) return;
     this.replaceFile(doc, parsed.file);
-    edit.file = fileSnapshot(doc.file);
+    edit.file = FileStamp.of(doc.file);
   }
 
   /**
    * Puts `fresh` (read from the file view's text) in place of `doc`'s file. Each
    * request keeps its key where the edit left it (`carryKeys`), and its object where
-   * it's unchanged; a request gone from the text closes its tabs, as deleting it does.
+   * it's unchanged; only the requests the edit changed are put in, so only what shows
+   * them is updated. A request gone from the text closes its tabs, as deleting it does.
    * The text has no line endings or byte order mark of its own: the file's stay.
+   * `fresh` shares its values with the reader's (`FileReader.parse`): what goes in is a copy.
    */
   private replaceFile(doc: Doc, fresh: HttpFile) {
     const old = doc.file.requests;
-    const gone = carryKeys(old, fresh.requests, (a, b) => snapshot(a) === snapshot(b));
+    const oldShots = fileShot(doc.file).requests;
+    const shots = new Map<Request, string>([...old.map((r, i) => [r, oldShots[i]] as const), ...fresh.requests.map((r) => [r, snapshot(r)] as const)]);
+    const same = (a: Request, b: Request) => shots.get(a) === shots.get(b);
+    const gone = carryKeys(old, fresh.requests, same);
+    const byKey = new Map(old.map((r) => [r._key, r]));
     const requests = fresh.requests.map((r) => {
-      const was = r._key ? old.find((o) => o._key === r._key) : undefined;
-      if (was && snapshot(was) === snapshot(r)) return was;
+      const was = r._key ? byKey.get(r._key) : undefined;
+      if (was && same(was, r)) return was;
       ensureKey(r);
-      return r;
+      return structuredClone(r);
     });
-    if (JSON.stringify(fresh.header) !== JSON.stringify(doc.file.header)) doc.file.header = fresh.header;
-    doc.file.requests = requests;
+    let head = 0;
+    while (head < old.length && head < requests.length && requests[head] === old[head]) head++;
+    let tail = 0;
+    while (tail < old.length - head && tail < requests.length - head && requests[requests.length - 1 - tail] === old[old.length - 1 - tail]) tail++;
+    if (head + tail < Math.max(old.length, requests.length)) old.splice(head, old.length - head - tail, ...requests.slice(head, requests.length - tail));
+    if (JSON.stringify(fresh.header) !== JSON.stringify(doc.file.header)) doc.file.header = structuredClone(fresh.header);
     doc.file.trailing = fresh.trailing;
     for (const t of this.tabs.filter((t) => t.kind === "request" && t.path === doc.path && gone.has(t.key))) this.removeTab(t.id);
+  }
+
+  /**
+   * The file at `path` as it is now, null without its document. Reading it in an
+   * effect makes the effect run again whenever the file changes, for one
+   * comparison while it doesn't (`FileStamp`).
+   */
+  fileStamp(path: string): FileStamp | null {
+    const doc = this.docs[path];
+    return doc ? FileStamp.of(doc.file) : null;
+  }
+
+  /** Whether the file at `path` is still as `stamp` (`fileStamp`) found it. */
+  isFileAsStamped(path: string, stamp: FileStamp): boolean {
+    const doc = this.docs[path];
+    return !!doc && stamp.matches(doc.file);
   }
 
   /** What the file view of `path` holds when the user typed it: null when its text is the file rendered. */

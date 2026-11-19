@@ -115,6 +115,7 @@ const nodeSet = new NodeSet(
   }),
 );
 const type = (name: NodeName) => nodeSet.types[NODES.indexOf(name)];
+const BLOCK = type("Block");
 
 /** A node as the line parser builds it: absolute positions, children in order. */
 interface Node {
@@ -425,14 +426,52 @@ function bodyKind(method: string, headers: Map<string, string>, lines: Line[]): 
   return first.startsWith("{") || first.startsWith("[") ? "JsonBody" : first.startsWith("<") ? "XmlBody" : "Body";
 }
 
-function parseText(text: string): Node {
+/**
+ * The tree of `text`, one Block per `###` block. A block reads the same wherever it
+ * is (only its own lines count, as in the core), so one whose text an edit left
+ * untouched (inside one of `fragments`, the last tree's parts still valid) is that
+ * tree's Block, nested languages and all: only the blocks an edit touched are read
+ * again, and `parseMixed` parses their bodies and scripts only (#168).
+ */
+function parseText(text: string, fragments: readonly TreeFragment[]): Tree {
   const blocks: Line[][] = [[]];
   for (const line of linesOf(text)) {
     if (line.text.startsWith("###")) blocks.push([]);
     blocks[blocks.length - 1].push(line);
   }
-  const children = blocks.filter((b) => b.length).map(block);
-  return node("Document", 0, text.length, children);
+  const children: Tree[] = [];
+  const positions: number[] = [];
+  let f = 0;
+  for (const lines of blocks) {
+    if (!lines.length) continue;
+    const from = lines[0].from;
+    const to = end(lines[lines.length - 1]);
+    while (f < fragments.length && fragments[f].to < to) f++;
+    const kept = f < fragments.length && fragments[f].from <= from ? keptBlock(fragments[f], from, to) : null;
+    children.push(kept ?? toTree(block(lines)));
+    positions.push(from);
+  }
+  return new Tree(type("Document"), children, positions, text.length);
+}
+
+/** The Block of `fragment`'s tree that is now at `from`–`to`, if it has one there. */
+function keptBlock(fragment: TreeFragment, from: number, to: number): Tree | null {
+  const { tree, offset } = fragment;
+  const at = from + offset;
+  // Its Blocks, in order: the one starting at `at`, by binary search.
+  let lo = 0;
+  let hi = tree.children.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const pos = tree.positions[mid];
+    if (pos < at) lo = mid + 1;
+    else if (pos > at) hi = mid - 1;
+    else {
+      const child = tree.children[mid];
+      return child instanceof Tree && child.type === BLOCK && child.length === to - from ? child : null;
+    }
+  }
+  return null;
 }
 
 /** The parsers of the languages nested in `.http`, by the node they parse. */
@@ -465,26 +504,26 @@ const mixed = parseMixed((ref: SyntaxNodeRef) => {
 
 class HttpParser extends Parser {
   createParse(input: Input, fragments: readonly TreeFragment[], ranges: readonly { from: number; to: number }[]): PartialParse {
-    return mixed(this.lines(input, ranges), input, fragments, ranges);
+    return mixed(this.lines(input, fragments, ranges), input, fragments, ranges);
   }
 
   /** The `.http` tree without its nested languages. */
-  private lines(input: Input, ranges: readonly { from: number; to: number }[]): PartialParse {
-    return new LineParse(input, ranges[0].from, ranges[ranges.length - 1].to);
+  private lines(input: Input, fragments: readonly TreeFragment[], ranges: readonly { from: number; to: number }[]): PartialParse {
+    return new LineParse(input, fragments, ranges[0].from, ranges[ranges.length - 1].to);
   }
 }
 
 /**
- * Parses the whole text in one go, on the first `advance`: a request's source is
- * small. (A whole file's view may want to reuse unchanged `###` blocks from the
- * previous tree's fragments instead.) The `.http` text is always the whole
- * document, so `from` is 0.
+ * Parses the whole text in one go, on the first `advance`, reusing the blocks an
+ * edit didn't touch (`parseText`). The `.http` text is always the whole document,
+ * so `from` is 0.
  */
 class LineParse implements PartialParse {
   parsedPos: number;
   stoppedAt: number | null = null;
   constructor(
     private input: Input,
+    private fragments: readonly TreeFragment[],
     from: number,
     private to: number,
   ) {
@@ -492,7 +531,7 @@ class LineParse implements PartialParse {
   }
   advance(): Tree {
     this.parsedPos = this.to;
-    return toTree(parseText(this.input.read(0, this.to)));
+    return parseText(this.input.read(0, this.to), this.fragments);
   }
   stopAt(pos: number) {
     this.stoppedAt = pos;

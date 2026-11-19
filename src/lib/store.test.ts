@@ -3483,6 +3483,36 @@ describe("viewing a whole file as text (#166)", () => {
     expect(await app.sourceFor(PATH, list.key)).toBe("### List\n// hand formatted\nGET   {{host}}/books/2\nAccept: application/json\n\n");
   });
 
+  it("an edit reads only the block it touched, and updates only that request (#168)", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.editFileText(PATH, TEXT.replace("### Create", "### Create it"));
+    const [list] = app.docs[PATH].file.requests;
+    api.parseFileText.mockClear();
+
+    await app.editFileText(PATH, TEXT.replace("### Create", "### Create it").replace("POST {{host}}/books", "POST {{host}}/books/new"));
+    expect(api.parseFileText.mock.calls).toEqual([["### Create it\nPOST {{host}}/books/new\n"]]);
+    expect(app.docs[PATH].file.requests[0]).toBe(list);
+    expect(app.docs[PATH].file.requests.map((r) => [r.name, r.url])).toEqual([
+      ["List", "{{host}}/books"],
+      ["Create it", "{{host}}/books/new"],
+    ]);
+  });
+
+  it("an edit to the File variables at the top changes the header only", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    const requests = [...app.docs[PATH].file.requests];
+    await app.editFileText(PATH, TEXT.replace("@host = https://example.com", "@host = https://example.org\n@token = t"));
+    expect(app.docs[PATH].file.header.variables).toEqual([
+      { name: "host", value: "https://example.org" },
+      { name: "token", value: "t" },
+    ]);
+    expect(app.docs[PATH].file.requests).toEqual(requests);
+    expect(app.docs[PATH].file.requests.every((r, i) => r === requests[i])).toBe(true);
+    expect(app.isDocDirty(PATH)).toBe(true);
+  });
+
   it("keeps the last valid file while the text doesn't parse, and reads dirty", async () => {
     const [list, create] = await openAll(parsed());
     await app.openFileView(PATH);

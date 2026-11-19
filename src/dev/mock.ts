@@ -11,7 +11,7 @@ import { displayName, hasScripts, promptMasked, requestPrompts, segments } from 
 import { responseRedirects } from "../lib/scripts";
 import { requestVariableReads } from "../lib/checks";
 import { environmentMissing, redirectNotRun, scriptFileMissing, scriptFileOutside, sentWithoutScripts, UNTRUSTED_MESSAGE, unsentMessage } from "./coreMessages";
-import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
+import { bmpImage, largeHttpFile, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
@@ -715,6 +715,10 @@ window.addEventListener(
   releaseReads: () => releaseReads(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
+  /** Makes api/pets.http a file of `requests` requests (`largeHttpFile`), for the large-file perf test (e2e/perf). Before it's opened. */
+  prepareLargeFile: (requests: number) => {
+    files[`${ROOT}/api/pets.http`] = invokeCore<HttpFile>("parse_file", { text: largeHttpFile(requests) });
+  },
   get settings() {
     return clone(settings);
   },

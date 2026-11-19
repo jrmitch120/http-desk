@@ -91,6 +91,8 @@
     editorExtensions({ ...opts, history: !ownHistory });
   /** Marks a change that puts a new `value` in: not the user's, so no `onchange`. */
   const fromValue = Annotation.define<boolean>();
+  /** The text `onchange` was last given, and the document it was. */
+  let emitted: { doc: Text; text: string } | null = null;
 
   /**
    * Puts `text` in place of `v`'s, changing only the span that differs, so a
@@ -208,7 +210,10 @@
           untrack(() => underlines) ? underlineExtension() : [],
           untrack(() => marks) ? lineMarks() : [],
           EditorView.updateListener.of((u) => {
-            if (u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) onchange?.(u.state.doc.toString());
+            if (!u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) return;
+            const text = u.state.doc.toString();
+            emitted = { doc: u.state.doc, text };
+            onchange?.(text);
           }),
         ],
       }),
@@ -230,7 +235,8 @@
       return;
     }
     const v = value;
-    if (view && v !== view.state.doc.toString()) setValue(view, v);
+    // The text just typed, given back: the document already holds it (a large file's text isn't made again).
+    if (view && !(emitted?.doc === view.state.doc && emitted.text === v) && v !== view.state.doc.toString()) setValue(view, v);
   });
   $effect(() => {
     const l = language;
