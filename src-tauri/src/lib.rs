@@ -461,15 +461,18 @@ fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> 
     Ok(httpdesk_core::parse(&text))
 }
 
+/// A request's Source view text: the text before it and its block, as written
+/// where the request still matches it, else rendered. [`parse_request`] reads it back.
 #[tauri::command]
-fn render_request(request: Request) -> String {
-    httpdesk_core::render_request(&Request { leading: String::new(), ..request })
+fn request_source(request: Request) -> String {
+    httpdesk_core::request_source(&request)
 }
 
-/// The first request in `text` (a History entry's source text), parsed as in a file.
+/// The first request in `text` (a Source view's, a History entry's source text) and
+/// the problems found reading it; no request when the text has no request line.
 #[tauri::command]
-fn parse_request(text: String) -> Option<Request> {
-    httpdesk_core::parse(&text).requests.into_iter().next()
+fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
+    httpdesk_core::parse_request(&text)
 }
 
 #[tauri::command]
@@ -1477,7 +1480,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             find_usages,
             read_http_file,
             save_http_file,
-            render_request,
+            request_source,
             parse_request,
             create_file,
             create_dir,

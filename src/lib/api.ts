@@ -19,6 +19,7 @@ import type {
   Usage,
   HttpResponse,
   NamedExchange,
+  ParsedRequest,
   Request,
   RequestPreview,
   RequestVariableReading,
@@ -78,9 +79,10 @@ export const api = {
 
   readHttpFile: (path: string) => invoke<HttpFile>("read_http_file", { path }),
   saveHttpFile: (path: string, file: HttpFile) => invoke<HttpFile>("save_http_file", { path, file }),
-  renderRequest: (request: Request) => invoke<string>("render_request", { request }),
-  /** The first request in `text` (a History entry's source text), parsed as in a file; null without one. */
-  parseRequest: (text: string) => invoke<Request | null>("parse_request", { text }),
+  /** A request's Source view text: the text before it and its block, as written where the request still matches it. */
+  requestSource: (request: Request) => invoke<string>("request_source", { request }),
+  /** The first request in `text` (a Source view's, a History entry's source text) and the problems found reading it. */
+  parseRequest: (text: string) => invoke<ParsedRequest>("parse_request", { text }),
   createFile: (path: string, content: string) => invoke<void>("create_file", { path, content }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),

@@ -1715,7 +1715,7 @@ mockIPC(
       case "preview_request":
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
-      case "render_request":
+      case "request_source":
       case "parse_request":
         return invokeCore(cmd, args);
       case "search_requests": {

@@ -39,6 +39,8 @@ import type {
   HttpFile,
   HttpResponse,
   NamedExchange,
+  ParsedRequest,
+  Problem,
   Request,
   RequestPreview,
   RunProgress,
@@ -63,6 +65,37 @@ export interface Doc {
   /** Requests of Orphaned tabs: gone from the file on disk but still open, with
    *  their edits. Saving appends them back to the file (see `save`). */
   orphans: Request[];
+  /** Per request key: the text the user typed in its Source view (see `SourceText`). */
+  sources: Record<string, SourceEdit>;
+}
+
+/**
+ * What a request's Source view holds once the user has typed in it, rather than
+ * text rendered from the request. The request stays authoritative: text that
+ * parses replaces it, text that doesn't leaves it at its last valid state.
+ */
+export interface SourceText {
+  /** The text as typed (the latest keystroke; it's read after a short pause). */
+  text: string;
+  /** The problems the core found reading the text last read. */
+  problems: Problem[];
+  /** False while the text doesn't parse (no request line, or an error): the
+   *  request keeps its last valid state and reads as dirty. */
+  parses: boolean;
+}
+
+/** A `SourceText` and the request it goes with (a snapshot): once the request
+ *  changes otherwise (a structured edit), the text no longer stands for it. */
+interface SourceEdit extends SourceText {
+  request: string;
+}
+
+/** How long typing in a Source view pauses before the text is read. */
+export const SOURCE_READ_DELAY_MS = 150;
+
+/** Whether `parsed` text can replace a request: it has a request line and no error. */
+export function sourceParses(parsed: ParsedRequest): parsed is ParsedRequest & { request: Request } {
+  return parsed.request !== null && !parsed.problems.some((p) => p.severity === "error");
 }
 
 export type { Tab } from "./tabView";
@@ -165,6 +198,21 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 function snapshot(req: Request): string {
   return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
 }
+
+/** `doc`'s typed source text for `req`, while `req` is still as that text left it. */
+function currentSource(doc: Doc, req: Request, shot = snapshot(req)): SourceEdit | null {
+  const edit = doc.sources[req._key!];
+  return edit && edit.request === shot ? edit : null;
+}
+
+/** `req` (of `doc`) was edited since loaded or saved; source text that doesn't parse counts as an edit. */
+function requestDirty(doc: Doc, req: Request): boolean {
+  const shot = snapshot(req);
+  return doc.saved[req._key!] !== shot || currentSource(doc, req, shot)?.parses === false;
+}
+
+/** A request's id among the source texts waiting to be read. */
+const sourceId = (path: string, key: string) => `${path}\n${key}`;
 
 const ensureKey = (r: Request) => {
   if (!r._key) r._key = uid();
@@ -551,6 +599,7 @@ class AppStore {
       externalChange: false,
       missing: false,
       orphans,
+      sources: {},
     };
   }
 
@@ -627,11 +676,11 @@ class AppStore {
     return !!doc && (doc.missing || doc.orphans.some((r) => r._key === tab.key));
   }
 
+  /** Edited since loaded or saved; source text that doesn't parse counts as an edit too. */
   isRequestDirty(path: string, key: string): boolean {
     const doc = this.docs[path];
     const req = this.findRequest(path, key);
-    if (!doc || !req) return false;
-    return doc.saved[key] !== snapshot(req);
+    return !!doc && !!req && requestDirty(doc, req);
   }
 
   /** Edits in an Orphaned tab count too: they exist nowhere on disk. */
@@ -640,7 +689,7 @@ class AppStore {
     if (!doc) return false;
     if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
     if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-    return [...doc.file.requests, ...doc.orphans].some((r) => doc.saved[r._key!] !== snapshot(r));
+    return [...doc.file.requests, ...doc.orphans].some((r) => requestDirty(doc, r));
   }
 
   dirtyDocs(): string[] {
@@ -651,6 +700,7 @@ class AppStore {
    *  appended to it; unedited ones stay orphaned so a request another editor
    *  removed isn't silently restored. */
   async save(path: string, revive: string[] = []): Promise<boolean> {
+    await this.readSources(path);
     const doc = this.docs[path];
     if (!doc) return false;
     try {
@@ -663,7 +713,14 @@ class AppStore {
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
       const orphans = doc.orphans.filter((r) => !back.includes(r));
-      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
+      // Text that doesn't parse stays as typed (the request saved at its last valid state).
+      const invalid = [...doc.file.requests, ...doc.orphans].filter((r) => currentSource(doc, r)?.parses === false);
+      const sources = Object.fromEntries(invalid.map((r) => [r._key!, $state.snapshot(doc.sources[r._key!])]));
+      const saved = this.makeDoc(path, fresh, orphans, doc.saved);
+      for (const r of [...saved.file.requests, ...saved.orphans]) {
+        if (sources[r._key!]) saved.sources[r._key!] = { ...sources[r._key!], request: snapshot(r) };
+      }
+      this.docs[path] = saved;
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -896,10 +953,11 @@ class AppStore {
     delete this.runs[id];
     this.history.forget(id);
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
-    // An orphaned request lives only in its tab.
+    // An orphaned request lives only in its tab, and so does the text typed in its Source view.
     const doc = this.docs[tab.path];
     if (doc && !this.tabs.some((t) => t.path === tab.path && t.key === tab.key)) {
       doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
+      this.dropSource(tab.path, tab.key);
     }
   }
 
@@ -991,6 +1049,7 @@ class AppStore {
   revertRequest(path: string, key: string) {
     const doc = this.docs[path];
     if (!doc) return;
+    this.dropSource(path, key);
     const idx = doc.file.requests.findIndex((r) => r._key === key);
     if (idx < 0) return;
     if (doc.saved[key]) {
@@ -1011,7 +1070,7 @@ class AppStore {
   async restoreRequest(path: string, key: string | null, source: string) {
     let restored: Request | null;
     try {
-      restored = await api.parseRequest(source);
+      restored = (await api.parseRequest(source)).request;
     } catch (e) {
       this.toast("error", errorMessage(e));
       return;
@@ -1029,6 +1088,120 @@ class AppStore {
       doc.file.requests.push(req);
     }
     await this.openRequest(path, { key: req._key });
+  }
+
+  // ---------------------------------------------------------------- request source
+
+  /** The latest source text typed per request (by `sourceId`) until it's read: after a pause, or at once on Save. */
+  private sourceReads = new Map<string, { timer: ReturnType<typeof setTimeout>; settle: (() => void)[]; read: () => Promise<void> }>();
+
+  /**
+   * The user typed `text` in request `key`'s Source view. It's kept as typed at once
+   * and read by the core after a short pause (`SOURCE_READ_DELAY_MS`): text that
+   * parses replaces the request (so the structured editors follow), text that
+   * doesn't leaves the request at its last valid state. Settles once `text` is read,
+   * or once later typing replaced it.
+   */
+  editSource(path: string, key: string, text: string): Promise<void> {
+    const doc = this.docs[path];
+    const req = this.findRequest(path, key);
+    if (!doc || !req) return Promise.resolve();
+    const last = this.sourceEdit(path, key);
+    doc.sources[key] = { text, problems: last?.problems ?? [], parses: last?.parses ?? true, request: snapshot(req) };
+    const id = sourceId(path, key);
+    const pending = this.sourceReads.get(id);
+    if (pending) clearTimeout(pending.timer);
+    // Text replaced before it was read settles when the text replacing it is read.
+    const settle: (() => void)[] = pending?.settle ?? [];
+    const done = new Promise<void>((s) => settle.push(s));
+    let reading: Promise<void> | null = null;
+    const entry = {
+      settle,
+      timer: setTimeout(() => void entry.read(), SOURCE_READ_DELAY_MS),
+      read: () => {
+        clearTimeout(entry.timer);
+        reading ??= this.readSource(path, key, text).finally(() => {
+          if (this.sourceReads.get(id) === entry) this.sourceReads.delete(id);
+          settle.forEach((s) => s());
+        });
+        return reading;
+      },
+    };
+    this.sourceReads.set(id, entry);
+    return done;
+  }
+
+  /** Forgets the text typed in request `key`'s Source view, read or not. */
+  private dropSource(path: string, key: string) {
+    const id = sourceId(path, key);
+    const pending = this.sourceReads.get(id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.sourceReads.delete(id);
+      pending.settle.forEach((s) => s());
+    }
+    const doc = this.docs[path];
+    if (doc) delete doc.sources[key];
+  }
+
+  /** Reads now the source texts of `path`'s requests still waiting to be read. */
+  private async readSources(path: string) {
+    const reads = [...this.sourceReads].filter(([id]) => id.startsWith(sourceId(path, ""))).map(([, e]) => e.read());
+    await Promise.all(reads);
+  }
+
+  /** Reads typed `text` into request `key`, unless more typing or a structured edit came since. */
+  private async readSource(path: string, key: string, text: string) {
+    let parsed: ParsedRequest;
+    try {
+      parsed = await api.parseRequest(text);
+    } catch (e) {
+      this.toast("error", errorMessage(e));
+      return;
+    }
+    const doc = this.docs[path];
+    const edit = this.sourceEdit(path, key);
+    if (!doc || !edit || edit.text !== text) return;
+    edit.problems = parsed.problems;
+    edit.parses = sourceParses(parsed);
+    if (!sourceParses(parsed)) return;
+    const req: Request = { ...parsed.request, _key: key };
+    const at = doc.file.requests.findIndex((r) => r._key === key);
+    if (at >= 0) doc.file.requests[at] = req;
+    else doc.orphans = doc.orphans.map((r) => (r._key === key ? req : r));
+    edit.request = snapshot(req);
+  }
+
+  /** The source text typed for request `key`, while the request is still as that text left it. */
+  private sourceEdit(path: string, key: string): SourceEdit | null {
+    const doc = this.docs[path];
+    const req = this.findRequest(path, key);
+    return doc && req ? currentSource(doc, req) : null;
+  }
+
+  /**
+   * What request `key`'s Source view holds when the user typed it: null when its
+   * text is the request rendered (nothing typed, or a structured edit since).
+   */
+  sourceText(path: string, key: string): SourceText | null {
+    return this.sourceEdit(path, key);
+  }
+
+  /** Whether request `key`'s Source view holds text that doesn't parse: the request is at its last valid state. */
+  isSourceInvalid(path: string, key: string): boolean {
+    return this.sourceEdit(path, key)?.parses === false;
+  }
+
+  /**
+   * The text request `key`'s Source view shows: what the user typed, or the request
+   * rendered by the core (as written where it still matches its text). Null without
+   * the request.
+   */
+  async sourceFor(path: string, key: string): Promise<string | null> {
+    const typed = this.sourceEdit(path, key);
+    if (typed) return typed.text;
+    const req = this.findRequest(path, key);
+    return req ? api.requestSource($state.snapshot(req) as Request) : null;
   }
 
   // ---------------------------------------------------------------- request ops

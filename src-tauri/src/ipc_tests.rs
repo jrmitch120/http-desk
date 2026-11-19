@@ -23,6 +23,7 @@ mod runner;
 mod script_files;
 mod scripts;
 mod session;
+mod source;
 mod usages;
 mod watcher;
 mod window_state;
@@ -233,8 +234,8 @@ fn vertical_slice_over_ipc() {
     assert_eq!(r["query"]["items"][1], json!({ "enabled": false, "name": "size", "value": "50" }));
     assert_eq!(r["auth"]["kind"], "bearer");
 
-    // Source preview command.
-    let src = h.ok("render_request", json!({ "request": r }));
+    // The Source view's text.
+    let src = h.ok("request_source", json!({ "request": r }));
     assert!(src.as_str().unwrap().contains("#~ X-Debug: on"));
 }
 

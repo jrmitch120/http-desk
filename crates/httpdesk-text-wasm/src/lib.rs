@@ -32,15 +32,15 @@ fn json(value: &impl serde::Serialize) -> Result<String, String> {
 /// Runs `command` with JSON `args_json` and gives back its JSON result.
 pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
     match command {
-        // The shell's `render_request`.
-        "render_request" => {
+        // The shell's `request_source`: a request's Source view text.
+        "request_source" => {
             let RequestArgs { request } = args(command, args_json)?;
-            json(&httpdesk_text::render_request(&Request { leading: String::new(), ..request }))
+            json(&httpdesk_text::request_source(&request))
         }
-        // The shell's `parse_request`: the first request in `text`, parsed as in a file.
+        // The shell's `parse_request`: the first request in `text` and the problems found reading it.
         "parse_request" => {
             let Text { text } = args(command, args_json)?;
-            json(&httpdesk_text::parse(&text).requests.into_iter().next())
+            json(&httpdesk_text::parse_request(&text))
         }
         // What History keeps as a send's source text (`history::Pending::begin`).
         "request_text" => {

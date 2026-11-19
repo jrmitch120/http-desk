@@ -87,6 +87,26 @@ export interface Request {
   _key?: string;
 }
 
+/**
+ * Something the core's parser couldn't read cleanly (httpdesk-text `Problem`). Reading
+ * recovers anyway and keeps the text as written. Line and column are 1-based, the
+ * column in characters.
+ */
+export interface Problem {
+  line: number;
+  column: number;
+  /** "error": the text doesn't say what was meant; "warning": it reads, probably not as intended. */
+  severity: "error" | "warning";
+  code: "unparseable-request-line" | "header-after-body" | "unknown-directive";
+  message: string;
+}
+
+/** A single request's text read on its own (`parse_request`): null without a request line. */
+export interface ParsedRequest {
+  request: Request | null;
+  problems: Problem[];
+}
+
 export interface FileHeader {
   comments: string[];
   variables: Variable[];
