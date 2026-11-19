@@ -205,6 +205,11 @@ export function fileText(page: Page, path: string): Promise<string> {
   return page.evaluate((p) => (window as unknown as { __mock: { fileText: (p: string) => string } }).__mock.fileText(p), path);
 }
 
+/** Puts `text` in the `.http` file at `path` "on disk" (it's there after a reload too). */
+export function writeFileText(page: Page, path: string, text: string): Promise<void> {
+  return page.evaluate(([p, t]) => (window as unknown as { __mock: { writeText: (p: string, t: string) => void } }).__mock.writeText(p, t), [path, text]);
+}
+
 /** The OS clipboard's text, as the clipboard plugin (src/lib/clipboard.ts) reads and writes it. */
 export function clipboard(page: Page): Promise<string> {
   return mockState(page, "clipboard");

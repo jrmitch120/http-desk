@@ -3,7 +3,7 @@
 // so an edit in one shows in the other; requests and bodies fold; it comes back with
 // the Layout.
 import { expect, test, type Page } from "@playwright/test";
-import { activeTab, menuClick, mockState, openApp, openRequest, tab, treeItem, treeMenu } from "./helpers";
+import { activeTab, fileText, menuClick, mockState, openApp, openRequest, tab, treeItem, treeMenu, writeFileText } from "./helpers";
 
 const fileView = (page: Page) => page.locator(".file-view .file-code");
 const line = (page: Page, text: string) => fileView(page).locator(".cm-line", { hasText: text });
@@ -92,6 +92,23 @@ test("a request tab's File button shows its request in the file view, and the fi
   await line(page, "GET {{baseUrl}}/pets?limit=20").click();
   await page.getByRole("button", { name: "Request", exact: true }).click();
   await expect(activeTab(page)).toContainText("List pets");
+});
+
+test("a file with mixed line endings keeps each line's own through an edit in the file view; a new line gets the file's", async ({ page }) => {
+  await openApp(page);
+  // Mostly CRLF; the Accept line ends in LF.
+  const text = "### List pets\r\nGET {{baseUrl}}/pets\r\nAccept: application/json\n\r\n### Create pet\r\nPOST {{baseUrl}}/pets\r\n";
+  await writeFileText(page, "/demo/api/pets.http", text);
+  await page.reload();
+  await treeItem(page, "api").click();
+  await treeMenu(page, "pets.http", "View as text");
+  await line(page, "POST {{baseUrl}}/pets").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("\nX-Trace: on");
+  await expect(tab(page, "pets.http").locator(".dot")).toBeVisible();
+  await page.keyboard.press("Meta+s");
+  await expect(tab(page, "pets.http").locator(".dot")).toHaveCount(0);
+  expect(await fileText(page, "/demo/api/pets.http")).toBe(text.replace("POST {{baseUrl}}/pets\r\n", "POST {{baseUrl}}/pets\r\nX-Trace: on\r\n"));
 });
 
 test("the file view underlines an Undefined variable and a shared # @name, as each request's tab does", async ({ page }) => {

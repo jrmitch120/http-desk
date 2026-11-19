@@ -1149,7 +1149,19 @@ Decisions made during implementation, beyond the plan above:
   (`app.texts.unparsed` gives it after the file's requests, so where both hold text the file
   view's answer is applied last and is what's saved). A file
   view is part of the Layout (`{ kind: "file", path }`). `app.openFileView(path, { line })`
-  opens it scrolled to a line, `{ key }` to a request.
+  opens it scrolled to a line, `{ key }` to a request. The file view's Request button
+  opens the request under its cursor in that request's tab, and a request tab's File
+  button opens the file view at its request.
+  **Line endings in the views.** A file with mixed line endings is kept as written
+  (`mixed_endings`, §2), so its views' text has each line's own `\r\n` or `\n`. CodeMirror
+  reads every break as one and gives `\n` back, so the editor keeps where breaks have the
+  other ending (`lib/codemirror/lineEndings.ts`: a sorted list of offsets mapped through
+  each edit; a deleted break loses its mark) and writes them back in the text it gives
+  (Editor.svelte's `lineBreak`, which the views take from `app.texts.lineBreak(path)`): a
+  line edited keeps its ending, a break typed anew gets the file's (most lines'), and
+  untouched lines save back byte for byte. A text read from a view with `\r` in it is read
+  whole by the core (`FileReader`), and its endings become the file's. A lone `\r` break
+  (old Mac files) comes back as the file's ending. Any other file's views have `\n` only.
   An outline beside the text lists its requests (#167): `src/lib/codemirror/outline.ts`
   reads them from the `.http` tree (`requestBlocks`: each `###` block with a request line,
   in the file's order, named as `displayName` names a request) and finds the one at a

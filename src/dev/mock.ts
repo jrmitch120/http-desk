@@ -770,6 +770,8 @@ window.addEventListener(
   },
   /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
   writeFile: writeDiskFile,
+  /** `writeFile` with the file's text, read as the shell reads it from disk. */
+  writeText: (path: string, text: string) => writeDiskFile(path, invokeCore<HttpFile>("parse_file", { text })),
   /** Writes a `.http` file model "on disk" while the app runs, then tells it like the watcher does (`workspace-changed`). */
   async changeFile(path: string, file: unknown) {
     writeDiskFile(path, file);

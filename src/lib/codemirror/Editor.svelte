@@ -10,6 +10,7 @@
   import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
   import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
   import { inReadOnlyRegion } from "./readOnly";
+  import { keepLineEndings, readEndings, setEndings, textWithEndings, type LineBreak } from "./lineEndings";
   import { sharedEnds } from "../splice";
 
   interface Props {
@@ -45,8 +46,17 @@
     underlines?: Underline[];
     /** Markers in a gutter of their own, with hovers (`lineMarks.ts`). Given at mount, the gutter is there and follows this. */
     lineMarks?: LineMark[];
+    /**
+     * For the text of a file with mixed line endings: `value` keeps each line's own
+     * (`\r\n` or `\n`), so does `onchange`'s text, and a line break typed anew is this,
+     * the file's own (lineEndings.ts). Without it the text's breaks are all `\n`.
+     */
+    lineBreak?: LineBreak;
   }
-  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks }: Props = $props();
+  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks, lineBreak }: Props = $props();
+
+  /** `v`'s text, as `value` is given and `onchange` gives it. */
+  const textOf = (state: EditorState) => (lineBreak ? textWithEndings(state, lineBreak) : state.doc.toString());
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -107,12 +117,19 @@
   /**
    * Puts `text` in place of `v`'s, changing only the span that differs, so a
    * selection outside it stays where it was. With `freshHistory`, the undo
-   * history starts again (taking the history out and putting it back).
+   * history starts again (taking the history out and putting it back). Each line
+   * takes its ending from `value` (`lineBreak`).
    */
-  function setValue(v: EditorView, text: string) {
+  function setValue(v: EditorView, value: string) {
+    const br = untrack(() => lineBreak);
+    const { doc: text, others } = br ? readEndings(value, br) : { doc: value, others: [] };
     const old = v.state.doc.toString();
     const { head: from, tail: end } = sharedEnds(old.length, text.length, (i, j) => old.charCodeAt(i) === text.charCodeAt(j));
-    const change = v.state.update({ changes: { from, to: old.length - end, insert: text.slice(from, text.length - end) }, annotations: fromValue.of(true) });
+    const change = v.state.update({
+      changes: { from, to: old.length - end, insert: text.slice(from, text.length - end) },
+      effects: setEndings.of(others),
+      annotations: fromValue.of(true),
+    });
     if (!ownHistory || untrack(() => readonly)) return v.dispatch(change);
     const forget = change.state.update({ effects: histC.reconfigure([]), annotations: fromValue.of(true) });
     v.dispatch([change, forget, forget.state.update({ effects: histC.reconfigure(historyExt(false)), annotations: fromValue.of(true) })]);
@@ -192,10 +209,11 @@
 
   onMount(() => {
     const deferDoc = !!doc && wrap;
+    const initial = lineBreak ? readEndings(value, lineBreak) : { doc: value, others: [] };
     view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: deferDoc ? STAND_IN : (doc ?? value),
+        doc: deferDoc ? STAND_IN : (doc ?? initial.doc),
         extensions: [
           baseC.of(baseExt({ readonly, wrap, placeholder, gutters })),
           histC.of(historyExt(readonly)),
@@ -217,9 +235,10 @@
           extensions,
           untrack(() => underlines) ? underlineExtension() : [],
           untrack(() => marks) ? lineMarks() : [],
+          keepLineEndings(initial.others),
           EditorView.updateListener.of((u) => {
             if (!u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) return;
-            const text = u.state.doc.toString();
+            const text = textOf(u.state);
             emitted = { doc: u.state.doc, text };
             onchange?.(text);
           }),
@@ -248,7 +267,7 @@
     }
     const v = value;
     // The text just typed, given back: the document already holds it (a large file's text isn't made again).
-    if (view && !(emitted?.doc === view.state.doc && emitted.text === v) && v !== view.state.doc.toString()) setValue(view, v);
+    if (view && !(emitted?.doc === view.state.doc && emitted.text === v) && v !== textOf(view.state)) setValue(view, v);
   });
   $effect(() => {
     const l = language;

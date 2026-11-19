@@ -356,7 +356,7 @@
         </div>
         <div class="source-code">
           <ReadOnlyRegion when={() => !!lock && !ownSource}>
-            <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.texts.edit(tab.path, view, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} />
+            <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.texts.edit(tab.path, view, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} lineBreak={app.texts.lineBreak(tab.path)} />
           </ReadOnlyRegion>
         </div>
       </div>

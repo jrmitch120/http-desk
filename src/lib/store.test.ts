@@ -3632,6 +3632,48 @@ describe("viewing a whole file as text (#166)", () => {
   });
 });
 
+describe("a file with mixed line endings in its views (#161, #166)", () => {
+  // Mostly CRLF; the `Accept` line ends in LF. The real core reads and writes the text, and saving writes and reads it back as the shell does.
+  const TEXT = "@host = https://example.com\r\n\r\n### List\r\nGET {{host}}/books\r\nAccept: application/json\n\r\n### Create\r\nPOST {{host}}/books\r\n";
+  const written = () => invokeCore<string>("file_text", { file: saveHttpFile.mock.lastCall![1] });
+  beforeEach(() => {
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+    api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+    saveHttpFile.mockImplementation(async (_path: string, file: HttpFile) => invokeCore("parse_file", { text: invokeCore<string>("file_text", { file }) }));
+  });
+
+  it("shows each line with its own ending, and new lines typed in with the file's", async () => {
+    await openAll(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    await app.openFileView(PATH);
+    expect(app.texts.lineBreak(PATH)).toBe("\r\n");
+    const shown = (await app.texts.textFor(PATH, fileView))!;
+    expect(shown).toBe(TEXT);
+
+    // As the editor gives it back: the edited line keeps its ending, the new one gets CRLF.
+    await app.texts.edit(PATH, fileView, shown.replace("POST {{host}}/books\r\n", "POST {{host}}/books\r\nX-Trace: on\r\n"));
+    await app.saveAll();
+    expect(written()).toBe(TEXT.replace("POST {{host}}/books\r\n", "POST {{host}}/books\r\nX-Trace: on\r\n"));
+  });
+
+  it("an edit in a request's Source view keeps the other lines' endings", async () => {
+    const [list] = await openAll(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    const source = (await app.texts.textFor(PATH, sourceView(list.key)))!;
+    expect(source).toBe("### List\r\nGET {{host}}/books\r\nAccept: application/json\n\r\n");
+    await app.texts.edit(PATH, sourceView(list.key), source.replace("/books\r\n", "/books/1\r\n"));
+    await app.saveAll();
+    expect(written()).toBe(TEXT.replace("GET {{host}}/books\r\n", "GET {{host}}/books/1\r\n"));
+  });
+
+  it("a request edited in its sections is written with the file's ending", async () => {
+    const [list] = await openAll(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    app.requestFor(list)!.url = "{{host}}/books/2";
+    await app.saveAll();
+    expect(written()).toBe(TEXT.replace("GET {{host}}/books\r\nAccept: application/json\n", "GET {{host}}/books/2\r\nAccept: application/json\r\n"));
+  });
+});
+
 describe("the Problems panel (#172)", () => {
   const AUTHORS = "/ws/api/authors.http";
   const BROKEN = "### List\nGET https://example.com/books\n\n### Search\nGET https://example.com/search for books\n";

@@ -16,6 +16,7 @@ import { api, errorMessage } from "./api";
 import { basename, displayName, uid } from "./http";
 import { FileReader } from "./fileReader";
 import { carryKeys } from "./reattach";
+import type { LineBreak } from "./codemirror/lineEndings";
 import { docSnapshot, fileShot, FileStamp, snapshot } from "./snapshots.svelte";
 import { sharedEnds } from "./splice";
 import type { Doc } from "./store.svelte";
@@ -220,6 +221,18 @@ export class TextViews {
     if (view.kind === "file") return api.fileText({ ...($state.snapshot(doc.file) as HttpFile), lineEnding: "lf", bom: false });
     const req = this.host.findRequest(path, view.key);
     return req ? api.requestSource($state.snapshot(req) as Request) : null;
+  }
+
+  /**
+   * For a file with mixed line endings, the line break its views' text keeps lines
+   * apart with when typed anew (the file's own, most lines'): the views keep each line's
+   * own ending (Editor.svelte's `lineBreak`), so what isn't edited saves back as written.
+   * Undefined for any other file, whose views' text has `\n` breaks only.
+   */
+  lineBreak(path: string): LineBreak | undefined {
+    const file = this.host.docs[path]?.file;
+    if (!file?.mixedEndings) return undefined;
+    return file.lineEnding === "crlf" ? "\r\n" : "\n";
   }
 
   /** The file view's reader for `path`'s document. */

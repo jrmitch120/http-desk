@@ -271,6 +271,7 @@
             {variables}
             {underlines}
             lineMarks={marks}
+            lineBreak={app.texts.lineBreak(tab.path)}
             extensions={followCursor}
           />
         </div>
