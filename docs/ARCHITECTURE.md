@@ -812,6 +812,10 @@ Decisions made during implementation, beyond the plan above:
   gutter of its own (`lineMarks.ts`), whose hover says what each editor does, and the
   check strip adds a `portability` note per editor the request behaves differently in.
   HttpDesk-only lines behave alike in both editors, so they are marked but not noted.
+  Settings → Portability's "Show portability notes as warnings" (`portabilityWarnings`
+  in the app settings, off by default, never in the workspace) raises both to warnings
+  (`app.portabilityLevel`, read live by every view); HttpDesk-only lines stay as they
+  are, and a warning never blocks a send.
   A `# @name` two requests in a file share is flagged in the request's check strip
   (`duplicateName` in `src/lib/checks.ts`); it never blocks the send.
 * **Undefined-variable checks** catch them before sending, without blocking it.

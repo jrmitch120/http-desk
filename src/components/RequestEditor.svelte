@@ -7,7 +7,7 @@
   import { envVariables, makeVarProvider } from "../lib/vars";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { sessionView } from "../lib/sessionView.svelte";
-  import { bodyFilePaths, portabilityLineMarks, requestChecks, type Check, type PortabilityLevel, type QuickFix, type Section } from "../lib/checks";
+  import { bodyFilePaths, portabilityLineMarks, requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import { sourceProblems } from "../lib/problems.svelte";
   import { checkUnderlines } from "../lib/codemirror/underlines";
   import { readingCard, workspaceFile } from "../lib/exchanges";
@@ -91,8 +91,6 @@
    * (`request_portability`), for the strip's portability notes and the source's gutter.
    */
   let portability = $state<PortabilityMark[]>([]);
-  /** How portability notes show (#171 makes this a setting). */
-  const portabilityLevel: PortabilityLevel = "note";
   $effect(() => {
     if (!req) return;
     const snap = JSON.stringify(req);
@@ -101,7 +99,7 @@
     }, 120);
     return () => clearTimeout(t);
   });
-  const sourceMarks = $derived(portabilityLineMarks(portability, portabilityLevel));
+  const sourceMarks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
   const checks = $derived(
@@ -114,7 +112,7 @@
           app.folderOf(tab.path),
           doc.file.requests,
           { read: reading?.read, exists: (path) => sourceProblems.exists(tab.path, path) },
-          { marks: portability, level: portabilityLevel },
+          { marks: portability, level: app.portabilityLevel },
         )
       : [],
   );

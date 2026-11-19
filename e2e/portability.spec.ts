@@ -4,7 +4,7 @@
 // is the core's portability table (crates/httpdesk-text/src/portability.rs), which
 // the mock runs too (WASM).
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { dialog, mockState, openApp, openRequest } from "./helpers";
 
 const source = (page: Page) => page.locator(".source-code");
 const strip = (page: Page) => page.getByRole("region", { name: "Pre-send checks" });
@@ -14,8 +14,8 @@ async function showSource(page: Page) {
   await page.getByRole("button", { name: ".http", exact: true }).click();
 }
 
-/** Hovers the gutter marker beside the source line that is exactly `text`, from off the editor. */
-async function hoverMarkerOf(page: Page, text: string) {
+/** The gutter marker beside the source line that is exactly `text`, once there is one. */
+async function markerOf(page: Page, text: string) {
   await expect(source(page).locator(".cm-line", { hasText: text })).toBeVisible();
   // A marker is beside its line: the one whose middle is within the line's height.
   const marker = async () => {
@@ -28,8 +28,14 @@ async function hoverMarkerOf(page: Page, text: string) {
     return null;
   };
   await expect.poll(async () => !!(await marker())).toBe(true);
+  return (await marker())!;
+}
+
+/** Hovers the gutter marker beside the source line that is exactly `text`, from off the editor. */
+async function hoverMarkerOf(page: Page, text: string) {
+  const marker = await markerOf(page, text);
   await page.mouse.move(0, 0);
-  await (await marker())!.hover();
+  await marker.hover();
 }
 
 test("a response handler is marked: Rider runs it, VS Code ignores it, and the strip notes the lines", async ({ page }) => {
@@ -65,4 +71,25 @@ test("HttpDesk's own lines are marked as ignored by both editors, and the strip 
 
   // Both editors ignore them alike, so the request doesn't behave differently in either.
   await expect(strip(page)).toHaveCount(0);
+});
+
+test("turning on portability warnings makes a handler line's marker and the strip's note warnings, at once", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+  await showSource(page);
+  await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-jetbrains-only/);
+  await expect(strip(page).locator("li.note")).toHaveCount(1);
+
+  await page.keyboard.press("Meta+Comma");
+  const settings = dialog(page, "Settings");
+  const warnings = settings.getByRole("switch", { name: "Show portability notes as warnings" });
+  await expect(warnings).toHaveAttribute("aria-checked", "false");
+  await warnings.click();
+  await expect.poll(async () => (await mockState(page, "settings")).portabilityWarnings).toBe(true);
+  await settings.getByRole("button", { name: "Done" }).click();
+
+  // The open request follows without being reopened: the same lines, now warnings.
+  await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-warning/);
+  await expect(strip(page).locator("li.note")).toHaveCount(0);
+  await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 3 and 13 of the .http source");
 });
