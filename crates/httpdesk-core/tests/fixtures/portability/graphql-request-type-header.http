@@ -1,0 +1,6 @@
+### Viewer
+POST https://example.com/graphql
+Content-Type: application/json
+X-REQUEST-TYPE: GraphQL
+
+query { viewer { login } }

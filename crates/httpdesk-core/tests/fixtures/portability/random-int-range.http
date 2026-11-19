@@ -1,0 +1,2 @@
+### Dice
+GET https://example.com/?n={{$randomInt 1 7}}

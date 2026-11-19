@@ -1,0 +1,7 @@
+### Log in
+# @name login
+POST https://example.com/login
+
+### Me
+GET https://example.com/me
+Authorization: Bearer {{login.response.body.$.token}}

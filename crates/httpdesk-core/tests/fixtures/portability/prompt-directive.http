@@ -1,0 +1,3 @@
+### Verify
+# @prompt otp Your one-time password
+POST https://example.com/verify?code={{otp}}

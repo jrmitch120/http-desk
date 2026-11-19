@@ -1,0 +1,3 @@
+### Traced
+GET https://example.com/
+X-Request-Id: {{$guid}}

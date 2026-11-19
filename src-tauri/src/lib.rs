@@ -466,6 +466,14 @@ fn render_request(request: Request) -> String {
     httpdesk_core::render_request(&Request { leading: String::new(), ..request })
 }
 
+/// The constructs in `request`'s source (as `render_request` writes it, so lines
+/// match) and how VS Code and Rider treat each: the Source view's gutter markers and
+/// the check strip's portability note.
+#[tauri::command]
+fn request_portability(request: Request) -> Vec<httpdesk_core::portability::PortabilityMark> {
+    httpdesk_core::portability::portability(&render_request(request))
+}
+
 /// The first request in `text` (a History entry's source text), parsed as in a file.
 #[tauri::command]
 fn parse_request(text: String) -> Option<Request> {
@@ -1478,6 +1486,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             read_http_file,
             save_http_file,
             render_request,
+            request_portability,
             parse_request,
             create_file,
             create_dir,

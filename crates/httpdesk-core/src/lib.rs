@@ -12,6 +12,7 @@ pub mod json_filter;
 pub mod model;
 pub mod openapi;
 pub mod parser;
+pub mod portability;
 mod query;
 pub mod run;
 pub mod script;

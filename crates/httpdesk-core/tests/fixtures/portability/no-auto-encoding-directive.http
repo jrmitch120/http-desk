@@ -1,0 +1,3 @@
+### Raw path
+# @no-auto-encoding
+GET https://example.com/a%2Fb

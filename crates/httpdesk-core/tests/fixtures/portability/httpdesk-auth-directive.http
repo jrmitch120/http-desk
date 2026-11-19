@@ -1,0 +1,4 @@
+### API key
+# @httpdesk-auth apikey header X-API-Key
+GET https://example.com/keyed
+X-API-Key: secret
