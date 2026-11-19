@@ -490,6 +490,19 @@ fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
     httpdesk_core::parse_request(&text)
 }
 
+/// A file view's text read as a whole `.http` file, with the problems found reading
+/// it. [`file_text`] writes the file back as this text, byte for byte.
+#[tauri::command]
+fn parse_file_text(text: String) -> httpdesk_core::ParsedFile {
+    httpdesk_core::parse_with_problems(&text)
+}
+
+/// A whole file's text, as saving would write it (untouched requests as written).
+#[tauri::command]
+fn file_text(file: HttpFile) -> String {
+    httpdesk_core::serialize(&file)
+}
+
 /// What reading `request`'s source finds: its problems, and the files its body is
 /// read from (`httpdesk_core::request_problems`), for the check strip and the Source
 /// view's underlines.
@@ -1516,6 +1529,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             request_portability,
             portability_text,
             parse_request,
+            parse_file_text,
+            file_text,
             request_problems,
             body_file_exists,
             create_file,

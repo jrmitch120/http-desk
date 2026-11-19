@@ -2093,6 +2093,7 @@ name = "httpdesk-text-wasm"
 version = "0.1.3"
 dependencies = [
  "httpdesk-text",
+ "ignore",
  "serde",
  "serde_json",
 ]

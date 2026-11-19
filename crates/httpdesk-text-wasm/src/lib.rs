@@ -7,7 +7,7 @@
 //! UTF-8 into buffers from [`text_alloc`], calls [`text_invoke`] (which frees
 //! them), then reads the result (or error message) at [`text_output`].
 
-use httpdesk_text::Request;
+use httpdesk_text::{HttpFile, Request};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -19,6 +19,11 @@ struct Text {
 #[derive(Deserialize)]
 struct RequestArgs {
     request: Request,
+}
+
+#[derive(Deserialize)]
+struct FileArgs {
+    file: HttpFile,
 }
 
 fn args<T: DeserializeOwned>(command: &str, json: &str) -> Result<T, String> {
@@ -66,6 +71,16 @@ pub fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         "parse_file" => {
             let Text { text } = args(command, args_json)?;
             json(&httpdesk_text::parse(&text))
+        }
+        // The shell's `parse_file_text`: a file view's text, read as a whole file with its problems.
+        "parse_file_text" => {
+            let Text { text } = args(command, args_json)?;
+            json(&httpdesk_text::parse_with_problems(&text))
+        }
+        // The shell's `file_text`: a whole file's text, as saving would write it.
+        "file_text" => {
+            let FileArgs { file } = args(command, args_json)?;
+            json(&httpdesk_text::serialize(&file))
         }
         _ => Err(format!("the WASM core has no command {command}")),
     }

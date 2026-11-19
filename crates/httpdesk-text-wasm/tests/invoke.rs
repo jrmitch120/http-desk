@@ -111,6 +111,40 @@ fn portability_text_marks_the_lines_of_text_that_isnt_a_request_yet() {
 }
 
 #[test]
+fn parse_file_text_gives_the_file_and_the_problems_found_reading_it() {
+    let parsed = call(
+        "parse_file_text",
+        json!({ "text": format!("@petId = 1\n\n{REQUEST}\n### Broken\nGET /pets/a b\n") }),
+    );
+    assert_eq!(parsed["file"]["header"]["variables"], json!([{ "name": "petId", "value": "1" }]));
+    let names: Vec<&Value> = parsed["file"]["requests"].as_array().unwrap().iter().map(|r| &r["name"]).collect();
+    assert_eq!(names, ["List pets", "Broken"]);
+    let found: Vec<_> = parsed["problems"].as_array().unwrap().iter().map(|p| (p["line"].clone(), p["code"].clone())).collect();
+    assert_eq!(found, [(json!(10), json!("unparseable-request-line"))]);
+}
+
+/// Every `.http` file in the repository (git-ignored paths such as `target/` skipped).
+fn fixture_files() -> Vec<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let files: Vec<_> = ignore::Walk::new(&root)
+        .filter_map(Result::ok)
+        .map(|e| e.into_path())
+        .filter(|p| p.extension().is_some_and(|e| e == "http"))
+        .collect();
+    assert!(files.len() >= 6, "found only {files:?}");
+    files
+}
+
+#[test]
+fn every_fixture_file_round_trips_byte_for_byte_through_parse_file_text() {
+    for path in fixture_files() {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed = call("parse_file_text", json!({ "text": text }));
+        assert_eq!(call("file_text", json!({ "file": parsed["file"] })), text, "{}", path.display());
+    }
+}
+
+#[test]
 fn an_unknown_command_or_bad_arguments_is_an_error() {
     assert!(invoke("send_request", "{}").unwrap_err().contains("send_request"));
     assert!(invoke("request_source", "{\"request\": 1}").is_err());
