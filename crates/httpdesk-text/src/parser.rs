@@ -777,9 +777,9 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
             req.extra_lines.extend(disabled_parts_raw.into_iter().map(ExtraLine::new));
         }
     }
-    // As the sender reads them (`exec::build_body`): a body that is one `< path` line,
-    // or a multipart body's `< path` lines. A line read as a file before ADR 0010 but
-    // sent as text now is warned about where a File line would be read.
+    // A line read as a file before ADR 0010 but sent as text now is warned about in a
+    // Whole-file body or a multipart body, where it was read. In a body with other
+    // lines it never was, and `<soap:Envelope`-like lines are content.
     if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
         for (i, line) in body_lines.iter().enumerate() {
             if let Some(FileReference { substitute, path }) = former_file_reference(line) {
@@ -787,12 +787,15 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
                 let message = format!("Sent as text. Write `{mark} {path}` to read the file");
                 problems.push(problem_at(&lines, body_at + i, Severity::Warning, ProblemCode::NotAFileLine, &message));
             }
-            let Some(FileReference { path, .. }) = file_reference(line) else { continue };
-            let message =
-                format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
-            let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
-            files.push(BodyFile { path: path.to_string(), missing });
         }
+    }
+    // The files the sender reads (`exec::build_body`).
+    for (i, (_, file)) in read_body_lines(&req.body, body_lines).into_iter().enumerate() {
+        let Some(FileReference { path, .. }) = file else { continue };
+        let message =
+            format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
+        let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
+        files.push(BodyFile { path: path.to_string(), missing });
     }
 
     Some((req, request_line_at))
@@ -882,6 +885,16 @@ pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
         return None;
     }
     file_path(rest).map(|path| FileReference { substitute, path })
+}
+
+/// Each of `body`'s `lines` (as written), with the file it stands for if it's a File
+/// line the body reads when sent: every File line of an enabled body (ADR 0010). The
+/// one rule for which lines are read: the sender reads these and the parser names
+/// them (`BodyFile`, and the MissingFile problem). A form body reads only a Whole-file
+/// body for now, its other lines being joined with `&` (#180).
+pub fn read_body_lines<'a>(body: &Body, lines: &[&'a str]) -> Vec<(&'a str, Option<FileReference<'a>>)> {
+    let reads = body.enabled && (body.mode != BodyMode::FormUrlEncoded || lines.len() == 1);
+    lines.iter().map(|&line| (line, reads.then(|| file_reference(line)).flatten())).collect()
 }
 
 /// A line HttpDesk read as a file before ADR 0010 but that isn't a File line:

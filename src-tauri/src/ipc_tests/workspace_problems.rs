@@ -90,12 +90,17 @@ fn every_files_problems_and_portability_notes_are_listed_by_line_in_the_file() {
                     vec![]
                 )
             ),
-            // `<@` (variables in the file) is VS Code's.
+            // `<@` (variables in the file) is VS Code's, and so is the way a file among
+            // other body lines is spliced.
             (
                 "missing-file.http".into(),
                 (
-                    vec![problem(7, 1, "error", "missing-file"), problem(16, 1, "error", "missing-file")],
-                    vec![mark(16, "vscode-only")]
+                    vec![
+                        problem(7, 1, "error", "missing-file"),
+                        problem(16, 1, "error", "missing-file"),
+                        problem(24, 1, "error", "missing-file")
+                    ],
+                    vec![mark(16, "vscode-only"), mark(24, "vscode-only")]
                 )
             ),
             // `<path` and indented `< path` lines are sent as text, so they aren't marked as files.
@@ -176,7 +181,10 @@ fn an_open_document_is_read_as_the_page_has_it_and_a_file_again_from_disk_once_i
     std::fs::write(root.join("payload.json"), "{}").unwrap();
     assert_eq!(
         entries(&h.ok("file_problems", json!({ "path": missing }))),
-        (vec![problem(16, 1, "error", "missing-file")], vec![mark(16, "vscode-only")])
+        (
+            vec![problem(16, 1, "error", "missing-file"), problem(24, 1, "error", "missing-file")],
+            vec![mark(16, "vscode-only"), mark(24, "vscode-only")]
+        )
     );
 
     // Another editor breaks a file that was fine; one that's gone has nothing.

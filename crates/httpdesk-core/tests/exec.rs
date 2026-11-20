@@ -212,6 +212,60 @@ async fn bodies_json_form_multipart_and_files() {
 }
 
 #[tokio::test]
+async fn a_file_line_among_other_body_lines_is_replaced_by_its_file() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    std::fs::write(dir.path().join("g.txt"), "Y").unwrap();
+    std::fs::write(dir.path().join("vars.txt"), "v={{v}}").unwrap();
+    std::fs::write(dir.path().join("item.json"), r#"{"id": 1}"#).unwrap();
+    std::fs::write(dir.path().join("item.xml"), "<item>{{v}}</item>").unwrap();
+    let vars = env(&[("base", &server.uri()), ("v", "42")]);
+
+    let text = "Content-Type: text/plain\n\n";
+    let cases = [
+        // The line is replaced by the file, and the line breaks around it stay (ADR 0010).
+        (text, "before\n< ./f.txt\nafter", "before\nX\nafter"),
+        (text, "< ./f.txt\nafter", "X\nafter"),
+        (text, "before\n< ./f.txt", "before\nX"),
+        (text, "< ./f.txt\nand\n< ./g.txt", "X\nand\nY"),
+        (text, "< ./f.txt\n< ./g.txt", "X\nY"),
+        // The other lines are filled in as before; a `<` file is sent as it is, `<@` filled in.
+        (text, "{{v}}\n< ./vars.txt\n<@ ./vars.txt", "42\nv={{v}}\nv=42"),
+        // A tab after the mark and spaces after the path, as VS Code reads them.
+        (text, "a\n<\t./f.txt   \nb", "a\nX\nb"),
+        // `<path` and an indented `< path` are text, as both editors send them.
+        (text, "a\n<./f.txt\n  < ./f.txt", "a\n<./f.txt\n  < ./f.txt"),
+        ("Content-Type: application/json\n\n", "[\n< ./item.json\n]", "[\n{\"id\": 1}\n]"),
+        ("Content-Type: application/xml\n\n", "<items>\n<@ ./item.xml\n</items>", "<items>\n<item>42</item>\n</items>"),
+        (
+            "Content-Type: application/xml\n\n",
+            "<items>\n< ./item.xml\n</items>",
+            "<items>\n<item>{{v}}</item>\n</items>",
+        ),
+    ];
+    for (head, body, expected) in cases {
+        let req = parse(&format!("POST {{{{base}}}}/echo\n{head}{body}\n")).requests.remove(0);
+        send(&req, vars.clone(), dir.path()).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_file_among_other_body_lines_fails_the_send_before_anything_goes_out() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    let vars = env(&[("base", &server.uri())]);
+    let req = parse("POST {{base}}/echo\nContent-Type: text/plain\n\n< ./f.txt\nbefore\n< ./typo.txt\nafter\n")
+        .requests
+        .remove(0);
+    let err = send(&req, vars, dir.path()).await.unwrap_err();
+    assert!(matches!(err, ExecError::File { ref path, .. } if path.ends_with("typo.txt")), "{err}");
+    assert!(server.received_requests().await.unwrap().is_empty(), "nothing was sent");
+}
+
+#[tokio::test]
 async fn disabled_form_fields_are_not_sent() {
     let server = echo_server().await;
     let vars = env(&[("base", &server.uri())]);

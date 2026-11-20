@@ -214,8 +214,8 @@ Blocks with no request line (the file header, `leading` and `trailing` text) rep
 as the Source view shows it (`request_source`: as written while it matches, else rendered), so an edited request is read as it now
 is, and gives its problems and the files its body is read from (`BodyFile`: the path
 as written, and the `missing-file` error to report at the `< path` line if it doesn't
-exist), found as the sender finds them (a body that is one `< path` line, or a
-multipart body's `< path` lines). The parser can't tell whether a file exists: the
+exist), found as the sender finds them (`parser::read_body_lines`: every File line of
+an enabled body; in a form body only a Whole-file one, until #180). The parser can't tell whether a file exists: the
 page asks the shell (`body_file_exists`, relative to the `.http` file's folder as
 `exec::body_file_path` resolves it, variables resolved by the page) and keeps the
 answer per path (`src/lib/problems.svelte.ts`). The check strip lists both as

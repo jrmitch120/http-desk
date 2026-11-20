@@ -151,6 +151,23 @@ describe("files and scripts", () => {
     expect(token(text, "./photo.png")).toBe("tok-link");
   });
 
+  it("highlights a File line among other body lines, as the sender reads it", () => {
+    const text = "POST /x\nContent-Type: text/plain\n\nbefore\n< ./f.txt\n<@ ./{{name}}.txt\nafter\n";
+    expect(token(text, "<")).toBe("tok-operator");
+    expect(token(text, "./f.txt")).toBe("tok-link");
+    expect(token(text, "<@")).toBe("tok-operator");
+    // In a JSON or XML body the rest is still read in its language.
+    const json = 'POST /x\nContent-Type: application/json\n\n[\n< ./item.json\n, {"id": 2}\n]\n';
+    expect(token(json, "./item.json")).toBe("tok-link");
+    expect(token(json, '"id"')).toBe("tok-propertyName");
+    const xml = "POST /x\nContent-Type: application/xml\n\n<items>\n< ./item.xml\n</items>\n";
+    expect(token(xml, "./item.xml")).toBe("tok-link");
+    expect(token(xml, "items")).toBe("tok-typeName");
+    // A form body joins its lines with `&`, sending such a line as text.
+    const form = "POST /x\nContent-Type: application/x-www-form-urlencoded\n\na=1\n< ./f.txt\n";
+    expect(token(form, "./f.txt")).not.toBe("tok-link");
+  });
+
   it("reads a body line starting with < as XML, not a reference, when there's more to the body", () => {
     const text = "POST /x\n\n<pet\n  kind=\"cat\"/>\n";
     expect(token(text, "pet")).toBe("tok-typeName");

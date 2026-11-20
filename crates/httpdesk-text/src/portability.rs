@@ -8,7 +8,7 @@
 
 use serde::{Serialize, Serializer};
 
-use crate::model::Request;
+use crate::model::{BodyMode, Request};
 use crate::parser::{self, BOM, DISABLED_MARKER};
 use crate::vars::{segments, split_reference, Segment};
 
@@ -60,6 +60,7 @@ pub enum Construct {
     GraphqlMethod,
     BodyFile,
     BodyFileWithVariables,
+    BodyFileLine,
 }
 
 impl Construct {
@@ -409,6 +410,15 @@ pub static TABLE: &[Row] = &[
         jetbrains: &[jb!("exploring-http-syntax.html#provide-request-body")],
         vscode: &[VSC_BODY],
     },
+    Row {
+        construct: Construct::BodyFileLine,
+        id: "body-file-line",
+        support: Support::VscodeOnly,
+        label: "< file among other lines",
+        hover: "VS Code puts this file's content in place of the line; Rider does too, but drops the line breaks around it",
+        jetbrains: &[jb!("exploring-http-syntax.html#provide-request-body")],
+        vscode: &[VSC_BODY],
+    },
 ];
 
 /// `construct`'s row. Every construct has one (a test checks).
@@ -479,7 +489,8 @@ impl Marks {
 /// query continuation lines), header area to the first blank line, body, then the
 /// response handler from its first `>` line. `first` is the block's line number.
 fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
-    let request_line = parser::parse_block_at(raw).map(|(_, i)| i);
+    let parsed = parser::parse_block_at(raw);
+    let request_line = parsed.as_ref().map(|(_, i)| *i);
     let preamble_end = request_line.unwrap_or(lines.len());
     let mut i = 0;
     while i < preamble_end {
@@ -507,7 +518,7 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
             }
         }
     }
-    let Some(rl) = request_line else { return };
+    let Some((request, rl)) = parsed else { return };
 
     let line = lines[rl];
     if line.split_whitespace().next() == Some("GRAPHQL") {
@@ -545,12 +556,22 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
 
     // Body, then the response handler.
     let handler_at = (i..lines.len()).find(|&j| parser::is_handler_start(lines[j])).unwrap_or(lines.len());
+    // A `< file` read alone (a Whole-file body, a multipart part) both editors send as
+    // it is; among other lines, Rider drops the line breaks around it.
+    let alone = matches!(request.body.mode, BodyMode::File | BodyMode::Multipart);
     for (j, l) in lines.iter().enumerate().take(handler_at).skip(i) {
         let (t, at) = (l.trim(), first + j);
         if t.starts_with(DISABLED_MARKER) {
             marks.add(at, Construct::DisabledLine);
         } else if let Some(r) = parser::file_reference(l) {
-            marks.add(at, if r.substitute { Construct::BodyFileWithVariables } else { Construct::BodyFile });
+            marks.add(
+                at,
+                match (r.substitute, alone) {
+                    (true, _) => Construct::BodyFileWithVariables,
+                    (false, true) => Construct::BodyFile,
+                    (false, false) => Construct::BodyFileLine,
+                },
+            );
         } else {
             marks.references(at, l);
         }

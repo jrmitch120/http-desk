@@ -20,7 +20,7 @@ use crate::cookies::{self, CookieJar, ResponseCookie};
 use crate::env::SslConfig;
 use crate::exchange::UnmatchedPath;
 use crate::model::*;
-use crate::parser::DISABLED_MARKER;
+use crate::parser::{self, FileReference, DISABLED_MARKER};
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
@@ -306,17 +306,18 @@ fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
 /// Reads a body file by its path as written (variables resolved).
 type ReadFile<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ExecError>;
 
-/// `< path` (raw) or `<@ path` (variables substituted). `None` if not a file reference.
-fn file_reference(line: &str, resolver: &Resolver, read: ReadFile) -> Option<Result<Vec<u8>, ExecError>> {
-    let crate::parser::FileReference { substitute, path } = crate::parser::file_reference(line)?;
-    let path = resolver.resolve(path);
-    Some(read(&path).map(|bytes| {
-        if substitute {
-            resolver.resolve(&String::from_utf8_lossy(&bytes)).into_bytes()
-        } else {
-            bytes
-        }
-    }))
+/// A File line's file: raw for `< path`, its variables filled in for `<@ path`.
+fn read_file_line(file: FileReference, resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
+    let bytes = read(&resolver.resolve(file.path))?;
+    Ok(if file.substitute { resolver.resolve(&String::from_utf8_lossy(&bytes)).into_bytes() } else { bytes })
+}
+
+/// A body line as sent: its file if it's a File line the body reads, else the line filled in.
+fn body_line(line: (&str, Option<FileReference>), resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
+    match line {
+        (_, Some(file)) => read_file_line(file, resolver, read),
+        (text, None) => Ok(resolver.resolve(text).into_bytes()),
+    }
 }
 
 fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option<Vec<u8>>, ExecError> {
@@ -324,24 +325,30 @@ fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option
         return Ok(None);
     }
     let text = body.text.trim_end();
-    if !text.contains('\n') {
-        if let Some(file) = file_reference(text, resolver, read) {
-            return file.map(Some);
+    if body.mode == BodyMode::Multipart {
+        // Each line then CRLF; `#~` lines are disabled parts (see the parser).
+        let lines: Vec<&str> = text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)).collect();
+        let mut out = Vec::new();
+        for line in parser::read_body_lines(body, &lines) {
+            out.extend(body_line(line, resolver, read)?);
+            out.extend(b"\r\n");
         }
+        return Ok(Some(out));
+    }
+    // Each File line replaced by its file, the line breaks around it kept (ADR 0010).
+    let lines: Vec<&str> = text.split('\n').collect();
+    let lines = parser::read_body_lines(body, &lines);
+    if lines.iter().any(|(_, file)| file.is_some()) {
+        let mut out = Vec::new();
+        for (i, line) in lines.into_iter().enumerate() {
+            if i > 0 {
+                out.push(b'\n');
+            }
+            out.extend(body_line(line, resolver, read)?);
+        }
+        return Ok(Some(out));
     }
     let bytes = match body.mode {
-        BodyMode::Multipart => {
-            let mut out = Vec::new();
-            // `#~` lines are disabled parts (see the parser).
-            for line in text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)) {
-                match file_reference(line, resolver, read) {
-                    Some(file) => out.extend(file?),
-                    None => out.extend(resolver.resolve(line).into_bytes()),
-                }
-                out.extend(b"\r\n");
-            }
-            out
-        }
         BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
         _ => resolver.resolve(text).into_bytes(),
     };
