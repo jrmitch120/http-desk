@@ -435,7 +435,7 @@
               onblur={commitEdit}
             ></textarea>
           {:else if row.description}
-            <button class="desc" style:grid-column="{subStart} / -1" use:tooltip={row.description} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>{row.description}</button>
+            <button class="desc" style:grid-column="{subStart} / -1" onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>{row.description}</button>
           {:else}
             <!-- Only while the row is focused; mousedown keeps focus so the click lands. -->
             <button class="desc add" style:grid-column="{subStart} / -1" onmousedown={(e) => e.preventDefault()} onfocus={() => startEdit(row)} onclick={() => startEdit(row)}>Add description</button>
@@ -533,11 +533,8 @@
      hairline that closes off the key/value divider above it. */
   .desc {
     grid-row: 2;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    display: block;
+    overflow-wrap: anywhere;
     margin: 0;
     padding: 5px 10px 6px;
     border: none;
@@ -575,9 +572,6 @@
     display: block;
   }
   .desc-edit {
-    display: block;
-    -webkit-line-clamp: unset;
-    line-clamp: unset;
     background: var(--panel-2);
     color: var(--text);
     resize: none;
