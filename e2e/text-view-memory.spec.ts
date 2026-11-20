@@ -41,7 +41,8 @@ test("⌘Enter in the file view sends from the request's tab, and coming back th
   await openRequest(page, ["api", "pets.http"], "List pets");
   await viewAsText(page).click();
   await line(page, "Content-Type: application/json").click();
-  await page.keyboard.press(`${mod}+Enter`);
+  // Send is the app's key, which follows the app's OS (macOS in the mock), not the machine's as CodeMirror's do.
+  await page.keyboard.press("Meta+Enter");
   await expect(activeTab(page)).toContainText("Create pet");
 
   await tab(page, "pets.http").click();
