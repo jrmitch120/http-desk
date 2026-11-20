@@ -83,6 +83,11 @@ export const theme = EditorView.theme({
     color: "var(--text)",
     boxShadow: "var(--popup-shadow)",
     animation: "popup-in 120ms ease-out",
+    // Sized by its content, up to the limit its own kind sets (a message's 360px), not
+    // by what contains it: WebKit lays a tooltip out absolutely in the popup layer,
+    // which has no width to give, so without this every word takes a line. No limit
+    // here: this rule would override the kind's own.
+    width: "max-content",
   },
   ".cm-tooltip-autocomplete": { overflow: "hidden" },
   ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12px", padding: "4px" },

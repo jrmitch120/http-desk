@@ -8,7 +8,7 @@ import { activeTab, openApp, openRequest, tab } from "./helpers";
 const fileView = (page: Page) => page.locator(".file-view .file-code");
 const line = (page: Page, text: string) => fileView(page).locator(".cm-line", { hasText: text });
 const viewAsText = (page: Page) => page.getByRole("button", { name: "View file as text" });
-const mod = process.platform === "darwin" ? "Meta" : "Control";
+const mod = "ControlOrMeta";
 
 test("the file view's cursor and undo history outlast a visit to another tab", async ({ page }) => {
   await openApp(page);
