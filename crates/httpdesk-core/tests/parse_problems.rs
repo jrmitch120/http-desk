@@ -151,3 +151,17 @@ fn a_single_requests_body_files_are_placed_in_its_own_text() {
     let files: Vec<_> = parsed.files.iter().map(|f| (f.path.as_str(), f.missing.line)).collect();
     assert_eq!(files, [("./missing.json", 5)]);
 }
+
+#[test]
+fn a_variable_commented_out_is_not_an_unknown_directive() {
+    for text in [
+        "# @host = http://localhost\nGET https://a\n",
+        "// @host=http://localhost\nGET https://a\n",
+        "### One\n#@token = abc\nGET https://a\n",
+    ] {
+        assert_eq!(parse_with_problems(text).problems, [], "{text:?}");
+    }
+    // A directive nobody reads still is one.
+    let problems = parse_with_problems("# @nmae x\nGET https://a\n").problems;
+    assert_eq!(problems.iter().map(|p| p.code).collect::<Vec<_>>(), [ProblemCode::UnknownDirective]);
+}

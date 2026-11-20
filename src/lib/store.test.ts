@@ -3440,14 +3440,27 @@ describe("saving while a request's source doesn't parse (#164)", () => {
     expect(app.texts.isInvalid(PATH, sourceView(list.key))).toBe(true);
   });
 
-  it("text with no request line can only be reverted", async () => {
+  it("text with no request line saves as written as text of the file, not a request, and its tab closes", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.texts.edit(PATH, sourceView(list.key), "### List\n// nothing yet\n");
+
+    const saving = app.saveTab(list);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    expect(app.dialog!.title).toBe('Save "List" as written?');
+    expect(app.dialog!.message).toContain("has no request line");
+    expect(app.dialog!.buttons.map((b) => b.value)).toEqual(["cancel", "revert", "written"]);
+    app.closeDialog("written");
+    expect(await saving).toBe(true);
+    expect(written()).toBe("@host = https://example.com\n\n### List\n// nothing yet\n### Create\nPOST {{host}}/books\n");
+    expect(app.tabs.map((t) => t.id)).toEqual([create.id]);
+  });
+
+  it("text with no request line can be reverted", async () => {
     const [list] = await openAll(parsed());
     await app.texts.edit(PATH, sourceView(list.key), "### List\n// nothing yet\n");
 
     const saving = app.saveTab(list);
     await vi.waitFor(() => expect(app.dialog).not.toBeNull());
-    expect(app.dialog!.title).toBe('Revert "List" to the last valid request?');
-    expect(app.dialog!.buttons.map((b) => b.value)).toEqual(["cancel", "revert"]);
     app.closeDialog("revert");
     expect(await saving).toBe(true);
     expect(written()).toBe(TEXT);
@@ -3577,6 +3590,67 @@ describe("viewing a whole file as text (#166)", () => {
     await app.texts.edit(PATH, fileView, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n");
     expect(app.tabs.map((t) => t.id)).toEqual([create.id, fileTab()!.id]);
     expect(app.isRequestDirty(PATH, create.key)).toBe(false);
+  });
+
+  it("a request typed back into the text is the request it was: its tab comes back, and the file reads clean", async () => {
+    const [list, create] = await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.texts.edit(PATH, fileView, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n");
+    expect(app.tabs.map((t) => t.id)).toEqual([create.id, fileTab()!.id]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+
+    // Undo, or the block pasted back.
+    await app.texts.edit(PATH, fileView, TEXT);
+    expect(app.docs[PATH].file.requests.map((r) => r._key)).toEqual([list.key, create.key]);
+    expect(app.tabs.map((t) => (t.kind === "request" ? t.key : "file"))).toEqual([list.key, create.key, "file"]);
+    expect(app.isDocDirty(PATH)).toBe(false);
+    // Where it was, not in front: the user is typing in the file view.
+    expect(app.activeTab).toBe(fileTab());
+  });
+
+  it("a request cut and pasted elsewhere in the text keeps its tab", async () => {
+    const [list] = await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.texts.edit(PATH, fileView, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n");
+    await app.texts.edit(PATH, fileView, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n");
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["Create", "List"]);
+    expect(app.docs[PATH].file.requests[1]._key).toBe(list.key);
+    expect(app.tabs.some((t) => t.kind === "request" && t.key === list.key)).toBe(true);
+    expect(app.isDocDirty(PATH)).toBe(true);
+  });
+
+  it("an edit to the text after the last request reads as unsaved", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    await app.texts.edit(PATH, fileView, TEXT + "\n### notes\n# todo\n");
+    expect(app.docs[PATH].file.requests.map((r) => r.name)).toEqual(["List", "Create"]);
+    expect(app.isDocDirty(PATH)).toBe(true);
+    await app.texts.edit(PATH, fileView, TEXT);
+    expect(app.isDocDirty(PATH)).toBe(false);
+  });
+
+  it("text the core couldn't be asked about stays as typed, and a Save asks about it", async () => {
+    await openAll(parsed());
+    await app.openFileView(PATH);
+    api.parseFileText.mockRejectedValueOnce(new Error("no answer"));
+    const typed = TEXT.replace("POST {{host}}/books", "POST {{host}}/books/new");
+    await app.texts.edit(PATH, fileView, typed);
+    expect(app.toasts.at(-1)?.message).toContain("no answer");
+    expect(app.texts.typed(PATH, fileView)).toMatchObject({ text: typed, parses: false });
+    expect(app.isDocDirty(PATH)).toBe(true);
+    // Typing on reads it again.
+    await app.texts.edit(PATH, fileView, typed + "\n");
+    expect(app.texts.isInvalid(PATH, fileView)).toBe(false);
+  });
+
+  it("asks about text typed a moment before its tab closes", async () => {
+    readHttpFile.mockResolvedValue(parsed());
+    await app.openFileView(PATH);
+    void app.texts.edit(PATH, fileView, TEXT.replace("### Create", "### Create it"));
+    const closing = app.closeTab(fileTab()!.id);
+    await vi.waitFor(() => expect(app.dialog?.title).toBe("Save changes to books.http?"));
+    app.closeDialog("cancel");
+    expect(await closing).toBe(false);
   });
 
   it("keeps a CRLF file's line endings and its byte order mark", async () => {
@@ -3827,6 +3901,47 @@ describe("the file view and request tabs while text doesn't parse (#174)", () =>
     expect([app.texts.lock(list), app.texts.lock(create)]).toEqual([null, null]);
   });
 
+  it("an error the file came with locks nothing while the text around it is edited", async () => {
+    const [list, create] = await openAll(parsed(BROKEN));
+    await app.openFileView(PATH);
+    const typed = BROKEN.replace("Accept: application/json", "Accept: text/plain");
+    await app.texts.edit(PATH, fileView, typed);
+    // The error is still listed, but the text stands for the file: the document follows it.
+    expect(app.texts.typed(PATH, fileView)).toMatchObject({ parses: true, problems: [{ code: "unparseable-request-line" }] });
+    expect([app.texts.lock(list), app.texts.lock(create)]).toEqual([null, null]);
+    expect(app.requestFor(list)!.headers.items[0].value).toBe("text/plain");
+    await app.save(PATH);
+    expect(app.dialog).toBeNull();
+    expect(written()).toBe(typed);
+
+    // Text typed into the line that doesn't parse is new text that doesn't.
+    await app.texts.edit(PATH, fileView, typed.replace("and more", "and more still"));
+    expect(app.texts.isInvalid(PATH, fileView)).toBe(true);
+    expect(app.texts.lock(list)?.heldBy).toEqual({ kind: "file" });
+  });
+
+  it("closing a request tab with edits drops nothing while the file view's text doesn't parse", async () => {
+    const [list] = await openAll(parsed());
+    await app.openFileView(PATH);
+    app.requestFor(list)!.headers.items.push({ enabled: true, name: "X-Trace", value: "on" });
+    const typed = BROKEN.replace("Accept: application/json", "Accept: application/json\nX-Trace: on");
+    await app.texts.edit(PATH, fileView, typed);
+    expect(app.texts.isInvalid(PATH, fileView)).toBe(true);
+
+    // Not asked: Don't save would revert the request and drop the text unseen.
+    expect(await app.closeTab(list.id)).toBe(true);
+    expect(app.dialog).toBeNull();
+    expect(app.texts.typed(PATH, fileView)?.text).toBe(typed);
+  });
+
+  it("Send doesn't send the last valid request while its source doesn't parse", async () => {
+    const [, create] = await openAll(parsed());
+    await app.texts.edit(PATH, sourceView(create.key), "### Create\nPOST {{host}}/books and more\n");
+    await app.send(create.id);
+    expect(app.toasts.at(-1)?.message).toBe(`The source of "Create" doesn't parse. Fix the text to send it.`);
+    expect(app.runs[create.id]).toBeUndefined();
+  });
+
   it("text that doesn't parse in a request's source makes the file view read-only, until it parses again", async () => {
     const [list, create] = await openAll(parsed());
     await app.openFileView(PATH);
@@ -3900,7 +4015,7 @@ describe("the file view and request tabs while text doesn't parse (#174)", () =>
     expect(app.dirtyDocs()).toEqual([]);
   });
 
-  const FILE_HELD = "The text in books.http's file view doesn't parse, so books.http can't be changed until it does: fix it, or save it as written or revert it, first.";
+  const FILE_HELD = "The text in books.http's file view doesn't parse, so books.http can't be changed until it does. Fix the text, or save the file and choose what to keep.";
 
   it("while the file view's text doesn't parse, nothing from outside the views changes the file, and each says why", async () => {
     const [list, create] = await openAll(parsed());
@@ -3929,7 +4044,7 @@ describe("the file view and request tabs while text doesn't parse (#174)", () =>
     const [list, create] = await openAll(parsed());
     const broken = "### Create\nPOST {{host}}/books and more\n";
     await app.texts.edit(PATH, sourceView(create.key), broken);
-    const held = `The source of "Create" doesn't parse, so it can't be changed until it does: fix it, or save it as written or revert it, first.`;
+    const held = `The source of "Create" doesn't parse, so it can't be changed until it does. Fix the text, or save the file and choose what to keep.`;
 
     await app.renameRequest(PATH, create.key);
     await app.deleteRequest(PATH, create.key);

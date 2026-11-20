@@ -42,6 +42,8 @@ export interface TypedText {
   /** False while the text doesn't parse (no request line, or an error): what it stands
    *  for keeps its last valid state and reads as dirty. */
   parses: boolean;
+  /** Whether the core has read text typed here (not necessarily the latest): false until the first reading, and after one that failed. */
+  read: boolean;
 }
 
 /** A Source view's text and the request it goes with (a snapshot): once the request
@@ -67,8 +69,12 @@ export interface UnparsedText {
   name: string;
   /** What the last valid state is of. */
   noun: TextView["kind"];
-  /** False when the parser recovered nothing to save (no request line): only Revert is offered. */
+  /** False when there's nothing to save as written (text the core couldn't be asked about): only Revert is offered. */
   canSaveAsWritten: boolean;
+  /** Saved as written, a request's text stays in the file as text, not a request (it has no request line), and its tab closes. */
+  asText: boolean;
+  /** The first error found in the text, as a sentence ("Line 3: …."), or "" without one. */
+  problem: string;
   /** The document takes what the parser recovered from the text, which is saved as the text, byte for byte. */
   saveAsWritten(): void;
   /** The text is dropped: the document stays at its last valid state, which is saved. */
@@ -134,6 +140,8 @@ export interface TextViewsHost {
   findRequest(path: string, key: string): Request | undefined;
   /** Requests `keys` of `path` are gone from its file (typed out of its file view): their tabs close, as deleting them does. */
   requestsGone(path: string, keys: Set<string>): void;
+  /** Requests `keys` of `path`, gone that way, are in its file again (an Undo, or a block cut and pasted elsewhere): their tabs come back. */
+  requestsBack(path: string, keys: Set<string>): void;
   toast(kind: "error", message: string): void;
 }
 
@@ -159,12 +167,62 @@ const ensureKey = (r: Request) => {
   return r._key;
 };
 
+/** A request typed out of a document's file view, and its JSON then (`snapshot`). */
+interface TypedOut {
+  request: Request;
+  shot: string;
+}
+
+const lineBreaks = (s: string) => {
+  let n = 0;
+  for (let i = s.indexOf("\n"); i >= 0; i = s.indexOf("\n", i + 1)) n++;
+  return n;
+};
+
+/**
+ * The requests of `file` (read from `text`) that `problems`' errors are in, or null when
+ * an error is outside every request. A request's lines are counted back from the text's
+ * end: the text is its header, each request's `leading` and `raw`, then its `trailing`.
+ */
+export function requestsWithErrors(text: string, file: HttpFile, problems: Problem[]): Set<Request> | null {
+  const errors = problems.filter((p) => p.severity === "error");
+  const found = new Set<Request>();
+  if (!errors.length) return found;
+  // Each request's first line (0-based), the text before it included.
+  const starts: number[] = [];
+  let at = lineBreaks(text) - lineBreaks(file.trailing);
+  for (let i = file.requests.length - 1; i >= 0; i--) {
+    const r = file.requests[i];
+    if (r.raw === null) return null;
+    at -= lineBreaks(r.leading) + lineBreaks(r.raw);
+    starts[i] = at;
+  }
+  for (const p of errors) {
+    let i = starts.length - 1;
+    while (i >= 0 && starts[i] > p.line - 1) i--;
+    if (i < 0) return null;
+    found.add(file.requests[i]);
+  }
+  return found;
+}
+
 export class TextViews {
   constructor(private readonly host: TextViewsHost) {}
 
   private pending = new Map<string, Pending>();
   /** Each document's reader of its file view's text, which reads only the `###` blocks an edit touched (#168). Gone with the document. */
   private readers = new WeakMap<Doc, FileReader>();
+  /**
+   * The requests typed out of each document's file view since it was loaded or saved.
+   * One that shows up in the text again (an Undo, a block cut and pasted elsewhere) is the
+   * same request: it keeps its key, so it reads as edited or not as it did, and its tab
+   * comes back. Gone with the document (a save or a reload makes a new one).
+   */
+  private typedOut = new WeakMap<Doc, TypedOut[]>();
+  /** Each document's file as last rendered for its file view, while the file is still as it was then: showing the view again asks the core nothing. */
+  private rendered = new WeakMap<Doc, { stamp: FileStamp; text: string }>();
+  /** The views whose text was just reverted (`unparsed`'s `revert`): the text that replaces it goes in as a change Undo takes back. */
+  private reverted = new Set<string>();
 
   /** The edit `view` of `doc` holds, while what it stands for is as it left it. */
   private current(doc: Doc, view: TextView): SourceEdit | FileEdit | null {
@@ -185,13 +243,13 @@ export class TextViews {
       const req = this.host.findRequest(path, view.key);
       if (!req) return Promise.resolve();
       const last = sourceEdit(doc, req);
-      doc.sources[view.key] = { text, problems: last?.problems ?? [], files: last?.files ?? [], parses: last?.parses ?? true, request: snapshot(req), recovered: last?.recovered ?? null, following: last?.following ?? null };
+      doc.sources[view.key] = { text, problems: last?.problems ?? [], files: last?.files ?? [], parses: last?.parses ?? true, read: last?.read ?? false, request: snapshot(req), recovered: last?.recovered ?? null, following: last?.following ?? null };
     } else {
       // Typed on from text that still stands for the file: only the text changes, so
       // what reads whether the file is dirty or invalid doesn't run again for each keystroke.
       const last = fileEdit(doc);
       if (last) last.text = text;
-      else doc.fileText = { text, problems: [], files: [], parses: true, file: FileStamp.of(doc.file), recovered: null };
+      else doc.fileText = { text, problems: [], files: [], parses: true, read: false, file: FileStamp.of(doc.file), recovered: null };
     }
     return this.readLater(path, view, () => this.read(path, view, text));
   }
@@ -200,6 +258,12 @@ export class TextViews {
   typed(path: string, view: TextView): TypedText | null {
     const doc = this.host.docs[path];
     return doc ? this.current(doc, view) : null;
+  }
+
+  /** The first error in the text `view` of `path` holds, while it doesn't parse: where a banner's button goes. */
+  firstError(path: string, view: TextView): Problem | null {
+    const typed = this.typed(path, view);
+    return typed?.parses === false ? (typed.problems.find((p) => p.severity === "error") ?? null) : null;
   }
 
   /** Whether `view` of `path` holds text that doesn't parse. */
@@ -218,7 +282,14 @@ export class TextViews {
     if (!doc) return null;
     const typed = this.current(doc, view);
     if (typed) return typed.text;
-    if (view.kind === "file") return api.fileText({ ...($state.snapshot(doc.file) as HttpFile), lineEnding: "lf", bom: false });
+    if (view.kind === "file") {
+      const known = this.rendered.get(doc);
+      if (known?.stamp.matches(doc.file)) return known.text;
+      const stamp = FileStamp.of(doc.file);
+      const text = await api.fileText({ ...($state.snapshot(doc.file) as HttpFile), lineEnding: "lf", bom: false });
+      this.rendered.set(doc, { stamp, text });
+      return text;
+    }
     const req = this.host.findRequest(path, view.key);
     return req ? api.requestSource($state.snapshot(req) as Request) : null;
   }
@@ -258,17 +329,22 @@ export class TextViews {
 
   /** Reads typed `text` into what `view` stands for, unless more typing or another edit came since. */
   private async read(path: string, view: TextView, text: string) {
-    let reading: Reading;
+    let reading: TextReading;
     try {
       reading = view.kind === "file" ? await this.readFile(path, text) : await readRequest(text);
     } catch (e) {
       this.host.toast("error", errorMessage(e));
+      // Not read: it stays as typed and counts as not parsing, so a Save asks about it
+      // rather than writing the document without it. Typing on reads it again.
+      const unread = this.host.docs[path] && this.current(this.host.docs[path], view);
+      if (unread && unread.text === text) Object.assign(unread, { parses: false, read: false, recovered: null });
       return;
     }
     const doc = this.host.docs[path];
     const edit = doc && this.current(doc, view);
     if (!doc || !edit || edit.text !== text) return;
-    Object.assign(edit, reading.found);
+    if (view.kind === "file" && !reading.found.parses && this.errorsAreTheFiles(doc, text, reading)) Object.assign(reading.found, { parses: true, recovered: null });
+    Object.assign(edit, reading.found, { read: true });
     if (!edit.parses) return;
     if (view.kind === "file") {
       this.replaceFile(doc, reading.parsed as HttpFile);
@@ -280,7 +356,24 @@ export class TextViews {
     }
   }
 
-  private async readFile(path: string, text: string): Promise<Reading> {
+  /**
+   * Whether every error in a file view's `text` is in a request the document already
+   * holds as that text writes it (a file saved as written, or one that came with a line
+   * the core can't read): the text then stands for the file as any other does, since
+   * taking it in leaves those requests as they are. Only text that doesn't parse where
+   * the document did keeps the file at its last valid state (#174).
+   */
+  private errorsAreTheFiles(doc: Doc, text: string, reading: TextReading): boolean {
+    const file = reading.parsed as HttpFile | null;
+    const broken = file && requestsWithErrors(text, file, reading.found.problems);
+    if (!broken) return false;
+    const shots = fileShot(doc.file).requests;
+    // The document's requests still as they were read, by the text they were read from.
+    const asRead = new Set(doc.file.requests.flatMap((r, i) => (r.raw !== null && shots[i] === (readAs.get(r) ?? doc.saved[r._key!]) ? [r.raw] : [])));
+    return [...broken].every((r) => r.raw !== null && asRead.has(r.raw));
+  }
+
+  private async readFile(path: string, text: string): Promise<TextReading> {
     const { file, problems } = await this.reader(path).parse(text);
     const parses = !problems.some((p) => p.severity === "error");
     return { found: { problems, files: [], parses, recovered: parses ? null : file }, parsed: file };
@@ -295,8 +388,9 @@ export class TextViews {
     const id = pendingId(path, view);
     const pending = this.pending.get(id);
     if (pending) clearTimeout(pending.timer);
-    // Text replaced before it was read settles when the text replacing it is read.
-    const settle: (() => void)[] = pending?.settle ?? [];
+    // Text replaced before it was read settles when the text replacing it is read (or,
+    // already being read, when that ends: its own list, so that doesn't settle this one).
+    const settle: (() => void)[] = [...(pending?.settle ?? [])];
     const done = new Promise<void>((s) => settle.push(s));
     let reading: Promise<void> | null = null;
     const entry: Pending = {
@@ -316,9 +410,11 @@ export class TextViews {
     return done;
   }
 
-  /** Whether text typed in `view` of `path` is waiting to be read. */
-  waiting(path: string, view: TextView): boolean {
-    return this.pending.has(pendingId(path, view));
+  /** Whether text typed in `view` of `path` (in any of its views, without one) is waiting to be read. */
+  waiting(path: string, view?: TextView): boolean {
+    if (view) return this.pending.has(pendingId(path, view));
+    for (const e of this.pending.values()) if (e.path === path) return true;
+    return false;
   }
 
   /** Reads now the text typed in `path`'s views (only `view`'s, if given) still waiting to be read. */
@@ -360,13 +456,18 @@ export class TextViews {
         {
           name: displayName(req),
           noun: "request",
-          canSaveAsWritten: !!recovered,
+          // Read, with or without a request line (a text the core couldn't be asked about has a problem of neither kind).
+          canSaveAsWritten: !!recovered || edit.read,
+          asText: !recovered,
+          problem: firstError(edit.problems),
           saveAsWritten: () => {
+            const text = edit.text;
             this.drop(path, { kind: "request", key });
             const now = this.host.docs[path];
             if (now && recovered) putAsWritten(now, { ...recovered, _key: key }, following);
+            else if (now) this.putAsText(now, key, text);
           },
-          revert: () => this.drop(path, { kind: "request", key }),
+          revert: () => this.revert(path, { kind: "request", key }),
         },
       ];
     });
@@ -379,14 +480,39 @@ export class TextViews {
         name: basename(path),
         noun: "file",
         canSaveAsWritten: !!recovered,
+        asText: false,
+        problem: firstError(edit.problems),
         saveAsWritten: () => {
           this.drop(path, { kind: "file" });
           const now = this.host.docs[path];
           if (now && recovered) this.replaceFile(now, recovered);
         },
-        revert: () => this.drop(path, { kind: "file" }),
+        revert: () => this.revert(path, { kind: "file" }),
       },
     ];
+  }
+
+  /**
+   * `text`, typed in request `key`'s Source view with no request line, takes the
+   * request's place in `doc`'s file as text: before the next request, or at the file's
+   * end. The request is gone from the file, and its tabs close.
+   */
+  private putAsText(doc: Doc, key: string, text: string) {
+    const file = doc.file;
+    const at = file.requests.findIndex((r) => r._key === key);
+    const next = file.requests[at >= 0 ? at + 1 : file.requests.length];
+    // Whole lines, so what follows starts on its own.
+    const lines = text && !text.endsWith("\n") && (next || file.trailing) ? `${text}\n` : text;
+    if (next) next.leading = lines + next.leading;
+    else file.trailing = at >= 0 ? lines + file.trailing : file.trailing + lines;
+    if (at >= 0) file.requests.splice(at, 1);
+    this.host.requestsGone(doc.path, new Set([key]));
+  }
+
+  /** Drops `view`'s text for its last valid state, which its editor takes as a change Undo takes back. */
+  private revert(path: string, view: TextView) {
+    this.reverted.add(pendingId(path, view));
+    this.drop(path, view);
   }
 
   /**
@@ -475,7 +601,7 @@ export class TextViews {
 
   /**
    * What `view` stands for as it is now (its request, or the file), null without it, and
-   * whether it's still so. Reading it in an effect makes the effect run again whenever
+   * whether it's still so. TextReading it in an effect makes the effect run again whenever
    * that changes, for one comparison while it doesn't.
    */
   private standsFor(path: string, view: TextView): { still(): boolean } | null {
@@ -499,18 +625,24 @@ export class TextViews {
    * after (`VIEW_REFRESH_DELAY_MS`), or at once unless `soon`, unless it changed again
    * meanwhile. Typing itself doesn't rerun the effect: only what the view stands for changing does (#168).
    */
-  follow(path: string, view: TextView, show: (text: string) => void, soon: boolean): (() => void) | undefined {
+  follow(path: string, view: TextView, show: (text: string, how: { undoable: boolean }) => void, soon: boolean): (() => void) | undefined {
     const at = this.standsFor(path, view);
     if (!at) return;
     const typed = this.typed(path, view);
     if (typed) {
       const text = typed.text;
-      untrack(() => show(text));
+      untrack(() => show(text, { undoable: false }));
       return;
     }
+    const id = pendingId(path, view);
     return afterPause(
-      () => this.textFor(path, view).catch((e) => `# ${errorMessage(e)}`),
-      (text) => text !== null && at.still() && show(text),
+      // Text that can't be rendered isn't shown as the view's text (it would be read as the file's on the next keystroke).
+      () =>
+        this.textFor(path, view).catch((e) => {
+          this.host.toast("error", errorMessage(e));
+          return null;
+        }),
+      (text) => text !== null && at.still() && show(text, { undoable: this.reverted.delete(id) }),
       soon ? VIEW_REFRESH_DELAY_MS : 0,
     );
   }
@@ -532,10 +664,16 @@ export class TextViews {
     const freshShot = (r: Request) => freshShots.get(r) ?? freshShots.set(r, snapshot(r)).get(r)!;
     // Whether the document's `a` reads as `b`, read from the text: at once when `a` is still
     // as it was read from the same block (most are), else by their JSON (#168).
+    const before = this.typedOut.get(doc) ?? [];
+    const beforeShot = new Map(before.map((t) => [t.request, t.shot]));
+    const shotOf = (a: Request) => oldShot.get(a) ?? beforeShot.get(a);
     const same = (a: Request, b: Request) =>
-      (a.raw !== null && a.raw === b.raw && a.leading === b.leading && oldShot.get(a) === (readAs.get(a) ?? doc.saved[a._key!])) || oldShot.get(a) === freshShot(b);
-    const gone = carryKeys(old, fresh.requests, same);
-    const byKey = new Map(old.map((r) => [r._key, r]));
+      (a.raw !== null && a.raw === b.raw && a.leading === b.leading && shotOf(a) === (readAs.get(a) ?? doc.saved[a._key!])) || shotOf(a) === freshShot(b);
+    const gone = carryKeys(old, fresh.requests, same, before.map((t) => t.request));
+    const back = new Set(before.flatMap((t) => (fresh.requests.some((r) => r._key === t.request._key) ? [t.request._key!] : [])));
+    const byKey = new Map([...before.map((t) => t.request), ...old].map((r) => [r._key, r]));
+    const leaving = old.filter((r) => gone.has(r._key!)).map((request) => ({ request, shot: oldShot.get(request)! }));
+    this.typedOut.set(doc, [...before.filter((t) => !back.has(t.request._key!)), ...leaving]);
     const added = new Set<number>();
     const requests = fresh.requests.map((r, i) => {
       const was = r._key ? byKey.get(r._key) : undefined;
@@ -555,16 +693,25 @@ export class TextViews {
       doc.file.mixedEndings = fresh.mixedEndings ?? false;
     }
     if (gone.size) this.host.requestsGone(doc.path, gone);
+    if (back.size) this.host.requestsBack(doc.path, back);
   }
 }
 
+/** The first error of `problems` as a sentence, "Line 3: Can't read this request line." ("" without one). */
+export function firstError(problems: Problem[]): string {
+  const p = problems.find((p) => p.severity === "error");
+  if (!p) return "";
+  const message = p.message.trim();
+  return `Line ${p.line}: ${message}${/[.!?]$/.test(message) ? "" : "."}`;
+}
+
 /** What reading a view's text found, and what it read (a request, or a file). */
-interface Reading {
+interface TextReading {
   found: Pick<TypedText, "problems" | "files" | "parses"> & { recovered: Request | HttpFile | null; following?: Following | null };
   parsed: Request | HttpFile | null;
 }
 
-async function readRequest(text: string): Promise<Reading> {
+async function readRequest(text: string): Promise<TextReading> {
   const parsed = await api.parseRequest(text);
   return { found: { problems: parsed.problems, files: parsed.files, parses: sourceParses(parsed), recovered: parsed.request, following: parsed.following }, parsed: parsed.request };
 }

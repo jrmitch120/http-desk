@@ -3,8 +3,8 @@
 // an Undefined variable, and a duplicate `# @name`. Hovering one shows its message.
 // The editor is given them with `setUnderlines` (Editor.svelte's `underlines`);
 // they then follow its edits until it's given others.
-import { StateEffect, StateField, type EditorState, type Extension } from "@codemirror/state";
-import { Decoration, EditorView, hoverTooltip, type DecorationSet } from "@codemirror/view";
+import { EditorSelection, StateEffect, StateField, type EditorState, type Extension } from "@codemirror/state";
+import { Decoration, EditorView, hoverTooltip, keymap, showTooltip, type DecorationSet, type Tooltip } from "@codemirror/view";
 import type { Check } from "../checks";
 import { segments } from "../http";
 import type { HttpFile } from "../types";
@@ -32,6 +32,8 @@ const isComment = (line: string) => /^\s*(#|\/\/)/.test(line);
  * underlined where a sent line references them (not in comments or `#~` lines).
  */
 export function checkUnderlines(text: string, checks: Check[]): Underline[] {
+  // Nothing to place: the text (a whole file's, in the file view) isn't split for nothing.
+  if (!checks.length) return [];
   const lines = text.split("\n");
   const starts: number[] = [];
   lines.reduce((at, l) => (starts.push(at), at + l.length + 1), 0);
@@ -114,32 +116,80 @@ const underlineField = StateField.define<Marked>({
   provide: (f) => EditorView.decorations.from(f, (v) => v.decorations),
 });
 
+/** Every underline in `state`, where its text is now. */
+export function underlinesIn(state: EditorState): Underline[] {
+  return state.field(underlineField, false)?.underlines ?? [];
+}
+
 /** The underlines covering `pos` in `state`. */
 export function underlinesAt(state: EditorState, pos: number): Underline[] {
   return state.field(underlineField, false)?.underlines.filter((u) => u.to > u.from && pos >= u.from && pos <= u.to) ?? [];
 }
 
-/** Underlines (given with `setUnderlines`), and their messages on hover. */
+/** The messages of the underlines `here`, as a tooltip over them. */
+function tipOf(here: Underline[]): Tooltip {
+  return {
+    pos: Math.min(...here.map((u) => u.from)),
+    end: Math.max(...here.map((u) => u.to)),
+    create() {
+      const dom = document.createElement("div");
+      dom.className = "cm-underline-tip";
+      // Read out when it shows from the keyboard (`nextUnderline`).
+      dom.setAttribute("role", "status");
+      for (const u of here) {
+        const p = dom.appendChild(document.createElement("div"));
+        p.className = `cm-underline-message cm-underline-${u.severity}`;
+        p.textContent = `${u.severity === "error" ? "Error" : "Warning"}: ${u.message}`;
+      }
+      return { dom };
+    },
+  };
+}
+
+/** Shows the messages of the underlines at an offset (Next problem), or none. */
+const showUnderlineAt = StateEffect.define<number | null>();
+
+/** The tooltip Next / Previous problem shows at the caret, until the caret moves or the text changes. */
+const shownField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(tip, tr) {
+    for (const e of tr.effects) {
+      if (!e.is(showUnderlineAt)) continue;
+      const here = e.value === null ? [] : underlinesAt(tr.state, e.value);
+      return here.length ? tipOf(here) : null;
+    }
+    return tr.docChanged || tr.selection ? null : tip;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+/**
+ * Moves the caret to the next underline after it (`dir` 1) or the last before it
+ * (-1), around the ends, and shows its message: the problems by keyboard, as a hover
+ * shows them. False when there's none.
+ */
+export function nextUnderline(view: EditorView, dir: 1 | -1): boolean {
+  const all = (view.state.field(underlineField, false)?.underlines ?? []).filter((u) => u.to > u.from);
+  if (!all.length) return false;
+  const at = view.state.selection.main.head;
+  const starts = [...new Set(all.map((u) => u.from))].sort((a, b) => a - b);
+  const to = dir === 1 ? (starts.find((s) => s > at) ?? starts[0]) : ([...starts].reverse().find((s) => s < at) ?? starts[starts.length - 1]);
+  view.dispatch({ selection: EditorSelection.cursor(to), effects: [EditorView.scrollIntoView(to, { y: "nearest", yMargin: 40 }), showUnderlineAt.of(to)], userEvent: "select.problem" });
+  return true;
+}
+
+/** Underlines (given with `setUnderlines`), their messages on hover, and F8 / Shift-F8 to go through them. */
 export function underlines(): Extension {
   return [
     underlineField,
+    shownField,
+    keymap.of([
+      { key: "F8", run: (v) => nextUnderline(v, 1), shift: (v) => nextUnderline(v, -1) },
+      { key: "Escape", run: (v) => (v.state.field(shownField) ? (v.dispatch({ effects: showUnderlineAt.of(null) }), true) : false) },
+    ]),
     hoverTooltip((view, pos) => {
       const here = underlinesAt(view.state, pos);
-      if (!here.length) return null;
-      return {
-        pos: Math.min(...here.map((u) => u.from)),
-        end: Math.max(...here.map((u) => u.to)),
-        create() {
-          const dom = document.createElement("div");
-          dom.className = "cm-underline-tip";
-          for (const u of here) {
-            const p = dom.appendChild(document.createElement("div"));
-            p.className = `cm-underline-message cm-underline-${u.severity}`;
-            p.textContent = u.message;
-          }
-          return { dom };
-        },
-      };
+      return here.length ? tipOf(here) : null;
     }),
     EditorView.theme({
       ".cm-underline": { textDecoration: "underline wavy", textDecorationSkipInk: "none", textUnderlineOffset: "3px" },

@@ -1,18 +1,19 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
   import { Annotation, Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
-  import { history } from "@codemirror/commands";
+  import { history, historyField } from "@codemirror/commands";
   import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
+  import { foldEffect, foldedRanges, foldState, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
-  import { setUnderlines, underlines as underlineExtension, type Underline } from "./underlines";
+  import { nextUnderline, setUnderlines, underlines as underlineExtension, underlinesIn, type Underline } from "./underlines";
   import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
   import { inReadOnlyRegion } from "./readOnly";
   import { keepLineEndings, readEndings, setEndings, textWithEndings, type LineBreak } from "./lineEndings";
   import { sharedEnds } from "../splice";
   import { editorKey } from "../platform";
+  import { recallEditor, rememberEditor } from "../editorMemory";
 
   interface Props {
     value?: string;
@@ -53,8 +54,16 @@
      * the file's own (lineEndings.ts). Without it the text's breaks are all `\n`.
      */
     lineBreak?: LineBreak;
+    /**
+     * A key the editor is remembered by while it's off screen (editorMemory.ts): mounted
+     * again with it, the cursor, folds and scroll position are where they were left, and
+     * so is the undo history while `value` is still the text it held. Fixed at mount.
+     */
+    memory?: string;
+    /** Names the text for assistive technology (the editor's `aria-label`). Fixed at mount. */
+    label?: string;
   }
-  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks, lineBreak }: Props = $props();
+  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks, lineBreak, memory, label }: Props = $props();
 
   /** `v`'s text, as `value` is given and `onchange` gives it. */
   const textOf = (state: EditorState) => (lineBreak ? textWithEndings(state, lineBreak) : state.doc.toString());
@@ -208,14 +217,41 @@
     putDocAfterMeasure(v, keep);
   }
 
+  /** What `memory` keeps of the state besides its text and selection. */
+  const REMEMBERED = { history: historyField, folds: foldState };
+
+  /** Keeps the editor as it is for when it's mounted again (`memory`). */
+  function remember(v: EditorView) {
+    if (!memory) return;
+    rememberEditor(memory, { text: textOf(v.state), state: v.state.toJSON(REMEMBERED), scroll: v.scrollSnapshot() });
+  }
+
   onMount(() => {
     const deferDoc = !!doc && wrap;
     const initial = lineBreak ? readEndings(value, lineBreak) : { doc: value, others: [] };
+    const was = memory ? recallEditor(memory) : undefined;
+    // The same text: all of it comes back. Text changed meanwhile (an edit in another
+    // view): the cursor's place and the scroll position do, as near as the text allows.
+    const sameText = was?.text === value;
+    const create = (config: { doc: string | Text; extensions: Extension[] }) => {
+      if (was && sameText) {
+        try {
+          return EditorState.fromJSON(was.state, config, REMEMBERED);
+        } catch {
+          // A memory this version can't read: the editor starts afresh.
+        }
+      }
+      const head = was && !sameText ? ((was.state as { selection?: { ranges?: { head?: number }[]; main?: number } }).selection?.ranges?.[0]?.head ?? 0) : 0;
+      const length = typeof config.doc === "string" ? config.doc.length : config.doc.length;
+      return EditorState.create({ ...config, selection: { anchor: Math.min(head, length) } });
+    };
     view = new EditorView({
       parent: host,
-      state: EditorState.create({
+      scrollTo: was ? (was.scroll as StateEffect<unknown>) : undefined,
+      state: create({
         doc: deferDoc ? STAND_IN : (doc ?? initial.doc),
         extensions: [
+          label ? EditorView.contentAttributes.of({ "aria-label": label }) : [],
           baseC.of(baseExt({ readonly, wrap, placeholder, gutters })),
           histC.of(historyExt(readonly)),
           lockC.of(lockExt(readOnlyHere())),
@@ -248,6 +284,7 @@
         ],
       }),
     });
+    // The value effect then finds the document as `value` says, and leaves the history alone.
     // Before the first paint, so switching back to an editor (Preview → Raw)
     // is coloured at once.
     parseDrawn(view);
@@ -255,6 +292,7 @@
   });
   onDestroy(() => {
     destroyed = true;
+    if (view) remember(view);
     view?.destroy();
   });
 
@@ -294,7 +332,11 @@
   $effect(() => {
     // After the document effect above, so they're placed in the text they were found in.
     const u = underlines;
-    if (u) view?.dispatch({ effects: setUnderlines.of(u) });
+    if (!u || !view) return;
+    // A reading that found what the editor already shows (it moved its own with the text) places nothing again.
+    const has = underlinesIn(view.state);
+    if (has.length === u.length && has.every((x, i) => x.from === u[i].from && x.to === u[i].to && x.severity === u[i].severity && x.message === u[i].message)) return;
+    view.dispatch({ effects: setUnderlines.of(u) });
   });
   $effect(() => {
     const p = variables;
@@ -305,6 +347,24 @@
     if (m) view?.dispatch({ effects: setLineMarks.of(m) });
   });
 
+  /**
+   * Puts `text` in place of the document as one change Undo takes back (a new `value`
+   * starts the history again with `freshHistory`): for text the user's own action
+   * replaced (Revert to last valid). No `onchange` follows.
+   */
+  export function replace(text: string) {
+    const v = view;
+    if (!v) return;
+    const { doc: next, others } = lineBreak ? readEndings(text, lineBreak) : { doc: text, others: [] };
+    const old = v.state.doc.toString();
+    if (old === next) return;
+    const { head: from, tail: end } = sharedEnds(old.length, next.length, (i, j) => old.charCodeAt(i) === next.charCodeAt(j));
+    v.dispatch({
+      changes: { from, to: old.length - end, insert: next.slice(from, next.length - end) },
+      effects: setEndings.of(others),
+      annotations: [fromValue.of(true), Transaction.userEvent.of("input.revert")],
+    });
+  }
   export function openSearch() {
     if (view) openSearchPanel(view);
   }
@@ -333,12 +393,23 @@
   export function document(): Text | null {
     return view?.state.doc ?? null;
   }
-  /** Selects line `n` (1-based) and scrolls it into view, focusing the editor so the selection shows. */
-  export function revealLine(n: number) {
+  /**
+   * Scrolls line `n` (1-based) into view and focuses the editor, with the line selected,
+   * or with `caret`, the caret on it at that character column (1-based; its start
+   * without one), so typing on doesn't replace the line.
+   */
+  export function revealLine(n: number, how: { caret?: number | true } = {}) {
     if (!view || n < 1 || n > view.state.doc.lines) return;
     const line = view.state.doc.line(n);
-    view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+    const at = how.caret === undefined ? null : line.from + (how.caret === true ? 0 : Math.min(Array.from(line.text).slice(0, how.caret - 1).join("").length, line.length));
+    view.dispatch({ selection: at === null ? { anchor: line.from, head: line.to } : { anchor: at }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
     view.focus();
+  }
+  /** Moves the caret to the next problem underlined in the text (the one before, with `dir` -1) and shows its message. */
+  export function nextProblem(dir: 1 | -1 = 1) {
+    if (!view) return false;
+    view.focus();
+    return nextUnderline(view, dir);
   }
   /** Puts the caret at offset `pos` and scrolls its line to the top of the view; with `focus`, focuses the editor too. */
   export function revealAt(pos: number, { focus = false } = {}) {

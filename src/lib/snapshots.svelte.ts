@@ -45,6 +45,9 @@ export interface FileShot {
   rest: string;
 }
 
+/** What of `file` is neither its header nor a request, as JSON: the text after its last request, its line ending and byte order mark. */
+export const restShot = (f: HttpFile): string => JSON.stringify([f.trailing, f.lineEnding, f.mixedEndings ?? false, f.bom]);
+
 const keptFileShots = new WeakMap<HttpFile, () => FileShot>();
 
 /** `file` (a document's state) as JSON: a new value only once something in it changed. */
@@ -52,7 +55,7 @@ export const fileShot = (file: HttpFile): FileShot =>
   kept(keptFileShots, file, (f) => ({
     header: JSON.stringify(f.header),
     requests: f.requests.map(docSnapshot),
-    rest: JSON.stringify([f.trailing, f.lineEnding, f.mixedEndings ?? false, f.bom]),
+    rest: restShot(f),
   }));
 
 /**

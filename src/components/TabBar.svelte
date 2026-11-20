@@ -20,7 +20,7 @@
         : [
             { separator: true as const },
             { label: "Duplicate request", icon: "copy" as const, action: () => app.duplicateRequest(tab.path, tab.key) },
-            { label: "View file as text", icon: "code" as const, action: () => app.openFileView(tab.path) },
+            { label: "View file as text", icon: "code" as const, action: () => app.openFileView(tab.path, tab.kind === "request" ? { key: tab.key } : {}) },
           ]),
     ]);
   }

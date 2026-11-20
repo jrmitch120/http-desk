@@ -5,7 +5,7 @@ import { EditorState } from "@codemirror/state";
 import { CompletionContext } from "@codemirror/autocomplete";
 import { json } from "@codemirror/lang-json";
 import { http } from "./http";
-import { httpCompletion } from "./httpCompletion";
+import { accepting, httpCompletion } from "./httpCompletion";
 import { KNOWN_DIRECTIVES } from "../http";
 import rust from "../../../crates/httpdesk-text/src/parser.rs?raw";
 
@@ -102,5 +102,37 @@ describe("the directive list", () => {
       .map((item) => (item.startsWith('"') ? item.slice(1, -1) : constant(item)));
     expect(known.length).toBeGreaterThan(10);
     expect([...KNOWN_DIRECTIVES].sort()).toEqual(known.sort());
+  });
+});
+
+describe("accepting an option", () => {
+  /** `text` (caret at `‸`) after `value` is accepted there, followed by `then`. */
+  function accept(text: string, value: string, then: string): string {
+    const pos = text.indexOf("‸");
+    const doc = text.slice(0, pos) + text.slice(pos + 1);
+    const state = EditorState.create({ doc, selection: { anchor: pos }, extensions: [http()] });
+    const result = httpCompletion(new CompletionContext(state, pos, true))!;
+    expect(result.options.map((o) => o.label)).toContain(value);
+    const next = state.update(accepting(state, result.from, pos, value, then)).state;
+    const at = next.selection.main.head;
+    return next.doc.sliceString(0, at) + "‸" + next.doc.sliceString(at);
+  }
+
+  it("a header name is followed by its colon, and a method by a space", () => {
+    expect(accept("GET https://example.com\nCont‸", "Content-Type", ": ")).toBe("GET https://example.com\nContent-Type: ‸");
+    expect(accept("P‸", "POST", " ")).toBe("POST ‸");
+  });
+
+  it("what's there already isn't doubled, and the rest of the word goes", () => {
+    expect(accept("GET https://example.com\nUser‸: x\n", "User-Agent", ": ")).toBe("GET https://example.com\nUser-Agent: ‸x\n");
+    expect(accept("pa‸ https://example.com", "PATCH", " ")).toBe("PATCH ‸https://example.com");
+    expect(accept("GET https://example.com\nAcc‸ept:", "Accept", ": ")).toBe("GET https://example.com\nAccept:‸");
+  });
+
+  it("a directive says which editor reads it, when only one does", () => {
+    const pos = "# @‸".indexOf("‸");
+    const state = EditorState.create({ doc: "# @\nGET https://example.com\n", selection: { anchor: pos }, extensions: [http()] });
+    const details = Object.fromEntries(httpCompletion(new CompletionContext(state, pos, false))!.options.map((o) => [o.label, o.detail]));
+    expect([details.name, details.timeout, details.prompt, details["httpdesk-auth"]]).toEqual([undefined, "Rider only", "VS Code only", "HttpDesk only"]);
   });
 });

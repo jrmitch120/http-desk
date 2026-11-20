@@ -25,8 +25,11 @@ interface Marks {
 
 /** `marks` placed in `doc`. */
 function place(doc: Text, marks: LineMark[]): Marks {
-  const on = marks.filter((m) => m.line >= 1 && m.line <= doc.lines).sort((a, b) => a.line - b.line);
-  return { set: RangeSet.of(on.map((m) => new Marker(m).range(doc.line(m.line).from))), beyond: marks.filter((m) => !on.includes(m)) };
+  const on: LineMark[] = [];
+  const beyond: LineMark[] = [];
+  for (const m of marks) (m.line >= 1 && m.line <= doc.lines ? on : beyond).push(m);
+  on.sort((a, b) => a.line - b.line);
+  return { set: RangeSet.of(on.map((m) => new Marker(m).range(doc.line(m.line).from))), beyond };
 }
 
 const marksField = StateField.define<Marks>({
@@ -45,7 +48,7 @@ const marksField = StateField.define<Marks>({
     });
     const shown = marks.beyond.filter((m) => m.line <= doc.lines);
     if (shown.length) set = set.update({ add: shown.map((m) => new Marker(m).range(doc.line(m.line).from)), sort: true });
-    return { set, beyond: shown.length ? marks.beyond.filter((m) => !shown.includes(m)) : marks.beyond };
+    return { set, beyond: shown.length ? marks.beyond.filter((m) => m.line > doc.lines) : marks.beyond };
   },
 });
 

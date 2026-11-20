@@ -27,7 +27,8 @@ import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
-import { docSnapshot, kept, snapshot } from "./snapshots.svelte";
+import { docSnapshot, fileShot, kept, restShot, snapshot } from "./snapshots.svelte";
+import { forgetEditors } from "./editorMemory";
 import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
@@ -66,6 +67,8 @@ export interface Doc {
   saved: Record<string, string>;
   savedOrder: string;
   savedHeader: string;
+  /** The rest of the file as last loaded/saved (`fileShot`'s `rest`): the text after its last request, its line ending and byte order mark. */
+  savedRest: string;
   externalChange: boolean;
   missing: boolean;
   /** Requests of Orphaned tabs: gone from the file on disk but still open, with
@@ -192,6 +195,8 @@ const keptOrders = new WeakMap<Request[], () => string>();
 function docDirty(doc: Doc): boolean {
   if (kept(keptOrders, doc.file.requests, (rs) => rs.map((r) => r._key).join(",")) !== doc.savedOrder) return true;
   if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
+  // The text after the last request (a file view edit there changes nothing else).
+  if (fileShot(doc.file).rest !== doc.savedRest) return true;
   if (fileEdit(doc)?.parses === false) return true;
   // Kept apart, so text typed in the file view doesn't have every request checked again.
   return kept(keptRequestsDirty, doc, (d) => [...d.file.requests, ...d.orphans].some((r) => requestDirty(d, r)));
@@ -488,6 +493,9 @@ class AppStore {
    *  window, quitting, switching workspace). True to go ahead: nothing was
    *  unsaved, the user chose Don't save, or Save all saved every file. */
   async confirmUnsaved(question = ""): Promise<boolean> {
+    // Text typed a moment ago counts: it's read before the documents are asked about.
+    const typing = Object.keys(this.docs).filter((p) => this.texts.waiting(p));
+    if (typing.length) await Promise.all(typing.map((p) => this.texts.readNow(p)));
     const dirty = this.dirtyDocs();
     if (!dirty.length) return true;
     const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
@@ -597,6 +605,7 @@ class AppStore {
       saved: Object.fromEntries([...orphanSaved, ...file.requests.map((r) => [r._key!, snapshot(r)])]),
       savedOrder: file.requests.map((r) => r._key).join(","),
       savedHeader: JSON.stringify(file.header),
+      savedRest: restShot(file),
       externalChange: false,
       missing: false,
       orphans,
@@ -764,14 +773,22 @@ class AppStore {
     if (!text.canSaveAsWritten) {
       const r = await this.choose(
         `Revert "${text.name}" to the last valid ${text.noun}?`,
-        `Its text doesn't parse and has no request line, so it can't be saved as written. The last valid ${text.noun} will be saved instead.`,
+        `Nothing could be read from its text, so it can't be saved as written. The text you typed is discarded and the last valid ${text.noun} is saved instead. Undo in its editor brings the text back.`,
         [{ ...CANCEL, focus: true }, { ...revert, role: "primary", danger: true }],
       );
       return r.button === "revert" ? "revert" : "cancel";
     }
+    if (text.asText) {
+      const r = await this.choose(
+        `Save "${text.name}" as written?`,
+        `Its text has no request line. Save it as written and it stays in the file as text, not a request, and its tab closes. Or revert: the text you typed is discarded and the last valid ${text.noun} is saved. Undo in its editor brings the text back.`,
+        [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
+      );
+      return r.button === "written" || r.button === "revert" ? r.button : "cancel";
+    }
     const r = await this.choose(
       `Save "${text.name}" as written?`,
-      `Its text doesn't parse. Save it as written, with the lines that don't parse kept as they are, or revert to the last valid ${text.noun} and save that.`,
+      `${text.problem ? `${text.problem} ` : "Its text doesn't parse. "}Save it as written, with the lines that don't parse kept as they are, or revert: the text you typed is discarded and the last valid ${text.noun} is saved. Undo in its editor brings the text back.`,
       [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
     );
     return r.button === "written" || r.button === "revert" ? r.button : "cancel";
@@ -981,10 +998,14 @@ class AppStore {
     if (isRequestTab(tab)) tab.section = section;
   }
 
+  /** Per document, where the tab of each request typed out of its file view sat: it comes back there with the request. */
+  private typedOutTabs = new WeakMap<Doc, Map<string, number>>();
+
   private removeTab(id: string) {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
+    forgetEditors(id);
     this.unshown.delete(id);
     delete this.fileCursors[id];
     this.releaseResponse(this.runs[id]?.response);
@@ -1007,10 +1028,18 @@ class AppStore {
   async closeTab(id: string): Promise<boolean> {
     const tab = this.tabs.find((t) => t.id === id);
     if (!tab) return true;
+    // Text typed a moment ago counts as an edit: it's read before the tab is asked about.
+    if (this.texts.waiting(tab.path)) {
+      await this.texts.readNow(tab.path);
+      if (!this.tabs.some((t) => t.id === id)) return true;
+    }
     const req = this.requestFor(tab);
     if (tab.kind === "file") {
       if (!(await this.closingFileView(tab))) return false;
-    } else if (req && this.isRequestDirty(tab.path, tab.key)) {
+    } else if (req && this.isRequestDirty(tab.path, tab.key) && !this.texts.blocked(tab.path)) {
+      // (While the file view holds text that doesn't parse, the tab just closes: its
+      // request's edits stay in the document, which the file view still shows, and
+      // reverting them would drop that text unseen, #174.)
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
         CANCEL,
         { label: "Don't save", value: "discard", role: "destructive", danger: true },
@@ -1036,7 +1065,9 @@ class AppStore {
   private async closingFileView(tab: Tab): Promise<boolean> {
     const others = this.tabs.some((t) => t !== tab && t.path === tab.path);
     if (!this.texts.isInvalid(tab.path, fileView) && (others || !this.isDocDirty(tab.path))) return true;
-    const r = await this.choose(`Save changes to ${basename(tab.path)}?`, "Your changes will be lost if you don't save them.", [
+    // With other tabs open only the text here that doesn't parse goes: their edits stay in the document.
+    const lost = others ? "The text typed here doesn't parse, and is discarded if you don't save it. Edits made in the file's request tabs stay." : "Your changes will be lost if you don't save them.";
+    const r = await this.choose(`Save changes to ${basename(tab.path)}?`, lost, [
       CANCEL,
       { label: "Don't save", value: "discard", role: "destructive", danger: true },
       { label: "Save", value: "save", role: "primary" },
@@ -1118,7 +1149,7 @@ class AppStore {
 
   revertRequest(path: string, key: string) {
     const doc = this.docs[path];
-    if (!doc) return;
+    if (!doc || this.refused(path)) return;
     this.texts.drop(path, sourceView(key));
     const idx = doc.file.requests.findIndex((r) => r._key === key);
     if (idx < 0) return;
@@ -1148,6 +1179,12 @@ class AppStore {
     if (!restored) return this.toast("error", "This History entry has no request to restore");
     const doc = await this.loadDoc(path);
     if (!doc) return;
+    // An entry sent from a file with mixed line endings keeps its text's `\r\n`s. Put
+    // into a file that has one ending, they'd be written beside the file's own: read
+    // with `\n`, the request takes the file's ending like the rest of it.
+    if (!doc.file.mixedEndings && source.includes("\r\n")) {
+      restored = (await api.parseRequest(source.replaceAll("\r\n", "\n")).catch(() => null))?.request ?? restored;
+    }
     const linked = historyLinkKey(path, historyLink(path, restored));
     const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(path, historyLink(path, r)) === linked : r._key === key));
     if (this.refused(path, at >= 0 ? [doc.file.requests[at]._key!] : [])) return;
@@ -1164,16 +1201,17 @@ class AppStore {
   // ---------------------------------------------------------------- file view
 
   /** A file view asked to show a line (`openFileView`), until it has. */
-  fileLineWanted = $state<{ tabId: string; line: number } | null>(null);
+  fileLineWanted = $state<{ tabId: string; line: number; column?: number } | null>(null);
   /** A file view asked to show a request (`openFileView`), until it has. */
   fileRequestWanted = $state<{ tabId: string; key: string } | null>(null);
 
   /**
    * Opens the file at `path` as one text (its file view, a tab of its own; the one
    * already open, if there is one), made active. With `line` (1-based), the view
-   * selects that line and scrolls it into view; with `key`, it shows that request.
+   * scrolls that line into view with the caret on it (at character `column`, or its
+   * start); with `key`, it shows that request.
    */
-  async openFileView(path: string, at: { line?: number; key?: string } = {}) {
+  async openFileView(path: string, at: { line?: number; column?: number; key?: string } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
@@ -1183,7 +1221,7 @@ class AppStore {
       this.tabs.splice(i < 0 ? this.tabs.length : i + 1, 0, tab);
     }
     this.activeTabId = tab.id;
-    if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line };
+    if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line, column: at.column };
     if (at.key) this.fileRequestWanted = { tabId: tab.id, key: at.key };
   }
 
@@ -1218,11 +1256,14 @@ class AppStore {
   private async sendUnderCursor(tab: Tab) {
     if (this.texts.waiting(tab.path, fileView)) await this.texts.readNow(tab.path, fileView);
     if (this.texts.isInvalid(tab.path, fileView)) {
-      this.toast("error", `${basename(tab.path)} doesn't read as a file yet. Fix the text to send a request from it.`);
+      this.toast("error", `The text in ${basename(tab.path)}'s file view doesn't parse. Fix the text to send a request from it.`);
       return;
     }
     const key = this.requestUnderCursor(tab);
-    if (!key) return;
+    if (!key) {
+      this.toast("info", "Put the cursor in a request to send it.");
+      return;
+    }
     await this.openRequest(tab.path, { key });
     if (isRequestTab(this.activeTab) && this.activeTab.key === key) await this.send(this.activeTab.id);
   }
@@ -1237,7 +1278,7 @@ class AppStore {
    */
   private refused(path: string, keys: string[] = []): boolean {
     const why = this.texts.blocked(path, keys);
-    if (why) this.toast("error", `${why}: fix it, or save it as written or revert it, first.`);
+    if (why) this.toast("error", `${why}. Fix the text, or save the file and choose what to keep.`);
     return !!why;
   }
 
@@ -1367,6 +1408,8 @@ class AppStore {
     this.docs = docs;
     for (const t of [...this.tabs, ...this.closed]) t.path = remap(t.path);
     if (this.expanded[from]) this.expanded[to] = true;
+    // No watcher event follows the app's own change: the Problems panel is told here.
+    this.problems.moved(from, to);
     await this.refreshTree();
     await this.reloadFolderEnvironments(from);
   }
@@ -1399,6 +1442,7 @@ class AppStore {
     const under = (p: string) => p === path || p.startsWith(path + "/") || p.startsWith(path + "\\");
     for (const t of this.tabs.filter((t) => under(t.path))) this.removeTab(t.id);
     for (const p of Object.keys(this.docs).filter(under)) delete this.docs[p];
+    this.problems.removed(path);
     await this.refreshTree();
     await this.reloadFolderEnvironments(path);
   }
@@ -1471,6 +1515,11 @@ class AppStore {
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
+    // What would be sent is the request as it last read, not the text shown: say so instead.
+    if (this.texts.isInvalid(tab.path, sourceView(tab.key))) {
+      this.toast("error", `The source of "${displayName(req)}" doesn't parse. Fix the text to send it.`);
+      return;
+    }
     // Only awaited for a request with prompts, so an ordinary send starts loading at once.
     if (requestPrompts(req).length && !(await this.confirming(tabId, () => this.askPrompts(tab, req)))) return;
     const env = this.guardedEnvironment(tab.path, req.method);
@@ -1713,7 +1762,26 @@ class AppStore {
       },
       findRequest: (path, key) => store.findRequest(path, key),
       requestsGone: (path, keys) => {
-        for (const t of store.tabs.filter((t) => t.kind === "request" && t.path === path && keys.has(t.key))) store.removeTab(t.id);
+        const doc = store.docs[path];
+        for (const t of store.tabs.filter((t): t is RequestTab => t.kind === "request" && t.path === path && keys.has(t.key))) {
+          // Where it sat, for when the request is typed back in (`requestsBack`).
+          if (doc) store.typedOutTabs.set(doc, new Map(store.typedOutTabs.get(doc) ?? []).set(t.key, store.tabs.indexOf(t)));
+          store.removeTab(t.id);
+        }
+      },
+      requestsBack: (path, keys) => {
+        const doc = store.docs[path];
+        const sat = doc && store.typedOutTabs.get(doc);
+        if (!sat) return;
+        for (const key of keys) {
+          const index = sat.get(key);
+          sat.delete(key);
+          if (index === undefined || store.tabs.some((t) => t.kind === "request" && t.path === path && t.key === key)) continue;
+          // Where it sat, not made active: the user is typing in the file view.
+          const tab = newTab(path, key);
+          store.tabs.splice(Math.min(index, store.tabs.length), 0, tab);
+          void store.showLastResponse(tab.id);
+        }
       },
       toast: (kind, message) => store.toast(kind, message),
     };

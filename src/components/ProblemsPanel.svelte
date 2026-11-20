@@ -10,9 +10,17 @@
   import { app } from "../lib/store.svelte";
   import { relativePath } from "../lib/http";
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   const files = $derived(app.problems.list);
   const label = (path: string) => (app.root ? relativePath(app.root, path).replace(/^\.\//, "") : path);
+  const TONES = { error: "Error", warning: "Warning", note: "Note" };
+  /** A row's whole message as its tooltip, only while the row cuts it short. */
+  const clipped = (row: HTMLElement, message: string) =>
+    tooltip(row, () => {
+      const el = row.querySelector<HTMLElement>(".message");
+      return el && el.scrollWidth > el.clientWidth ? message : null;
+    });
 </script>
 
 <div class="problems">
@@ -27,8 +35,8 @@
           <ol>
             {#each f.entries as e, i (i)}
               <li>
-                <button class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line })}>
-                  <span class="icon"><Icon name={e.tone === "note" ? "info" : "alert"} size={12} /></span>
+                <button class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line, column: e.column })} use:clipped={e.message}>
+                  <span class="icon" role="img" aria-label={TONES[e.tone]}><Icon name={e.tone === "note" ? "info" : "alert"} size={12} /></span>
                   <span class="line">Line {e.line}</span>
                   <span class="message">{e.message}</span>
                 </button>
@@ -60,6 +68,11 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+  /* A group off screen isn't laid out or painted: a workspace may list thousands of entries. */
+  .group {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 60px;
   }
   .group + .group {
     margin-top: var(--space-2);

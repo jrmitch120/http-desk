@@ -14,6 +14,8 @@ export interface ProblemEntry {
   line: number;
   tone: "error" | "warning" | "note";
   message: string;
+  /** 1-based character column on the line, where it's known: where the caret goes. */
+  column?: number;
 }
 
 export interface ProblemFile {
@@ -43,7 +45,7 @@ function referenceEntries(file: HttpFile, outside: OutsideScope, kept: Reference
       line++;
       at = nl + 1;
     }
-    return { line, tone: u.severity, message: u.message };
+    return { line, tone: u.severity, message: u.message, column: Array.from(text.slice(at, u.from)).length + 1 };
   });
 }
 
@@ -52,18 +54,35 @@ function referenceEntries(file: HttpFile, outside: OutsideScope, kept: Reference
  * the requests of the file at a path see besides the file itself; without it, a file's
  * references aren't looked at. `kept` keeps each file's reference checks between readings.
  */
+/** What `problemFiles` made of a file last time, while what it was made from is the same: one file read again doesn't have every other listed again. */
+export type ProblemFilesMemo = WeakMap<FileProblems, { level: PortabilityLevel; scope: OutsideScope | undefined; made: ProblemFile[] }>;
+
 export function problemFiles(
   files: FileProblems[],
   level: PortabilityLevel,
   outside?: (path: string) => OutsideScope,
   kept: (path: string) => ReferenceChecks = () => new ReferenceChecks(),
+  memo?: ProblemFilesMemo,
 ): ProblemFile[] {
   return [...files]
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     .flatMap((f) => {
-      const references = f.file && outside ? referenceEntries(f.file, outside(f.path), kept(f.path)) : [];
+      const scope = outside?.(f.path);
+      const known = memo?.get(f);
+      if (known && known.level === level && known.scope === scope) return known.made;
+      const made = listed(f, level, scope, kept);
+      memo?.set(f, { level, scope, made });
+      return made;
+    });
+}
+
+/** One file's entry in the panel's list, or none with nothing to show. */
+function listed(f: FileProblems, level: PortabilityLevel, scope: OutsideScope | undefined, kept: (path: string) => ReferenceChecks): ProblemFile[] {
+  {
+    {
+      const references = f.file && scope ? referenceEntries(f.file, scope, kept(f.path)) : [];
       const entries: ProblemEntry[] = [
-        ...f.problems.map((p) => ({ line: p.line, tone: p.severity, message: p.message })),
+        ...f.problems.map((p) => ({ line: p.line, tone: p.severity, message: p.message, column: p.column })),
         ...references,
         ...f.portability.map((m) => ({ line: m.line, tone: level, message: m.hover })),
       ];
@@ -74,7 +93,8 @@ export function problemFiles(
       const summary = differing.flatMap(([editor, n]) => (n ? [differsText(n, editor)] : []));
       const count = f.problems.length + references.length + (level === "warning" ? differing.reduce((n, [, lines]) => n + lines, 0) : 0);
       return [{ path: f.path, entries, summary, count }];
-    });
+    }
+  }
 }
 
 /** The count on the panel's toggle. */

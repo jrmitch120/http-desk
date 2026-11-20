@@ -312,7 +312,8 @@ impl FileProblems {
 /// `path`'s folder; one whose path has a `{{variable}}` isn't (its value depends on
 /// the environment), so it's never reported missing.
 pub fn file_problems(path: &Path, text: &str) -> FileProblems {
-    let found = crate::text_problems(text);
+    // Read once: the file it reads as goes back with what was found in it.
+    let (read, found) = crate::text_reading(text);
     let dir = path.parent().unwrap_or(path);
     let missing = found
         .files
@@ -325,7 +326,7 @@ pub fn file_problems(path: &Path, text: &str) -> FileProblems {
         .into_iter()
         .filter(|m| matches!(m.support, Support::JetbrainsOnly | Support::VscodeOnly))
         .collect();
-    let file = (text.contains("{{") || text.contains("@name")).then(|| crate::parse(text));
+    let file = (text.contains("{{") || text.contains("@name")).then_some(read);
     FileProblems { path: path.to_path_buf(), problems, portability, file }
 }
 

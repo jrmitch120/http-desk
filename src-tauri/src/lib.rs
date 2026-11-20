@@ -523,7 +523,7 @@ fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> 
 /// A request's Source view text: the text before it and its block, as written
 /// where the request still matches it, else rendered. [`parse_request`] reads it back.
 #[tauri::command]
-fn request_source(request: Request) -> String {
+async fn request_source(request: Request) -> String {
     httpdesk_core::request_source(&request)
 }
 
@@ -531,34 +531,38 @@ fn request_source(request: Request) -> String {
 /// match) and how VS Code and Rider treat each: the Source view's gutter markers and
 /// the check strip's portability note.
 #[tauri::command]
-fn request_portability(request: Request) -> Vec<httpdesk_core::portability::PortabilityMark> {
+async fn request_portability(request: Request) -> Vec<httpdesk_core::portability::PortabilityMark> {
     httpdesk_core::portability::request_portability(&request)
 }
+
+// The text commands below are `async` so they run off the main thread: a whole
+// file's text (the file view's, read after each pause in typing) takes long enough
+// to read that the window would otherwise wait on it.
 
 /// The constructs in `text` (a Source view's typed text, which may not read as a
 /// request) and how VS Code and Rider treat each, as [`request_portability`] gives them.
 #[tauri::command]
-fn portability_text(text: String) -> Vec<httpdesk_core::portability::PortabilityMark> {
+async fn portability_text(text: String) -> Vec<httpdesk_core::portability::PortabilityMark> {
     httpdesk_core::portability::portability(&text)
 }
 
 /// The first request in `text` (a Source view's, a History entry's source text) and
 /// the problems found reading it; no request when the text has no request line.
 #[tauri::command]
-fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
+async fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
     httpdesk_core::parse_request(&text)
 }
 
 /// A file view's text read as a whole `.http` file, with the problems found reading
 /// it. [`file_text`] writes the file back as this text, byte for byte.
 #[tauri::command]
-fn parse_file_text(text: String) -> httpdesk_core::ParsedFile {
+async fn parse_file_text(text: String) -> httpdesk_core::ParsedFile {
     httpdesk_core::parse_with_problems(&text)
 }
 
 /// A whole file's text, as saving would write it (untouched requests as written).
 #[tauri::command]
-fn file_text(file: HttpFile) -> String {
+async fn file_text(file: HttpFile) -> String {
     httpdesk_core::serialize(&file)
 }
 
@@ -566,7 +570,7 @@ fn file_text(file: HttpFile) -> String {
 /// read from (`httpdesk_core::request_problems`), for the check strip and the Source
 /// view's underlines.
 #[tauri::command]
-fn request_problems(request: Request) -> httpdesk_core::RequestProblems {
+async fn request_problems(request: Request) -> httpdesk_core::RequestProblems {
     httpdesk_core::request_problems(&request)
 }
 

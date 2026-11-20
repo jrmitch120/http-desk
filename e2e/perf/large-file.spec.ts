@@ -40,7 +40,7 @@ async function openLargeFile(page: Page): Promise<void> {
   await openApp(page);
   await page.evaluate((n) => (window as unknown as { __mock: { prepareLargeFile(n: number): void } }).__mock.prepareLargeFile(n), REQUESTS);
   await treeItem(page, "api").click();
-  await treeMenu(page, "pets.http", "View as text");
+  await treeMenu(page, "pets.http", "View file as text");
   await expect(activeTab(page)).toContainText("pets.http");
   await expect(line(page, "@host = http://localhost:8765")).toBeVisible();
 }

@@ -10,6 +10,7 @@
   import { bodyFilePaths, portabilityLineMarks, requestChecks, type Check, type QuickFix, type Section } from "../lib/checks";
   import { sourceProblems } from "../lib/problems.svelte";
   import { checkUnderlines } from "../lib/codemirror/underlines";
+  import { inDocument } from "../lib/codemirror/lineEndings";
   import { readingCard, workspaceFile } from "../lib/exchanges";
   import { AUTH_FIELDS } from "../lib/usages";
   import type { Definition } from "../lib/codemirror/setup";
@@ -32,6 +33,7 @@
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
+  import { editorMemoryKey } from "../lib/editorMemory";
 
   let { tab }: { tab: RequestTab } = $props();
 
@@ -82,12 +84,15 @@
     };
   });
 
+  /** The request as JSON, made once per change: what its readings are asked with and compared by. */
+  const reqJson = $derived(req ? JSON.stringify(req) : null);
+
   // What the core found reading the request's source: asked when it's opened (at once)
   // and after each edit (debounced like the source), for the strip and the underlines.
   $effect(() => {
-    if (!req) return;
+    const snap = reqJson;
+    if (snap === null) return;
     const key = tab.key;
-    const snap = JSON.stringify(req);
     const t = setTimeout(() => sourceProblems.refresh(key, JSON.parse(snap)), untrack(() => sourceProblems.read(key)) ? VIEW_REFRESH_DELAY_MS : 0);
     return () => clearTimeout(t);
   });
@@ -96,7 +101,7 @@
   // the problems and body files found reading the typed text do (#163, #165).
   const typedSource = $derived(app.texts.typed(tab.path, view));
   const reading = $derived(
-    typedSource && !typedSource.parses ? { snap: JSON.stringify(req), read: { problems: typedSource.problems, files: typedSource.files } } : sourceProblems.read(tab.key),
+    typedSource && !typedSource.parses ? { snap: reqJson ?? "", read: { problems: typedSource.problems, files: typedSource.files } } : sourceProblems.read(tab.key),
   );
   // Whether each file the body reads exists: asked when the request is opened and when a path changes.
   const bodyFiles = $derived(variables ? bodyFilePaths(reading?.read, variables).map((f) => f.path).join("\n") : "");
@@ -113,9 +118,9 @@
    */
   let portability = $state<PortabilityMark[]>([]);
   $effect(() => {
-    if (!req) return;
+    const snap = reqJson;
+    if (snap === null) return;
     const typed = typedSource?.text ?? null;
-    const snap = JSON.stringify(req);
     return afterPause(
       () => (typed !== null ? api.portabilityText(typed) : api.requestPortability(JSON.parse(snap))).catch((): PortabilityMark[] => []),
       (marks) => (portability = marks),
@@ -171,7 +176,12 @@
   /** The request (as JSON) `source` is up to date with. */
   let sourceOf = $state<string | null>(null);
   const sourceInvalid = $derived(app.texts.isInvalid(tab.path, view));
+  /** Where the source stops parsing: what its note says. */
+  const sourceError = $derived(app.texts.firstError(tab.path, view));
+  const lineBreak = $derived(app.texts.lineBreak(tab.path));
+
   let sourceEditor = $state<Editor>();
+  let sourceBox = $state<HTMLElement>();
   /** One of the request's own `@name` lines (index into `variables`) to select once the source shows it. */
   let declaration = $state<number | null>(null);
 
@@ -217,15 +227,21 @@
     return app.texts.follow(
       tab.path,
       view,
-      (text) => {
+      (text, how) => {
+        // Text the user reverted to goes in as a change Undo takes back.
+        if (how.undoable && source !== text) sourceEditor?.replace(text);
         source = text;
-        sourceOf = JSON.stringify(app.requestFor(tab));
+        sourceOf = untrack(() => reqJson);
       },
       untrack(() => sourceOf) !== null,
     );
   });
   // The strip's checks in the source: the core's problems only when it read the version of the request shown.
-  const underlines = $derived(checkUnderlines(source, reading?.snap === sourceOf ? checks : checks.filter((c) => c.kind !== "problem")));
+  const underlines = $derived.by(() => {
+    const found = checkUnderlines(source, reading?.snap === sourceOf ? checks : checks.filter((c) => c.kind !== "problem"));
+    // In a file with mixed endings the text keeps each `\r\n`; the editor's document has one character per break.
+    return lineBreak ? inDocument(source, found) : found;
+  });
   // Shown again (the .http button, its shortcut): the cursor is where it was left.
   let sourceWasShown = untrack(() => showSource);
   $effect(() => {
@@ -234,10 +250,12 @@
       tick().then(() => sourceEditor?.focus());
     }
     if (!showSource) sourceOf = null;
+    // Hidden with the focus in it (its shortcut): the focus goes on to the URL, not nowhere.
+    if (!showSource && sourceWasShown && sourceBox?.contains(document.activeElement)) tick().then(() => urlInput?.focus());
     sourceWasShown = showSource;
   });
   $effect(() => {
-    if (declaration === null || !showSource || !req || !sourceEditor || sourceOf !== JSON.stringify(req)) return;
+    if (declaration === null || !showSource || !req || !sourceEditor || sourceOf !== reqJson) return;
     // The request's named `@name` lines are in order in its block, before anything else
     // starting with `@`; the text before the block (`leading`) comes first.
     const nth = req.variables.slice(0, declaration + 1).filter((v) => v.name).length;
@@ -282,7 +300,10 @@
         {lock.reason}
         {#snippet actions()}
           {#if lock.heldBy.kind === "file"}
-            <button class="btn small" onclick={() => app.openFileView(tab.path, { key: tab.key })}>Show file view</button>
+            {@const error = app.texts.firstError(tab.path, lock.heldBy)}
+            <button class="btn small" onclick={() => app.openFileView(tab.path, error ? { line: error.line, column: error.column } : { key: tab.key })}>
+              {error ? `Show line ${error.line} in the file view` : "Show file view"}
+            </button>
           {:else if ownSource}
             <button class="btn small" onclick={() => app.toggleSource()}>Show source</button>
           {/if}
@@ -342,27 +363,40 @@
     </div>
 
     <ResolvedPreview {tab} />
-    <!-- Its quick fixes edit the request or the file. -->
-    <fieldset class="lockable" disabled={!!lock}>
-      <CheckStrip {checks} onfix={fix} />
-    </fieldset>
+    <!-- Its quick fixes edit the request or the file. Above the sections; under the source
+         (below), where an entry that comes and goes with the typing doesn't move the text. -->
+    {#snippet strip()}
+      <fieldset class="lockable" disabled={!!lock}>
+        <CheckStrip {checks} onfix={fix} />
+      </fieldset>
+    {/snippet}
+    {#if !showSource}{@render strip()}{/if}
 
     {#if sourceMounted}
-      <div class="source" hidden={!showSource}>
-        <div class="source-note muted">
+      <div class="source" hidden={!showSource} bind:this={sourceBox}>
+        <!-- One line either way, so the text below doesn't move as typing passes through text that doesn't parse. -->
+        <div class="source-note" class:muted={!sourceInvalid} class:invalid={sourceInvalid} role="status">
           {#if sourceInvalid}
-            This text doesn't read as a request yet. Until it does, the request stays as it last read, and can be edited only here.
+            <Icon name="alert" size={12} />
+            <span class="ellipsis">
+              {#if sourceError}<span class="line">Line {sourceError.line}</span> {sourceError.message}{:else}This text doesn't parse.{/if}
+              Until it does, the request stays as it last read, and can be edited only here.
+            </span>
+            {#if sourceError}
+              <button class="link" onclick={() => sourceEditor?.revealLine(sourceError.line, { caret: sourceError.column })}>Go to line {sourceError.line}</button>
+            {/if}
           {:else}
-            This request as it's written to <code>{basename(tab.path)}</code>. Edit it here or in the sections.
+            <span class="ellipsis">This request as it's written to <code>{basename(tab.path)}</code>. Edit it here or in the sections.</span>
           {/if}
         </div>
         <div class="source-code">
           <ReadOnlyRegion when={() => !!lock && !ownSource}>
-            <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.texts.edit(tab.path, view, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} lineBreak={app.texts.lineBreak(tab.path)} />
+            <Editor bind:this={sourceEditor} value={source} onchange={(text) => app.texts.edit(tab.path, view, text)} onsend={() => app.send(tab.id)} freshHistory language="http" {variables} {underlines} lineMarks={sourceMarks} {lineBreak} memory={editorMemoryKey(tab.id, "source")} label={`${displayName(req)} as .http source`} />
           </ReadOnlyRegion>
         </div>
       </div>
     {/if}
+    {#if showSource}<div class="under-source">{@render strip()}</div>{/if}
     {#if !showSource}
       {#snippet undefinedCount(s: Section)}
         {@const n = undefinedIn(s)}
@@ -538,9 +572,36 @@
   .source[hidden] {
     display: none;
   }
+  /* The strip keeps its own bottom margin; this is the gap above it. */
+  .under-source {
+    flex: none;
+    margin-top: var(--space-2);
+  }
+  .under-source:not(:has(.checks)) {
+    display: none;
+  }
   .source-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     font-size: 11.5px;
-    padding: 8px 16px;
+    line-height: 16px;
+    padding: var(--space-2) var(--space-4);
+  }
+  .source-note.invalid {
+    color: var(--text-2);
+  }
+  .source-note.invalid :global(svg) {
+    flex: none;
+    color: var(--danger);
+  }
+  .source-note .line {
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+  .source-note .link {
+    flex: none;
+    font-size: inherit;
   }
   .source-code {
     flex: 1;

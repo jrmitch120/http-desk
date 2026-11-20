@@ -156,8 +156,9 @@ the app's Menu instead:
   focused or not, the URL bar, the body editor): Cut, Copy, Paste, Select all (icons
   `cut`, `copy`, `paste`, `select-all`). Cut
   and Copy are disabled with nothing selected, and in a password input or a
-  `masked` VarField. Read-only text (the response viewer, the `.http` source, a
-  read-only input): Copy and Select all.
+  `masked` VarField. The `.http` source and the file view are editors too, with the
+  whole menu. Read-only text (the response viewer, a read-only input, a text view
+  while it's locked): Copy and Select all.
 - A right-click outside an editor's selection puts the caret there first; on a
   VarField's static rendering it starts the editor with the caret there. While the
   menu is open the editor is held (`src/lib/codemirror/holds.ts`), so a VarField

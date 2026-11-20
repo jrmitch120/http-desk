@@ -38,7 +38,8 @@ test("typing Con on a header line offers Content-Type, and Enter writes it", asy
   await expect(list(page).getByRole("option", { name: "Content-Type" })).toBeVisible();
   await page.keyboard.type("t");
   await accept(page, "Content-Type");
-  await expect(source(page).locator(".cm-activeLine")).toHaveText("Content-Type");
+  // With its colon, the caret after it for the value.
+  await expect(source(page).locator(".cm-activeLine")).toHaveText("Content-Type: ");
 });
 
 test("typing {{ offers a variable from the selected environment", async ({ page }) => {

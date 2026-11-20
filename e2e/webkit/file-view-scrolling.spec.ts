@@ -17,7 +17,7 @@ async function openAsText(page: Page, replaceWith?: string) {
   await openApp(page);
   await treeItem(page, "samples").click();
   await treeItem(page, "jetbrains.http").click();
-  await treeMenu(page, "jetbrains.http", "View as text");
+  await treeMenu(page, "jetbrains.http", "View file as text");
   await expect(activeTab(page)).toContainText("jetbrains.http");
   await code(page).locator(".cm-line").first().click();
   if (text) {

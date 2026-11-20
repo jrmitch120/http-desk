@@ -9,7 +9,7 @@
 import { untrack } from "svelte";
 import { api } from "./api";
 import { ReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
-import { problemCount, problemFiles, type ProblemFile } from "./problemsList";
+import { problemCount, problemFiles, type ProblemFile, type ProblemFilesMemo } from "./problemsList";
 import type { EnvironmentSet, FileProblems, OpenText } from "./types";
 import { envVariables } from "./vars";
 
@@ -68,8 +68,10 @@ export class WorkspaceProblems {
       if (!checks) this.kept.set(path, (checks = new ReferenceChecks()));
       return checks;
     };
-    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf, kept);
+    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf, kept, this.listed);
   });
+  /** Each file's entry as last listed (`problemFiles`' memo): an edit to one open document lists only that one again. */
+  private listed: ProblemFilesMemo = new WeakMap();
 
   /** The count on the panel's toggle. */
   get count(): number {
@@ -94,10 +96,63 @@ export class WorkspaceProblems {
     this.seen.clear();
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+    clearTimeout(this.scanTimer);
   }
 
-  /** Reads the whole workspace, open documents as the app has them. */
-  async scan(): Promise<void> {
+  /** A scan under way, and whether another was asked for meanwhile (it runs once this one ends). */
+  private scanning: Promise<void> | null = null;
+  private scanAgain = false;
+  private scanTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Reads the whole workspace, open documents as the app has them. One at a time: asked
+   * for while one runs (a checkout reports folder after folder), it runs once more when
+   * that one ends, however often it was asked for.
+   */
+  scan(): Promise<void> {
+    if (this.scanning) {
+      this.scanAgain = true;
+      return this.scanning;
+    }
+    const run = async () => {
+      do {
+        this.scanAgain = false;
+        await this.scanOnce();
+      } while (this.scanAgain);
+    };
+    const scanning = run().finally(() => {
+      if (this.scanning === scanning) this.scanning = null;
+    });
+    return (this.scanning = scanning);
+  }
+
+  /** `scan`, once the watcher has been quiet for a moment. */
+  private scanSoon() {
+    clearTimeout(this.scanTimer);
+    this.scanTimer = setTimeout(() => void this.scan(), PROBLEMS_READ_DELAY_MS);
+  }
+
+  /** The app moved the file or folder at `from` to `to` (no watcher event follows): what was found in it is at its new path. */
+  moved(from: string, to: string) {
+    const remap = (p: string) => (p === from ? to : p.startsWith(from + "/") || p.startsWith(from + "\\") ? to + p.slice(from.length) : p);
+    const files: Record<string, FileProblems> = {};
+    for (const f of Object.values(this.files)) {
+      const path = remap(f.path);
+      files[path] = path === f.path ? f : { ...f, path };
+      if (path !== f.path) this.kept.delete(f.path);
+    }
+    this.files = files;
+  }
+
+  /** The app deleted the file or folder at `path` (no watcher event follows): nothing is listed for it. */
+  removed(path: string) {
+    const under = (p: string) => p === path || p.startsWith(path + "/") || p.startsWith(path + "\\");
+    if (!Object.keys(this.files).some(under)) return;
+    this.files = Object.fromEntries(Object.entries(this.files).filter(([p]) => !under(p)));
+    for (const p of [...this.kept.keys()]) if (under(p)) this.kept.delete(p);
+  }
+
+  private async scanOnce(): Promise<void> {
     if (!this.host.root) return;
     const open = this.opens;
     const since = this.asks;
@@ -123,7 +178,7 @@ export class WorkspaceProblems {
   /** The watcher reported `paths`: each `.http` file is read again, and the whole workspace when a folder changed. */
   changed(paths: string[]) {
     if (paths.some((p) => !/\.(http|rest)$/i.test(p) && !/http-client(\.private)?\.env\.json$/.test(p))) {
-      void this.scan();
+      this.scanSoon();
       return;
     }
     for (const p of paths) if (/\.(http|rest)$/i.test(p)) void this.refresh(p);

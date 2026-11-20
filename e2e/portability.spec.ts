@@ -121,7 +121,7 @@ test("turning on portability warnings makes a handler line's marker and the stri
 test("the file view marks the lines that behave differently too, each with what both editors do", async ({ page }) => {
   await openApp(page);
   await treeItem(page, "samples").click();
-  await treeMenu(page, "jetbrains.http", "View as text");
+  await treeMenu(page, "jetbrains.http", "View file as text");
   const fileView = page.locator(".file-view .file-code");
   await hoverMarkerOf(page, "> {%", fileView);
   await expect(page.getByRole("tooltip")).toHaveText("Rider runs this response handler; VS Code ignores the script and sends its lines as body text");

@@ -13,6 +13,7 @@
   import { sessionView } from "../lib/sessionView.svelte";
   import { portabilityLineMarks, ReferenceChecks, type OutsideScope } from "../lib/checks";
   import { checkUnderlines, fileUnderlines } from "../lib/codemirror/underlines";
+  import { inDocument } from "../lib/codemirror/lineEndings";
   import { requestAt, requestBlocks, type OutlineEntry, type RequestBlock } from "../lib/codemirror/outline";
   import { EditorView } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
@@ -27,12 +28,16 @@
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
+  import { editorMemoryKey } from "../lib/editorMemory";
 
   let { tab }: { tab: Tab } = $props();
 
   const doc = $derived(app.docs[tab.path]);
   const dirty = $derived(app.isDocDirty(tab.path));
   const invalid = $derived(app.texts.isInvalid(tab.path, fileView));
+  /** Where the text stops parsing: what the note says, and where its button goes. */
+  const firstError = $derived(app.texts.firstError(tab.path, fileView));
+  const lineBreak = $derived(app.texts.lineBreak(tab.path));
   // Read-only while a request's Source view holds text that doesn't parse (#174).
   const lock = $derived(app.texts.lock(tab));
   setReadOnlyRegion(() => !!lock);
@@ -86,7 +91,9 @@
     app.texts.follow(
       tab.path,
       fileView,
-      (t) => {
+      (t, how) => {
+        // Text the user reverted to goes in as a change Undo takes back.
+        if (how.undoable && text !== t) editor?.replace(t);
         if (text !== t) text = t;
         shown = true;
       },
@@ -112,11 +119,14 @@
   /** Each request's Undefined variables and shared `# @name`, as its tab's strip finds them, kept between readings. */
   const references = new ReferenceChecks();
   // The core's problems, then those, each where it was found in the text (#165, #166).
+  /** The body files the Problems panel found missing (the shell looks on disk), by line of the file's text as it then was. */
+  const missingFiles = $derived((app.problems.files[tab.path]?.problems ?? []).filter((p) => p.code === "missing-file"));
   const underlines = $derived.by(() => {
     if (!found) return [];
-    const problems = checkUnderlines(found.text, found.problems.map((problem) => ({ kind: "problem" as const, problem })));
-    if (!found.file) return problems;
-    return [...problems, ...fileUnderlines(found.file, references.of(found.file, outside))].sort((a, b) => a.from - b.from);
+    const problems = checkUnderlines(found.text, [...found.problems, ...missingFiles].map((problem) => ({ kind: "problem" as const, problem })));
+    const all = found.file ? [...problems, ...fileUnderlines(found.file, references.of(found.file, outside))].sort((a, b) => a.from - b.from) : problems;
+    // In a file with mixed endings the text keeps each `\r\n`; the editor's document has one character per break.
+    return lineBreak ? inDocument(found.text, all) : all;
   });
   const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portabilityLevel));
 
@@ -176,6 +186,29 @@
     editor?.revealAt(block.start, { focus });
   }
 
+  // The outline is one stop in the tab order (its current entry); the arrow keys move through it.
+  let outline = $state<HTMLElement>();
+  function outlineKey(e: KeyboardEvent) {
+    const move = { ArrowDown: 1, ArrowUp: -1, Home: -Infinity, End: Infinity }[e.key];
+    if (move === undefined || !outline) return;
+    const rows = [...outline.querySelectorAll<HTMLElement>(".list-row")];
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    const to = rows[Math.max(0, Math.min(rows.length - 1, move === -Infinity ? 0 : move === Infinity ? rows.length - 1 : at + move))];
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
+  }
+  // The entry of the request under the cursor stays in sight as the cursor moves through a long file.
+  $effect(() => {
+    if (!currentEntry || !outline) return;
+    tick().then(() => outline?.querySelector<HTMLElement>(".list-row.current")?.scrollIntoView({ block: "nearest" }));
+  });
+
+  let folding = $state(false);
+  let canFoldAll = $state(true);
+  /** The request under the cursor can't be opened: why, for the button's tooltip. */
+  const noRequest = $derived(underCursor ? "" : invalid ? "The text doesn't parse, so its requests are as they last read" : "Put the cursor in a request to open it in its own tab");
+
   // Asked to show a request (the explorer, `app.openFileView(path, { key })`): once the text is shown.
   $effect(() => {
     const want = app.fileRequestWanted;
@@ -191,7 +224,7 @@
     const want = app.fileLineWanted;
     if (want?.tabId !== tab.id || !shown || !editor) return;
     app.fileLineWanted = null;
-    tick().then(() => editor?.revealLine(want.line));
+    tick().then(() => editor?.revealLine(want.line, { caret: want.column ?? true }));
   });
 </script>
 
@@ -219,16 +252,19 @@
       <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <span class="spacer"></span>
       <!-- Back to a request's own tab (the request tab's File button comes here). -->
+      <button class="icon-btn" aria-label="Fold all" use:tooltip={canFoldAll ? undefined : "Too large to fold all"} aria-disabled={!canFoldAll || folding} onclick={() => canFoldAll && !folding && editor?.fold(true)}><Icon name="fold" size={14} /></button>
+      <button class="icon-btn" aria-label="Unfold all" use:tooltip onclick={() => editor?.fold(false)}><Icon name="unfold" size={14} /></button>
+      <!-- Unavailable with a reason: aria-disabled, so the reason is reachable from the keyboard (controls.md). -->
       <button
         class="btn small ghost"
-        disabled={!underCursor}
+        aria-disabled={!underCursor}
         onclick={() => {
           // The one under the cursor now, though the outline hasn't caught up.
           const index = requestNow();
           const key = !invalid && index !== null ? doc?.file.requests[index]?._key : underCursor;
           if (key) void app.openRequest(tab.path, { key });
         }}
-        use:tooltip={underCursor ? "Open the request under the cursor in its own tab" : invalid ? "The text doesn't read as a file yet" : "Put the cursor in a request to open it in its own tab"}
+        use:tooltip={noRequest || "Open the request under the cursor in its own tab"}
       >
         <Icon name="file" size={14} />Request
       </button>
@@ -236,19 +272,28 @@
         <Icon name="save" size={14} />Save{#if dirty}<span class="dot"></span>{/if}
       </button>
     </div>
-    <div class="note muted">
+    <!-- One line either way, so the text below doesn't move as typing passes through text that doesn't parse. -->
+    <div class="note" class:muted={!invalid} class:invalid role="status">
       {#if invalid}
-        This text doesn't read as a file yet. Until it does, its requests stay as they last read.
+        <Icon name="alert" size={12} />
+        <span class="ellipsis">
+          {#if firstError}<span class="line">Line {firstError.line}</span> {firstError.message}{:else}This text doesn't parse.{/if}
+          Until it does, its requests stay as they last read.
+        </span>
+        {#if firstError}
+          <button class="link" onclick={() => editor?.revealLine(firstError.line, { caret: firstError.column })}>Go to line {firstError.line}</button>
+        {/if}
       {:else}
-        The whole of <code>{basename(tab.path)}</code> as it's written. Edits here show in its requests' tabs, and theirs here.
+        <span class="ellipsis">The whole of <code>{basename(tab.path)}</code> as it's written. Edits here show in its requests' tabs, and theirs here.</span>
       {/if}
     </div>
     {#if shown}
       <div class="file-body">
-        <nav class="outline" aria-label="Outline">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <nav class="outline" aria-label="Outline" bind:this={outline} onkeydown={outlineKey}>
           <!-- Nothing in a row reads its place: a request added or removed above moves the rest without touching them (#168). -->
           {#each entries as entry (entry)}
-            <button class="list-row" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
+            <button class="list-row" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} tabindex={entry === (currentEntry ?? entries[0]) ? 0 : -1} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
               <Badge method={entry.method} />
               <span class="label ellipsis">{entry.label}</span>
             </button>
@@ -271,8 +316,12 @@
             {variables}
             {underlines}
             lineMarks={marks}
-            lineBreak={app.texts.lineBreak(tab.path)}
+            {lineBreak}
+            bind:folding
+            bind:canFoldAll
             extensions={followCursor}
+            memory={editorMemoryKey(tab.id, "file")}
+            label={`${basename(tab.path)} as text`}
           />
         </div>
       </div>
@@ -290,8 +339,8 @@
   .crumbs {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 10px 14px 4px 16px;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) var(--space-1);
     color: var(--muted);
     flex: none;
   }
@@ -308,8 +357,28 @@
     background: var(--accent);
   }
   .note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
     font-size: 11.5px;
-    padding: 6px 16px 8px;
+    line-height: 16px;
+    padding: var(--space-2) var(--space-4);
+  }
+  .note.invalid {
+    color: var(--text-2);
+  }
+  .note.invalid :global(svg) {
+    flex: none;
+    color: var(--danger);
+  }
+  .note .line {
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+  .note .link {
+    flex: none;
+    font-size: inherit;
   }
   code {
     font-family: var(--mono);
@@ -342,7 +411,7 @@
   }
   .none {
     font-size: 11.5px;
-    padding: 6px;
+    padding: var(--space-2);
   }
   .file-code {
     flex: 1;

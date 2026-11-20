@@ -61,9 +61,14 @@ pub fn parse_with_problems(text: &str) -> ParsedFile {
 /// the files its requests' bodies are read from, each placed in `text` (a workspace's
 /// Problems panel lists them by line in the file).
 pub fn text_problems(text: &str) -> RequestProblems {
+    text_reading(text).1
+}
+
+/// A whole file's `text` read once: the file it reads as, and [`text_problems`] of it.
+pub fn text_reading(text: &str) -> (HttpFile, RequestProblems) {
     let mut files = Vec::new();
-    let ParsedFile { problems, .. } = read_file(text, &mut files);
-    RequestProblems { problems, files }
+    let ParsedFile { file, problems } = read_file(text, &mut files);
+    (file, RequestProblems { problems, files })
 }
 
 /// [`parse_with_problems`], adding the files the bodies are read from to `files`.
@@ -543,7 +548,10 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
                     docs.push(d)
                 }
                 Some(d) => {
-                    if !KNOWN_DIRECTIVES.iter().any(|k| k.eq_ignore_ascii_case(&d.name)) {
+                    // A variable commented out (`# @host = https://…`) is a comment, not a directive nobody reads.
+                    let commented_variable =
+                        comment_body(line.trim()).is_some_and(|c| parse_variable(c.trim()).is_some());
+                    if !commented_variable && !KNOWN_DIRECTIVES.iter().any(|k| k.eq_ignore_ascii_case(&d.name)) {
                         let at = line.find('@').map_or(0, |i| line[..i].chars().count());
                         problems.push(Problem {
                             column: at + 1,
@@ -552,7 +560,7 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
                                 idx - 1,
                                 Severity::Warning,
                                 ProblemCode::UnknownDirective,
-                                &format!("Unknown directive @{}: neither JetBrains, VS Code nor HttpDesk reads it, so it's ignored", d.name),
+                                &format!("Unknown directive @{}: neither Rider, VS Code nor HttpDesk reads it, so it's ignored", d.name),
                             )
                         });
                     }

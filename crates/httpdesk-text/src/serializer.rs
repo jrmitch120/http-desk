@@ -38,16 +38,40 @@ fn single_line(context: &str, what: impl FnOnce() -> String, value: &str) -> Res
 }
 
 fn check_file(file: &HttpFile) -> Result<(), InvalidField> {
-    for c in &file.header.comments {
-        single_line("File header", || "a comment line".into(), c)?;
-    }
-    for v in &file.header.variables {
-        check_variable("File variables", v)?;
+    // As for a request below: a header still as it was read is written as that text.
+    let header_as_read = file
+        .header
+        .raw
+        .as_deref()
+        .is_some_and(|raw| FileHeader { raw: file.header.raw.clone(), ..parser::parse_header(raw) } == file.header);
+    if !header_as_read {
+        for c in &file.header.comments {
+            single_line("File header", || "a comment line".into(), c)?;
+        }
+        for v in &file.header.variables {
+            check_variable("File variables", v)?;
+        }
     }
     for req in &file.requests {
-        check_request(req)?;
+        // A request still as its text was read is written as that text, whatever its
+        // fields hold (a lone `\r` the parser left in a header's value): any text
+        // saves back byte for byte.
+        if let Err(e) = check_request(req) {
+            if !written_as_read(req) {
+                return Err(e);
+            }
+        }
     }
     Ok(())
+}
+
+/// Whether `req` is exactly what its text (`raw`) reads as, every field: [`serialize`]
+/// then writes that text. (Not whether it renders the same: an edit the rendering
+/// would drop, a trailing `\r` in a value, is still an edit to refuse.)
+fn written_as_read(req: &Request) -> bool {
+    let Some(raw) = req.raw.as_deref() else { return false };
+    parser::parse_block(raw)
+        .is_some_and(|read| Request { raw: req.raw.clone(), leading: req.leading.clone(), ..read } == *req)
 }
 
 fn check_variable(context: &str, v: &Variable) -> Result<(), InvalidField> {

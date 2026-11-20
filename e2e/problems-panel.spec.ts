@@ -52,6 +52,8 @@ test("a file's portability summary says how many lines behave differently, and t
   // Fixing the broken line in its file view removes its entry, unsaved.
   await group(page, "problems/broken.http").getByRole("button", { name: /Line 2/ }).click();
   await expect(fileView(page).locator(".cm-activeLine")).toContainText("search for pets");
+  // The caret is at the problem, the line not selected: typing there wouldn't replace it.
+  await page.keyboard.press("Shift+End");
   await page.keyboard.type("GET {{baseUrl}}/search");
   await expect(group(page, "problems/broken.http")).toHaveCount(0);
   await expect(toggle(page)).toContainText("1");

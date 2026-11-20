@@ -1,6 +1,6 @@
 // Shared CodeMirror configuration: theme (driven by CSS variables so it follows
 // the app theme), syntax highlighting, languages, and {{variable}} support.
-import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
@@ -643,7 +643,7 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
     ext.push(EditorState.readOnly.of(true));
   } else {
     if (opts.history !== false) ext.push(history());
-    ext.push(closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab]));
+    ext.push(closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, { key: "Tab", run: acceptCompletion }, indentWithTab]));
   }
   if (opts.placeholder) ext.push(placeholderExt(opts.placeholder));
   return ext;

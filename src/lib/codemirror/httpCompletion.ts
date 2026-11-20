@@ -5,7 +5,7 @@
 // method Select's, the Headers table's suggestions, the parser's directives.
 // `variableExtensions` (./setup.ts) runs it next to the `{{variables}}`
 // completion, so any `.http` editor with variables has both.
-import type { Completion, CompletionContext, CompletionResult } from "@codemirror/autocomplete";
+import { pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { ensureSyntaxTree, language, syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { HEADER_NAMES, KNOWN_DIRECTIVES, STANDARD_METHODS } from "../http";
@@ -17,7 +17,27 @@ interface Place {
   options: readonly string[];
   type: string;
   from: number;
+  /** What follows an accepted option, unless it's there already: a method's space, a header name's `: `. */
+  then?: string;
 }
+
+/**
+ * Which editor reads each directive that isn't read by both (the core's portability
+ * table, crates/httpdesk-text/src/portability.rs): shown beside it in the list.
+ */
+const DIRECTIVE_SUPPORT: Record<string, string> = {
+  "no-log": "Rider only",
+  "no-auto-encoding": "Rider only",
+  timeout: "Rider only",
+  "connection-timeout": "Rider only",
+  "use-os-credentials": "Rider only",
+  note: "VS Code only",
+  prompt: "VS Code only",
+  "httpdesk-disabled": "HttpDesk only",
+  "httpdesk-auth": "HttpDesk only",
+  param: "HttpDesk only",
+  header: "HttpDesk only",
+};
 
 /**
  * The `.http` tree of `state`, parsed to the end of line `to` ends on: every block
@@ -42,7 +62,7 @@ function placeAt(state: EditorState, pos: number): Place | null {
 
   const word = /[\w-]*$/.exec(before)![0];
   if (covering?.name === "RequestLine") {
-    if (/^\s*[A-Za-z]*$/.test(before)) return { options: STANDARD_METHODS, type: "keyword", from: pos - word.length };
+    if (/^\s*[A-Za-z]*$/.test(before)) return { options: STANDARD_METHODS, type: "keyword", from: pos - word.length, then: " " };
     return null;
   }
   // A directive: `@` right after `#` or `//`, or one space after (the core's rule), above the request line.
@@ -52,7 +72,7 @@ function placeAt(state: EditorState, pos: number): Place | null {
   }
   // A header's name: a line in the header area, before its colon. A line without one isn't a Header yet.
   if ((!covering || covering.name === "Header") && request && line.from > request.to && headerArea(state, request.to, line.number)) {
-    if (/^\s*[\w-]*$/.test(before)) return { options: HEADER_NAMES, type: "property", from: pos - word.length };
+    if (/^\s*[\w-]*$/.test(before)) return { options: HEADER_NAMES, type: "property", from: pos - word.length, then: ": " };
   }
   return null;
 }
@@ -61,6 +81,20 @@ function placeAt(state: EditorState, pos: number): Place | null {
 function headerArea(state: EditorState, requestEnd: number, number: number): boolean {
   for (let n = state.doc.lineAt(requestEnd).number + 1; n < number; n++) if (state.doc.line(n).text.trim() === "") return false;
   return true;
+}
+
+/**
+ * The change that puts `value` in place of the word at `from`..`to` (and the rest of
+ * that word after the caret), followed by `then` (a method's space, a header name's
+ * `: `) unless that's there already, the caret after it.
+ */
+export function accepting(state: EditorState, from: number, to: number, value: string, then: string): { changes: { from: number; to: number; insert: string }; selection: { anchor: number } } {
+  const rest = /^[\w-]*/.exec(state.sliceDoc(to, state.doc.lineAt(to).to))![0].length;
+  const after = state.sliceDoc(to + rest, to + rest + then.length);
+  // All of it there (`: `), or its start (`:` at the line's end): the caret goes past what is.
+  const there = after === then ? then.length : after.startsWith(then.trimEnd()) && then.trimEnd() ? then.trimEnd().length : 0;
+  const insert = value + (there ? "" : then);
+  return { changes: { from, to: to + rest, insert }, selection: { anchor: from + insert.length + there } };
 }
 
 /** The `.http` completion source: nothing outside a `.http` editor. */
@@ -72,7 +106,13 @@ export function httpCompletion(ctx: CompletionContext): CompletionResult | null 
   if (!typed && !ctx.explicit && place.options !== KNOWN_DIRECTIVES) return null;
   const matches = matchSuggestions(typed, place.options);
   if (!matches.length) return null;
-  const options: Completion[] = matches.map((m) => ({ label: m.value, type: place.type }));
+  const { then } = place;
+  const options: Completion[] = matches.map((m) => ({
+    label: m.value,
+    type: place.type,
+    detail: place.options === KNOWN_DIRECTIVES ? DIRECTIVE_SUPPORT[m.value] : undefined,
+    apply: then ? (view, c, from, to) => view.dispatch({ ...accepting(view.state, from, to, m.value, then), userEvent: "input.complete", annotations: pickedCompletion.of(c) }) : undefined,
+  }));
   const where = new Map(matches.map((m) => [m.value, [m.from, m.to]]));
   return { from: place.from, options, filter: false, getMatch: (c) => where.get(c.label) ?? [] };
 }

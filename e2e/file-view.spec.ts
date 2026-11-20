@@ -44,7 +44,7 @@ test("an edit to the second request's header in the file view shows in that requ
 test("a request folds, and so does a body", async ({ page }) => {
   await openApp(page);
   await treeItem(page, "api").click();
-  await treeMenu(page, "pets.http", "View as text");
+  await treeMenu(page, "pets.http", "View file as text");
   await expect(activeTab(page)).toContainText("pets.http");
 
   // The fold gutter's marker beside `### List pets`.
@@ -103,7 +103,7 @@ test("a file with mixed line endings keeps each line's own through an edit in th
   await writeFileText(page, "/demo/api/pets.http", text);
   await page.reload();
   await treeItem(page, "api").click();
-  await treeMenu(page, "pets.http", "View as text");
+  await treeMenu(page, "pets.http", "View file as text");
   await line(page, "POST {{baseUrl}}/pets").click();
   await page.keyboard.press("End");
   await page.keyboard.type("\nX-Trace: on");
@@ -131,7 +131,7 @@ test("a new .http file is read from the text it's created with, as the shell rea
 test("the file view underlines an Undefined variable and a shared # @name, as each request's tab does", async ({ page }) => {
   await openApp(page);
   await treeItem(page, "api").click();
-  await treeMenu(page, "pets.http", "View as text");
+  await treeMenu(page, "pets.http", "View file as text");
   await line(page, "### Create pet").click();
   await page.keyboard.press("End");
   await page.keyboard.type("\n# @name twin");

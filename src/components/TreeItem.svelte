@@ -47,7 +47,7 @@
       menu.show(e, [
         { label: "New request", icon: "plus", action: () => app.addRequest(node.path) },
         { label: "Run file", icon: "send", disabled: app.running, action: () => app.runFile(node.path) },
-        { label: "View as text", icon: "code", action: () => app.openFileView(node.path) },
+        { label: "View file as text", icon: "code", action: () => app.openFileView(node.path) },
         { label: "Save", icon: "save", disabled: !dirty, action: () => app.save(node.path) },
         { separator: true },
         { label: "Rename…", icon: "edit", action: () => app.renamePath(node.path) },

@@ -454,7 +454,9 @@ struct Marks(Vec<PortabilityMark>);
 
 impl Marks {
     fn add(&mut self, line: usize, construct: Construct) {
-        if self.0.iter().any(|m| m.line == line && m.construct == construct) {
+        // Lines are added in order, so one already marked is among the last: a file's
+        // thousands of marks aren't all looked through for each.
+        if self.0.iter().rev().take_while(|m| m.line >= line).any(|m| m.line == line && m.construct == construct) {
             return;
         }
         let r = row(construct);

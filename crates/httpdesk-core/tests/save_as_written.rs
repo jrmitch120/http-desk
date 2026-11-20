@@ -63,3 +63,19 @@ fn a_request_saved_as_written_with_another_block_after_it_saves_that_block_after
     file.requests.splice(2..2, following.requests);
     assert_eq!(try_serialize(&file).unwrap(), FILE.replace(&source, &typed));
 }
+
+#[test]
+fn text_with_a_lone_carriage_return_in_a_line_saves_back_byte_for_byte() {
+    // `try_serialize` (what a save uses) refuses a field with a line break, but not one
+    // the text was read with: a request still as it was read is written as that text.
+    for text in ["GET http://x\nX-A: b\rc\n", "# note\rGET http://x\r", "@host = a\rb\n\n### One\nGET http://x\n"] {
+        assert_eq!(try_serialize(&parse(text)).as_deref(), Ok(text), "{text:?}");
+    }
+}
+
+#[test]
+fn a_field_edited_to_hold_a_line_break_is_still_refused() {
+    let mut file = parse("GET http://x\nX-A: b\n");
+    file.requests[0].headers.items[0].value = "b\nc".into();
+    assert!(try_serialize(&file).is_err());
+}

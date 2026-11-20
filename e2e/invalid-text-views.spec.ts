@@ -41,7 +41,7 @@ test("a broken line in the file view makes an open request tab of the file read-
   await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
 
   // The banner leads to the text, and fixing it unlocks the tab.
-  await banner.getByRole("button", { name: "Show file view" }).click();
+  await banner.getByRole("button", { name: /Show line \d+ in the file view/ }).click();
   await toCreateLineEnd(page);
   for (let i = 0; i < " and more".length; i++) await page.keyboard.press("Backspace");
   await expect(fileView(page).locator(".cm-underline-error")).toHaveCount(0);

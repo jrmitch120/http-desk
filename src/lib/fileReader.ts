@@ -93,6 +93,9 @@ class BlockCache<T> {
 export class FileReader {
   private parses = new BlockCache<BlockParse>();
   private marks = new BlockCache<PortabilityMark[]>();
+  /** The last text asked about and its reading, under way or done: the store and the file view ask about the same text moments apart. */
+  private lastParse: { text: string; found: Promise<ParsedFile> } | null = null;
+  private lastMarks: { text: string; found: Promise<PortabilityMark[]> } | null = null;
 
   constructor(private core: TextCore) {}
 
@@ -100,7 +103,18 @@ export class FileReader {
    * The file and problems in `text`: what the core's `parse_file_text` gives. The
    * requests' nested values are shared with later readings: copy one before changing it.
    */
-  async parse(text: string): Promise<ParsedFile> {
+  parse(text: string): Promise<ParsedFile> {
+    // Each asker gets requests of its own: the store gives them keys.
+    const own = ({ file, problems }: ParsedFile): ParsedFile => ({ file: { ...file, requests: file.requests.map((r) => ({ ...r })) }, problems });
+    if (this.lastParse?.text === text) return this.lastParse.found.then(own);
+    const found = this.parseText(text);
+    this.lastParse = { text, found };
+    // A reading that failed isn't kept: asking again asks the core again.
+    found.catch(() => this.lastParse?.found === found && (this.lastParse = null));
+    return found.then(own);
+  }
+
+  private async parseText(text: string): Promise<ParsedFile> {
     if (readWhole(text)) return this.core.parseFileText(text);
     const blocks = splitBlocks(text);
     const found = await this.read(text, blocks, this.parses, (t) => this.core.parseFileText(t), parsesOf, ({ file, problems }) => ({
@@ -126,7 +140,15 @@ export class FileReader {
   }
 
   /** The lines of `text` that behave differently in VS Code or Rider: what the core's `portability_text` gives. */
-  async portability(text: string): Promise<PortabilityMark[]> {
+  portability(text: string): Promise<PortabilityMark[]> {
+    if (this.lastMarks?.text === text) return this.lastMarks.found;
+    const found = this.portabilityOf(text);
+    this.lastMarks = { text, found };
+    found.catch(() => this.lastMarks?.found === found && (this.lastMarks = null));
+    return found;
+  }
+
+  private async portabilityOf(text: string): Promise<PortabilityMark[]> {
     if (readWhole(text)) return this.core.portabilityText(text);
     const blocks = splitBlocks(text);
     const found = await this.read(text, blocks, this.marks, (t) => this.core.portabilityText(t), marksOf, (marks) => marks);

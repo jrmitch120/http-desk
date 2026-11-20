@@ -19,13 +19,42 @@ export function readEndings(text: string, newBreak: LineBreak): { doc: string; o
   let at = 0;
   for (let nl = text.indexOf("\n"); nl >= 0; nl = text.indexOf("\n", nl + 1)) {
     const crlf = nl > 0 && text[nl - 1] === "\r";
-    const line = text.slice(at, crlf ? nl - 1 : nl);
-    doc += line;
+    doc += ownBreaks(text.slice(at, crlf ? nl - 1 : nl));
     if ((crlf ? "\r\n" : "\n") !== newBreak) others.push(doc.length);
     doc += "\n";
     at = nl + 1;
   }
-  return { doc: doc + text.slice(at), others };
+  return { doc: doc + ownBreaks(text.slice(at)), others };
+}
+
+/**
+ * A lone `\r` within a line is a break of its own to CodeMirror: `\n` here, one
+ * character as it was, so every offset after it is the same in the editor (left as
+ * `\r`, one before a `\r\n` would be read with it as a single break).
+ */
+const ownBreaks = (line: string) => (line.includes("\r") ? line.replaceAll("\r", "\n") : line);
+
+/**
+ * `ranges`, offsets into `text` (which keeps each line's own ending), as offsets into
+ * the document CodeMirror holds for it (`readEndings`), where every break is one
+ * character: each `\r\n` before an offset is one character less.
+ */
+export function inDocument<T extends { from: number; to: number }>(text: string, ranges: T[]): T[] {
+  if (!ranges.length || !text.includes("\r\n")) return ranges;
+  const crlfs: number[] = [];
+  for (let i = text.indexOf("\r\n"); i >= 0; i = text.indexOf("\r\n", i + 2)) crlfs.push(i);
+  // How many `\r\n` start before `offset`.
+  const before = (offset: number) => {
+    let lo = 0;
+    let hi = crlfs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (crlfs[mid] < offset) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  return ranges.map((r) => ({ ...r, from: r.from - before(r.from), to: r.to - before(r.to) }));
 }
 
 /** `doc` (CodeMirror's text, `\n` breaks) written with `newBreak`, except at `others`, the offsets of breaks that have the other ending. */

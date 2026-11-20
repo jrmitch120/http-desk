@@ -43,9 +43,6 @@ export interface FileTab extends TabBase {
 /** An editor tab: a request of a document, or a file view of the document. */
 export type Tab = RequestTab | FileTab;
 
-/** What a tab shows: a request of a document, or the whole file as one text. */
-export type TabKind = Tab["kind"];
-
 /** Whether `tab` is on a request (not a file view). */
 export const isRequestTab = (tab: Tab | null | undefined): tab is RequestTab => tab?.kind === "request";
 

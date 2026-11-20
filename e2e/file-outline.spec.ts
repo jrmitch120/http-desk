@@ -16,7 +16,7 @@ async function openAsText(page: Page, folder: string, file: string) {
   await openApp(page);
   await treeItem(page, folder).click();
   await treeItem(page, file).click();
-  await treeMenu(page, file, "View as text");
+  await treeMenu(page, file, "View file as text");
   await expect(activeTab(page)).toContainText(file);
   await expect(fileView(page).locator(".cm-line").first()).toBeVisible();
 }

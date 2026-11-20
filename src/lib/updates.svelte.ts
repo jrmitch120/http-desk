@@ -49,7 +49,8 @@ class Updates {
     if (dirty) {
       await app.saveAll();
       if (app.dirtyDocs().length) {
-        app.toast("error", "Update cancelled because some files couldn't be saved.");
+        // A save that failed was reported; nothing was, if the user cancelled when asked what to keep.
+        app.toast("info", "The update wasn't installed: some files are still unsaved.");
         return;
       }
     }

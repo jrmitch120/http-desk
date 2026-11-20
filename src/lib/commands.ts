@@ -254,7 +254,8 @@ const COMMANDS: Command[] = [
     label: "Show .http Source",
     // A browser's View Source key. Not ⌘U: CodeMirror's undo selection in the source.
     shortcut: { mod: true, alt: true, key: "u" },
-    enabled: withTab,
+    // A file view is the source already: only a request has sections to show instead.
+    enabled: withRequest,
     checked: () => app.activeTabId !== null && app.settings?.showSource === true,
     run: () => app.activeTabId && app.toggleSource(),
   },
@@ -263,7 +264,8 @@ const COMMANDS: Command[] = [
     id: "view-file-as-text",
     label: "View File as Text",
     enabled: () => app.activeTab?.kind === "request",
-    run: () => app.activeTab && void app.openFileView(app.activeTab.path),
+    // At the request it's asked from, as the request tab's File button opens it.
+    run: () => isRequestTab(app.activeTab) && void app.openFileView(app.activeTab.path, { key: app.activeTab.key }),
   },
   {
     // Hiding never changes the stored width, so showing again restores it.
@@ -292,6 +294,8 @@ const COMMANDS: Command[] = [
   {
     id: "toggle-problems",
     label: "Show Problems",
+    // As in VS Code.
+    shortcut: { mod: true, shift: true, key: "m" },
     enabled: inWorkspace,
     checked: () => app.panel === "problems",
     run: () => app.togglePanel("problems"),
