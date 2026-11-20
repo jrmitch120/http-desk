@@ -6,7 +6,7 @@
 import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
 import { getDirective, uid } from "./http";
-import type { RunState, Tab } from "./store.svelte";
+import type { RunState, RequestTab } from "./store.svelte";
 import { newTab } from "./tabView";
 import type { ExchangeShape, HttpResponse, NamedExchange, Request, StoredCookie, TestResult } from "./types";
 
@@ -121,7 +121,7 @@ export class SessionStore {
    * its own (`ExchangeView.svelte`) under a pseudo tab: its response is a copy with
    * its own id, so the request's tab keeps the response it shows.
    */
-  shownExchange = $state<{ entry: NamedExchange; tab: Tab } | null>(null);
+  shownExchange = $state<{ entry: NamedExchange; tab: RequestTab } | null>(null);
 
   /** Shows a named request's latest exchange in the response viewer, over the open tabs. */
   async openExchange(entry: NamedExchange) {
@@ -133,7 +133,7 @@ export class SessionStore {
       return;
     }
     this.closeExchange();
-    const tab: Tab = { ...newTab(entry.file, ""), id: `exchange:${uid()}` };
+    const tab: RequestTab = { ...newTab(entry.file, ""), id: `exchange:${uid()}` };
     this.host.runs[tab.id] = { runId: uid(), loading: false, startedAt: 0, response };
     this.shownExchange = { entry, tab };
   }

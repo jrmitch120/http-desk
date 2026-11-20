@@ -36,7 +36,9 @@
 
 <style>
   .tooltip {
-    max-width: 360px;
+    /* By its content, as CodeMirror's tooltips are (setup.ts): never by the popup layer, which has no width. */
+    width: max-content;
+    max-width: min(360px, calc(100vw - 12px));
     padding: 4px 8px;
     font-size: 12px;
     line-height: 1.4;

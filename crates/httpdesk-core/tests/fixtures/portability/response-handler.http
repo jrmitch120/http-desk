@@ -1,0 +1,7 @@
+### Check
+GET https://example.com/get
+
+> {%
+    // @no-log is only a comment here, and {{$guid}} is script text
+    client.test("ok", () => client.assert(response.status === 200));
+%}

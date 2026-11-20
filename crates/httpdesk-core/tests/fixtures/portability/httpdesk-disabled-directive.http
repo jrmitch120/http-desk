@@ -1,0 +1,4 @@
+### No headers
+# @httpdesk-disabled headers
+GET https://example.com/h
+#~ Accept: application/json

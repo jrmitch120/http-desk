@@ -31,6 +31,7 @@
     ];
   });
   const layout = $derived(app.settings?.layout ?? "horizontal");
+  const problems = $derived(app.problems.count);
 
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
@@ -94,6 +95,19 @@
       <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
     </span>
   {/if}
+  <!-- The Problems panel's toggle, with the workspace's problem count. -->
+  <button
+    class="icon-btn"
+    class:active={app.panel === "problems"}
+    class:counted={problems > 0}
+    class:attention={problems > 0}
+    aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
+    aria-pressed={app.panel === "problems"}
+    use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
+    onclick={() => runCommand("toggle-problems")}
+  >
+    <Icon name="alert" />{#if problems}<span class="count">{problems}</span>{/if}
+  </button>
   <button
     class="icon-btn"
     class:active={app.sidebarShown}

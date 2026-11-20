@@ -1,0 +1,43 @@
+### A blank line ends the headers
+POST https://example.com/notes
+Accept: */*
+
+Content-Type: text/plain
+X-Trace: 1
+hello
+
+### Header-like lines after body text are content
+POST https://example.com/notes
+Content-Type: text/plain
+
+https://example.com/link
+Note: this line comes after body text
+
+### JSON keys are quoted, so they're never headers
+POST https://example.com
+Content-Type: application/json
+
+{
+  "note": "fine"
+}
+
+### A text body may start with a header-like line
+POST https://example.com/mail
+Content-Type: text/plain
+
+Subject: hi
+Dear all,
+
+### So may a YAML body
+POST https://example.com/config
+Content-Type: application/yaml
+
+name: pets
+replicas: 2
+
+### A JSON body never starts with one
+POST https://example.com
+Content-Type: application/json
+
+Authorization: Bearer t
+{}

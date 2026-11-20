@@ -5,6 +5,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { app } from "./store.svelte";
+import { isRequestTab } from "./tabView";
 import { updates } from "./updates.svelte";
 import { DOCUMENTATION_URL, openLink, RELEASE_NOTES_URL, reportIssue } from "./about";
 import { modalOpen } from "./modal.svelte";
@@ -34,9 +35,11 @@ export type CommandId =
   | "duplicate-request"
   | "rename-request"
   | "show-source"
+  | "view-file-as-text"
   | "toggle-sidebar"
   | "toggle-session"
   | "toggle-runner"
+  | "toggle-problems"
   | "clear-session"
   | "zoom-in"
   | "zoom-out"
@@ -238,20 +241,31 @@ const COMMANDS: Command[] = [
     id: "duplicate-request",
     label: "Duplicate",
     enabled: withRequest,
-    run: () => app.activeTab && void app.duplicateRequest(app.activeTab.path, app.activeTab.key),
+    run: () => isRequestTab(app.activeTab) && void app.duplicateRequest(app.activeTab.path, app.activeTab.key),
   },
   {
     id: "rename-request",
     label: "Rename…",
     enabled: withRequest,
-    run: () => app.activeTab && void app.renameRequest(app.activeTab.path, app.activeTab.key),
+    run: () => isRequestTab(app.activeTab) && void app.renameRequest(app.activeTab.path, app.activeTab.key),
   },
   {
     id: "show-source",
     label: "Show .http Source",
-    enabled: withTab,
+    // A browser's View Source key. Not ⌘U: CodeMirror's undo selection in the source.
+    shortcut: { mod: true, alt: true, key: "u" },
+    // A file view is the source already: only a request has sections to show instead.
+    enabled: withRequest,
     checked: () => app.activeTabId !== null && app.settings?.showSource === true,
     run: () => app.activeTabId && app.toggleSource(),
+  },
+  {
+    // The whole file as one text, in a tab of its own (its file view).
+    id: "view-file-as-text",
+    label: "View File as Text",
+    enabled: () => app.activeTab?.kind === "request",
+    // At the request it's asked from, as the request tab's File button opens it.
+    run: () => isRequestTab(app.activeTab) && void app.openFileView(app.activeTab.path, { key: app.activeTab.key }),
   },
   {
     // Hiding never changes the stored width, so showing again restores it.
@@ -276,6 +290,15 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     checked: () => app.panel === "runner",
     run: () => app.togglePanel("runner"),
+  },
+  {
+    id: "toggle-problems",
+    label: "Show Problems",
+    // As in VS Code.
+    shortcut: { mod: true, shift: true, key: "m" },
+    enabled: inWorkspace,
+    checked: () => app.panel === "problems",
+    run: () => app.togglePanel("problems"),
   },
   { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {

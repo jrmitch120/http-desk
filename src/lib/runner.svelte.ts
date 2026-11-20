@@ -258,7 +258,7 @@ export class RunnerStore {
     const args = { filePath: path, fileVariables: $state.snapshot(fileVariables(doc.file)), requestNames: requestNames(doc.file) };
     return doc.file.requests.flatMap((req) => {
       const key = req._key!;
-      const open = this.host.tabs.some((t) => t.path === path && t.key === key);
+      const open = this.host.tabs.some((t) => t.kind === "request" && t.path === path && t.key === key);
       const saved = doc.saved[key];
       if (!open && saved === undefined) return [];
       const request = open ? ($state.snapshot(req) as Request) : (JSON.parse(saved) as Request);

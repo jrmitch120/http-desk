@@ -5,7 +5,7 @@
   // Dynamic variables that generate a new value on every send stay as written, and
   // so do Prompt variables not answered yet. Values the Session remembers for them
   // are shown (masked ones masked by the shell) and can be forgotten here.
-  import { app, type Tab } from "../lib/store.svelte";
+  import { app, type RequestTab } from "../lib/store.svelte";
   import { errorMessage } from "../lib/api";
   import { promptAnswersOf } from "../lib/promptAnswers.svelte";
   import { fileVariables, methodClass, requestNames, requestPrompts } from "../lib/http";
@@ -13,7 +13,7 @@
   import type { RequestPreview } from "../lib/types";
   import { tooltip } from "../lib/popup/tooltip.svelte";
 
-  let { tab }: { tab: Tab } = $props();
+  let { tab }: { tab: RequestTab } = $props();
 
   /** Wait after the last edit before asking again, so typing doesn't flood the shell. */
   const DEBOUNCE_MS = 150;

@@ -1,6 +1,6 @@
 // Shared CodeMirror configuration: theme (driven by CSS variables so it follows
 // the app theme), syntax highlighting, languages, and {{variable}} support.
-import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap, pickedCompletion, type Completion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { html } from "@codemirror/lang-html";
@@ -8,7 +8,7 @@ import { xml } from "@codemirror/lang-xml";
 import { javascript } from "@codemirror/lang-javascript";
 import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { EditorState, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
+import { EditorState, Facet, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { bodySyntaxWarnings, segments } from "../http";
 import { dynamicUsage, dynamicVariable, MASK, requestVariable, varClass } from "../vars";
 import type { PathCompletion } from "../requestPaths";
@@ -34,9 +34,12 @@ import { createFindPanel } from "./findPanel.svelte";
 import { findInPieces } from "./findInPieces";
 import { scrollJumps } from "./scrollJumps";
 import { extractExtension } from "./extract";
+import { http } from "./http";
+import { httpCompletion } from "./httpCompletion";
 import type { ReadingCard } from "../exchanges";
+import { editorKey } from "../platform";
 
-export type Language = "json" | "xml" | "html" | "javascript" | "text";
+export type Language = "json" | "xml" | "html" | "javascript" | "http" | "text";
 
 export const theme = EditorView.theme({
   "&": { backgroundColor: "transparent", color: "var(--text)", height: "100%", fontSize: "12.5px" },
@@ -80,6 +83,11 @@ export const theme = EditorView.theme({
     color: "var(--text)",
     boxShadow: "var(--popup-shadow)",
     animation: "popup-in 120ms ease-out",
+    // Sized by its content, up to the limit its own kind sets (a message's 360px), not
+    // by what contains it: WebKit lays a tooltip out absolutely in the popup layer,
+    // which has no width to give, so without this every word takes a line. No limit
+    // here: this rule would override the kind's own.
+    width: "max-content",
   },
   ".cm-tooltip-autocomplete": { overflow: "hidden" },
   ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12px", padding: "4px" },
@@ -116,10 +124,18 @@ const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.operator], color: "var(--tok-keyword, #c586c0)" },
   { tag: [t.punctuation, t.bracket, t.angleBracket], color: "var(--muted)" },
   { tag: t.invalid, color: "var(--danger)" },
+  // `.http` (./http.ts): `###` separators, File variable names, directives, `< file` paths and `#~` lines.
+  { tag: t.heading, color: "var(--text-2)", fontWeight: "600" },
+  { tag: t.definition(t.variableName), color: "var(--tok-key, #9cdcfe)" },
+  { tag: t.annotation, color: "var(--tok-tag, #569cd6)" },
+  { tag: t.link, color: "var(--tok-string, #ce9178)", textDecoration: "underline" },
+  { tag: t.deleted, textDecoration: "line-through" },
 ]);
 
 export function languageExtension(lang: Language): Extension {
   switch (lang) {
+    case "http":
+      return http();
     case "json":
       return json();
     case "xml":
@@ -376,38 +392,46 @@ export function varCard(
   return dom;
 }
 
-function varCompletion(provider: VarProvider) {
-  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
-    // Paths can hold brackets and quotes: `{{login.response.body.$.items[0]['odd key']`.
-    const m = ctx.matchBefore(/\{\{\s*[^{}\s][^{}]*|\{\{\s*/);
-    if (!m) return null;
-    const start = m.from + /\{\{\s*/.exec(m.text)![0].length;
-    const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
-    const close = after === "}}" ? "" : "}}";
-    const typed = ctx.state.sliceDoc(start, ctx.pos);
-    const path = await provider.pathCompletions?.(typed);
-    if (ctx.aborted) return null;
-    if (path) return pathResult(start, path, close);
-    // Names in scope are plain words: anything else isn't a reference being typed.
-    if (!/^[\w.$-]*$/.test(typed)) return null;
-    return {
-      from: start,
-      options: provider.completions().map((c): VarOption => {
-        // A named request goes on with its path (`{{login.|}}`), completed next.
-        if (c.source === "request") return { label: c.name, detail: "request", type: "variable", apply: applyWithCaret(c.name + ".", close), entry: c, reopen: true };
-        // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
-        const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
-        return {
-          label: c.name,
-          detail: c.source,
-          type: c.source === "dynamic" ? "function" : "variable",
-          // The names in scope before the dynamic variables, which would sort first (`$`).
-          boost: c.source === "dynamic" ? -1 : 0,
-          apply: c.required ? applyWithCaret(text, close) : text + close,
-          entry: c,
-        };
-      }),
-    };
+/**
+ * The VarProvider an editor's `variableExtensions` was given, which `varCompletion`
+ * reads when it runs. The completion source itself stays the same function when the
+ * provider changes (the Source view gets a new one each time its text is read), as a
+ * new source would close the list open at the time.
+ */
+const varProvider = Facet.define<VarProvider, VarProvider | null>({ combine: (ps) => ps.at(-1) ?? null });
+
+async function varCompletion(ctx: CompletionContext): Promise<CompletionResult | null> {
+  const provider = ctx.state.facet(varProvider);
+  if (!provider) return null;
+  // Paths can hold brackets and quotes: `{{login.response.body.$.items[0]['odd key']`.
+  const m = ctx.matchBefore(/\{\{\s*[^{}\s][^{}]*|\{\{\s*/);
+  if (!m) return null;
+  const start = m.from + /\{\{\s*/.exec(m.text)![0].length;
+  const after = ctx.state.sliceDoc(ctx.pos, ctx.pos + 2);
+  const close = after === "}}" ? "" : "}}";
+  const typed = ctx.state.sliceDoc(start, ctx.pos);
+  const path = await provider.pathCompletions?.(typed);
+  if (ctx.aborted) return null;
+  if (path) return pathResult(start, path, close);
+  // Names in scope are plain words: anything else isn't a reference being typed.
+  if (!/^[\w.$-]*$/.test(typed)) return null;
+  return {
+    from: start,
+    options: provider.completions().map((c): VarOption => {
+      // A named request goes on with its path (`{{login.|}}`), completed next.
+      if (c.source === "request") return { label: c.name, detail: "request", type: "variable", apply: applyWithCaret(c.name + ".", close), entry: c, reopen: true };
+      // One that needs its argument leaves the caret where it goes: `{{$processEnv |}}`.
+      const text = c.required ? c.name + (c.name.endsWith(".") ? "" : " ") : c.name;
+      return {
+        label: c.name,
+        detail: c.source,
+        type: c.source === "dynamic" ? "function" : "variable",
+        // The names in scope before the dynamic variables, which would sort first (`$`).
+        boost: c.source === "dynamic" ? -1 : 0,
+        apply: c.required ? applyWithCaret(text, close) : text + close,
+        entry: c,
+      };
+    }),
   };
 }
 
@@ -472,24 +496,30 @@ const completionColumns = [
  */
 export const layerTooltips = (): Extension => tooltips({ parent: popupLayer() });
 
+/** The autocompletion of `variableExtensions`, the same for every provider (see `varProvider`). */
+const completion = autocompletion({
+  override: [varCompletion, httpCompletion],
+  icons: false,
+  addToOptions: completionColumns,
+  // A named request or a path segment ending in `.` goes on with the next segment.
+  activateOnCompletion: (c) => !!(c as VarOption).reopen,
+  optionClass: (c) => ((c as VarOption).hint ? "cm-completionHint" : ""),
+});
+
 /**
  * `{{variable}}` marks, hover cards, autocompletion and Extract to variable
  * (when the provider has `extract`). With `marks: false` only the
  * autocompletion: for a masked field, where a mark, a card or extracting the
- * selection would give the hidden text away.
+ * selection would give the hidden text away. In a `.http` editor (the Source
+ * view, the file view) the autocompletion also offers methods, header names and
+ * directives where they're typed (`httpCompletion`).
  */
 export function variableExtensions(provider: VarProvider, { marks = true }: { marks?: boolean } = {}): Extension {
   return [
     layerTooltips(),
     marks ? [varDecorations(provider), varTooltip(provider), extractExtension(provider)] : [],
-    autocompletion({
-      override: [varCompletion(provider)],
-      icons: false,
-      addToOptions: completionColumns,
-      // A named request or a path segment ending in `.` goes on with the next segment.
-      activateOnCompletion: (c) => !!(c as VarOption).reopen,
-      optionClass: (c) => ((c as VarOption).hint ? "cm-completionHint" : ""),
-    }),
+    varProvider.of(provider),
+    completion,
   ];
 }
 
@@ -589,7 +619,7 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
     EditorView.contentAttributes.of({ "aria-multiline": "false", ...(opts.label ? { "aria-label": opts.label } : {}) }),
     keymap.of([
       { key: "Enter", run: () => (enter?.(), true) },
-      ...(enter ? [{ key: "Mod-Enter", run: () => (enter(), true) }] : []),
+      ...(enter ? [{ key: editorKey({ mod: true, key: "Enter" }), run: () => (enter(), true) }] : []),
       ...completionKeymap,
       // Escape is left to the owner (a modal closes), as in a text input; the `{{` list still takes it while open.
       ...defaultKeymap.filter((b) => !b.key?.includes("Enter") && b.key !== "Escape"),
@@ -598,7 +628,8 @@ export function singleLineExtensions(opts: { placeholder?: string; label?: strin
   ];
 }
 
-export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }): Extension {
+/** An editable editor has an undo history unless `history` is false (its Editor keeps one of its own). */
+export function editorExtensions(opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean; history?: boolean }): Extension {
   const ext: Extension[] = [
     layerTooltips(),
     scrollJumps,
@@ -616,7 +647,8 @@ export function editorExtensions(opts: { readonly: boolean; wrap: boolean; place
   if (opts.readonly) {
     ext.push(EditorState.readOnly.of(true));
   } else {
-    ext.push(history(), closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, indentWithTab]));
+    if (opts.history !== false) ext.push(history());
+    ext.push(closeBrackets(), indentOnInput(), highlightActiveLine(), keymap.of([...closeBracketsKeymap, ...completionKeymap, { key: "Tab", run: acceptCompletion }, indentWithTab]));
   }
   if (opts.placeholder) ext.push(placeholderExt(opts.placeholder));
   return ext;

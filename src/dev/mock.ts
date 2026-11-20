@@ -1,24 +1,29 @@
 // Dev-only: lets the UI run in a plain browser (`pnpm dev`, open localhost:1420)
-// for visual testing. Fixtures are produced by the real Rust parser
-// (`cargo run -p httpdesk-core --example dump -- file.http`). Never bundled in
-// production builds (imported behind `import.meta.env.DEV`).
+// for visual testing. `.http` text is parsed and rendered by the real core, built
+// to WASM (./textCore.ts), so the sample files are plain `.http` text. Never
+// bundled in production builds (imported behind `import.meta.env.DEV`).
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import pets from "./pets.json";
-import jetbrains from "./jetbrains.json";
+import { invokeCore } from "./textCore";
+import petsText from "./pets.http?raw";
+import jetbrainsText from "./jetbrains.http?raw";
 import { displayName, hasScripts, promptMasked, requestPrompts, segments } from "../lib/http";
 import { responseRedirects } from "../lib/scripts";
 import { requestVariableReads } from "../lib/checks";
 import { environmentMissing, redirectNotRun, scriptFileMissing, scriptFileOutside, sentWithoutScripts, UNTRUSTED_MESSAGE, unsentMessage } from "./coreMessages";
-import { bmpImage, largeJson, toBase64 } from "./perfFixtures";
+import { bmpImage, largeHttpFile, largeJson, toBase64 } from "./perfFixtures";
 import type { BodyFetchView } from "../lib/api";
 import { currentOS, forceOS } from "../lib/platform";
 import capabilities from "../../src-tauri/capabilities/default.json";
 import { envVariables, isDynamic, makeVarProvider, MASK, requestVariable, SECRET_CLOSE, SECRET_OPEN } from "../lib/vars";
-import type { AuthPart, EnvironmentSet, ExchangeShape, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
+import type { AuthPart, EnvironmentSet, ExchangeShape, FileProblems, OpenText, PortabilityMark, RequestProblems, HistoryBodyKept, HistoryEntry, HistoryEntryLink, HistoryQuery, HistorySummary, HttpFile, HttpResponse, JsonShape, MessageShape, Request, ResponseCookie, ResponseKind, RunRequestReport, SendError, SendErrorKind, SentRequest, StoredCookie } from "../lib/types";
 
 /** What the shell rejects with for a response id whose body has been released. */
 const RESPONSE_GONE = "Response is no longer available";
+
+/** The sample files, read as the shell reads them from disk. */
+const pets = invokeCore<HttpFile>("parse_file", { text: petsText });
+const jetbrains = invokeCore<HttpFile>("parse_file", { text: jetbrainsText });
 
 const ROOT = "/demo";
 const files: Record<string, unknown> = {
@@ -114,6 +119,42 @@ if (new URLSearchParams(location.search).get("scriptFiles") === "1") {
 const scriptFiles: Record<string, string> = {
   [`${ROOT}/api/check-status.js`]: 'client.test("Status is 200", function () {\n  client.assert(response.status === 200, "Response status is not 200");\n});\n',
 };
+/** The workspace's files a request body reads (`< path`), besides its `.http` and script files. */
+const bodyFiles = new Set([`${ROOT}/samples/request-form-data.json`]);
+/** `path` as a send finds it (`exec::body_file_path`): relative to the folder of the `.http` file at `filePath`, unless absolute. */
+function resolveFrom(filePath: string, path: string): string {
+  if (path.startsWith("/")) return path;
+  const parts = filePath.slice(0, filePath.lastIndexOf("/")).split("/");
+  for (const part of path.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "." && part !== "") parts.push(part);
+  }
+  return parts.join("/");
+}
+/** The shell's `body_file_exists`, answered from the mock's own files. */
+function bodyFileExists(filePath: string, path: string): boolean {
+  const resolved = resolveFrom(filePath, path.trim());
+  return bodyFiles.has(resolved) || Object.hasOwn(scriptFiles, resolved) || fileAt(resolved) !== undefined;
+}
+/** An open document's text, as the shell reads it for the Problems panel. */
+const openTextOf = (doc: OpenText) => ("text" in doc ? doc.text : invokeCore<string>("file_text", { file: doc.file }));
+/** Lets the page's other tasks run: the shell does this work off the page's thread, the mock on it. */
+const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve));
+/** Like the shell's `workspace::file_problems`: the real core reads the text, and each body
+ *  file (one without `{{variables}}`) is looked for among the mock's own files. A task per
+ *  read, so a large file's don't hold the page's thread as one long task. */
+async function fileProblemsOf(path: string, text: string): Promise<FileProblems> {
+  const read = invokeCore<RequestProblems>("text_problems", { text });
+  const missing = read.files.filter((f) => !f.path.includes("{{") && !bodyFileExists(path, f.path)).map((f) => f.missing);
+  const problems = [...read.problems, ...missing].sort((a, b) => a.line - b.line || a.column - b.column);
+  await nextTask();
+  const portability = invokeCore<PortabilityMark[]>("portability_text", { text }).filter((m) => m.support === "jetbrains-only" || m.support === "vscode-only");
+  // What the text reads as, for the page to find its Undefined variables and shared names in.
+  const refers = text.includes("{{") || text.includes("@name");
+  if (!refers) return { path, problems, portability };
+  await nextTask();
+  return { path, problems, portability, file: invokeCore<HttpFile>("parse_file", { text }) };
+}
 /** Like the core's `ScriptFiles::locate`: the script file `path` names, relative to the
  *  `.http` file at `filePath`, or (thrown) why it can't be used. */
 function locateScriptFile(filePath: string | null, path: string): string {
@@ -155,6 +196,24 @@ if (new URLSearchParams(location.search).get("subfolder") === "1") {
   const requests = orders.requests.slice(0, 2).map((r, i) => ({ ...r, name: ["List orders", "Create order"][i], url: "{{baseUrl}}/orders", raw: null }));
   files[`${ROOT}/api/v2/orders.http`] = { ...orders, requests };
   tree.children[0].children.unshift({ name: "v2", path: `${ROOT}/api/v2`, kind: "dir", children: [{ name: "orders.http", path: `${ROOT}/api/v2/orders.http`, kind: "file" }] } as never);
+}
+// `?problems=1` adds problems/broken.http (a request line with a space in its URL) and
+// problems/upload.http (a body read from ./missing.json, which isn't there), for the
+// Problems panel.
+if (new URLSearchParams(location.search).get("problems") === "1") {
+  const broken = "### Search\nGET {{baseUrl}}/search for pets\nAccept: application/json\n";
+  const upload = "### Upload\nPOST {{baseUrl}}/pets/upload\nContent-Type: application/json\n\n< ./missing.json\n";
+  files[`${ROOT}/problems/broken.http`] = invokeCore("parse_file", { text: broken });
+  files[`${ROOT}/problems/upload.http`] = invokeCore("parse_file", { text: upload });
+  tree.children.push({
+    name: "problems",
+    path: `${ROOT}/problems`,
+    kind: "dir",
+    children: [
+      { name: "broken.http", path: `${ROOT}/problems/broken.http`, kind: "file" },
+      { name: "upload.http", path: `${ROOT}/problems/upload.http`, kind: "file" },
+    ],
+  });
 }
 // Files a test rewrote "on disk" with `__mock.writeFile` (another editor's changes
 // while the app was closed) are still there after a reload.
@@ -444,6 +503,7 @@ let settings = {
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   showSource: false,
+  portabilityWarnings: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
@@ -621,6 +681,8 @@ window.addEventListener(
   get savedPaths() {
     return [...savedPaths];
   },
+  /** The text of the `.http` file at `path`, as the shell would have it on disk. */
+  fileText: (path: string) => invokeCore<string>("file_text", { file: fileAt(path) }),
   /** The native menu bar as the app last sent it, with the state changes since applied. */
   get menu() {
     return { layout: clone(menuBar) };
@@ -695,15 +757,21 @@ window.addEventListener(
   releaseReads: () => releaseReads(),
   /** Builds the perf test's large bodies (`jsonBytes` sets the JSON body's size, 50 MB by default); from then on sends answer with them (e2e/perf). */
   preparePerf: (jsonBytes?: number) => preparePerf(jsonBytes),
+  /** Makes api/pets.http a file of `requests` requests (`largeHttpFile`), for the large-file perf test (e2e/perf). Before it's opened. */
+  prepareLargeFile: (requests: number) => {
+    files[`${ROOT}/api/pets.http`] = invokeCore<HttpFile>("parse_file", { text: largeHttpFile(requests) });
+  },
   get settings() {
     return clone(settings);
   },
-  /** The `.http` file models as last saved, by path (the mock has no serializer). */
+  /** The `.http` file models as last saved, by path (the mock keeps models, not text). */
   get files() {
     return clone(files);
   },
   /** Writes a `.http` file model "on disk", as another editor would; it survives a reload. */
   writeFile: writeDiskFile,
+  /** `writeFile` with the file's text, read as the shell reads it from disk. */
+  writeText: (path: string, text: string) => writeDiskFile(path, invokeCore<HttpFile>("parse_file", { text })),
   /** Writes a `.http` file model "on disk" while the app runs, then tells it like the watcher does (`workspace-changed`). */
   async changeFile(path: string, file: unknown) {
     writeDiskFile(path, file);
@@ -839,8 +907,6 @@ type MockHistoryEntry = Omit<HistorySummary, "link"> & {
   writtenMethod: string;
   writtenUrl: string;
   source: string;
-  /** The request `source` was rendered from: what `parse_request` gives back for it (the mock has no parser). */
-  model: Request;
   request: SentRequest;
   response: Omit<HttpResponse, "id"> | null;
   sendError: SendError | null;
@@ -903,12 +969,6 @@ const masked = (request: SentRequest, values: string[]): SentRequest => ({
   bodyPreview: request.bodyPreview === null ? null : maskValues(request.bodyPreview, values),
 });
 
-/** A request's text, as the mock renders it (it has no serializer). */
-function requestText(r: any): string {
-  const vars = r.variables.filter((v: any) => v.name).map((v: any) => `@${v.name} = ${v.value}\n`).join("");
-  return `### ${r.name}\n${vars}${r.method} ${r.url}\n${r.headers.items.map((h: any) => `${h.enabled ? "" : "#~ "}${h.name}: ${h.value}`).join("\n")}\n`;
-}
-
 /** Where the mock says History is kept (`history_location`). */
 const MOCK_HISTORY_LOCATION = "/Users/me/Library/Application Support/io.github.jrmitch120.httpdesk/history.sqlite3";
 
@@ -931,7 +991,7 @@ async function sendFromTab(args: any): Promise<HttpResponse> {
       writtenMethod: r.method, writtenUrl: r.url, method: outcome.request.method, url: maskValues(outcome.request.url, values),
       status: response?.status ?? null, statusText: response?.statusText ?? null,
       durationMs: response?.timeMs ?? performance.now() - started, size: response?.bodySize ?? null,
-      error: outcome.sendError?.message ?? null, source: requestText(r) + (r.body.text ? `\n${r.body.text}\n` : ""), model: { ...clone(r), _key: undefined }, ...outcome,
+      error: outcome.sendError?.message ?? null, source: invokeCore<string>("request_text", { request: r }), ...outcome,
       request: masked(capRequest(outcome.request), values),
     });
     try {
@@ -1000,7 +1060,7 @@ function openHistoryEntry(id: number): HistoryEntry {
   const e = historyEntries.find((h) => h.id === id && h.workspace === ROOT);
   if (!e) throw "This History entry no longer exists";
   historyOpened.push(id);
-  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, model: _r, body, response, bodyKept = "whole", ...entry } = clone(e);
+  const { workspace: _w, file: _f, name: _n, writtenMethod: _m, writtenUrl: _u, body, response, bodyKept = "whole", ...entry } = clone(e);
   const request = previewedRequest(entry.request);
   const link = linkOf(e);
   if (!response) return { ...entry, link, request, response: null, bodyKept };
@@ -1691,14 +1751,16 @@ mockIPC(
       case "read_http_file":
         await readsReleased;
         return clone(fileAt(args.path));
-      case "save_http_file":
+      case "save_http_file": {
+        // Like the shell: the file is written as text, then read back.
+        const text = invokeCore<string>("file_text", { file: args.file });
         savedPaths.push(args.path);
-        files[args.path] = clone(args.file);
-        return clone(args.file);
+        files[args.path] = invokeCore<HttpFile>("parse_file", { text });
+        return clone(files[args.path]);
+      }
       case "create_file": {
-        // Parsing `args.content` needs the Rust core; one request from the fixture stands in.
-        const req = { ...clone((pets as any).requests[0]), name: "New request", raw: null, leading: "" };
-        files[args.path] = { ...clone(pets as any), requests: [req], trailing: "" };
+        // As the shell writes it and reads it back: the real core reads the content.
+        files[args.path] = invokeCore<HttpFile>("parse_file", { text: args.content });
         addNode(args.path, "file");
         return null;
       }
@@ -1718,12 +1780,36 @@ mockIPC(
       case "preview_request":
         previewRequests++;
         return previewRequest(args as unknown as PreviewArgs);
-      case "render_request":
-        return requestText(args.request);
-      case "parse_request": {
-        // No parser: a History entry's source text gives back the request it was rendered from.
-        const model = historyEntries.find((e) => e.source === args.text)?.model;
-        return model ? clone(model) : null;
+      case "request_source":
+      case "request_portability":
+      case "portability_text":
+      case "parse_request":
+      case "parse_file_text":
+      case "file_text":
+      case "request_problems":
+        return invokeCore(cmd, args);
+      case "body_file_exists":
+        return bodyFileExists(args.file, String(args.path));
+      case "workspace_problems": {
+        const open = (args.open ?? []) as OpenText[];
+        const paths: string[] = [];
+        const walk = (n: Node) => (n.kind === "file" ? paths.push(n.path) : n.children?.forEach(walk));
+        walk(openTree());
+        const all: FileProblems[] = [];
+        for (const path of paths) {
+          const doc = open.find((d) => d.path === path);
+          const file = fileAt(path);
+          if (!doc && file === undefined) continue;
+          const found = await fileProblemsOf(path, doc ? openTextOf(doc) : invokeCore<string>("file_text", { file }));
+          if (found.problems.length || found.portability.length || found.file) all.push(found);
+        }
+        return all;
+      }
+      case "file_problems": {
+        const has = args as { path: string; text?: string; file?: HttpFile };
+        const file = fileAt(has.path);
+        if (has.text === undefined && !has.file && file === undefined) return null;
+        return await fileProblemsOf(has.path, has.text ?? invokeCore<string>("file_text", { file: has.file ?? file }));
       }
       case "search_requests": {
         // Same matching as the backend: every term in name, method, URL or file name.

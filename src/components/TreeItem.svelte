@@ -47,6 +47,7 @@
       menu.show(e, [
         { label: "New request", icon: "plus", action: () => app.addRequest(node.path) },
         { label: "Run file", icon: "send", disabled: app.running, action: () => app.runFile(node.path) },
+        { label: "View file as text", icon: "code", action: () => app.openFileView(node.path) },
         { label: "Save", icon: "save", disabled: !dirty, action: () => app.save(node.path) },
         { separator: true },
         { label: "Rename…", icon: "edit", action: () => app.renamePath(node.path) },
@@ -57,10 +58,11 @@
     }
   }
 
-  /** Opens the request, which becomes the explorer's selection. */
+  /** Opens the request, which becomes the explorer's selection; while its file's file view is active, shows it there instead. */
   function openRequest(key: string) {
     app.selectRequest(node.path, key, "only");
-    app.openRequest(node.path, { key });
+    if (app.activeTab?.kind === "file" && app.activeTab.path === node.path) app.openFileView(node.path, { key });
+    else app.openRequest(node.path, { key });
   }
 
   /** ⌘-click (Ctrl-click off macOS) toggles the request in the selection and Shift-click
@@ -144,7 +146,7 @@
     {/each}
   {:else if doc}
     {#each doc.file.requests as req (req._key)}
-      {@const active = app.activeTab?.path === node.path && app.activeTab?.key === req._key}
+      {@const active = app.activeTab?.kind === "request" && app.activeTab.path === node.path && app.activeTab.key === req._key}
       {@const selected = app.isTreeSelected(node.path, req._key!)}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div

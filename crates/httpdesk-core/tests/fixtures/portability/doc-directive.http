@@ -1,0 +1,3 @@
+### Items
+# @param limit: How many items to return
+GET https://example.com/items?limit=5

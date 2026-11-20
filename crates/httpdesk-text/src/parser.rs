@@ -24,27 +24,86 @@ pub const HEADER_DOC_DIRECTIVE: &str = "header";
 
 const KNOWN_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
 
+/// `# @tag` names JetBrains, VS Code or HttpDesk reads (matched ignoring case, as
+/// VS Code does). See docs/research/http-comment-compat.md, Q2.
+const KNOWN_DIRECTIVES: &[&str] = &[
+    // JetBrains
+    "name",
+    "no-redirect",
+    "no-log",
+    "no-cookie-jar",
+    "no-auto-encoding",
+    "timeout",
+    "connection-timeout",
+    "use-os-credentials",
+    // VS Code REST Client (`name`, `no-redirect` and `no-cookie-jar` too)
+    "note",
+    "prompt",
+    // HttpDesk
+    SECTION_DIRECTIVE,
+    AUTH_DIRECTIVE,
+    PARAM_DOC_DIRECTIVE,
+    HEADER_DOC_DIRECTIVE,
+];
+
 pub const BOM: char = '\u{FEFF}';
 
 pub fn parse(text: &str) -> HttpFile {
+    parse_with_problems(text).file
+}
+
+/// [`parse`], and the problems found reading the text.
+pub fn parse_with_problems(text: &str) -> ParsedFile {
+    read_file(text, &mut Vec::new())
+}
+
+/// What reading a whole file's `text` finds: [`parse_with_problems`]'s problems, and
+/// the files its requests' bodies are read from, each placed in `text` (a workspace's
+/// Problems panel lists them by line in the file).
+pub fn text_problems(text: &str) -> RequestProblems {
+    text_reading(text).1
+}
+
+/// A whole file's `text` read once: the file it reads as, and [`text_problems`] of it.
+pub fn text_reading(text: &str) -> (HttpFile, RequestProblems) {
+    let mut files = Vec::new();
+    let ParsedFile { file, problems } = read_file(text, &mut files);
+    (file, RequestProblems { problems, files })
+}
+
+/// [`parse_with_problems`], adding the files the bodies are read from to `files`.
+fn read_file(text: &str, files: &mut Vec<BodyFile>) -> ParsedFile {
+    let mut problems = Vec::new();
     let (bom, text) = match text.strip_prefix(BOM) {
         Some(rest) => (true, rest),
         None => (false, text),
     };
     let crlf = text.matches("\r\n").count();
     let lf = text.matches('\n').count() - crlf;
+    // New and edited text gets the ending most lines have. Mixed endings are kept as
+    // written: the text is read as it is, and every `\r` stays in the verbatim text, so
+    // it saves back byte for byte. Text with only CRLF is read as LF.
     let line_ending = if crlf > lf { LineEnding::Crlf } else { LineEnding::Lf };
-    let normalized = text.replace("\r\n", "\n");
+    let mixed_endings = crlf > 0 && lf > 0;
+    let normalized = if crlf > 0 && lf == 0 { text.replace("\r\n", "\n") } else { text.to_string() };
 
-    let mut file = HttpFile { line_ending, bom, ..Default::default() };
+    let mut file = HttpFile { line_ending, mixed_endings, bom, ..Default::default() };
     let mut pending = String::new();
+    // Lines before the current block.
+    let mut lines_before = 0;
 
     for (i, raw) in split_blocks(&normalized).into_iter().enumerate() {
+        let block_line = lines_before;
+        lines_before += raw.matches('\n').count();
         if raw.is_empty() {
             continue;
         }
-        match parse_block(&raw) {
-            Some(mut req) => {
+        let (mut found, mut named) = (Vec::new(), Vec::new());
+        match read_block(&raw, &mut found, &mut named) {
+            Some((mut req, _)) => {
+                place(&mut found, &mut named, block_line);
+                problems.extend(found);
+                files.extend(named);
                 req.leading = std::mem::take(&mut pending);
                 req.raw = Some(raw);
                 file.requests.push(req);
@@ -54,7 +113,84 @@ pub fn parse(text: &str) -> HttpFile {
         }
     }
     file.trailing = pending;
-    file
+    ParsedFile { file, problems }
+}
+
+/// A single request's text (a Source view, a History entry) read on its own: the
+/// first request in it, read as [`parse`] reads it, with its text kept as written
+/// (line endings included) and everything before it, a byte order mark too, as
+/// its `leading` text, so [`crate::serializer::request_source`] gives the text
+/// back. Text after the request's block, from the next `###` on, is an error (a
+/// request's text holds one block), kept as [`ParsedRequest::following`].
+pub fn parse_request(text: &str) -> ParsedRequest {
+    let (bom, text) = match text.strip_prefix(BOM) {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let mut leading = String::from(if bom { "\u{FEFF}" } else { "" });
+    let mut lines_before = 0;
+    let mut blocks = split_blocks(text).into_iter();
+    for raw in blocks.by_ref() {
+        let block_line = lines_before;
+        lines_before += raw.matches('\n').count();
+        let (mut problems, mut files) = (Vec::new(), Vec::new());
+        let Some((req, _)) = read_block(&raw, &mut problems, &mut files) else {
+            leading.push_str(&raw);
+            continue;
+        };
+        place(&mut problems, &mut files, block_line);
+        let request = Some(Request { leading, raw: Some(raw), ..req });
+        let rest: Vec<String> = blocks.collect();
+        if rest.is_empty() {
+            return ParsedRequest { request, problems, files, following: None };
+        }
+        problems.push(Problem {
+            line: lines_before + 1,
+            column: 1,
+            severity: Severity::Error,
+            code: ProblemCode::TextAfterRequest,
+            message: "This ### starts another block, and a request's text holds only one: the text from here on isn't part of this request. Save as written adds it to the file after the request".to_string(),
+        });
+        let mut following = Following::default();
+        for raw in rest {
+            let block_line = lines_before;
+            lines_before += raw.matches('\n').count();
+            let (mut found, mut named) = (Vec::new(), Vec::new());
+            match read_block(&raw, &mut found, &mut named) {
+                Some((req, _)) => {
+                    place(&mut found, &mut named, block_line);
+                    problems.extend(found);
+                    files.extend(named);
+                    let leading = std::mem::take(&mut following.trailing);
+                    following.requests.push(Request { leading, raw: Some(raw), ..req });
+                }
+                None => following.trailing.push_str(&raw),
+            }
+        }
+        return ParsedRequest { request, problems, files, following: Some(following) };
+    }
+    ParsedRequest { request: None, problems: Vec::new(), files: Vec::new(), following: None }
+}
+
+/// Moves what was found reading a block (lines counted from its first) to the text the
+/// block is in, `lines_before` lines below its start.
+fn place(problems: &mut [Problem], files: &mut [BodyFile], lines_before: usize) {
+    for p in problems.iter_mut().chain(files.iter_mut().map(|f| &mut f.missing)) {
+        p.line += lines_before;
+    }
+}
+
+/// What reading `req`'s text as the Source view shows it ([`crate::serializer::request_source`])
+/// finds: its problems, and the files its body is read from, placed in that text. Its
+/// block is read as written where the request still matches it, else rendered, so a
+/// request edited in the structured editors is read as it now is.
+pub fn request_problems(req: &Request) -> RequestProblems {
+    let text = crate::serializer::request_text(req);
+    let (mut problems, mut files) = (Vec::new(), Vec::new());
+    read_block(&text, &mut problems, &mut files);
+    // The text before the block (`leading`) comes first in the Source view.
+    place(&mut problems, &mut files, req.leading.matches('\n').count());
+    RequestProblems { problems, files }
 }
 
 /// Splits normalized text into raw blocks. Block 0 is the text before the first
@@ -70,7 +206,7 @@ pub(crate) fn split_blocks(text: &str) -> Vec<String> {
     blocks
 }
 
-pub(crate) fn is_separator(line: &str) -> bool {
+pub fn is_separator(line: &str) -> bool {
     line.starts_with("###")
 }
 
@@ -91,7 +227,7 @@ pub(crate) fn parse_header(raw: &str) -> FileHeader {
 }
 
 /// Returns the text after a `#` or `//` comment prefix.
-pub(crate) fn comment_body(t: &str) -> Option<&str> {
+pub fn comment_body(t: &str) -> Option<&str> {
     t.strip_prefix("//").or_else(|| t.strip_prefix('#'))
 }
 
@@ -112,6 +248,16 @@ pub(crate) fn parse_variable(t: &str) -> Option<Variable> {
 /// Names an `@name = value` line can declare.
 pub(crate) fn is_variable_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
+}
+
+/// The directive a preamble comment's body (after `#` or `//`) is: `# @name` or
+/// `#@name`. An indented `#   @x` is description text.
+pub(crate) fn preamble_directive(c: &str) -> Option<Directive> {
+    if strip_one_space(c).starts_with('@') {
+        parse_directive(c)
+    } else {
+        None
+    }
 }
 
 fn parse_directive(c: &str) -> Option<Directive> {
@@ -183,6 +329,31 @@ fn parse_request_line(t: &str) -> (String, String, Option<String>) {
     (method, url_tokens.join(" "), version)
 }
 
+/// Whether a request line's URL has whitespace outside `{{ … }}`, so its words
+/// can't all be the URL.
+fn has_gap(url: &str) -> bool {
+    let mut rest = url;
+    loop {
+        let (before, inside) = match rest.split_once("{{") {
+            Some((before, inside)) => (before, Some(inside)),
+            None => (rest, None),
+        };
+        if before.contains(char::is_whitespace) {
+            return true;
+        }
+        match inside.and_then(|i| i.split_once("}}")) {
+            Some((_, after)) => rest = after,
+            None => return false,
+        }
+    }
+}
+
+/// A problem at the first non-blank character of the block's `index`-th line (0-based).
+fn problem_at(lines: &[&str], index: usize, severity: Severity, code: ProblemCode, message: &str) -> Problem {
+    let column = 1 + lines[index].chars().take_while(|c| c.is_whitespace()).count();
+    Problem { line: index + 1, column, severity, code, message: message.to_string() }
+}
+
 /// Parses `name=value` as written in the file into its decoded form (ADR-0001).
 pub(crate) fn parse_param(s: &str) -> KeyValue {
     let (n, v) = s.split_once('=').unwrap_or((s, ""));
@@ -204,9 +375,17 @@ fn split_header(s: &str) -> Option<(String, String)> {
     Some((name.to_string(), value.trim().to_string()))
 }
 
+/// `Name: value` at column 0 with an RFC 9110 token as the name (so a quoted JSON
+/// key isn't one) and a value that isn't a URL's `//`.
+fn looks_like_header(line: &str) -> bool {
+    let Some((name, value)) = line.split_once(':') else { return false };
+    let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
+    name.starts_with(|c: char| c.is_ascii_alphanumeric()) && name.chars().all(token) && !value.starts_with("//")
+}
+
 /// A response handler or output redirect starts at column 0 (JetBrains), so an
 /// indented `>` line is body content.
-pub(crate) fn is_handler_start(line: &str) -> bool {
+pub fn is_handler_start(line: &str) -> bool {
     if line.starts_with(">>") {
         return true;
     }
@@ -301,6 +480,17 @@ pub(crate) fn parse_block(raw: &str) -> Option<Request> {
 
 /// [`parse_block`], and which of the block's lines (0-based) is its request line.
 pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
+    parse_block_reporting(raw, &mut Vec::new())
+}
+
+/// [`parse_block_at`], adding what it couldn't read cleanly to `problems`, with
+/// lines counted from the block's first line (1-based).
+fn parse_block_reporting(raw: &str, problems: &mut Vec<Problem>) -> Option<(Request, usize)> {
+    read_block(raw, problems, &mut Vec::new())
+}
+
+/// [`parse_block_reporting`], adding the files the body is read from to `files`.
+fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>) -> Option<(Request, usize)> {
     let lines: Vec<&str> = raw.lines().collect();
     let mut idx = 0;
     let mut req = Request::default();
@@ -324,9 +514,7 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
             continue;
         }
         if let Some(c) = comment_body(t) {
-            // `# @name` or `#@name`. An indented `#   @x` is description text.
-            let directive = if strip_one_space(c).starts_with('@') { parse_directive(c) } else { None };
-            match directive {
+            match preamble_directive(c) {
                 Some(d) if d.name == SECTION_DIRECTIVE => {
                     let mut unknown = Vec::new();
                     for s in section_names(&d.value) {
@@ -359,7 +547,25 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
                 {
                     docs.push(d)
                 }
-                Some(d) => req.directives.push(d),
+                Some(d) => {
+                    // A variable commented out (`# @host = https://…`) is a comment, not a directive nobody reads.
+                    let commented_variable =
+                        comment_body(line.trim()).is_some_and(|c| parse_variable(c.trim()).is_some());
+                    if !commented_variable && !KNOWN_DIRECTIVES.iter().any(|k| k.eq_ignore_ascii_case(&d.name)) {
+                        let at = line.find('@').map_or(0, |i| line[..i].chars().count());
+                        problems.push(Problem {
+                            column: at + 1,
+                            ..problem_at(
+                                &lines,
+                                idx - 1,
+                                Severity::Warning,
+                                ProblemCode::UnknownDirective,
+                                &format!("Unknown directive @{}: neither Rider, VS Code nor HttpDesk reads it, so it's ignored", d.name),
+                            )
+                        });
+                    }
+                    req.directives.push(d)
+                }
                 None => req.comments.push(strip_one_space(c).to_string()),
             }
             continue;
@@ -392,6 +598,15 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     let request_line_at = idx - 1;
 
     let (method, mut url, version) = parse_request_line(request_line);
+    if has_gap(&url) {
+        problems.push(problem_at(
+            &lines,
+            request_line_at,
+            Severity::Error,
+            ProblemCode::UnparseableRequestLine,
+            "Can't read this request line: it should be a method, a URL and an optional HTTP version, and a URL can't contain spaces",
+        ));
+    }
     req.method = method;
     req.http_version = version;
 
@@ -477,6 +692,23 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
     // ---- body + response handler ----
     let rest = &lines[idx.min(lines.len())..];
     let handler_at = rest.iter().position(|l| is_handler_start(l)).unwrap_or(rest.len());
+    // Header lines the body starts with: probably meant as headers, before a stray blank
+    // line. Unless the request's Content-Type says the body is one that may start with a
+    // `Name: value` line (text, YAML, …): only one without, or JSON, XML or a form, can't.
+    let body_at = idx + rest[..handler_at].iter().take_while(|l| l.trim().is_empty()).count();
+    let content_type = header_items.iter().find(|(d, kv)| *d == 0 && kv.name.eq_ignore_ascii_case("content-type"));
+    let headers_unlikely = content_type.is_none_or(|(_, kv)| {
+        matches!(detect_body_mode(Some(&kv.value), "body"), BodyMode::Json | BodyMode::Xml | BodyMode::FormUrlEncoded)
+    });
+    for i in (body_at..idx + handler_at).take_while(|&i| headers_unlikely && looks_like_header(lines[i])) {
+        problems.push(problem_at(
+            &lines,
+            i,
+            Severity::Warning,
+            ProblemCode::HeaderAfterBody,
+            "This header is in the body: the blank line above it ends the headers, so it's sent as body text",
+        ));
+    }
     let body_lines = trim_blank_lines(&rest[..handler_at]);
     let handler_lines = trim_blank_lines(&rest[handler_at..]);
     if !handler_lines.is_empty() {
@@ -543,6 +775,17 @@ pub(crate) fn parse_block_at(raw: &str) -> Option<(Request, usize)> {
             req.body.text = insert_disabled_parts(&req.body.text, &disabled_parts);
         } else {
             req.extra_lines.extend(disabled_parts_raw.into_iter().map(ExtraLine::new));
+        }
+    }
+    // As the sender reads them (`exec::build_body`): a body that is one `< path` line,
+    // or a multipart body's `< path` lines.
+    if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
+        for (i, line) in body_lines.iter().enumerate() {
+            let Some(FileReference { path, .. }) = file_reference(line) else { continue };
+            let message =
+                format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
+            let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
+            files.push(BodyFile { path: path.to_string(), missing });
         }
     }
 

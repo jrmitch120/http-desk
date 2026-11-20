@@ -1,0 +1,5 @@
+### Item
+< {%
+    request.variables.set("id", "1");
+%}
+GET https://example.com/items/{{id}}

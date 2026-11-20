@@ -186,14 +186,14 @@ fn an_entrys_source_text_parses_back_into_its_request_with_its_variables_as_writ
     assert_eq!(entry["url"], format!("{url}/dogs"), "sent resolved");
 
     let source = h.ok("open_history_entry", json!({ "id": entry["id"] }))["source"].clone();
-    let restored = h.ok("parse_request", json!({ "text": source }));
+    let restored = h.ok("parse_request", json!({ "text": source }))["request"].clone();
 
     assert_eq!(restored["url"], format!("{url}/{{{{kind}}}}s"));
     // The credential as written, not masked like the request as sent.
     assert_eq!((&restored["auth"]["kind"], &restored["auth"]["token"]), (&json!("bearer"), &json!("{{token}}")));
     assert_eq!(restored["body"]["text"], "{\"kind\": \"{{kind}}\"}");
     assert_eq!((&restored["name"], name_of(&restored)), (&json!("Make pet"), json!("makePet")));
-    assert_eq!(h.ok("parse_request", json!({ "text": "# only a comment\n" })), Value::Null);
+    assert_eq!(h.ok("parse_request", json!({ "text": "# only a comment\n" }))["request"], Value::Null);
 }
 
 /// The names of the files in `dir`, sorted.

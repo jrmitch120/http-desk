@@ -287,9 +287,19 @@ fn parse_duration_ms(v: &str) -> Option<u64> {
     Some((n * factor) as u64)
 }
 
-fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
+/// Where a send reads body file `path` (as written after `<`, variables resolved)
+/// from: relative to `base_dir`, the `.http` file's folder, unless it's absolute.
+pub fn body_file_path(base_dir: &Path, path: &str) -> PathBuf {
     let p = Path::new(path.trim());
-    let full = if p.is_absolute() { p.to_path_buf() } else { base_dir.join(p) };
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base_dir.join(p)
+    }
+}
+
+fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
+    let full = body_file_path(base_dir, path);
     std::fs::read(&full).map_err(|e| ExecError::File { path: full, reason: e.to_string() })
 }
 

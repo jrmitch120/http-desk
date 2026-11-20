@@ -1,0 +1,3 @@
+### Secret
+// @no-log
+GET https://example.com/secret

@@ -709,14 +709,34 @@ fn utf8_bom_is_stripped_for_parsing_and_written_back() {
 }
 
 #[test]
-fn mixed_line_endings_are_saved_with_the_dominant_ending() {
+fn mixed_line_endings_are_kept_as_written_and_edits_are_written_with_the_dominant_ending() {
     // Mostly LF with one stray CRLF.
-    let f = parse("### A\nGET https://x\nAccept: */*\r\n\n### B\nGET https://y\n");
-    assert_eq!(serialize(&f), "### A\nGET https://x\nAccept: */*\n\n### B\nGET https://y\n");
+    let text = "### A\nGET https://x\nAccept: */*\r\n\n### B\nGET https://y\n";
+    let mut f = parse(text);
+    assert_eq!(serialize(&f), text);
+    f.requests[0].url = "https://w".into();
+    assert_eq!(serialize(&f), "### A\nGET https://w\nAccept: */*\n\n### B\nGET https://y\n");
 
     // Mostly CRLF with one stray LF.
-    let f = parse("### A\r\nGET https://x\nAccept: */*\r\n\r\n### B\r\nGET https://y\r\n");
-    assert_eq!(serialize(&f), "### A\r\nGET https://x\r\nAccept: */*\r\n\r\n### B\r\nGET https://y\r\n");
+    let text = "### A\r\nGET https://x\nAccept: */*\r\n\r\n### B\r\nGET https://y\r\n";
+    let mut f = parse(text);
+    assert_eq!(f.requests[0].headers.items, vec![KeyValue::new("Accept", "*/*")]);
+    assert_eq!(serialize(&f), text);
+
+    // An edited request, and one added, are written with CRLF; the rest stays as written.
+    f.requests[1].url = "https://z".into();
+    assert_eq!(serialize(&f), "### A\r\nGET https://x\nAccept: */*\r\n\r\n### B\r\nGET https://z\r\n");
+    f.requests.push(Request { name: "C".into(), method: "GET".into(), url: "https://c".into(), ..Default::default() });
+    assert_eq!(
+        serialize(&f),
+        "### A\r\nGET https://x\nAccept: */*\r\n\r\n### B\r\nGET https://z\r\n\r\n### C\r\nGET https://c\r\n"
+    );
+
+    // An edited header too.
+    let text = "@a = 1\r\n@b = 2\n\r\n### A\r\nGET https://x\r\n";
+    let mut f = parse(text);
+    f.header.variables[0].value = "3".into();
+    assert_eq!(serialize(&f), "@a = 3\r\n@b = 2\r\n\r\n### A\r\nGET https://x\r\n");
 }
 
 #[test]

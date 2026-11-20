@@ -16,6 +16,7 @@ mod layout;
 mod paths;
 mod pre_request;
 mod preview;
+mod problems;
 mod renaming;
 mod reply;
 mod request_variables;
@@ -23,9 +24,11 @@ mod runner;
 mod script_files;
 mod scripts;
 mod session;
+mod source;
 mod usages;
 mod watcher;
 mod window_state;
+mod workspace_problems;
 
 // The origin Tauri serves the app from; capabilities only apply to it.
 #[cfg(windows)]
@@ -233,9 +236,15 @@ fn vertical_slice_over_ipc() {
     assert_eq!(r["query"]["items"][1], json!({ "enabled": false, "name": "size", "value": "50" }));
     assert_eq!(r["auth"]["kind"], "bearer");
 
-    // Source preview command.
-    let src = h.ok("render_request", json!({ "request": r }));
+    // The Source view's text.
+    let src = h.ok("request_source", json!({ "request": r }));
     assert!(src.as_str().unwrap().contains("#~ X-Debug: on"));
+
+    // Portability marks, placed on the lines of that same source text.
+    let marks = h.ok("request_portability", json!({ "request": r }));
+    let line = src.as_str().unwrap().lines().position(|l| l == "#~ X-Debug: on").unwrap() + 1;
+    let mark = marks.as_array().unwrap().iter().find(|m| m["line"] == line).expect("the disabled header is marked");
+    assert_eq!((&mark["construct"], &mark["support"]), (&json!("disabled-line"), &json!("httpdesk-only")));
 }
 
 #[test]

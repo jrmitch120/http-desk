@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ApiKeyLocation, AuthKind, BodyMode, HttpFile, KvSection, Request};
+use crate::model::{ApiKeyLocation, AuthKind, BodyMode, HttpFile, KvSection, Problem, Request};
+use crate::portability::{PortabilityMark, Support};
 
 pub const HTTP_EXTENSIONS: &[&str] = &["http", "rest"];
 const IGNORED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "__pycache__", "venv"];
@@ -275,6 +276,76 @@ pub fn usages(root: &Path, name: &str, open: &[(PathBuf, HttpFile)]) -> Vec<Usag
                     out.push(Usage::Environment { path: path.clone(), env, name, secret, start, end });
                 }
             }
+        }
+    }
+    out
+}
+
+/// What a workspace's Problems panel lists for one `.http` file, by line in the file.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileProblems {
+    pub path: PathBuf,
+    /// The parser's problems ([`crate::text_problems`]) and each body file that doesn't
+    /// exist, in line order.
+    pub problems: Vec<Problem>,
+    /// The lines that behave differently in VS Code or Rider: the constructs only one of
+    /// them reads ([`Support::JetbrainsOnly`], [`Support::VscodeOnly`]). Portable lines
+    /// and HttpDesk's own, which both ignore, aren't listed.
+    pub portability: Vec<PortabilityMark>,
+    /// What the text reads as, when it has a `{{reference}}` or a `@name`: the page finds
+    /// the file's Undefined variables and shared `# @name`s in it itself, as it knows the
+    /// selected environment and the Session. Its verbatim text places each in the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<HttpFile>,
+}
+
+impl FileProblems {
+    /// Nothing to list, nor anything for the page to look for.
+    pub fn is_empty(&self) -> bool {
+        self.problems.is_empty() && self.portability.is_empty() && self.file.is_none()
+    }
+}
+
+/// [`FileProblems`] of the `.http` file at `path` whose text is `text` (as on disk, or
+/// as the app has it). A body file is looked for as a send looks for it, relative to
+/// `path`'s folder; one whose path has a `{{variable}}` isn't (its value depends on
+/// the environment), so it's never reported missing.
+pub fn file_problems(path: &Path, text: &str) -> FileProblems {
+    // Read once: the file it reads as goes back with what was found in it.
+    let (read, found) = crate::text_reading(text);
+    let dir = path.parent().unwrap_or(path);
+    let missing = found
+        .files
+        .into_iter()
+        .filter(|f| !f.path.contains("{{") && !crate::exec::body_file_path(dir, &f.path).is_file())
+        .map(|f| f.missing);
+    let mut problems: Vec<Problem> = found.problems.into_iter().chain(missing).collect();
+    problems.sort_by_key(|p| (p.line, p.column));
+    let portability = crate::portability::portability(text)
+        .into_iter()
+        .filter(|m| matches!(m.support, Support::JetbrainsOnly | Support::VscodeOnly))
+        .collect();
+    let file = (text.contains("{{") || text.contains("@name")).then_some(read);
+    FileProblems { path: path.to_path_buf(), problems, portability, file }
+}
+
+/// [`file_problems`] of every `.http` file under `root` (as [`http_files`] lists them)
+/// that has any. `open` holds the text of documents as the app has them (unsaved edits
+/// included); it's read instead of the file on disk at the same path. Unreadable
+/// files are skipped.
+pub fn problems(root: &Path, open: &[(PathBuf, String)]) -> Vec<FileProblems> {
+    let mut out = Vec::new();
+    for path in http_files(root) {
+        let found = match open.iter().find(|(p, _)| *p == path) {
+            Some((_, text)) => file_problems(&path, text),
+            None => {
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                file_problems(&path, &text)
+            }
+        };
+        if !found.is_empty() {
+            out.push(found);
         }
     }
     out

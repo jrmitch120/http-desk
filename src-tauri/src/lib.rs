@@ -94,6 +94,10 @@ struct AppSettings {
     /// Show the request's `.http` source in place of its sections.
     #[serde(deserialize_with = "or_default")]
     show_source: bool,
+    /// Show non-portable constructs as warnings rather than notes (Settings → Portability).
+    /// Off by default; kept here, never in the workspace.
+    #[serde(deserialize_with = "or_default")]
+    portability_warnings: bool,
     /// How the Environments modal shows variables.
     #[serde(deserialize_with = "or_default")]
     env_view: EnvView,
@@ -250,6 +254,7 @@ impl Default for AppSettings {
             panel_height: 260.0,
             show_resolved: false,
             show_source: false,
+            portability_warnings: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),
             trusted_workspaces: Vec::new(),
@@ -443,6 +448,60 @@ async fn find_usages<R: tauri::Runtime>(app: AppHandle<R>, name: String, open: V
     off_main(app, move |state| Ok(workspace::usages(&state.root()?, &name, &open))).await
 }
 
+/// A document as the app has it for the Problems panel: the text of its file view
+/// (which may not parse), or else its file, unsaved edits included.
+#[derive(Debug, Deserialize)]
+struct OpenText {
+    path: PathBuf,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    file: Option<HttpFile>,
+}
+
+impl OpenText {
+    fn text(self) -> Option<(PathBuf, String)> {
+        let text = self.text.or_else(|| self.file.map(|f| httpdesk_core::serialize(&f)))?;
+        Some((self.path, text))
+    }
+}
+
+/// The Problems panel: every `.http` file in the workspace with problems or lines that
+/// behave differently in VS Code or Rider, by line in the file. `open` documents are
+/// read as given instead of from disk. Parsing happens on the blocking pool.
+#[tauri::command]
+async fn workspace_problems<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    open: Vec<OpenText>,
+) -> CmdResult<Vec<workspace::FileProblems>> {
+    let open: Vec<_> = open.into_iter().filter_map(OpenText::text).collect();
+    off_main(app, move |state| Ok(workspace::problems(&state.root()?, &open))).await
+}
+
+/// [`workspace_problems`] of one file, after an edit (`text` or `file`: as the app has
+/// it) or a change on disk (neither: read from disk). None if it isn't there.
+#[tauri::command]
+async fn file_problems<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    path: PathBuf,
+    text: Option<String>,
+    file: Option<HttpFile>,
+) -> CmdResult<Option<workspace::FileProblems>> {
+    off_main(app, move |state| {
+        let path = state.confine_entry(&path)?;
+        let text = match (OpenText { path: path.clone(), text, file }).text() {
+            Some((_, text)) => text,
+            None => match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("Could not read {}: {e}", path.display())),
+            },
+        };
+        Ok(Some(workspace::file_problems(&path, &text)))
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ files
 
 #[tauri::command]
@@ -461,15 +520,67 @@ fn save_http_file(state: State<'_, AppState>, path: PathBuf, file: HttpFile) -> 
     Ok(httpdesk_core::parse(&text))
 }
 
+/// A request's Source view text: the text before it and its block, as written
+/// where the request still matches it, else rendered. [`parse_request`] reads it back.
 #[tauri::command]
-fn render_request(request: Request) -> String {
-    httpdesk_core::render_request(&Request { leading: String::new(), ..request })
+async fn request_source(request: Request) -> String {
+    httpdesk_core::request_source(&request)
 }
 
-/// The first request in `text` (a History entry's source text), parsed as in a file.
+/// The constructs in `request`'s source (as [`request_source`] gives it, so lines
+/// match) and how VS Code and Rider treat each: the Source view's gutter markers and
+/// the check strip's portability note.
 #[tauri::command]
-fn parse_request(text: String) -> Option<Request> {
-    httpdesk_core::parse(&text).requests.into_iter().next()
+async fn request_portability(request: Request) -> Vec<httpdesk_core::portability::PortabilityMark> {
+    httpdesk_core::portability::request_portability(&request)
+}
+
+// The text commands below are `async` so they run off the main thread: a whole
+// file's text (the file view's, read after each pause in typing) takes long enough
+// to read that the window would otherwise wait on it.
+
+/// The constructs in `text` (a Source view's typed text, which may not read as a
+/// request) and how VS Code and Rider treat each, as [`request_portability`] gives them.
+#[tauri::command]
+async fn portability_text(text: String) -> Vec<httpdesk_core::portability::PortabilityMark> {
+    httpdesk_core::portability::portability(&text)
+}
+
+/// The first request in `text` (a Source view's, a History entry's source text) and
+/// the problems found reading it; no request when the text has no request line.
+#[tauri::command]
+async fn parse_request(text: String) -> httpdesk_core::ParsedRequest {
+    httpdesk_core::parse_request(&text)
+}
+
+/// A file view's text read as a whole `.http` file, with the problems found reading
+/// it. [`file_text`] writes the file back as this text, byte for byte.
+#[tauri::command]
+async fn parse_file_text(text: String) -> httpdesk_core::ParsedFile {
+    httpdesk_core::parse_with_problems(&text)
+}
+
+/// A whole file's text, as saving would write it (untouched requests as written).
+#[tauri::command]
+async fn file_text(file: HttpFile) -> String {
+    httpdesk_core::serialize(&file)
+}
+
+/// What reading `request`'s source finds: its problems, and the files its body is
+/// read from (`httpdesk_core::request_problems`), for the check strip and the Source
+/// view's underlines.
+#[tauri::command]
+async fn request_problems(request: Request) -> httpdesk_core::RequestProblems {
+    httpdesk_core::request_problems(&request)
+}
+
+/// Whether body file `path` (as written after `<`, variables resolved) exists, found as
+/// a send finds it: relative to the folder of `.http` file `file`, a workspace file.
+#[tauri::command]
+fn body_file_exists(state: State<'_, AppState>, file: PathBuf, path: String) -> CmdResult<bool> {
+    let file = state.confine_entry(&file)?;
+    let dir = file.parent().unwrap_or(&file);
+    Ok(httpdesk_core::exec::body_file_path(dir, &path).is_file())
 }
 
 #[tauri::command]
@@ -1475,10 +1586,18 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             get_tree,
             search_requests,
             find_usages,
+            workspace_problems,
+            file_problems,
             read_http_file,
             save_http_file,
-            render_request,
+            request_source,
+            request_portability,
+            portability_text,
             parse_request,
+            parse_file_text,
+            file_text,
+            request_problems,
+            body_file_exists,
             create_file,
             create_dir,
             rename_path,

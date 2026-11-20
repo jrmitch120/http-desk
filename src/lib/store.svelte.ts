@@ -16,6 +16,7 @@ import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFol
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
+import type { PortabilityLevel } from "./checks";
 import { SHARED } from "./vars";
 import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
@@ -24,9 +25,13 @@ import { HistoryStore, historyLink, historyLinkKey, type HistoryHost } from "./h
 import { Trust, type TrustHost } from "./trust";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
-import { reattach, signature, type KnownRequest } from "./reattach";
+import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
-import { newTab, type RequestSection, type Tab } from "./tabView";
+import { docSnapshot, fileShot, kept, restShot, snapshot } from "./snapshots.svelte";
+import { forgetEditors } from "./editorMemory";
+import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
+import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
+import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
   EnvironmentSet,
@@ -39,6 +44,10 @@ import type {
   HttpFile,
   HttpResponse,
   NamedExchange,
+  ParsedFile,
+  ParsedRequest,
+  PortabilityMark,
+  Problem,
   Request,
   RequestPreview,
   RunProgress,
@@ -58,14 +67,24 @@ export interface Doc {
   saved: Record<string, string>;
   savedOrder: string;
   savedHeader: string;
+  /** The rest of the file as last loaded/saved (`fileShot`'s `rest`): the text after its last request, its line ending and byte order mark. */
+  savedRest: string;
   externalChange: boolean;
   missing: boolean;
   /** Requests of Orphaned tabs: gone from the file on disk but still open, with
    *  their edits. Saving appends them back to the file (see `save`). */
   orphans: Request[];
+  /** Per request key: the text the user typed in its Source view (textViews.svelte.ts). */
+  sources: Record<string, SourceEdit>;
+  /** The text the user typed in the file's file view, and the file it goes with (textViews.svelte.ts). */
+  fileText: FileEdit | null;
 }
 
-export type { Tab } from "./tabView";
+/** An answer to `AppStore.askWhatToKeep`. */
+export type KeepChoice = "written" | "revert" | "cancel";
+
+export type { RequestTab, Tab } from "./tabView";
+export type { TextView, TypedText, UnparsedText, ViewLock } from "./textViews.svelte";
 
 export interface RunState {
   runId: string;
@@ -153,7 +172,7 @@ class PendingForm<S, C> {
 
 export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 /** A panel in the panel area below the requests (`PanelArea.svelte`). */
-export type PanelId = "session" | "runner";
+export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
 /** A section of the Settings modal that can be opened scrolled into view. */
@@ -162,8 +181,31 @@ export type SettingsSection = "tls" | "history";
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-function snapshot(req: Request): string {
-  return JSON.stringify(req, (k, v) => (k === "_key" ? undefined : v));
+const keptByKey = new WeakMap<Request[], () => Map<string, Request>>();
+
+/** A document's requests (its state) by key. */
+const byKey = (requests: Request[]) => new Map(requests.map((r) => [r._key!, r]));
+
+const keptDirty = new WeakMap<Doc, () => boolean>();
+const keptRequestsDirty = new WeakMap<Doc, () => boolean>();
+/** A document's requests' keys, in order, joined (as `savedOrder`). */
+const keptOrders = new WeakMap<Request[], () => string>();
+
+/** `doc` (a document's state) was edited since loaded or saved. Edits in an Orphaned tab count too: they exist nowhere on disk. */
+function docDirty(doc: Doc): boolean {
+  if (kept(keptOrders, doc.file.requests, (rs) => rs.map((r) => r._key).join(",")) !== doc.savedOrder) return true;
+  if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
+  // The text after the last request (a file view edit there changes nothing else).
+  if (fileShot(doc.file).rest !== doc.savedRest) return true;
+  if (fileEdit(doc)?.parses === false) return true;
+  // Kept apart, so text typed in the file view doesn't have every request checked again.
+  return kept(keptRequestsDirty, doc, (d) => [...d.file.requests, ...d.orphans].some((r) => requestDirty(d, r)));
+}
+
+/** `req` (of `doc`) was edited since loaded or saved; source text that doesn't parse counts as an edit. */
+function requestDirty(doc: Doc, req: Request): boolean {
+  const shot = docSnapshot(req);
+  return doc.saved[req._key!] !== shot || sourceEdit(doc, req, shot)?.parses === false;
 }
 
 const ensureKey = (r: Request) => {
@@ -179,6 +221,9 @@ export interface RequestRef {
   path: string;
   key: string;
 }
+
+/** A tab the user closed (Reopen Closed Tab): what it showed, and where it sat in the tab bar. */
+type ClosedTab = ({ kind: "request" } & RequestRef & { index: number }) | { kind: "file"; path: string; index: number };
 
 class AppStore {
   root = $state<string | null>(null);
@@ -207,6 +252,9 @@ class AppStore {
   /** The zoom of the whole interface. A missing, non-numeric or out-of-range
    *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
   zoom = $derived(zoomOf(this.settings?.zoom));
+  /** How non-portable constructs show (Settings → Portability): as warnings only when the
+   *  setting is `true`; missing or anything else in a hand-edited settings file, notes. */
+  portabilityLevel = $derived<PortabilityLevel>(this.settings?.portabilityWarnings === true ? "warning" : "note");
   /** The webview zoom last asked for, to skip repeat calls. */
   private webviewZoom: number | undefined = undefined;
   /** The theme in effect, with System resolved through the OS appearance. */
@@ -269,7 +317,8 @@ class AppStore {
   windowTitle = $derived.by(() => {
     if (!this.root) return "HttpDesk";
     const req = this.requestFor(this.activeTab);
-    return [req && displayName(req), basename(this.root), this.envName].filter(Boolean).join(" — ");
+    const shown = this.activeTab?.kind === "file" ? basename(this.activeTab.path) : req && displayName(req);
+    return [shown, basename(this.root), this.envName].filter(Boolean).join(" — ");
   });
 
   /** Every environment name in the workspace (the picker lists them all). */
@@ -330,6 +379,8 @@ class AppStore {
       });
       // Saves the open workspace's Layout once its changes settle.
       $effect(() => this.layout.track());
+      // The Problems panel reads an open document again once its edits pause.
+      $effect(() => this.problems.track());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;
@@ -442,6 +493,9 @@ class AppStore {
    *  window, quitting, switching workspace). True to go ahead: nothing was
    *  unsaved, the user chose Don't save, or Save all saved every file. */
   async confirmUnsaved(question = ""): Promise<boolean> {
+    // Text typed a moment ago counts: it's read before the documents are asked about.
+    const typing = Object.keys(this.docs).filter((p) => this.texts.waiting(p));
+    if (typing.length) await Promise.all(typing.map((p) => this.texts.readNow(p)));
     const dirty = this.dirtyDocs();
     if (!dirty.length) return true;
     const summary = `${dirty.length} file${dirty.length > 1 ? "s have" : " has"} unsaved changes.`;
@@ -490,7 +544,10 @@ class AppStore {
       this.session.reset();
       this.missingRoot = null;
       if (info.gitignoreUpdated) this.gitignoreUpdated("");
+      this.problems.reset();
       this.root = info.root;
+      // In the background: the shell reads every file off the main thread.
+      void this.problems.scan();
       this.trust.reset();
       this.tree = info.tree;
       // Reads still under way are the last workspace's: none is shared or kept.
@@ -548,9 +605,12 @@ class AppStore {
       saved: Object.fromEntries([...orphanSaved, ...file.requests.map((r) => [r._key!, snapshot(r)])]),
       savedOrder: file.requests.map((r) => r._key).join(","),
       savedHeader: JSON.stringify(file.header),
+      savedRest: restShot(file),
       externalChange: false,
       missing: false,
       orphans,
+      sources: {},
+      fileText: null,
     };
   }
 
@@ -610,37 +670,35 @@ class AppStore {
     for (const p of paths) if (this.docs[p]) await this.reload(p);
   }
 
+  /** A request tab's request (a file view has none). */
   requestFor(tab: Tab | null): Request | undefined {
-    if (!tab) return undefined;
+    if (!isRequestTab(tab)) return undefined;
     return this.findRequest(tab.path, tab.key);
   }
 
   /** A request of the document: in the file, or held by an Orphaned tab. */
   private findRequest(path: string, key: string): Request | undefined {
     const doc = this.docs[path];
-    return doc?.file.requests.find((r) => r._key === key) ?? doc?.orphans.find((r) => r._key === key);
+    return doc && (kept(keptByKey, doc.file.requests, byKey).get(key) ?? doc.orphans.find((r) => r._key === key));
   }
 
   /** True for an Orphaned tab: its request is no longer in the file on disk. */
   isOrphaned(tab: Tab): boolean {
     const doc = this.docs[tab.path];
-    return !!doc && (doc.missing || doc.orphans.some((r) => r._key === tab.key));
+    return !!doc && (doc.missing || (tab.kind === "request" && doc.orphans.some((r) => r._key === tab.key)));
   }
 
+  /** Edited since loaded or saved; source text that doesn't parse counts as an edit too. */
   isRequestDirty(path: string, key: string): boolean {
     const doc = this.docs[path];
     const req = this.findRequest(path, key);
-    if (!doc || !req) return false;
-    return doc.saved[key] !== snapshot(req);
+    return !!doc && !!req && requestDirty(doc, req);
   }
 
   /** Edits in an Orphaned tab count too: they exist nowhere on disk. */
   isDocDirty(path: string): boolean {
     const doc = this.docs[path];
-    if (!doc) return false;
-    if (doc.file.requests.map((r) => r._key).join(",") !== doc.savedOrder) return true;
-    if (JSON.stringify(doc.file.header) !== doc.savedHeader) return true;
-    return [...doc.file.requests, ...doc.orphans].some((r) => doc.saved[r._key!] !== snapshot(r));
+    return !!doc && kept(keptDirty, doc, docDirty);
   }
 
   dirtyDocs(): string[] {
@@ -651,6 +709,7 @@ class AppStore {
    *  appended to it; unedited ones stay orphaned so a request another editor
    *  removed isn't silently restored. */
   async save(path: string, revive: string[] = []): Promise<boolean> {
+    if (!(await this.settleUnparsed([path]))) return false;
     const doc = this.docs[path];
     if (!doc) return false;
     try {
@@ -673,7 +732,7 @@ class AppStore {
 
   /** Saves a tab's file; an Orphaned tab's request is written back into it. */
   async saveTab(tab: Tab): Promise<boolean> {
-    return this.save(tab.path, [tab.key]);
+    return this.save(tab.path, tab.kind === "request" ? [tab.key] : []);
   }
 
   async saveActive() {
@@ -681,8 +740,58 @@ class AppStore {
     if (tab) await this.saveTab(tab);
   }
 
+  /** Saves every unsaved file, after asking about all their text that doesn't parse
+   *  (Cancel saves none of them). */
   async saveAll() {
+    if (!(await this.settleUnparsed(Object.keys(this.docs)))) return;
     for (const p of this.dirtyDocs()) await this.save(p);
+  }
+
+  /**
+   * Before `paths` are saved: asks, in turn, what to keep of each text that doesn't
+   * parse in their views (`askWhatToKeep`), then applies every answer. False on
+   * Cancel, and then nothing changes. Text typed but not yet read is read first.
+   */
+  async settleUnparsed(paths: string[]): Promise<boolean> {
+    await Promise.all(paths.map((p) => this.texts.readNow(p)));
+    const answers: [UnparsedText, KeepChoice][] = [];
+    for (const text of paths.flatMap((p) => this.texts.unparsed(p))) {
+      const choice = await this.askWhatToKeep(text);
+      if (choice === "cancel") return false;
+      answers.push([text, choice]);
+    }
+    for (const [text, choice] of answers) {
+      if (choice === "written") text.saveAsWritten();
+      else text.revert();
+    }
+    return true;
+  }
+
+  /** The Save as written / Revert to last valid dialog for one text that doesn't parse. */
+  async askWhatToKeep(text: UnparsedText): Promise<KeepChoice> {
+    const revert = { label: "Revert to last valid", value: "revert" };
+    if (!text.canSaveAsWritten) {
+      const r = await this.choose(
+        `Revert "${text.name}" to the last valid ${text.noun}?`,
+        `Nothing could be read from its text, so it can't be saved as written. The text you typed is discarded and the last valid ${text.noun} is saved instead. Undo in its editor brings the text back.`,
+        [{ ...CANCEL, focus: true }, { ...revert, role: "primary", danger: true }],
+      );
+      return r.button === "revert" ? "revert" : "cancel";
+    }
+    if (text.asText) {
+      const r = await this.choose(
+        `Save "${text.name}" as written?`,
+        `Its text has no request line. Save it as written and it stays in the file as text, not a request, and its tab closes. Or revert: the text you typed is discarded and the last valid ${text.noun} is saved. Undo in its editor brings the text back.`,
+        [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
+      );
+      return r.button === "written" || r.button === "revert" ? r.button : "cancel";
+    }
+    const r = await this.choose(
+      `Save "${text.name}" as written?`,
+      `${text.problem ? `${text.problem} ` : "Its text doesn't parse. "}Save it as written, with the lines that don't parse kept as they are, or revert: the text you typed is discarded and the last valid ${text.noun} is saved. Undo in its editor brings the text back.`,
+      [CANCEL, { ...revert, role: "destructive", danger: true }, { label: "Save as written", value: "written", role: "primary" }],
+    );
+    return r.button === "written" || r.button === "revert" ? r.button : "cancel";
   }
 
   /** Reloads from disk, keeping tabs attached to the same requests where possible.
@@ -701,7 +810,7 @@ class AppStore {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
       const known = (r: Request, position: number | null): KnownRequest => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position });
       const unused = reattach([...old.file.requests.map((r, i) => known(r, i)), ...old.orphans.map((r) => known(r, null))], file.requests);
-      const held = new Set(this.tabs.filter((t) => t.path === path).map((t) => t.key));
+      const held = new Set(this.tabs.flatMap((t) => (t.kind === "request" && t.path === path ? [t.key] : [])));
       orphans = [...old.file.requests, ...old.orphans].filter((r) => unused.has(r._key!) && held.has(r._key!));
     }
     this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
@@ -716,6 +825,7 @@ class AppStore {
       JSON.stringify(file.header) === doc.savedHeader &&
       file.trailing === doc.file.trailing &&
       file.lineEnding === doc.file.lineEnding &&
+      !file.mixedEndings === !doc.file.mixedEndings &&
       file.requests.length === keys.length &&
       file.requests.every((r, i) => snapshot(r) === doc.saved[keys[i]])
     );
@@ -743,6 +853,7 @@ class AppStore {
   async onExternalChange(paths: string[]) {
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     this.reloadTimer = setTimeout(() => this.refreshTree(), 150);
+    this.problems.changed(paths);
     // An env file anywhere, or a folder (which may hold env files: moved in, renamed, deleted).
     if (paths.some((p) => /http-client(\.private)?\.env\.json$/.test(p) || !/\.(http|rest)$/i.test(p))) await this.loadEnvironments();
     for (const p of paths) {
@@ -872,7 +983,7 @@ class AppStore {
     const req = which.key ? doc.file.requests.find((r) => r._key === which.key) : doc.file.requests[which.index ?? 0];
     if (!req) return;
     const key = req._key!;
-    let tab = this.tabs.find((t) => t.path === path && t.key === key);
+    let tab = this.tabs.find((t) => t.kind === "request" && t.path === path && t.key === key);
     if (!tab) {
       tab = newTab(path, key);
       const at = this.tabs.findIndex((t) => t.id === this.activeTabId);
@@ -884,22 +995,31 @@ class AppStore {
   /** Shows one of a tab's request sections (Params, Headers, …). */
   showSection(tabId: string, section: RequestSection) {
     const tab = this.tabs.find((t) => t.id === tabId);
-    if (tab) tab.section = section;
+    if (isRequestTab(tab)) tab.section = section;
   }
+
+  /** Per document, where the tab of each request typed out of its file view sat: it comes back there with the request. */
+  private typedOutTabs = new WeakMap<Doc, Map<string, number>>();
 
   private removeTab(id: string) {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const [tab] = this.tabs.splice(idx, 1);
+    forgetEditors(id);
     this.unshown.delete(id);
+    delete this.fileCursors[id];
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
-    // An orphaned request lives only in its tab.
+    // A file view's text lives only in its tab. An orphaned request lives only in its
+    // tabs, and so does the text typed in its Source view.
     const doc = this.docs[tab.path];
-    if (doc && !this.tabs.some((t) => t.path === tab.path && t.key === tab.key)) {
+    if (!doc) return;
+    if (tab.kind === "file") this.texts.drop(tab.path, fileView);
+    else if (!this.tabs.some((t) => t.kind === "request" && t.path === tab.path && t.key === tab.key)) {
       doc.orphans = doc.orphans.filter((r) => r._key !== tab.key);
+      this.texts.drop(tab.path, sourceView(tab.key));
     }
   }
 
@@ -908,8 +1028,18 @@ class AppStore {
   async closeTab(id: string): Promise<boolean> {
     const tab = this.tabs.find((t) => t.id === id);
     if (!tab) return true;
+    // Text typed a moment ago counts as an edit: it's read before the tab is asked about.
+    if (this.texts.waiting(tab.path)) {
+      await this.texts.readNow(tab.path);
+      if (!this.tabs.some((t) => t.id === id)) return true;
+    }
     const req = this.requestFor(tab);
-    if (req && this.isRequestDirty(tab.path, tab.key)) {
+    if (tab.kind === "file") {
+      if (!(await this.closingFileView(tab))) return false;
+    } else if (req && this.isRequestDirty(tab.path, tab.key) && !this.texts.blocked(tab.path)) {
+      // (While the file view holds text that doesn't parse, the tab just closes: its
+      // request's edits stay in the document, which the file view still shows, and
+      // reverting them would drop that text unseen, #174.)
       const r = await this.choose(`Save changes to "${displayName(req)}"?`, "Your changes will be lost if you don't save them.", [
         CANCEL,
         { label: "Don't save", value: "discard", role: "destructive", danger: true },
@@ -920,8 +1050,32 @@ class AppStore {
       if (r.button === "discard") this.revertRequest(tab.path, tab.key);
     }
     const index = this.tabs.indexOf(tab);
-    if (index >= 0) this.closed = [{ path: tab.path, key: tab.key, index }, ...this.closed].slice(0, CLOSED_TABS_KEPT);
+    const was: ClosedTab = tab.kind === "file" ? { kind: "file", path: tab.path, index } : { kind: "request", path: tab.path, key: tab.key, index };
+    if (index >= 0) this.closed = [was, ...this.closed].slice(0, CLOSED_TABS_KEPT);
     this.removeTab(id);
+    return true;
+  }
+
+  /**
+   * Before file view `tab` closes: asks what to do with edits that would show nowhere
+   * else, the file's when no other tab shows it, or its text that doesn't parse. Don't
+   * save reads the file from disk again (or, with other tabs open, drops the text).
+   * False if it stays open.
+   */
+  private async closingFileView(tab: Tab): Promise<boolean> {
+    const others = this.tabs.some((t) => t !== tab && t.path === tab.path);
+    if (!this.texts.isInvalid(tab.path, fileView) && (others || !this.isDocDirty(tab.path))) return true;
+    // With other tabs open only the text here that doesn't parse goes: their edits stay in the document.
+    const lost = others ? "The text typed here doesn't parse, and is discarded if you don't save it. Edits made in the file's request tabs stay." : "Your changes will be lost if you don't save them.";
+    const r = await this.choose(`Save changes to ${basename(tab.path)}?`, lost, [
+      CANCEL,
+      { label: "Don't save", value: "discard", role: "destructive", danger: true },
+      { label: "Save", value: "save", role: "primary" },
+    ]);
+    if (r.button === "cancel") return false;
+    if (r.button === "save") return this.save(tab.path);
+    this.texts.drop(tab.path, fileView);
+    if (!others) await this.reload(tab.path);
     return true;
   }
 
@@ -933,8 +1087,8 @@ class AppStore {
   }
 
   /** The tabs the user closed in this workspace, the last closed first: each one's
-   *  request and where it sat in the tab bar. In memory only. */
-  private closed = $state<(RequestRef & { index: number })[]>([]);
+   *  request (or file, for a file view) and where it sat in the tab bar. In memory only. */
+  private closed = $state<ClosedTab[]>([]);
 
   /** Whether Reopen Closed Tab has a tab to reopen. */
   get canReopenTab(): boolean {
@@ -949,16 +1103,21 @@ class AppStore {
    */
   reopenClosedTab() {
     while (this.closed.length) {
-      const [{ path, key, index }, ...rest] = this.closed;
+      const [was, ...rest] = this.closed;
+      const { path, index } = was;
       this.closed = rest;
       const doc = this.docs[path];
-      if (!doc || doc.missing || !doc.file.requests.some((r) => r._key === key)) continue;
-      let tab = this.tabs.find((t) => t.path === path && t.key === key);
-      if (!tab) {
-        tab = newTab(path, key);
+      if (!doc || doc.missing || (was.kind === "request" && !doc.file.requests.some((r) => r._key === was.key))) continue;
+      let tab = this.tabs.find((t) => t.path === path && (t.kind === "file" ? was.kind === "file" : was.kind === "request" && t.key === was.key));
+      if (!tab && was.kind === "file") {
+        tab = newFileTab(path);
+        this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
+      } else if (!tab && was.kind === "request") {
+        tab = newTab(path, was.key);
         this.tabs.splice(Math.min(index, this.tabs.length), 0, tab);
         void this.showLastResponse(tab.id);
       }
+      if (!tab) continue;
       this.activeTabId = tab.id;
       return;
     }
@@ -990,7 +1149,8 @@ class AppStore {
 
   revertRequest(path: string, key: string) {
     const doc = this.docs[path];
-    if (!doc) return;
+    if (!doc || this.refused(path)) return;
+    this.texts.drop(path, sourceView(key));
     const idx = doc.file.requests.findIndex((r) => r._key === key);
     if (idx < 0) return;
     if (doc.saved[key]) {
@@ -1011,7 +1171,7 @@ class AppStore {
   async restoreRequest(path: string, key: string | null, source: string) {
     let restored: Request | null;
     try {
-      restored = await api.parseRequest(source);
+      restored = (await api.parseRequest(source)).request;
     } catch (e) {
       this.toast("error", errorMessage(e));
       return;
@@ -1019,8 +1179,15 @@ class AppStore {
     if (!restored) return this.toast("error", "This History entry has no request to restore");
     const doc = await this.loadDoc(path);
     if (!doc) return;
+    // An entry sent from a file with mixed line endings keeps its text's `\r\n`s. Put
+    // into a file that has one ending, they'd be written beside the file's own: read
+    // with `\n`, the request takes the file's ending like the rest of it.
+    if (!doc.file.mixedEndings && source.includes("\r\n")) {
+      restored = (await api.parseRequest(source.replaceAll("\r\n", "\n")).catch(() => null))?.request ?? restored;
+    }
     const linked = historyLinkKey(path, historyLink(path, restored));
     const at = doc.file.requests.findIndex((r) => (key === null ? historyLinkKey(path, historyLink(path, r)) === linked : r._key === key));
+    if (this.refused(path, at >= 0 ? [doc.file.requests[at]._key!] : [])) return;
     const req: Request = { ...restored, leading: "", _key: at >= 0 ? doc.file.requests[at]._key! : uid() };
     if (at >= 0) {
       // Text that preceded the request in its file stays as it is.
@@ -1031,12 +1198,94 @@ class AppStore {
     await this.openRequest(path, { key: req._key });
   }
 
+  // ---------------------------------------------------------------- file view
+
+  /** A file view asked to show a line (`openFileView`), until it has. */
+  fileLineWanted = $state<{ tabId: string; line: number; column?: number } | null>(null);
+  /** A file view asked to show a request (`openFileView`), until it has. */
+  fileRequestWanted = $state<{ tabId: string; key: string } | null>(null);
+
+  /**
+   * Opens the file at `path` as one text (its file view, a tab of its own; the one
+   * already open, if there is one), made active. With `line` (1-based), the view
+   * scrolls that line into view with the caret on it (at character `column`, or its
+   * start); with `key`, it shows that request.
+   */
+  async openFileView(path: string, at: { line?: number; column?: number; key?: string } = {}) {
+    const doc = await this.loadDoc(path);
+    if (!doc) return;
+    let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
+    if (!tab) {
+      tab = newFileTab(path);
+      const i = this.tabs.findIndex((t) => t.id === this.activeTabId);
+      this.tabs.splice(i < 0 ? this.tabs.length : i + 1, 0, tab);
+    }
+    this.activeTabId = tab.id;
+    if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line, column: at.column };
+    if (at.key) this.fileRequestWanted = { tabId: tab.id, key: at.key };
+  }
+
+  /** The request under each file view's cursor (by tab id): its place among the requests of the text shown, null outside one. */
+  private fileCursors = $state<Record<string, number | null>>({});
+
+  /**
+   * The file view `tabId` has its cursor in the `index`th request of its text (0-based),
+   * or in none. That request is the explorer's selection while the view is active, and
+   * the one Send sends from it.
+   */
+  setFileCursor(tabId: string, index: number | null) {
+    this.fileCursors[tabId] = index;
+  }
+
+  /**
+   * The key of the request under file view `tab`'s cursor: none outside a request, or
+   * while the text doesn't parse (the file's requests are then as they last read, not
+   * those of the text shown).
+   */
+  private requestUnderCursor(tab: Tab): string | null {
+    const index = this.fileCursors[tab.id];
+    if (tab.kind !== "file" || index === null || index === undefined || this.texts.isInvalid(tab.path, fileView)) return null;
+    return this.docs[tab.path]?.file.requests[index]?._key ?? null;
+  }
+
+  /**
+   * Sends the request under file view `tab`'s cursor the way its own tab sends it
+   * (opened, made active, and its response shown there), once the text typed in the
+   * view is read.
+   */
+  private async sendUnderCursor(tab: Tab) {
+    if (this.texts.waiting(tab.path, fileView)) await this.texts.readNow(tab.path, fileView);
+    if (this.texts.isInvalid(tab.path, fileView)) {
+      this.toast("error", `The text in ${basename(tab.path)}'s file view doesn't parse. Fix the text to send a request from it.`);
+      return;
+    }
+    const key = this.requestUnderCursor(tab);
+    if (!key) {
+      this.toast("info", "Put the cursor in a request to send it.");
+      return;
+    }
+    await this.openRequest(tab.path, { key });
+    if (isRequestTab(this.activeTab) && this.activeTab.key === key) await this.send(this.activeTab.id);
+  }
+
   // ---------------------------------------------------------------- request ops
+
+  /**
+   * Whether an action from outside the views (the explorer, History, Rename variable, a
+   * quick fix) is refused from changing the file at `path` (or requests `keys` of it): a
+   * view holds text that doesn't parse that the change would stop standing for, which
+   * would drop it unseen (`TextViews.blocked`, #174). Says why when it is.
+   */
+  private refused(path: string, keys: string[] = []): boolean {
+    const why = this.texts.blocked(path, keys);
+    if (why) this.toast("error", `${why}. Fix the text, or save the file and choose what to keep.`);
+    return !!why;
+  }
 
   /** Adds a request to a file and opens it. Saves immediately if the file was clean. */
   async addRequest(path: string, req: Request = newRequest()) {
     const doc = await this.loadDoc(path);
-    if (!doc) return;
+    if (!doc || this.refused(path)) return;
     const wasClean = !this.isDocDirty(path);
     ensureKey(req);
     doc.file.requests.push(req);
@@ -1048,7 +1297,7 @@ class AppStore {
   async duplicateRequest(path: string, key: string) {
     const doc = await this.loadDoc(path);
     const src = doc?.file.requests.find((r) => r._key === key);
-    if (!doc || !src) return;
+    if (!doc || !src || this.refused(path)) return;
     const copy: Request = { ...JSON.parse(snapshot(src)), name: `${displayName(src)} copy`, raw: null, leading: "", _key: uid() };
     const wasClean = !this.isDocDirty(path);
     doc.file.requests.splice(doc.file.requests.indexOf(src) + 1, 0, copy);
@@ -1060,6 +1309,9 @@ class AppStore {
     const doc = await this.loadDoc(path);
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!doc || !req) return;
+    // The request after it takes the text before it.
+    const next = doc.file.requests[doc.file.requests.indexOf(req) + 1];
+    if (this.refused(path, [key, ...(req.leading && next ? [next._key!] : [])])) return;
     const r = await this.choose("Delete request", `Delete "${displayName(req)}" from ${basename(path)}?`, [
       CANCEL,
       { label: "Delete", value: "delete", role: "primary", danger: true },
@@ -1074,14 +1326,14 @@ class AppStore {
       else doc.file.trailing = req.leading + doc.file.trailing;
     }
     doc.file.requests.splice(idx, 1);
-    for (const t of this.tabs.filter((t) => t.path === path && t.key === key)) this.removeTab(t.id);
+    for (const t of this.tabs.filter((t) => t.kind === "request" && t.path === path && t.key === key)) this.removeTab(t.id);
     if (wasClean) await this.save(path);
   }
 
   async renameRequest(path: string, key: string) {
     const doc = await this.loadDoc(path);
     const req = doc?.file.requests.find((r) => r._key === key);
-    if (!req) return;
+    if (!req || this.refused(path, [key])) return;
     const r = await this.prompt("Rename request", displayName(req));
     if (r === null || !r.trim()) return;
     const wasClean = !this.isDocDirty(path);
@@ -1156,6 +1408,8 @@ class AppStore {
     this.docs = docs;
     for (const t of [...this.tabs, ...this.closed]) t.path = remap(t.path);
     if (this.expanded[from]) this.expanded[to] = true;
+    // No watcher event follows the app's own change: the Problems panel is told here.
+    this.problems.moved(from, to);
     await this.refreshTree();
     await this.reloadFolderEnvironments(from);
   }
@@ -1188,6 +1442,7 @@ class AppStore {
     const under = (p: string) => p === path || p.startsWith(path + "/") || p.startsWith(path + "\\");
     for (const t of this.tabs.filter((t) => under(t.path))) this.removeTab(t.id);
     for (const p of Object.keys(this.docs).filter(under)) delete this.docs[p];
+    this.problems.removed(path);
     await this.refreshTree();
     await this.reloadFolderEnvironments(path);
   }
@@ -1195,7 +1450,7 @@ class AppStore {
   // ---------------------------------------------------------------- execution
 
   /** The request with the scope it's sent in. Send and the resolved preview both use this, so they agree. */
-  private requestArgs(tab: Tab, req: Request, doc: Doc): RequestArgs {
+  private requestArgs(tab: RequestTab, req: Request, doc: Doc): RequestArgs {
     return {
       request: $state.snapshot(req) as Request,
       filePath: tab.path,
@@ -1210,7 +1465,7 @@ class AppStore {
    * The values the Session remembers for the tab's request's Prompt variables, by
    * name. The Session (in the shell) holds them, never the webview.
    */
-  promptAnswers(tab: Tab): Promise<Record<string, string>> {
+  promptAnswers(tab: RequestTab): Promise<Record<string, string>> {
     return api.promptAnswers(tab.key);
   }
 
@@ -1223,7 +1478,7 @@ class AppStore {
    * Asks for the request's Prompt variables that the Session has no value for, all in
    * one form, and has the Session remember the answers. False if the user cancelled.
    */
-  private async askPrompts(tab: Tab, req: Request): Promise<boolean> {
+  private async askPrompts(tab: RequestTab, req: Request): Promise<boolean> {
     const remembered = await this.promptAnswers(tab);
     const asked = requestPrompts(req).filter((p) => !Object.hasOwn(remembered, p.name));
     if (!asked.length) return true;
@@ -1243,7 +1498,7 @@ class AppStore {
   }
 
   /** What sending the tab's request would send, without sending it (see `api.previewRequest`). */
-  async preview(tab: Tab): Promise<RequestPreview | null> {
+  async preview(tab: RequestTab): Promise<RequestPreview | null> {
     const req = this.requestFor(tab);
     const doc = this.docs[tab.path];
     if (!req || !doc) return null;
@@ -1251,11 +1506,20 @@ class AppStore {
   }
 
   async send(tabId: string) {
-    const tab = this.tabs.find((t) => t.id === tabId);
+    const typing = this.tabs.find((t) => t.id === tabId);
+    if (typing?.kind === "file") return this.sendUnderCursor(typing);
+    // Text typed in the Source view a moment ago is sent too (and only then awaited).
+    if (typing && this.texts.waiting(typing.path, sourceView(typing.key))) await this.texts.readNow(typing.path, sourceView(typing.key));
+    const tab = this.tabs.find((t): t is RequestTab => t.id === tabId && t.kind === "request");
     const req = this.requestFor(tab ?? null);
     const doc = tab && this.docs[tab.path];
     if (!tab || !req || !doc) return;
     if (this.runs[tabId]?.loading || this.confirmingSend.has(tabId)) return;
+    // What would be sent is the request as it last read, not the text shown: say so instead.
+    if (this.texts.isInvalid(tab.path, sourceView(tab.key))) {
+      this.toast("error", `The source of "${displayName(req)}" doesn't parse. Fix the text to send it.`);
+      return;
+    }
     // Only awaited for a request with prompts, so an ordinary send starts loading at once.
     if (requestPrompts(req).length && !(await this.confirming(tabId, () => this.askPrompts(tab, req)))) return;
     const env = this.guardedEnvironment(tab.path, req.method);
@@ -1391,10 +1655,14 @@ class AppStore {
 
   // ---------------------------------------------------------------- explorer selection
 
-  /** The requests selected in the explorer: those picked, else the active request. */
+  /** The requests selected in the explorer: those picked, else the active request (in a file view, the one under its cursor). */
   get selectedRequests(): RequestRef[] {
     if (this.treeSelection.length) return this.treeSelection;
     const tab = this.activeTab;
+    if (tab?.kind === "file") {
+      const key = this.requestUnderCursor(tab);
+      return key ? [{ path: tab.path, key }] : [];
+    }
     return tab ? [{ path: tab.path, key: tab.key }] : [];
   }
 
@@ -1457,6 +1725,67 @@ class AppStore {
   readonly history: HistoryStore = new HistoryStore(this.historyHost());
   /** The open workspace's Layout: saved as it changes, restored when it opens (layoutStore.svelte.ts). */
   readonly layout: LayoutStore = new LayoutStore(this.layoutHost());
+  /** The Problems panel's list: every file's problems and portability notes (workspaceProblems.svelte.ts). */
+  readonly problems: WorkspaceProblems = new WorkspaceProblems(this.problemsHost());
+  /** Text typed in each document's views, its Source views and file view (textViews.svelte.ts). */
+  readonly texts: TextViews = new TextViews(this.textViewsHost());
+
+  private problemsHost(): ProblemsHost {
+    const store = this;
+    return {
+      get root() {
+        return store.root;
+      },
+      get openPaths() {
+        return Object.keys(store.docs);
+      },
+      openText: (path) => store.texts.openText(path),
+      openVersion: (path) => store.texts.openVersion(path),
+      get portabilityLevel() {
+        return store.portabilityLevel;
+      },
+      environmentsOf: (path) => store.envSetFor(path),
+      get envName() {
+        return store.envName;
+      },
+      get sessionVersion() {
+        return store.sessionVersion;
+      },
+    };
+  }
+
+  private textViewsHost(): TextViewsHost {
+    const store = this;
+    return {
+      get docs() {
+        return store.docs;
+      },
+      findRequest: (path, key) => store.findRequest(path, key),
+      requestsGone: (path, keys) => {
+        const doc = store.docs[path];
+        for (const t of store.tabs.filter((t): t is RequestTab => t.kind === "request" && t.path === path && keys.has(t.key))) {
+          // Where it sat, for when the request is typed back in (`requestsBack`).
+          if (doc) store.typedOutTabs.set(doc, new Map(store.typedOutTabs.get(doc) ?? []).set(t.key, store.tabs.indexOf(t)));
+          store.removeTab(t.id);
+        }
+      },
+      requestsBack: (path, keys) => {
+        const doc = store.docs[path];
+        const sat = doc && store.typedOutTabs.get(doc);
+        if (!sat) return;
+        for (const key of keys) {
+          const index = sat.get(key);
+          sat.delete(key);
+          if (index === undefined || store.tabs.some((t) => t.kind === "request" && t.path === path && t.key === key)) continue;
+          // Where it sat, not made active: the user is typing in the file view.
+          const tab = newTab(path, key);
+          store.tabs.splice(Math.min(index, store.tabs.length), 0, tab);
+          void store.showLastResponse(tab.id);
+        }
+      },
+      toast: (kind, message) => store.toast(kind, message),
+    };
+  }
 
   private layoutHost(): LayoutHost {
     const store = this;
@@ -1588,7 +1917,7 @@ class AppStore {
   exchangeShape(path: string, name: string): Promise<ExchangeShape | null> {
     return this.session.exchangeShape(path, name);
   }
-  forgetPrompts(tab: Tab): Promise<void> {
+  forgetPrompts(tab: RequestTab): Promise<void> {
     return this.session.forgetPrompts(tab.key);
   }
   deleteGlobal(name: string): Promise<void> {
@@ -1778,6 +2107,9 @@ class AppStore {
    *  (the Undefined-variable strip's "Add …" fixes), an empty one is added there first. */
   async editDefinition(tabId: string, definition: WantedDefinition) {
     if (definition.kind === "request") return this.showDeclaration(tabId, definition.name);
+    // Adding a File variable changes the file.
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (definition.kind === "file" && definition.add && tab && this.refused(tab.path)) return;
     this.definitionWanted = definition;
     if (definition.kind === "file") this.showRequestSettings(tabId);
     else this.modal = "env";
@@ -1865,13 +2197,19 @@ class AppStore {
     if (!choice) return false;
     const { name: next } = choice;
     const usages = choice.usages ? await this.renameTargets(name, dir, choice.usages) : [];
+    const byFile = new Map<string, Usage[]>();
+    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
+    // Nothing changes if a file it would rewrite can't be (an open one's view holds text that doesn't parse).
+    for (const [path, list] of byFile) {
+      const requests = this.docs[path]?.file.requests ?? [];
+      const keys = list.flatMap((u) => (u.kind === "request" && requests[u.index] ? [requests[u.index]._key!] : []));
+      if (this.refused(path, keys)) return false;
+    }
     const set = await this.folderPair(dir);
     if (!set) return false;
     renameInEnvironments(set, usages, name, next);
     if (!(await this.writeEnvironments(set, dir))) return false;
 
-    const byFile = new Map<string, Usage[]>();
-    for (const u of usages) if (u.kind !== "environment") byFile.set(u.path, [...(byFile.get(u.path) ?? []), u]);
     let edited = 0;
     const unsaved: string[] = [];
     for (const [path, list] of byFile) {
@@ -1931,6 +2269,8 @@ class AppStore {
     if (!choice) return null;
     const { name, target } = choice;
     const tab = this.tabs.find((t) => t.id === tabId);
+    // The field gets `{{name}}`, and a File variable goes in the file.
+    if (tab && this.refused(tab.path, isRequestTab(tab) ? [tab.key] : [])) return null;
     if (target.kind !== "file") return tab && (await this.extractToEnvironments(tab.path, target, name, value)) ? name : null;
     const doc = tab && this.docs[tab.path];
     if (!tab || !doc) return null;

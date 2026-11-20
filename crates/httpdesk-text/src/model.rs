@@ -20,8 +20,15 @@ pub struct HttpFile {
     pub requests: Vec<Request>,
     /// Verbatim non-request text after the last request.
     pub trailing: String,
-    /// Dominant line ending of the original text; the whole file is saved with it.
+    /// The ending most of the original text's line breaks have (`Crlf` when more are CRLF
+    /// than LF): what new and edited text is written with. A file with only CRLF breaks is
+    /// read as LF and saved with CRLF throughout.
     pub line_ending: LineEnding,
+    /// The original text has both CRLF and LF breaks. It's then read as written, each
+    /// `\r` kept in its verbatim text, so what isn't edited saves back byte for byte;
+    /// only text written anew (an edited or added request, the lines between blocks)
+    /// gets [`Self::line_ending`].
+    pub mixed_endings: bool,
     /// The file started with a UTF-8 byte order mark (stripped for parsing, written back on save).
     pub bom: bool,
 }
@@ -381,4 +388,105 @@ impl Request {
     pub fn header(&self, name: &str) -> Option<&KeyValue> {
         self.headers.items.iter().find(|h| h.name.eq_ignore_ascii_case(name))
     }
+}
+
+/// Something the parser couldn't read cleanly. Reading recovers anyway, and the
+/// text is kept as written, so a problem never loses anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Problem {
+    /// 1-based line in the parsed text.
+    pub line: usize,
+    /// 1-based column, in characters (a leading byte order mark doesn't count).
+    pub column: usize,
+    pub severity: Severity,
+    pub code: ProblemCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// The text doesn't say what was meant.
+    Error,
+    /// The text reads, but probably not as intended.
+    Warning,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProblemCode {
+    /// The request line isn't `[METHOD] URL [HTTP/version]` (e.g. a space in the URL).
+    UnparseableRequestLine,
+    /// A header line after the blank line that starts the body: it's sent as body text.
+    HeaderAfterBody,
+    /// A `# @tag` above the request line that neither editor nor HttpDesk knows.
+    UnknownDirective,
+    /// A `< path` body reference to a file that doesn't exist. The parser can't tell:
+    /// it names the file ([`BodyFile`]) and the shell answers whether it exists.
+    MissingFile,
+    /// A `###` after the request's block in a single request's text (a Source view): it
+    /// starts another block, which a request's text can't hold.
+    TextAfterRequest,
+}
+
+/// A file and the problems found reading it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedFile {
+    pub file: HttpFile,
+    pub problems: Vec<Problem>,
+}
+
+/// A single request's text read on its own, and the problems found reading it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedRequest {
+    /// `None` when the text has no request line.
+    pub request: Option<Request>,
+    pub problems: Vec<Problem>,
+    /// The files the request's body is read from, placed in the text.
+    pub files: Vec<BodyFile>,
+    /// The text after the request's block, from the next `###` on, when there is any. A
+    /// single request's text holds one block, so it's reported ([`ProblemCode::TextAfterRequest`]),
+    /// and kept: Save as written puts it in the file after the request.
+    pub following: Option<Following>,
+}
+
+/// The text after a single request's block ([`ParsedRequest::following`]), read as a
+/// file reads it: its requests (each with the text before it as its `leading`), and
+/// the text after the last of them.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Following {
+    pub requests: Vec<Request>,
+    pub trailing: String,
+}
+
+impl Following {
+    /// The text, as read.
+    pub fn text(&self) -> String {
+        let mut text: String = self.requests.iter().map(crate::serializer::request_source).collect();
+        text.push_str(&self.trailing);
+        text
+    }
+}
+
+/// A file a request's body is read from when it's sent (`< path`, `<@ path`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BodyFile {
+    /// As written: relative to the `.http` file's folder, variables unresolved.
+    pub path: String,
+    /// The problem to report when the file doesn't exist (`missing-file`), at the reference.
+    pub missing: Problem,
+}
+
+/// What reading a request's text found ([`crate::parser::request_problems`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestProblems {
+    pub problems: Vec<Problem>,
+    /// The files its body is read from, which the shell checks exist.
+    pub files: Vec<BodyFile>,
 }

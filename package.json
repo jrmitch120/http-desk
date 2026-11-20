@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:wasm": "cargo build -p httpdesk-text-wasm --target wasm32-unknown-unknown --release",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "tauri": "tauri",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test --project=chromium",
-    "test:perf": "playwright test --project=perf"
+    "test:perf": "playwright test --project=perf",
+    "test:webkit": "playwright test --project=webkit"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
@@ -28,6 +30,7 @@
     "@codemirror/view": "^6.43.15",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@lezer/common": "^1.5.5",
     "@lezer/highlight": "^1.2.5",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-clipboard-manager": "^2.5.0",

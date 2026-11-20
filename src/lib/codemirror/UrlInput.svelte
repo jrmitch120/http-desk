@@ -3,6 +3,7 @@
   import { Annotation, Compartment, EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
   import { singleLineExtensions, theme, variableExtensions, type VarProvider } from "./setup";
+  import { inReadOnlyRegion } from "./readOnly";
 
   interface Props {
     value: string;
@@ -16,6 +17,10 @@
   let host: HTMLDivElement;
   let view = $state.raw<EditorView | null>(null);
   const varC = new Compartment();
+  /** In a read-only region (readOnly.ts), the URL can be read, selected and copied, not changed. */
+  const readOnlyC = new Compartment();
+  const readOnlyHere = inReadOnlyRegion();
+  const readOnlyExt = (on: boolean) => (on ? EditorState.readOnly.of(true) : []);
   /** Marks a change that puts the model's value in the editor, which isn't an edit to report back. */
   const fromModel = Annotation.define<boolean>();
 
@@ -37,6 +42,7 @@
           }),
           singleLineExtensions({ placeholder, onenter: () => onenter?.() }),
           varC.of(variables ? variableExtensions(variables) : []),
+          readOnlyC.of(readOnlyExt(readOnlyHere())),
           EditorView.updateListener.of((u) => {
             // Reporting the model's own value back would re-parse the query params into new
             // row objects, remounting the Params grid's rows under a cell being typed in.
@@ -62,6 +68,10 @@
   $effect(() => {
     const p = variables;
     view?.dispatch({ effects: varC.reconfigure(p ? variableExtensions(p) : []) });
+  });
+  $effect(() => {
+    const on = readOnlyHere();
+    view?.dispatch({ effects: readOnlyC.reconfigure(readOnlyExt(on)) });
   });
 
   export function focus() {

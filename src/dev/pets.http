@@ -1,0 +1,24 @@
+@petId = 1
+
+### List pets
+# Returns all pets, optionally filtered.
+# @param limit: How many pets to return. Default: 20.
+# @param status: Filter by status. One of: available, pending, sold.
+# @header Accept: Response format. The API only produces JSON.
+GET {{baseUrl}}/pets?limit=20
+#~ &status=sold
+Authorization: Bearer {{token}}
+Accept: application/json
+#~ X-Debug: true
+
+### Create pet
+POST {{baseUrl}}/pets
+Content-Type: application/json
+
+{
+  "name": "Rex",
+  "tag": "dog"
+}
+
+### Get pet image
+GET {{baseUrl}}/png/{{petId}}

@@ -1,0 +1,5 @@
+### Upload
+POST https://example.com/items
+Content-Type: application/json
+
+< ./payload.json

@@ -1,0 +1,81 @@
+//! Save as written (#164): a request whose Source view text doesn't parse is saved
+//! as the request the parser recovered from that text. The file is written the way
+//! the shell's `save_http_file` writes it (`try_serialize`), and read back with `parse`.
+
+use httpdesk_core::*;
+
+const FILE: &str = "@host = https://example.com\n\n### List\n// hand formatted\nGET   {{host}}/books\nAccept: application/json\n\n# between the two\n### Create\nPOST {{host}}/books\nContent-Type: application/json\n\n{\"title\": \"Dune\"}\n\n### Delete\nDELETE {{host}}/books/1\n";
+
+/// `FILE` with request `index` replaced by the request recovered from `text`, saved.
+fn saved_as_written(index: usize, text: &str) -> String {
+    let parsed = parse_request(text);
+    assert!(parsed.problems.iter().any(|p| p.severity == Severity::Error), "{text:?} should not parse");
+    let mut file = parse(FILE);
+    file.requests[index] = parsed.request.expect("a request line");
+    try_serialize(&file).unwrap()
+}
+
+#[test]
+fn a_request_saved_as_written_is_its_text_byte_for_byte_and_the_rest_of_the_file_is_unchanged() {
+    let source = request_source(&parse(FILE).requests[1]);
+    assert_eq!(source, "### Create\nPOST {{host}}/books\nContent-Type: application/json\n\n{\"title\": \"Dune\"}\n\n");
+    let broken = source.replace("POST {{host}}/books\n", "POST {{host}}/books and more\nX-Broken header\n");
+
+    assert_eq!(saved_as_written(1, &broken), FILE.replace(&source, &broken));
+}
+
+#[test]
+fn the_first_and_last_requests_save_as_written_too() {
+    let file = parse(FILE);
+    for index in [0, 2] {
+        let source = request_source(&file.requests[index]);
+        let broken = source.replacen("{{host}}/books", "{{host}}/bo oks", 1);
+        assert_eq!(saved_as_written(index, &broken), FILE.replace(&source, &broken), "request {index}");
+    }
+}
+
+#[test]
+fn a_file_saved_as_written_reads_back_as_the_parser_recovers_it() {
+    let source = request_source(&parse(FILE).requests[1]);
+    let broken = source.replace("POST {{host}}/books\n", "POST {{host}}/books and more\n");
+    let text = saved_as_written(1, &broken);
+
+    let read = parse_with_problems(&text);
+    assert_eq!(read.file.requests.len(), 3);
+    assert_eq!(request_source(&read.file.requests[1]), broken);
+    assert_eq!(read.file.requests[1].method, "POST");
+    assert!(read.problems.iter().any(|p| p.code == ProblemCode::UnparseableRequestLine), "{:?}", read.problems);
+    // Saved again unchanged, it is the same text.
+    assert_eq!(try_serialize(&read.file).unwrap(), text);
+}
+
+#[test]
+fn a_request_saved_as_written_with_another_block_after_it_saves_that_block_after_it() {
+    let source = request_source(&parse(FILE).requests[1]);
+    let typed = format!("{source}### Typed too\nGET {{{{host}}}}/typed\n\n# a note\n");
+    let parsed = parse_request(&typed);
+    assert!(parsed.problems.iter().any(|p| p.code == ProblemCode::TextAfterRequest));
+    let following = parsed.following.unwrap();
+    let mut file = parse(FILE);
+    file.requests[1] = parsed.request.unwrap();
+    // As the store saves it: the requests that follow it, then their trailing text before the next one.
+    file.requests[2].leading = following.trailing.clone() + &file.requests[2].leading;
+    file.requests.splice(2..2, following.requests);
+    assert_eq!(try_serialize(&file).unwrap(), FILE.replace(&source, &typed));
+}
+
+#[test]
+fn text_with_a_lone_carriage_return_in_a_line_saves_back_byte_for_byte() {
+    // `try_serialize` (what a save uses) refuses a field with a line break, but not one
+    // the text was read with: a request still as it was read is written as that text.
+    for text in ["GET http://x\nX-A: b\rc\n", "# note\rGET http://x\r", "@host = a\rb\n\n### One\nGET http://x\n"] {
+        assert_eq!(try_serialize(&parse(text)).as_deref(), Ok(text), "{text:?}");
+    }
+}
+
+#[test]
+fn a_field_edited_to_hold_a_line_break_is_still_refused() {
+    let mut file = parse("GET http://x\nX-A: b\n");
+    file.requests[0].headers.items[0].value = "b\nc".into();
+    assert!(try_serialize(&file).is_err());
+}

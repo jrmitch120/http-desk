@@ -44,6 +44,14 @@ describe("commandForKey", () => {
     expect(on("mac", press("s"))).toBeUndefined();
   });
 
+  it("toggles a request's .http source with ⌥⌘U on macOS and Ctrl+Alt+U elsewhere, like a browser's View Source", () => {
+    expect(on("mac", press("¨", { code: "KeyU", metaKey: true, altKey: true }))).toBe("show-source");
+    expect(on("windows", press("u", { ctrlKey: true, altKey: true }))).toBe("show-source");
+    expect(on("linux", press("u", { ctrlKey: true, altKey: true }))).toBe("show-source");
+    // ⌘U is the source editor's own (CodeMirror's undo selection).
+    expect(on("mac", press("u", { metaKey: true }))).toBeUndefined();
+  });
+
   it("toggles the sidebar with ⌘B on macOS and Ctrl+B elsewhere", () => {
     expect(on("mac", press("b", { metaKey: true }))).toBe("toggle-sidebar");
     expect(on("windows", press("b", { ctrlKey: true }))).toBe("toggle-sidebar");

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { isNote, quickFixes, requestChecks, undefinedVariables } from "./checks";
-import type { EnvironmentSet, Request } from "./types";
+import { bodyFilePaths, isNote, portabilityLineMarks, quickFixes, requestChecks, undefinedVariables, type PortabilityLevel, type SourceFindings } from "./checks";
+import type { BodyFile, EnvironmentSet, PortabilityMark, Problem, Request, Support } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
 const request = (edit: (r: Request) => void): Request => {
@@ -129,7 +129,7 @@ describe("an environment the request's folder doesn't define", () => {
     privateFileIgnored: null,
   };
   const req = request((r) => (r.url = "{{baseUrl}}/users"));
-  const checks = (envName: string | null) => requestChecks(req, makeVarProvider(scope({ envName, env: {} })), set, envName, "api/users");
+  const checks = (envName: string | null) => requestChecks(req, makeVarProvider(scope({ envName, env: {} })), { set, envName, dir: "api/users" });
 
   it("is listed first, naming the folder, with a way to choose another environment", () => {
     expect(checks("qa")).toEqual([
@@ -147,7 +147,7 @@ describe("an environment the request's folder doesn't define", () => {
 
 describe("a # @name another request in the file also has", () => {
   const named = (name: string) => request((r) => r.directives.push({ name: "name", value: name }));
-  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), null, null, "", file).filter((c) => c.kind === "duplicateName");
+  const checks = (req: Request, file: Request[]) => requestChecks(req, makeVarProvider(scope()), { file }).filter((c) => c.kind === "duplicateName");
 
   it("is flagged on each of them, naming it and counting the others", () => {
     const [a, b, c] = [named("login"), named(" login "), named("me")];
@@ -166,15 +166,15 @@ describe("a # @name another request in the file also has", () => {
 });
 
 describe("the note that Rider refuses a Request variable", () => {
-  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })), null, null);
-  const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "riderRefuses");
+  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })));
+  const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "portability" && c.note.kind === "riderRefuses");
 
   it("is there whenever a request sends one, naming the first request read", () => {
     const req = request((r) => {
       r.url = "https://example.com/{{me.response.body.$.id}}";
       r.headers.items.push({ enabled: true, name: "Authorization", value: "Bearer {{login.response.body.$.token}}" });
     });
-    expect(notes(req)).toEqual([{ kind: "riderRefuses", name: "me" }]);
+    expect(notes(req)).toEqual([{ kind: "portability", level: "note", note: { kind: "riderRefuses", name: "me" } }]);
   });
 
   it("isn't there for a request with none, or with one only in a disabled header", () => {
@@ -186,7 +186,125 @@ describe("the note that Rider refuses a Request variable", () => {
     const req = request((r) => (r.url = "{{base}}/{{login.response.body.$.id}}"));
     expect(checksOf(req).map((c) => [c.kind, isNote(c)])).toEqual([
       ["undefined", false],
-      ["riderRefuses", true],
+      ["portability", true],
     ]);
+  });
+});
+
+describe("problems reading the request's source", () => {
+  // As the core reports them (`request_problems`), placed in the request's source.
+  const unparseable: Problem = { line: 2, column: 1, severity: "error", code: "unparseable-request-line", message: "Can't read this request line" };
+  const unknown: Problem = { line: 1, column: 3, severity: "warning", code: "unknown-directive", message: "Unknown directive @nmae" };
+  const missing = (path: string, line = 5): BodyFile => ({ path, missing: { line, column: 1, severity: "error", code: "missing-file", message: `${path} doesn't exist` } });
+  const checksOf = (req: Request, found: SourceFindings, env: Scope["env"] = {}) => requestChecks(req, makeVarProvider(scope({ env })), { file: [req], found });
+  const exists = (answers: Record<string, boolean>) => (path: string) => answers[path];
+
+  it("lists each of the parser's problems, in the order of their lines, before the other checks", () => {
+    const req = request((r) => (r.url = "https://example.com/{{id}}"));
+    const checks = checksOf(req, { read: { problems: [unparseable, unknown], files: [] } });
+    expect(checks.map((c) => c.kind)).toEqual(["problem", "problem", "undefined"]);
+    expect(checks.slice(0, 2)).toEqual([
+      { kind: "problem", problem: unknown },
+      { kind: "problem", problem: unparseable },
+    ]);
+    expect(checks.every((c) => !isNote(c))).toBe(true);
+  });
+
+  it("goes away once the request reads cleanly", () => {
+    const req = request(() => {});
+    expect(checksOf(req, { read: { problems: [unparseable], files: [] } })).toHaveLength(1);
+    expect(checksOf(req, { read: { problems: [], files: [] } })).toEqual([]);
+    // Nothing until the core has answered.
+    expect(checksOf(req, {})).toEqual([]);
+  });
+
+  it("flags a body file the shell says doesn't exist, and not once it does, or before it has answered", () => {
+    const req = request(() => {});
+    const read = { problems: [], files: [missing("./payload.json")] };
+    expect(checksOf(req, { read, exists: exists({ "./payload.json": false }) })).toEqual([{ kind: "problem", problem: read.files[0].missing }]);
+    expect(checksOf(req, { read, exists: exists({ "./payload.json": true }) })).toEqual([]);
+    expect(checksOf(req, { read, exists: exists({}) })).toEqual([]);
+    expect(checksOf(req, { read })).toEqual([]);
+  });
+
+  it("asks about a body file by its path with variables resolved, and not at all while one is undefined", () => {
+    const read = { problems: [], files: [missing("./{{dir}}/payload.json"), missing("./{{nope}}.json", 6)] };
+    const env = { dir: { value: "fixtures", secret: false, source: "dev" } };
+    expect(bodyFilePaths(read, makeVarProvider(scope({ env })))).toEqual([{ file: read.files[0], path: "./fixtures/payload.json" }]);
+    const req = request(() => {});
+    expect(checksOf(req, { read, exists: exists({ "./fixtures/payload.json": false }) }, env)).toEqual([{ kind: "problem", problem: read.files[0].missing }]);
+  });
+});
+
+describe("the notes about lines that behave differently in VS Code or Rider", () => {
+  const mark = (line: number, construct: string, support: Support): PortabilityMark => ({ line, construct, support, label: construct, hover: `${construct} hover` });
+  const MARKS = [
+    mark(1, "name-directive", "portable"),
+    mark(2, "timeout-directive", "jetbrains-only"),
+    mark(3, "httpdesk-disabled-directive", "httpdesk-only"),
+    mark(4, "note-directive", "vscode-only"),
+    mark(5, "request-variable", "vscode-only"),
+    mark(7, "response-handler", "jetbrains-only"),
+  ];
+  const checksOf = (req: Request, marks: PortabilityMark[], level?: PortabilityLevel) =>
+    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), { portability: { marks, level } });
+
+  it("count the lines VS Code and Rider each treat differently, after the problems", () => {
+    const req = request((r) => (r.url = "{{base}}/items"));
+    expect(checksOf(req, MARKS)).toEqual([
+      expect.objectContaining({ kind: "undefined", name: "base" }),
+      { kind: "portability", level: "note", note: { kind: "differs", editor: "vscode", lines: [2, 7] } },
+      { kind: "portability", level: "note", note: { kind: "differs", editor: "rider", lines: [4] } },
+    ]);
+  });
+
+  it("leave out portable and HttpDesk-only lines, which behave the same in both editors", () => {
+    const req = request(() => {});
+    expect(checksOf(req, [MARKS[0], MARKS[2]])).toEqual([]);
+  });
+
+  it("leave a Request variable to the note that Rider refuses it, which reads only what is sent", () => {
+    const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.id}}"));
+    expect(checksOf(req, [MARKS[4]]).map((c) => c.kind === "portability" && c.note)).toEqual([{ kind: "riderRefuses", name: "login" }]);
+  });
+
+  it("count a line once, though it has two constructs", () => {
+    const req = request(() => {});
+    const twice = [mark(3, "jetbrains-dynamic-variable", "jetbrains-only"), mark(3, "random-int", "jetbrains-only")];
+    expect(checksOf(req, twice)).toEqual([{ kind: "portability", level: "note", note: { kind: "differs", editor: "vscode", lines: [3] } }]);
+  });
+
+  it("are warnings, not notes, at the warning level", () => {
+    const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.id}}"));
+    const checks = checksOf(req, MARKS, "warning");
+    expect(checks.map((c) => [c.kind, isNote(c)])).toEqual([
+      ["portability", false],
+      ["portability", false],
+      ["portability", false],
+    ]);
+  });
+});
+
+describe("the source's gutter markers for portability", () => {
+  const mark = (line: number, construct: string, support: Support): PortabilityMark => ({ line, construct, support, label: construct, hover: `${construct} hover` });
+
+  it("mark each line that isn't portable once, with every construct's hover, in line order", () => {
+    const marks = [
+      mark(7, "response-handler", "jetbrains-only"),
+      mark(1, "name-directive", "portable"),
+      mark(3, "jetbrains-dynamic-variable", "jetbrains-only"),
+      mark(3, "vscode-dynamic-variable", "vscode-only"),
+      mark(4, "disabled-line", "httpdesk-only"),
+    ];
+    expect(portabilityLineMarks(marks)).toEqual([
+      { line: 3, kind: "jetbrains-only", text: "jetbrains-dynamic-variable hover\nvscode-dynamic-variable hover" },
+      { line: 4, kind: "httpdesk-only", text: "disabled-line hover" },
+      { line: 7, kind: "jetbrains-only", text: "response-handler hover" },
+    ]);
+  });
+
+  it("are warnings at the warning level, except HttpDesk's own lines", () => {
+    const marks = [mark(2, "note-directive", "vscode-only"), mark(4, "disabled-line", "httpdesk-only")];
+    expect(portabilityLineMarks(marks, "warning").map((m) => m.kind)).toEqual(["warning", "httpdesk-only"]);
   });
 });

@@ -7,9 +7,11 @@ import { newResponseView, type RequestSection, type ResponseView } from "./tabVi
 import type { BodyMode } from "./bodyView.svelte";
 import type { PlacedRequest } from "./reattach";
 
-/** An open tab: its request (as last saved: `###` name, method, URL, and its
- *  index in the file, if it's still there) and how the tab showed it. */
-export interface LayoutTab extends PlacedRequest {
+/** An open request tab: its request (as last saved: `###` name, method, URL, and
+ *  its index in the file, if it's still there) and how the tab showed it. */
+export interface LayoutRequestTab extends PlacedRequest {
+  /** Missing in a Layout saved before file views. */
+  kind?: "request";
   path: string;
   /** What the tab was called (`displayName`, which may come from `# @name`), shown
    *  until its file is read. Missing in a Layout saved before it was kept. */
@@ -17,6 +19,14 @@ export interface LayoutTab extends PlacedRequest {
   section: RequestSection;
   responseView: ResponseView;
 }
+
+/** An open file view: the whole file at `path` as one text. */
+export interface LayoutFileTab {
+  kind: "file";
+  path: string;
+}
+
+export type LayoutTab = LayoutRequestTab | LayoutFileTab;
 
 export interface Layout {
   tabs: LayoutTab[];
@@ -53,6 +63,7 @@ const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 function readTab(v: unknown): LayoutTab | null {
   if (!isObject(v)) return null;
+  if (v.kind === "file") return typeof v.path === "string" ? { kind: "file", path: v.path } : null;
   const [path, name, method, url, title] = [str(v.path), str(v.name), str(v.method), str(v.url), str(v.title)];
   if (path === null || name === null || method === null || url === null) return null;
   const position = typeof v.position === "number" && Number.isInteger(v.position) && v.position >= 0 ? v.position : null;

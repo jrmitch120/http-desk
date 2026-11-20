@@ -1,29 +1,50 @@
 <script lang="ts">
   // The strip above a request's sections listing what the request would be sent
-  // with (src/lib/checks.ts): each Undefined variable once, where it is used, and its
+  // with (src/lib/checks.ts): what the core couldn't read cleanly in its source, by
+  // line (also underlined in the source), each Undefined variable once, where it is used, and its
   // quick fixes, a selected environment the request's folder doesn't define, and a
-  // `# @name` another request in the file also has. Notes (`isNote`) come last, in
-  // the info tone rather than the warning one: a Request variable, which Rider refuses
-  // to send (ADR-0007), is noted for as long as the request has one. It never blocks
-  // sending, and it isn't there when there's nothing to list. Each kind of check
-  // renders in its own branch below.
-  import { isNote, SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
+  // `# @name` another request in the file also has. Portability notes (`isNote`) come
+  // last, in the info tone rather than the warning one: a Request variable, which Rider
+  // refuses to send (ADR-0007), is noted for as long as the request has one, and so are
+  // the lines of its source only one of VS Code and Rider reads (the core's portability
+  // table; the source marks each). It never blocks sending, and it isn't there when
+  // there's nothing to list. Each kind of check renders in its own branch below.
+  import { differsText, isNote, SECTION_LABELS, type Check, type QuickFix } from "../lib/checks";
   import { folderLabel } from "../lib/envFolders";
   import { joinAnd } from "../lib/http";
   import Icon from "./Icon.svelte";
 
   let { checks, onfix }: { checks: Check[]; onfix: (check: Check, fix: QuickFix) => void } = $props();
+
+  /** Each entry's identity: one per kind, but one per Undefined variable, per problem and per portability note. */
+  function key(check: Check): string {
+    if (check.kind === "undefined") return `undefined:${check.name}`;
+    if (check.kind === "problem") return `problem:${check.problem.line}:${check.problem.column}:${check.problem.code}`;
+    if (check.kind === "portability") return `portability:${check.note.kind}:${check.note.kind === "differs" ? check.note.editor : ""}`;
+    return check.kind;
+  }
 </script>
 
 {#if checks.length}
   <section class="checks" class:notes-only={checks.every(isNote)} aria-label="Pre-send checks">
     <ul>
-      {#each checks as check (check.kind === "undefined" ? `undefined:${check.name}` : check.kind)}
+      {#each checks as check (key(check))}
         <li class:note={isNote(check)}>
           <span class="icon"><Icon name={isNote(check) ? "info" : "alert"} size={13} /></span>
-          {#if check.kind === "riderRefuses"}
+          {#if check.kind === "problem"}
+            <span class="message" data-code={check.problem.code}>
+              <span class="line">Line {check.problem.line}</span>
+              {check.problem.message}
+            </span>
+          {:else if check.kind === "portability" && check.note.kind === "riderRefuses"}
             <span class="message" role="note">
-              Rider refuses to send a request containing <code class="name">{`{{${check.name}.response…}}`}</code>
+              Rider refuses to send a request containing <code class="name">{`{{${check.note.name}.response…}}`}</code>
+            </span>
+          {:else if check.kind === "portability" && check.note.kind === "differs"}
+            {@const n = check.note.lines.length}
+            <span class="message" role="note">
+              {differsText(n, check.note.editor)}: {n === 1 ? "line" : "lines"}
+              {joinAnd(check.note.lines.map(String))} of the <code class="name">.http</code> source
             </span>
           {:else if check.kind === "envMissing"}
             <span class="message">
@@ -112,6 +133,12 @@
     font-family: var(--mono);
     font-size: 11.5px;
     color: var(--var-bad);
+  }
+  .message .line {
+    margin-right: var(--space-1);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
   }
   .message strong {
     font-weight: 600;

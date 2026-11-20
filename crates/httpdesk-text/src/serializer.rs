@@ -38,16 +38,40 @@ fn single_line(context: &str, what: impl FnOnce() -> String, value: &str) -> Res
 }
 
 fn check_file(file: &HttpFile) -> Result<(), InvalidField> {
-    for c in &file.header.comments {
-        single_line("File header", || "a comment line".into(), c)?;
-    }
-    for v in &file.header.variables {
-        check_variable("File variables", v)?;
+    // As for a request below: a header still as it was read is written as that text.
+    let header_as_read = file
+        .header
+        .raw
+        .as_deref()
+        .is_some_and(|raw| FileHeader { raw: file.header.raw.clone(), ..parser::parse_header(raw) } == file.header);
+    if !header_as_read {
+        for c in &file.header.comments {
+            single_line("File header", || "a comment line".into(), c)?;
+        }
+        for v in &file.header.variables {
+            check_variable("File variables", v)?;
+        }
     }
     for req in &file.requests {
-        check_request(req)?;
+        // A request still as its text was read is written as that text, whatever its
+        // fields hold (a lone `\r` the parser left in a header's value): any text
+        // saves back byte for byte.
+        if let Err(e) = check_request(req) {
+            if !written_as_read(req) {
+                return Err(e);
+            }
+        }
     }
     Ok(())
+}
+
+/// Whether `req` is exactly what its text (`raw`) reads as, every field: [`serialize`]
+/// then writes that text. (Not whether it renders the same: an edit the rendering
+/// would drop, a trailing `\r` in a value, is still an edit to refuse.)
+fn written_as_read(req: &Request) -> bool {
+    let Some(raw) = req.raw.as_deref() else { return false };
+    parser::parse_block(raw)
+        .is_some_and(|read| Request { raw: req.raw.clone(), leading: req.leading.clone(), ..read } == *req)
 }
 
 fn check_variable(context: &str, v: &Variable) -> Result<(), InvalidField> {
@@ -165,7 +189,7 @@ fn split_lines(s: &str) -> impl Iterator<Item = &str> {
 /// space goes after the `@` (`@timeout 1` becomes `@ timeout 1`), so neither
 /// HttpDesk nor other clients read it as a directive. The OpenAPI generator
 /// uses the same rule. Other lines are returned as they are.
-pub(crate) fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
+pub fn description_line(line: &str) -> std::borrow::Cow<'_, str> {
     let body = line.trim_start();
     match body.strip_prefix('@') {
         Some(rest) if rest.starts_with(|c: char| !c.is_whitespace() && c != '=') => {
@@ -183,6 +207,12 @@ pub fn request_text(req: &Request) -> String {
     written_text(req, &rendered).unwrap_or(rendered)
 }
 
+/// A single request's text, as [`parser::parse_request`] read it: its `leading`
+/// text, then its block as [`request_text`] writes it.
+pub fn request_source(req: &Request) -> String {
+    format!("{}{}", req.leading, request_text(req))
+}
+
 /// `req`'s text as read, where the model still matches it (`rendered`), or with
 /// only its scripts kept in place; `None` to render it.
 fn written_text(req: &Request, rendered: &str) -> Option<String> {
@@ -197,52 +227,72 @@ fn written_text(req: &Request, rendered: &str) -> Option<String> {
 pub fn serialize(file: &HttpFile) -> String {
     let mut out = String::new();
     let mut prev_rendered = false;
+    // In a file with mixed endings, text written anew gets the file's own (most lines'),
+    // and what's kept as written keeps its `\r`s. Any other file is written with `\n`
+    // here, and a CRLF one has every break turned to CRLF at the end.
+    let mixed_crlf = file.mixed_endings && file.line_ending == LineEnding::Crlf;
+    let eol = if mixed_crlf { "\r\n" } else { "\n" };
+    let anew = |text: &str| -> String {
+        match (file.mixed_endings, mixed_crlf) {
+            (false, _) => text.to_string(),
+            (true, false) => text.replace("\r\n", "\n"),
+            (true, true) => text.replace("\r\n", "\n").replace('\n', "\r\n"),
+        }
+    };
 
     let in_place = file.header.raw.as_deref().and_then(|raw| Some((render_header_in_place(&file.header, raw)?, raw)));
     match in_place {
         Some((text, raw)) => {
             // Blank lines are dropped once nothing else is left, unless that's how the file was.
-            if !text.trim().is_empty() || text == raw {
+            if text == raw {
                 out.push_str(&text);
+            } else if !text.trim().is_empty() {
+                out.push_str(&anew(&text));
             }
         }
         None => {
-            out.push_str(&render_header(&file.header));
+            out.push_str(&anew(&render_header(&file.header)));
             prev_rendered = !out.is_empty();
         }
     }
     for req in &file.requests {
         if !req.leading.is_empty() {
-            separate(&mut out, prev_rendered);
+            separate(&mut out, prev_rendered, eol);
             out.push_str(&req.leading);
             prev_rendered = false;
         }
         let rendered = render_request(req);
         match written_text(req, &rendered) {
             Some(raw) => {
-                separate(&mut out, prev_rendered);
+                separate(&mut out, prev_rendered, eol);
                 // Only a file's first block may omit `###`; anywhere else it would
                 // merge into the block before it.
                 if !out.is_empty() && !parser::is_separator(&raw) {
-                    out.push_str("###\n");
+                    out.push_str("###");
+                    out.push_str(eol);
                 }
-                out.push_str(&raw);
+                // As read, or with only its scripts written anew.
+                if req.raw.as_deref() == Some(raw.as_str()) {
+                    out.push_str(&raw);
+                } else {
+                    out.push_str(&anew(&raw));
+                }
                 prev_rendered = false;
             }
             None => {
-                separate(&mut out, true);
-                out.push_str(&rendered);
+                separate(&mut out, true, eol);
+                out.push_str(&anew(&rendered));
                 prev_rendered = true;
             }
         }
     }
 
     if !file.trailing.is_empty() {
-        separate(&mut out, prev_rendered);
+        separate(&mut out, prev_rendered, eol);
         out.push_str(&file.trailing);
     }
 
-    if file.line_ending == LineEnding::Crlf {
+    if file.line_ending == LineEnding::Crlf && !file.mixed_endings {
         out = out.replace('\n', "\r\n");
     }
     if file.bom {
@@ -325,15 +375,17 @@ fn splice_pre_script(block: &str, request_line: usize, old: Option<&str>, new: O
 }
 
 /// Ensures `out` ends with a newline, plus a blank line when `blank` is set.
-fn separate(out: &mut String, blank: bool) {
+/// Ends `out` with a line break, and with `blank` a blank line too, each `eol` where added.
+fn separate(out: &mut String, blank: bool, eol: &str) {
     if out.is_empty() {
         return;
     }
     if !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(eol);
     }
-    if blank && !out.ends_with("\n\n") {
-        out.push('\n');
+    // Verbatim text with mixed line endings keeps its `\r\n`.
+    if blank && !out.ends_with("\n\n") && !out.ends_with("\n\r\n") {
+        out.push_str(eol);
     }
 }
 

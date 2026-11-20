@@ -59,6 +59,28 @@ export interface Body {
   text: string;
 }
 
+/**
+ * How VS Code (REST Client) and Rider (JetBrains) treat a construct: both alike, only
+ * one of them, or neither (HttpDesk's own lines, written as comments).
+ */
+export type Support = "portable" | "jetbrains-only" | "vscode-only" | "httpdesk-only";
+
+/**
+ * A construct on a line of a request's `.http` source (`request_portability`), from
+ * the core's portability table (crates/httpdesk-text/src/portability.rs).
+ */
+export interface PortabilityMark {
+  /** 1-based, in the source as the Source view shows it (`request_source`, or the text typed there). */
+  line: number;
+  /** The table row, e.g. `response-handler`. */
+  construct: string;
+  support: Support;
+  /** The construct as written, e.g. `> {% %}`. */
+  label: string;
+  /** What each editor does with it. */
+  hover: string;
+}
+
 /** An unrecognized header-area line, kept verbatim and in place. */
 export interface ExtraLine {
   text: string;
@@ -87,6 +109,34 @@ export interface Request {
   _key?: string;
 }
 
+/** A single request's text read on its own (`parse_request`): null without a request line. */
+export interface ParsedRequest {
+  request: Request | null;
+  problems: Problem[];
+  /** The files the request's body is read from, placed in the text. */
+  files: BodyFile[];
+  /**
+   * The text after the request's block, from the next `###` on (null: none): a request's
+   * text holds one block, so it's reported (`text-after-request`), and kept: Save as
+   * written puts it in the file after the request.
+   */
+  following: Following | null;
+}
+
+/** The text after a single request's block, read as a file reads it (`ParsedRequest.following`). */
+export interface Following {
+  /** Each with the text before it as its `leading`. */
+  requests: Request[];
+  /** The text after the last of them. */
+  trailing: string;
+}
+
+/** A whole file's text read by the core (`parse_file_text`): the file and the problems found reading it. */
+export interface ParsedFile {
+  file: HttpFile;
+  problems: Problem[];
+}
+
 export interface FileHeader {
   comments: string[];
   variables: Variable[];
@@ -97,10 +147,52 @@ export interface HttpFile {
   header: FileHeader;
   requests: Request[];
   trailing: string;
+  /** Most of its line breaks' ending: what text written anew gets. */
   lineEnding: LineEnding;
+  /** It has both CRLF and LF breaks, so its text is kept as written, each `\r` in place (the core's `mixed_endings`). */
+  mixedEndings?: boolean;
   /** The file started with a UTF-8 BOM; written back on save. */
   bom: boolean;
 }
+
+/** Something the core couldn't read cleanly in a request's text (`httpdesk_text::Problem`). Reading recovers anyway. */
+export interface Problem {
+  /** 1-based line in the text read. */
+  line: number;
+  /** 1-based column, in characters. */
+  column: number;
+  severity: "error" | "warning";
+  code: ProblemCode;
+  message: string;
+}
+
+export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file" | "text-after-request";
+
+/** A file a request's body is read from (`< path`): as written, and the problem to report if it doesn't exist. */
+export interface BodyFile {
+  path: string;
+  missing: Problem;
+}
+
+/** What reading a request's source found (`request_problems`), placed in that text. */
+export interface RequestProblems {
+  problems: Problem[];
+  files: BodyFile[];
+}
+
+/** What the Problems panel lists for one `.http` file (`workspace_problems`), by line in the file. */
+export interface FileProblems {
+  path: string;
+  /** The parser's problems and each body file that doesn't exist, in line order. */
+  problems: Problem[];
+  /** The lines only one of VS Code and Rider reads (jetbrains-only or vscode-only constructs). */
+  portability: PortabilityMark[];
+  /** What the text reads as, when it has a `{{reference}}` or a `@name`: the page finds its Undefined variables and shared `# @name`s. */
+  file?: HttpFile;
+}
+
+/** A document as the app has it, for the Problems panel: its file view's text, or else its file. */
+export type OpenText = { path: string; text: string } | { path: string; file: HttpFile };
 
 export interface TreeNode {
   name: string;
@@ -615,6 +707,9 @@ export interface AppSettings {
   showResolved: boolean;
   /** Show the request's `.http` source in place of its sections (the .http button, Request → Show .http Source). */
   showSource: boolean;
+  /** Show non-portable constructs (the gutter's markers, the check strip's portability notes) as
+   *  warnings, for teams whose files must work in both VS Code and Rider. Off by default; never blocks a send. */
+  portabilityWarnings: boolean;
   /** How the Environments modal shows variables: every environment side by side, or one at a time. */
   envView: "matrix" | "list";
   /** Per workspace root: the Environments matrix's column widths, as resized. */

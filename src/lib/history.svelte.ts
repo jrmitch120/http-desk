@@ -13,7 +13,7 @@ import { api, errorMessage } from "./api";
 import { CANCEL, type DialogButton } from "./dialog";
 import { formatLimit, getDirective, uid } from "./http";
 import { newTab } from "./tabView";
-import type { RunState, Tab } from "./store.svelte";
+import type { RunState, RequestTab } from "./store.svelte";
 import type { HistoryEntry, HistoryEntryLink, HistoryLink, HistorySettings, HistorySummary, HttpResponse, Request } from "./types";
 import type { CompareSide } from "./compare";
 
@@ -31,7 +31,7 @@ export interface HistoryHost {
 }
 
 /** An entry opened from a History view: its summary, the pseudo tab its response shows under, and its source text (to restore). */
-export type OpenedEntry = { entry: HistorySummary; tab: Tab; source: string };
+export type OpenedEntry = { entry: HistorySummary; tab: RequestTab; source: string };
 
 /**
  * A History view, which can have one entry open: an editor tab's (its request's
@@ -296,7 +296,7 @@ export class HistoryStore {
       return;
     }
     this.close(view);
-    const tab: Tab = { ...newTab("", ""), id: `history:${uid()}` };
+    const tab: RequestTab = { ...newTab("", ""), id: `history:${uid()}` };
     this.host.runs[tab.id] = { runId: uid(), ...runOf(whole) };
     this.opened[viewKey(view)] = { entry, tab, source: whole.source };
   }

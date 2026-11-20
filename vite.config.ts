@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { textCoreWasm } from "./scripts/textCoreWasm";
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), textCoreWasm()],
   clearScreen: false,
   server: {
     port: 1420,

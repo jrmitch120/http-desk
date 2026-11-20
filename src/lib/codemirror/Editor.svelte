@@ -1,11 +1,19 @@
 <script lang="ts">
   import { onDestroy, onMount, untrack } from "svelte";
-  import { Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
+  import { Annotation, Compartment, EditorState, Prec, Transaction, type EditorSelection, type Extension, type StateEffect, type Text } from "@codemirror/state";
+  import { history, historyField } from "@codemirror/commands";
   import { EditorView, ViewPlugin, keymap } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
-  import { foldEffect, foldedRanges, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
+  import { foldEffect, foldedRanges, foldState, forceParsing, syntaxTree, unfoldAll } from "@codemirror/language";
   import { canFoldAll as canFoldAllOf, foldAllInPieces } from "./foldAll";
   import { editorExtensions, languageExtension, variableExtensions, type Language, type VarProvider } from "./setup";
+  import { nextUnderline, setUnderlines, underlines as underlineExtension, underlinesIn, type Underline } from "./underlines";
+  import { lineMarks, setLineMarks, type LineMark } from "./lineMarks";
+  import { inReadOnlyRegion } from "./readOnly";
+  import { keepLineEndings, readEndings, setEndings, textWithEndings, type LineBreak } from "./lineEndings";
+  import { sharedEnds } from "../splice";
+  import { editorKey } from "../platform";
+  import { recallEditor, rememberEditor } from "../editorMemory";
 
   interface Props {
     value?: string;
@@ -15,7 +23,13 @@
      * turned back into a string.
      */
     doc?: Text;
+    /** The user changed the text (never for a new `value`). */
     onchange?: (value: string) => void;
+    /**
+     * A new `value` starts a new undo history, so undo can't take back what came
+     * from outside (the Source view: an edit in the structured editors clears it).
+     */
+    freshHistory?: boolean;
     language?: Language;
     readonly?: boolean;
     wrap?: boolean;
@@ -30,8 +44,29 @@
     folding?: boolean;
     /** Out: whether the document is small enough for Fold all (`foldAll.ts`). */
     canFoldAll?: boolean;
+    /** Wavy underlines with a message on hover (`underlines.ts`), at offsets into `value`. Only for an editor given them at mount. */
+    underlines?: Underline[];
+    /** Markers in a gutter of their own, with hovers (`lineMarks.ts`). Given at mount, the gutter is there and follows this. */
+    lineMarks?: LineMark[];
+    /**
+     * For the text of a file with mixed line endings: `value` keeps each line's own
+     * (`\r\n` or `\n`), so does `onchange`'s text, and a line break typed anew is this,
+     * the file's own (lineEndings.ts). Without it the text's breaks are all `\n`.
+     */
+    lineBreak?: LineBreak;
+    /**
+     * A key the editor is remembered by while it's off screen (editorMemory.ts): mounted
+     * again with it, the cursor, folds and scroll position are where they were left, and
+     * so is the undo history while `value` is still the text it held. Fixed at mount.
+     */
+    memory?: string;
+    /** Names the text for assistive technology (the editor's `aria-label`). Fixed at mount. */
+    label?: string;
   }
-  let { value = "", doc, onchange, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true) }: Props = $props();
+  let { value = "", doc, onchange, freshHistory = false, language = "text", readonly = false, wrap = false, placeholder, variables = null, gutters = true, onsend, extensions = [], folding = $bindable(false), canFoldAll = $bindable(true), underlines, lineMarks: marks, lineBreak, memory, label }: Props = $props();
+
+  /** `v`'s text, as `value` is given and `onchange` gives it. */
+  const textOf = (state: EditorState) => (lineBreak ? textWithEndings(state, lineBreak) : state.doc.toString());
 
   /**
    * The most time spent colouring the visible text when an editor is created
@@ -70,6 +105,45 @@
   const baseC = new Compartment();
   const langC = new Compartment();
   const varC = new Compartment();
+  /** The undo history, with `freshHistory` (otherwise it's in baseC's extensions). */
+  const histC = new Compartment();
+  /**
+   * Read-only while in a read-only region (readOnly.ts): the text can't be changed, but
+   * unlike `readonly` the editor keeps its undo history (undo is refused meanwhile), so
+   * it's all there once the region can be edited again.
+   */
+  const lockC = new Compartment();
+  const readOnlyHere = inReadOnlyRegion();
+  const lockExt = (on: boolean) => (on ? EditorState.readOnly.of(true) : []);
+  const ownHistory = untrack(() => freshHistory);
+  const historyExt = (ro: boolean) => (ownHistory && !ro ? history() : []);
+  const baseExt = (opts: { readonly: boolean; wrap: boolean; placeholder?: string; gutters?: boolean }) =>
+    editorExtensions({ ...opts, history: !ownHistory });
+  /** Marks a change that puts a new `value` in: not the user's, so no `onchange`. */
+  const fromValue = Annotation.define<boolean>();
+  /** The text `onchange` was last given, and the document it was. */
+  let emitted: { doc: Text; text: string } | null = null;
+
+  /**
+   * Puts `text` in place of `v`'s, changing only the span that differs, so a
+   * selection outside it stays where it was. With `freshHistory`, the undo
+   * history starts again (taking the history out and putting it back). Each line
+   * takes its ending from `value` (`lineBreak`).
+   */
+  function setValue(v: EditorView, value: string) {
+    const br = untrack(() => lineBreak);
+    const { doc: text, others } = br ? readEndings(value, br) : { doc: value, others: [] };
+    const old = v.state.doc.toString();
+    const { head: from, tail: end } = sharedEnds(old.length, text.length, (i, j) => old.charCodeAt(i) === text.charCodeAt(j));
+    const change = v.state.update({
+      changes: { from, to: old.length - end, insert: text.slice(from, text.length - end) },
+      effects: setEndings.of(others),
+      annotations: fromValue.of(true),
+    });
+    if (!ownHistory || untrack(() => readonly)) return v.dispatch(change);
+    const forget = change.state.update({ effects: histC.reconfigure([]), annotations: fromValue.of(true) });
+    v.dispatch([change, forget, forget.state.update({ effects: histC.reconfigure(historyExt(false)), annotations: fromValue.of(true) })]);
+  }
 
   // A prebuilt document goes into a wrapped view only once the view has
   // measured itself without it, so it's laid out like a document replaced in
@@ -143,19 +217,50 @@
     putDocAfterMeasure(v, keep);
   }
 
+  /** What `memory` keeps of the state besides its text and selection. */
+  const REMEMBERED = { history: historyField, folds: foldState };
+
+  /** Keeps the editor as it is for when it's mounted again (`memory`). */
+  function remember(v: EditorView) {
+    if (!memory) return;
+    rememberEditor(memory, { text: textOf(v.state), state: v.state.toJSON(REMEMBERED), scroll: v.scrollSnapshot() });
+  }
+
   onMount(() => {
     const deferDoc = !!doc && wrap;
+    const initial = lineBreak ? readEndings(value, lineBreak) : { doc: value, others: [] };
+    const was = memory ? recallEditor(memory) : undefined;
+    // The same text: all of it comes back. Text changed meanwhile (an edit in another
+    // view): the cursor's place and the scroll position do, as near as the text allows.
+    const sameText = was?.text === value;
+    const create = (config: { doc: string | Text; extensions: Extension[] }) => {
+      if (was && sameText) {
+        try {
+          return EditorState.fromJSON(was.state, config, REMEMBERED);
+        } catch {
+          // A memory this version can't read: the editor starts afresh.
+        }
+      }
+      const head = was && !sameText ? ((was.state as { selection?: { ranges?: { head?: number }[]; main?: number } }).selection?.ranges?.[0]?.head ?? 0) : 0;
+      const length = typeof config.doc === "string" ? config.doc.length : config.doc.length;
+      return EditorState.create({ ...config, selection: { anchor: Math.min(head, length) } });
+    };
     view = new EditorView({
       parent: host,
-      state: EditorState.create({
-        doc: deferDoc ? STAND_IN : (doc ?? value),
+      scrollTo: was ? (was.scroll as StateEffect<unknown>) : undefined,
+      state: create({
+        doc: deferDoc ? STAND_IN : (doc ?? initial.doc),
         extensions: [
-          baseC.of(editorExtensions({ readonly, wrap, placeholder, gutters })),
+          label ? EditorView.contentAttributes.of({ "aria-label": label }) : [],
+          baseC.of(baseExt({ readonly, wrap, placeholder, gutters })),
+          histC.of(historyExt(readonly)),
+          lockC.of(lockExt(readOnlyHere())),
           langC.of(languageExtension(language)),
           varC.of(variables ? variableExtensions(variables) : []),
           Prec.highest(
             keymap.of([
-              { key: "Mod-Enter", run: () => (onsend ? (onsend(), true) : false) },
+              // ⌘Enter / Ctrl+Enter, as Send is on the app's OS (platform.ts), not CodeMirror's `Mod-`.
+              { key: editorKey({ mod: true, key: "Enter" }), run: () => (onsend ? (onsend(), true) : false) },
               // Fold all's key (CodeMirror's folds at once): in pieces, and not above the limit.
               { key: "Ctrl-Alt-[", run: () => (fold(true), true) },
             ]),
@@ -166,12 +271,20 @@
             return { update: (u) => void (u.docChanged && (canFoldAll = canFoldAllOf(u.state.doc.length))) };
           }),
           extensions,
+          untrack(() => underlines) ? underlineExtension() : [],
+          untrack(() => marks) ? lineMarks() : [],
+          keepLineEndings(initial.others),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) onchange?.(u.state.doc.toString());
+            // Without an `onchange` there's no text to make: a response body may be 88 MB.
+            if (!onchange || !u.transactions.some((tr) => tr.docChanged && !tr.annotation(fromValue))) return;
+            const text = textOf(u.state);
+            emitted = { doc: u.state.doc, text };
+            onchange?.(text);
           }),
         ],
       }),
     });
+    // The value effect then finds the document as `value` says, and leaves the history alone.
     // Before the first paint, so switching back to an editor (Preview → Raw)
     // is coloured at once.
     parseDrawn(view);
@@ -179,9 +292,14 @@
   });
   onDestroy(() => {
     destroyed = true;
+    if (view) remember(view);
     view?.destroy();
   });
 
+  $effect(() => {
+    const on = readOnlyHere();
+    view?.dispatch({ effects: lockC.reconfigure(lockExt(on)) });
+  });
   $effect(() => {
     const d = doc;
     if (d) {
@@ -189,9 +307,8 @@
       return;
     }
     const v = value;
-    if (view && v !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });
-    }
+    // The text just typed, given back: the document already holds it (a large file's text isn't made again).
+    if (view && !(emitted?.doc === view.state.doc && emitted.text === v) && v !== textOf(view.state)) setValue(view, v);
   });
   $effect(() => {
     const l = language;
@@ -202,17 +319,52 @@
   $effect(() => {
     const opts = { readonly, wrap, placeholder, gutters };
     if (!view) return;
-    const effects = baseC.reconfigure(editorExtensions(opts));
+    const effects = baseC.reconfigure(baseExt(opts));
+    // The same history kept (its state goes on), or none while read-only.
+    const hist = histC.reconfigure(historyExt(readonly));
     const rewrap = wrap !== wrapped;
     wrapped = wrap;
-    if (rewrap && untrack(() => doc) && !docPending) relayOut(view, effects);
-    else view.dispatch({ effects });
+    if (rewrap && untrack(() => doc) && !docPending) {
+      relayOut(view, effects);
+      view.dispatch({ effects: hist });
+    } else view.dispatch({ effects: [effects, hist] });
+  });
+  $effect(() => {
+    // After the document effect above, so they're placed in the text they were found in.
+    const u = underlines;
+    if (!u || !view) return;
+    // A reading that found what the editor already shows (it moved its own with the text) places nothing again.
+    const has = underlinesIn(view.state);
+    if (has.length === u.length && has.every((x, i) => x.from === u[i].from && x.to === u[i].to && x.severity === u[i].severity && x.message === u[i].message)) return;
+    view.dispatch({ effects: setUnderlines.of(u) });
   });
   $effect(() => {
     const p = variables;
     view?.dispatch({ effects: varC.reconfigure(p ? variableExtensions(p) : []) });
   });
+  $effect(() => {
+    const m = marks;
+    if (m) view?.dispatch({ effects: setLineMarks.of(m) });
+  });
 
+  /**
+   * Puts `text` in place of the document as one change Undo takes back (a new `value`
+   * starts the history again with `freshHistory`): for text the user's own action
+   * replaced (Revert to last valid). No `onchange` follows.
+   */
+  export function replace(text: string) {
+    const v = view;
+    if (!v) return;
+    const { doc: next, others } = lineBreak ? readEndings(text, lineBreak) : { doc: text, others: [] };
+    const old = v.state.doc.toString();
+    if (old === next) return;
+    const { head: from, tail: end } = sharedEnds(old.length, next.length, (i, j) => old.charCodeAt(i) === next.charCodeAt(j));
+    v.dispatch({
+      changes: { from, to: old.length - end, insert: next.slice(from, next.length - end) },
+      effects: setEndings.of(others),
+      annotations: [fromValue.of(true), Transaction.userEvent.of("input.revert")],
+    });
+  }
   export function openSearch() {
     if (view) openSearchPanel(view);
   }
@@ -241,12 +393,29 @@
   export function document(): Text | null {
     return view?.state.doc ?? null;
   }
-  /** Selects line `n` (1-based) and scrolls it into view, focusing the editor so the selection shows. */
-  export function revealLine(n: number) {
+  /**
+   * Scrolls line `n` (1-based) into view and focuses the editor, with the line selected,
+   * or with `caret`, the caret on it at that character column (1-based; its start
+   * without one), so typing on doesn't replace the line.
+   */
+  export function revealLine(n: number, how: { caret?: number | true } = {}) {
     if (!view || n < 1 || n > view.state.doc.lines) return;
     const line = view.state.doc.line(n);
-    view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+    const at = how.caret === undefined ? null : line.from + (how.caret === true ? 0 : Math.min(Array.from(line.text).slice(0, how.caret - 1).join("").length, line.length));
+    view.dispatch({ selection: at === null ? { anchor: line.from, head: line.to } : { anchor: at }, effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
     view.focus();
+  }
+  /** Moves the caret to the next problem underlined in the text (the one before, with `dir` -1) and shows its message. */
+  export function nextProblem(dir: 1 | -1 = 1) {
+    if (!view) return false;
+    view.focus();
+    return nextUnderline(view, dir);
+  }
+  /** Puts the caret at offset `pos` and scrolls its line to the top of the view; with `focus`, focuses the editor too. */
+  export function revealAt(pos: number, { focus = false } = {}) {
+    if (!view || pos < 0 || pos > view.state.doc.length) return;
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "start", yMargin: 8 }) });
+    if (focus) view.focus();
   }
   /**
    * For a context menu at `e`: moves the caret to the clicked spot unless the

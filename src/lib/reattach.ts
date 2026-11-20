@@ -1,6 +1,7 @@
 // Finding requests again after their file was read anew: a reload after another
 // editor changed the file, a workspace opening with its Layout, or a search result.
 import type { Request } from "./types";
+import { sharedEnds } from "./splice";
 
 /** How a request is found again: its name (the `###` title), method and URL as written. */
 export interface RequestIdentity {
@@ -50,4 +51,24 @@ export function reattach(known: KnownRequest[], fresh: Request[]): Set<string> {
     }
   }
   return new Set(unused.keys());
+}
+
+/**
+ * Gives `fresh` requests, read from a file view's text, the keys of the `old` ones
+ * (the document's) they stand for, as an edit to the text leaves them: the requests
+ * before and after the edited part are as they were (`same`), and each keeps its
+ * key; in between they're found as `reattach` finds them (by name + method + URL,
+ * by name, by position). A request still unmatched takes the key of one of `before`
+ * (requests an earlier edit removed) it stands for. Returns the old keys left unmatched.
+ */
+export function carryKeys(old: Request[], fresh: Request[], same: (a: Request, b: Request) => boolean, before: Request[] = []): Set<string> {
+  const { head, tail } = sharedEnds(old.length, fresh.length, (i, j) => same(old[i], fresh[j]));
+  for (let i = 0; i < head; i++) fresh[i]._key = old[i]._key;
+  for (let i = 1; i <= tail; i++) fresh[fresh.length - i]._key = old[old.length - i]._key;
+  const known = old.slice(head, old.length - tail).map((r, position) => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position }));
+  const between = fresh.slice(head, fresh.length - tail);
+  const gone = reattach(known, between);
+  // What's still new may be a request typed out earlier, back again: by name + method + URL, or by name.
+  if (before.length) reattach(before.map((r) => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position: null })), between);
+  return gone;
 }
