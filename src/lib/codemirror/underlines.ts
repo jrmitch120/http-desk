@@ -14,6 +14,8 @@ export interface Underline {
   to: number;
   severity: "error" | "warning";
   message: string;
+  /** The hover card of what's underlined says this already (an undefined variable's): a hover leaves it to the card. */
+  onCard?: true;
 }
 
 /** Replaces an editor's underlines (offsets into its document as it is). */
@@ -59,7 +61,7 @@ export function checkUnderlines(text: string, checks: Check[]): Underline[] {
       if (isComment(l)) return;
       for (const s of segments(l)) {
         if (s.ref !== undefined && undefinedNames.has(s.ref)) {
-          out.push({ from: starts[i] + s.from, to: starts[i] + s.from + s.text.length, severity: "warning", message: `{{${s.ref}}} is undefined` });
+          out.push({ from: starts[i] + s.from, to: starts[i] + s.from + s.text.length, severity: "warning", message: `{{${s.ref}}} is undefined`, onCard: true });
         }
       }
     });
@@ -188,7 +190,8 @@ export function underlines(): Extension {
       { key: "Escape", run: (v) => (v.state.field(shownField) ? (v.dispatch({ effects: showUnderlineAt.of(null) }), true) : false) },
     ]),
     hoverTooltip((view, pos) => {
-      const here = underlinesAt(view.state, pos);
+      // Not what the variable's card over the same text says (F8 still shows it: no card then).
+      const here = underlinesAt(view.state, pos).filter((u) => !u.onCard);
       return here.length ? tipOf(here) : null;
     }),
     EditorView.theme({

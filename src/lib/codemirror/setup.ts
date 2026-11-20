@@ -89,6 +89,11 @@ export const theme = EditorView.theme({
     // here: this rule would override the kind's own.
     width: "max-content",
   },
+  // Several hovers over one place share a tooltip (a variable's card and a problem's
+  // message): each part is as wide as the tooltip, with the app's rule between them.
+  ".cm-tooltip-hover": { maxWidth: "min(var(--popup-card-max-width), calc(100vw - 12px))" },
+  ".cm-tooltip-section:not(:only-child)": { maxWidth: "none", width: "auto", paddingLeft: "10px", paddingRight: "10px" },
+  ".cm-tooltip-section:not(:first-child)": { borderTop: "1px solid var(--border)" },
   ".cm-tooltip-autocomplete": { overflow: "hidden" },
   ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: "var(--mono)", fontSize: "12px", padding: "4px" },
   ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { borderRadius: "5px", padding: "2px 6px" },
