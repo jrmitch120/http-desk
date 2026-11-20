@@ -144,4 +144,14 @@ test("the file view underlines an Undefined variable and a shared # @name, as ea
 
   await expect(fileView(page).locator(".cm-underline-warning", { hasText: "{{nowhere}}" })).toHaveAttribute("data-message", "{{nowhere}} is undefined");
   await expect(fileView(page).locator(".cm-underline-warning", { hasText: "@name twin" })).toHaveCount(2);
+
+  // Hovering the variable shows its card alone: the card says it's undefined, so the
+  // underline's message isn't put under it again. Another underline's message still shows.
+  await page.mouse.move(0, 0);
+  await fileView(page).locator(".cm-underline-warning", { hasText: "{{nowhere}}" }).hover();
+  await expect(page.locator(".popup-layer .var-card")).toContainText("Undefined");
+  await expect(page.locator(".cm-underline-tip")).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await fileView(page).locator(".cm-underline-warning", { hasText: "@name twin" }).first().hover();
+  await expect(page.locator(".cm-underline-tip")).toContainText("Warning: # @name twin");
 });
