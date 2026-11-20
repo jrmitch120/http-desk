@@ -123,6 +123,32 @@ fn disabled_lines_are_httpdesk_only_and_their_contents_are_not_read() {
 }
 
 #[test]
+fn only_a_file_line_is_marked_as_a_file() {
+    let marked = |body: &str| {
+        let text = format!("POST https://example.com/\nContent-Type: application/json\n\n{body}\n");
+        portability(&text).iter().map(|m| (m.line, m.construct)).collect::<Vec<_>>()
+    };
+    assert_eq!(marked("<\t./a.json  "), [(4, C::BodyFile)]);
+    assert_eq!(marked("<./a.json"), []);
+    assert_eq!(marked("<@./a.json"), []);
+    assert_eq!(marked("  < ./a.json"), []);
+    assert_eq!(marked("  <@ ./a.json"), []);
+}
+
+#[test]
+fn a_file_rows_hover_says_what_each_editor_sends() {
+    let hover = |c: Construct| portability(&fixture(c)).into_iter().find(|m| m.construct == c).unwrap().hover;
+    assert_eq!(
+        hover(C::BodyFile),
+        "Both editors send this file's content; Rider also fills in {{variables}} written in the file"
+    );
+    assert_eq!(
+        hover(C::BodyFileWithVariables),
+        "VS Code sends this file's content with its {{variables}} filled in; Rider sends the line as text"
+    );
+}
+
+#[test]
 fn marks_are_sent_to_the_page_as_json_with_their_hover() {
     let marks = portability(&fixture(C::ResponseHandler));
     let json = serde_json::to_value(&marks[0]).unwrap();

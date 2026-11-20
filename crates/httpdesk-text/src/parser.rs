@@ -778,9 +778,15 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
         }
     }
     // As the sender reads them (`exec::build_body`): a body that is one `< path` line,
-    // or a multipart body's `< path` lines.
+    // or a multipart body's `< path` lines. A line read as a file before ADR 0010 but
+    // sent as text now is warned about where a File line would be read.
     if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
         for (i, line) in body_lines.iter().enumerate() {
+            if let Some(FileReference { substitute, path }) = former_file_reference(line) {
+                let mark = if substitute { "<@" } else { "<" };
+                let message = format!("Sent as text. Write `{mark} {path}` to read the file");
+                problems.push(problem_at(&lines, body_at + i, Severity::Warning, ProblemCode::NotAFileLine, &message));
+            }
             let Some(FileReference { path, .. }) = file_reference(line) else { continue };
             let message =
                 format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
@@ -866,20 +872,43 @@ pub struct FileReference<'a> {
     pub path: &'a str,
 }
 
-/// Reads `< path` or `<@ path` (the space is optional) from a single line. The
-/// editor and the sender both use this rule. `<tag>`, `<?xml` and `<<` are content.
+/// Reads a File line, `< path` or `<@ path`, from one line as written: the mark at
+/// the very start of the line, then a space or a tab (ADR 0010). Whitespace after the
+/// path is ignored. Every reader uses this rule: the editor, the sender, body-mode
+/// detection and the portability pass. `<tag>`, `<?xml` and `<<` are content.
 pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
-    let t = line.trim();
-    if t.contains('\n') || t.starts_with("<?") {
+    let (substitute, rest) = file_mark(line.trim_end())?;
+    if !rest.starts_with([' ', '\t']) {
         return None;
     }
-    let rest = t.strip_prefix('<')?;
-    let (substitute, path) = match rest.strip_prefix('@') {
+    file_path(rest).map(|path| FileReference { substitute, path })
+}
+
+/// A line HttpDesk read as a file before ADR 0010 but that isn't a File line:
+/// `<path`, or an indented `< path`. Both editors send it as text.
+fn former_file_reference(line: &str) -> Option<FileReference<'_>> {
+    if file_reference(line).is_some() {
+        return None;
+    }
+    let (substitute, rest) = file_mark(line.trim())?;
+    file_path(rest).map(|path| FileReference { substitute, path })
+}
+
+/// `<` or `<@` starting `line` (a single line, not `<?`), and the text after it.
+fn file_mark(line: &str) -> Option<(bool, &str)> {
+    if line.contains('\n') || line.starts_with("<?") {
+        return None;
+    }
+    let rest = line.strip_prefix('<')?;
+    Some(match rest.strip_prefix('@') {
         Some(p) => (true, p),
         None => (false, rest),
-    };
-    let path = path.trim();
-    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(FileReference { substitute, path })
+    })
+}
+
+fn file_path(rest: &str) -> Option<&str> {
+    let path = rest.trim();
+    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(path)
 }
 
 pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
@@ -887,7 +916,7 @@ pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
     if trimmed.is_empty() {
         return BodyMode::None;
     }
-    if file_reference(trimmed).is_some() {
+    if file_reference(text.trim_start_matches(['\r', '\n'])).is_some() {
         return BodyMode::File;
     }
     let ct = content_type.unwrap_or("").to_ascii_lowercase();

@@ -396,7 +396,7 @@ pub static TABLE: &[Row] = &[
         id: "body-file",
         support: Support::Portable,
         label: "< file",
-        hover: "Both editors send this file's content",
+        hover: "Both editors send this file's content; Rider also fills in {{variables}} written in the file",
         jetbrains: &[jb!("exploring-http-syntax.html#provide-request-body")],
         vscode: &[VSC_BODY],
     },
@@ -405,7 +405,7 @@ pub static TABLE: &[Row] = &[
         id: "body-file-with-variables",
         support: Support::VscodeOnly,
         label: "<@ file",
-        hover: "VS Code fills in the {{variables}} in this file; Rider documents only < file",
+        hover: "VS Code sends this file's content with its {{variables}} filled in; Rider sends the line as text",
         jetbrains: &[jb!("exploring-http-syntax.html#provide-request-body")],
         vscode: &[VSC_BODY],
     },
@@ -549,7 +549,7 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
         let (t, at) = (l.trim(), first + j);
         if t.starts_with(DISABLED_MARKER) {
             marks.add(at, Construct::DisabledLine);
-        } else if let Some(r) = t.starts_with('<').then(|| parser::file_reference(t)).flatten() {
+        } else if let Some(r) = parser::file_reference(l) {
             marks.add(at, if r.substitute { Construct::BodyFileWithVariables } else { Construct::BodyFile });
         } else {
             marks.references(at, l);

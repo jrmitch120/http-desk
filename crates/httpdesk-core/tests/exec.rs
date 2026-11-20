@@ -164,14 +164,18 @@ async fn bodies_json_form_multipart_and_files() {
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo&\nv={{v}}", b"name=foo&v=42".to_vec()),
         ("Content-Type: application/json\n\n< ./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
         ("Content-Type: application/json\n\n<@ ./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
-        // No space after the marker: the editor shows it as a file body, so it is sent as one.
-        ("Content-Type: application/json\n\n<./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
-        ("Content-Type: application/json\n\n<@./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // A tab after the marker, and spaces after the path, as VS Code reads them.
+        ("Content-Type: application/json\n\n<\t./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
+        ("Content-Type: application/json\n\n<@ ./payload.json   ", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // No space after the marker, or an indented line: both editors send it as text (ADR 0010).
+        ("Content-Type: application/json\n\n<./payload.json", b"<./payload.json".to_vec()),
+        ("Content-Type: application/json\n\n<@./payload.json", b"<@./payload.json".to_vec()),
+        ("Content-Type: application/json\n\n  < ./payload.json", b"  < ./payload.json".to_vec()),
         ("Content-Type: application/xml\n\n<tag/>", b"<tag/>".to_vec()),
     ];
     for (rest, expected) in cases {
         let req = parse(&format!("POST {{{{base}}}}/echo\n{rest}\n")).requests.remove(0);
-        let is_file = rest.contains("payload.json");
+        let is_file = expected.starts_with(br#"{"from":"file""#);
         assert_eq!(req.body.mode == BodyMode::File, is_file, "editor body mode for {rest}");
         send(&req, vars.clone(), dir.path()).await.unwrap();
         assert_eq!(last_request(&server).await.body, expected, "{rest}");
@@ -195,6 +199,12 @@ async fn bodies_json_form_multipart_and_files() {
     expected.extend([0u8, 159, 146, 150]);
     expected.extend(b"\r\n--B--\r\n");
     assert_eq!(got.body, expected);
+
+    // In a part too, `<path` and an indented `< path` are text.
+    let as_text = multipart.replace("< ./pic.bin", "<./pic.bin\n  < ./pic.bin");
+    send(&parse(&as_text).requests.remove(0), vars.clone(), dir.path()).await.unwrap();
+    let got = last_request(&server).await.body;
+    assert!(got.ends_with(b"\r\n\r\n<./pic.bin\r\n  < ./pic.bin\r\n--B--\r\n"), "{}", String::from_utf8_lossy(&got));
 
     let missing = parse("POST {{base}}/echo\n\n< ./nope.json\n").requests.remove(0);
     let err = send(&missing, vars, dir.path()).await.unwrap_err();

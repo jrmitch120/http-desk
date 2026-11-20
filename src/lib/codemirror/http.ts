@@ -348,13 +348,16 @@ function filePath(line: Line, from: number): Node | null {
   return withRefs(line, "FilePath", pathFrom, pathFrom + path.length);
 }
 
-/** `< path` or `<@ path`: a body (or a multipart part) read from a file (the core's `file_reference`). */
+/**
+ * A File line, `< path` or `<@ path`, the mark at the very start of the line and then a
+ * space or a tab: a body (or a multipart part) read from a file (the core's `file_reference`).
+ */
 function fileRef(line: Line): Node | null {
-  const { text, from } = trimmedOf(line);
-  if (!text.startsWith("<") || text.startsWith("<?")) return null;
-  const mark = text.startsWith("<@") ? 2 : 1;
-  const path = text.slice(mark).trim();
+  const mark = /^<@?(?=[ \t])/.exec(line.text)?.[0].length;
+  if (!mark) return null;
+  const path = line.text.slice(mark).trim();
   if (!path || path.startsWith("<") || path.includes(">")) return null;
+  const from = line.from;
   return node("FileRef", from, end(line), [node("FileMark", from, from + mark), filePath(line, from + mark)!]);
 }
 

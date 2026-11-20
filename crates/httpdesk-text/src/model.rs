@@ -425,6 +425,9 @@ pub enum ProblemCode {
     /// A `< path` body reference to a file that doesn't exist. The parser can't tell:
     /// it names the file ([`BodyFile`]) and the shell answers whether it exists.
     MissingFile,
+    /// A body line HttpDesk once read as a file, `<path` or an indented `< path`, that
+    /// isn't a File line: both editors send it as text, and so does HttpDesk (ADR 0010).
+    NotAFileLine,
     /// A `###` after the request's block in a single request's text (a Source view): it
     /// starts another block, which a request's text can't hold.
     TextAfterRequest,

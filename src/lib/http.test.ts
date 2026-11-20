@@ -147,11 +147,16 @@ describe("form bodies", () => {
 });
 
 describe("file bodies", () => {
-  it("reads `< path` and `<@ path` with or without a space, as they are sent", () => {
+  it("reads a File line, `< path` or `<@ path`, as it is sent", () => {
     expect(parseFileRef("< ./a.json")).toEqual({ substitute: false, path: "./a.json" });
-    expect(parseFileRef("<./a.json")).toEqual({ substitute: false, path: "./a.json" });
-    expect(parseFileRef("<@./a.json\n")).toEqual({ substitute: true, path: "./a.json" });
-    expect(parseFileRef("<@ ./a.json")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<@ ./a.json  \n")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<\t./a.json")).toEqual({ substitute: false, path: "./a.json" });
+  });
+
+  it("leaves `<path` and an indented `< path` as text, as both editors send them", () => {
+    expect(parseFileRef("<./a.json")).toBeNull();
+    expect(parseFileRef("<@./a.json")).toBeNull();
+    expect(parseFileRef("  < ./a.json")).toBeNull();
     expect(parseFileRef("<tag/>")).toBeNull();
     expect(parseFileRef("<?xml version=1.0")).toBeNull();
     expect(parseFileRef("< ./a.json\n< ./b.json")).toBeNull();
@@ -233,6 +238,13 @@ Content-Type: application/json
       ["element-name", "text", "Name"],
       ["data", "file", "./request-form-data.json"],
     ]);
+  });
+
+  it("takes a part's `<path` or indented `< path` as its text, as it is sent", () => {
+    const part = (content: string) => ["--B", 'Content-Disposition: form-data; name="f"; filename="x.bin"', "", content, "--B--"].join("\n");
+    expect(parseMultipart(part("<\t./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["file", "./x.bin"]]);
+    expect(parseMultipart(part("<./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["text", "<./x.bin"]]);
+    expect(parseMultipart(part("  < ./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["text", "  < ./x.bin"]]);
   });
 });
 

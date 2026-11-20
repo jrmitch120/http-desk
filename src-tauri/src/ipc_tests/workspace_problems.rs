@@ -98,6 +98,18 @@ fn every_files_problems_and_portability_notes_are_listed_by_line_in_the_file() {
                     vec![mark(16, "vscode-only")]
                 )
             ),
+            // `<path` and indented `< path` lines are sent as text, so they aren't marked as files.
+            (
+                "not-a-file-line.http".into(),
+                (
+                    vec![
+                        problem(7, 1, "warning", "not-a-file-line"),
+                        problem(13, 3, "warning", "not-a-file-line"),
+                        problem(22, 1, "warning", "not-a-file-line")
+                    ],
+                    vec![]
+                )
+            ),
             // `# @prompt` is VS Code's, a `> {% %}` handler Rider's.
             ("portable/prompt-directive.http".into(), (vec![], vec![mark(2, "vscode-only")])),
             ("portable/response-handler.http".into(), (vec![], vec![mark(4, "jetbrains-only")])),

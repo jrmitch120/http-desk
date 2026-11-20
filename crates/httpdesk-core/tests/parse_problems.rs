@@ -98,6 +98,28 @@ fn a_file_a_body_reads_is_named_with_the_problem_to_report_if_it_is_missing() {
 }
 
 #[test]
+fn a_line_once_read_as_a_file_is_sent_as_text_with_a_warning() {
+    use ProblemCode::*;
+    assert_eq!(
+        problems_in("not-a-file-line.http"),
+        [
+            (7, 1, Severity::Warning, NotAFileLine),
+            (13, 3, Severity::Warning, NotAFileLine),
+            (22, 1, Severity::Warning, NotAFileLine)
+        ]
+    );
+    // Placed in each request's text, and no file is read.
+    assert_eq!(
+        request_problems_in("not-a-file-line.http"),
+        [(0, 5, 1, NotAFileLine), (1, 5, 3, NotAFileLine), (2, 8, 1, NotAFileLine)]
+    );
+    // The message says how to write the File line.
+    let parsed = parse_request("POST https://e.com\n\n<@./payload.json\n");
+    assert_eq!(parsed.problems[0].message, "Sent as text. Write `<@ ./payload.json` to read the file");
+    assert_eq!(parsed.files, []);
+}
+
+#[test]
 fn only_a_file_the_body_sends_is_read() {
     let files =
         |text: &str| request_problems(&parse(text).requests[0]).files.into_iter().map(|f| f.path).collect::<Vec<_>>();

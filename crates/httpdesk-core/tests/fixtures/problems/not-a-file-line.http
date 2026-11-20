@@ -1,0 +1,23 @@
+# Lines HttpDesk once read as files, which both editors send as text.
+
+### No space after the mark
+POST https://example.com/pets
+Content-Type: application/json
+
+<./payload.json
+
+### Indented
+POST https://example.com/pets
+Content-Type: application/json
+
+  <@ ./payload.json
+
+### A multipart part
+POST https://example.com/upload
+Content-Type: multipart/form-data; boundary=B
+
+--B
+Content-Disposition: form-data; name="photo"; filename="photo.png"
+
+<@./photo.png
+--B--
