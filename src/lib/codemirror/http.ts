@@ -11,7 +11,7 @@ import { htmlLanguage } from "@codemirror/lang-html";
 import { javascriptLanguage } from "@codemirror/lang-javascript";
 import { graphqlLanguage } from "./graphql";
 import { styleTags, tags as t } from "@lezer/highlight";
-import { segments } from "../http";
+import { parseFileRef, segments } from "../http";
 
 /**
  * The node names of the `.http` tree, for whatever reads it. Its shape:
@@ -312,7 +312,7 @@ function block(lines: Line[]): Node {
     const method = reqLine.children.find((c) => c.name === "Method");
     const verb = method ? request.text.slice(method.from - request.from, method.to - request.from) : "GET";
     // Every File line of a body is read from its file, as the sender reads it (the core's
-    // `read_body_lines`): a body of one is, and so are those among other lines, in a form
+    // `body_lines_with_files`): a body of one is, and so are those among other lines, in a form
     // body too (which is then sent like a text body).
     const fromFile = bodyLines.length === 1 && fileRef(bodyLines[0]);
     const contentType = (headers.get("content-type") ?? "").toLowerCase();
@@ -351,15 +351,11 @@ function filePath(line: Line, from: number): Node | null {
   return withRefs(line, "FilePath", pathFrom, pathFrom + path.length);
 }
 
-/**
- * A File line, `< path` or `<@ path`, the mark at the very start of the line and then a
- * space or a tab: a body (or a multipart part) read from a file (the core's `file_reference`).
- */
+/** A File line, `< path` or `<@ path`, by the page's rule (`parseFileRef`, the core's `file_reference`). */
 function fileRef(line: Line): Node | null {
-  const mark = /^<@?(?=[ \t])/.exec(line.text)?.[0].length;
-  if (!mark) return null;
-  const path = line.text.slice(mark).trim();
-  if (!path || path.startsWith("<") || path.includes(">")) return null;
+  const ref = parseFileRef(line.text);
+  if (!ref) return null;
+  const mark = ref.substitute ? 2 : 1;
   const from = line.from;
   return node("FileRef", from, end(line), [node("FileMark", from, from + mark), filePath(line, from + mark)!]);
 }

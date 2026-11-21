@@ -183,7 +183,7 @@
       <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} {onsend} placeholder="Request body" extensions={bodySyntaxHighlight} />
     </div>
     {#if formAsText}
-      <p class="muted note">Sent as text with its files read in, not joined with <code>&amp;</code>, as VS Code sends a form with a <code>&lt; file</code> line. Without one, its fields are edited in a grid.</p>
+      <p class="muted note">Sent as text with its files read in and its comment lines left out, not joined with <code>&amp;</code>, as VS Code sends a form with a <code>&lt; file</code> line. Without one, its fields are edited in a grid.</p>
     {/if}
   {/if}
   {#if syntaxWarnings.length}

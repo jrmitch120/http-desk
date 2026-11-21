@@ -207,6 +207,7 @@ characters), severity, code and message. Reporting never changes what is built. 
 | `header-after-body` | warning | Each `Name: value` line (an RFC 9110 token name at column 0, not a `://` URL) that the body starts with, unless the request's Content-Type names a body that may start with one: only a request with no Content-Type, or a JSON, XML or form one, reports it (a text or YAML body doesn't). |
 | `text-after-request` | error | In a single request's text (`parse_request`, a Source view): a `###` after the request's block. The text from there on is kept as `following` (its requests and the text after them, their own problems reported too), so the text reads as not parsing and Save as written adds it to the file after the request. |
 | `unknown-directive` | warning | A `# @tag` above the request line that JetBrains, VS Code and HttpDesk all ignore (`KNOWN_DIRECTIVES`, matched ignoring case). |
+| `not-a-file-line` | warning | A `<path` or indented `< path` line (no space or tab after the mark, or not at column 0) in a body of that one line or a multipart body, the only bodies HttpDesk read files from before [ADR-0010](adr/0010-file-lines-read-where-both-editors-read-them.md): it's sent as text, as both editors send it, and the message says how to write the File line. In a body with other lines it isn't reported, so a multi-line XML start tag such as `<soap:Envelope` isn't flagged. |
 
 Blocks with no request line (the file header, `leading` and `trailing` text) report nothing.
 
@@ -214,7 +215,7 @@ Blocks with no request line (the file header, `leading` and `trailing` text) rep
 as the Source view shows it (`request_source`: as written while it matches, else rendered), so an edited request is read as it now
 is, and gives its problems and the files its body is read from (`BodyFile`: the path
 as written, and the `missing-file` error to report at the `< path` line if it doesn't
-exist), found as the sender finds them (`parser::read_body_lines`: every File line of
+exist), found as the sender finds them (`parser::body_lines_with_files`: every File line of
 an enabled body, a form body's included). The parser can't tell whether a file exists: the
 page asks the shell (`body_file_exists`, relative to the `.http` file's folder as
 `exec::body_file_path` resolves it, variables resolved by the page) and keeps the
@@ -1371,8 +1372,11 @@ Decisions made during implementation, beyond the plan above:
   is an `&` in front of the first field sent. A form body with a File line is sent like a
   text body instead, as VS Code sends it ([ADR-0010](adr/0010-file-lines-read-where-both-editors-read-them.md)):
   lines separated by `\n`, each File line replaced by its file, the other lines filled in
-  as in a text body (comment and `#~` lines included), and no `&` joining. The body editor
-  shows such a form as text, not in the grid.
+  as in a text body, and no `&` joining. Its `#`, `//` and `#~` lines are still skipped,
+  as above: VS Code drops every `#` and `//` line of a request before it reads the body
+  (`src/utils/selector.ts` L66, `Constants.CommentIdentifiersRegex` `/^\s*(#|\/{2})/` in
+  `src/common/constants.ts` L69, at the commit [research/body-file-lines.md](research/body-file-lines.md)
+  pins). The body editor shows such a form as text, not in the grid.
 * **Basic auth** is written as `Basic user password`, or `Basic user:password` when
   either part is empty. When the username contains whitespace, or the password has
   leading or trailing whitespace, it is written pre-encoded as `Basic <base64>`, because

@@ -20,7 +20,7 @@ use crate::cookies::{self, CookieJar, ResponseCookie};
 use crate::env::SslConfig;
 use crate::exchange::UnmatchedPath;
 use crate::model::*;
-use crate::parser::{self, FileReference, DISABLED_MARKER};
+use crate::parser::{self, BodyLine, FileReference, DISABLED_MARKER};
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
@@ -313,10 +313,10 @@ fn read_file_line(file: FileReference, resolver: &Resolver, read: ReadFile) -> R
 }
 
 /// A body line as sent: its file if it's a File line the body reads, else the line filled in.
-fn body_line(line: (&str, Option<FileReference>), resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
-    match line {
-        (_, Some(file)) => read_file_line(file, resolver, read),
-        (text, None) => Ok(resolver.resolve(text).into_bytes()),
+fn body_line(line: BodyLine, resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
+    match line.file {
+        Some(file) => read_file_line(file, resolver, read),
+        None => Ok(resolver.resolve(line.text).into_bytes()),
     }
 }
 
@@ -325,34 +325,41 @@ fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option
         return Ok(None);
     }
     let text = body.text.trim_end();
-    if body.mode == BodyMode::Multipart {
-        // Each line then CRLF; `#~` lines are disabled parts (see the parser).
-        let lines: Vec<&str> = text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)).collect();
-        let mut out = Vec::new();
-        for line in parser::read_body_lines(body, &lines) {
-            out.extend(body_line(line, resolver, read)?);
+    let multipart = body.mode == BodyMode::Multipart;
+    let lines: Vec<&str> = if multipart {
+        // `#~` lines are disabled parts (see the parser).
+        text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)).collect()
+    } else {
+        text.split('\n').collect()
+    };
+    let lines = parser::body_lines_with_files(body, &lines);
+    if !multipart && lines.iter().all(|l| l.file.is_none()) {
+        let bytes = match body.mode {
+            BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
+            _ => resolver.resolve(text).into_bytes(),
+        };
+        return Ok(Some(bytes));
+    }
+    // A multipart body: each line then CRLF. Any other: each File line replaced by its
+    // file, the `\n`s around it kept (ADR 0010); a form's comment and `#~` lines are
+    // skipped, as `join_form_lines` skips them and VS Code drops them.
+    let form = body.mode == BodyMode::FormUrlEncoded;
+    let mut out = Vec::new();
+    for (i, line) in lines.into_iter().filter(|l| !(form && is_comment(l.text))).enumerate() {
+        if i > 0 && !multipart {
+            out.push(b'\n');
+        }
+        out.extend(body_line(line, resolver, read)?);
+        if multipart {
             out.extend(b"\r\n");
         }
-        return Ok(Some(out));
     }
-    // Each File line replaced by its file, the line breaks around it kept (ADR 0010).
-    let lines: Vec<&str> = text.split('\n').collect();
-    let lines = parser::read_body_lines(body, &lines);
-    if lines.iter().any(|(_, file)| file.is_some()) {
-        let mut out = Vec::new();
-        for (i, line) in lines.into_iter().enumerate() {
-            if i > 0 {
-                out.push(b'\n');
-            }
-            out.extend(body_line(line, resolver, read)?);
-        }
-        return Ok(Some(out));
-    }
-    let bytes = match body.mode {
-        BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
-        _ => resolver.resolve(text).into_bytes(),
-    };
-    Ok(Some(bytes))
+    Ok(Some(out))
+}
+
+/// A `#` or `//` comment line, `#~` disabled ones included, indented or not.
+fn is_comment(line: &str) -> bool {
+    parser::comment_body(line.trim()).is_some()
 }
 
 /// Joins a form body written one field per line with `&`. Lines that already
@@ -361,7 +368,7 @@ fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option
 /// VS Code do, and so is the `&` left in front of the first field sent.
 fn join_form_lines(text: &str) -> String {
     let mut out = String::new();
-    let fields = text.lines().map(str::trim).filter(|l| !l.is_empty() && crate::parser::comment_body(l).is_none());
+    let fields = text.lines().map(str::trim).filter(|l| !l.is_empty() && !is_comment(l));
     for line in fields {
         let line = if out.is_empty() { line.trim_start_matches('&') } else { line };
         if !out.is_empty() && !out.ends_with('&') && !line.starts_with('&') {

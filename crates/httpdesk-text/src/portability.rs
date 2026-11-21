@@ -556,9 +556,9 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
 
     // Body, then the response handler.
     let handler_at = (i..lines.len()).find(|&j| parser::is_handler_start(lines[j])).unwrap_or(lines.len());
-    // A `< file` read alone (a Whole-file body, a multipart part) both editors send as
+    // A `< file` that is a Whole-file body or a multipart part's content both editors send as
     // it is; among other lines, Rider drops the line breaks around it.
-    let alone = matches!(request.body.mode, BodyMode::File | BodyMode::Multipart);
+    let whole_file_or_part = matches!(request.body.mode, BodyMode::File | BodyMode::Multipart);
     for (j, l) in lines.iter().enumerate().take(handler_at).skip(i) {
         let (t, at) = (l.trim(), first + j);
         if t.starts_with(DISABLED_MARKER) {
@@ -566,7 +566,7 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
         } else if let Some(r) = parser::file_reference(l) {
             marks.add(
                 at,
-                match (r.substitute, alone) {
+                match (r.substitute, whole_file_or_part) {
                     (true, _) => Construct::BodyFileWithVariables,
                     (false, true) => Construct::BodyFile,
                     (false, false) => Construct::BodyFileLine,

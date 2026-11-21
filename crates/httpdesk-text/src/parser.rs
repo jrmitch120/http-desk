@@ -782,7 +782,7 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
     // lines it never was, and `<soap:Envelope`-like lines are content.
     if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
         for (i, line) in body_lines.iter().enumerate() {
-            if let Some(FileReference { substitute, path }) = former_file_reference(line) {
+            if let Some(FileReference { substitute, path }) = was_a_file_line_before_adr_0010(line) {
                 let mark = if substitute { "<@" } else { "<" };
                 let message = format!("Sent as text. Write `{mark} {path}` to read the file");
                 problems.push(problem_at(&lines, body_at + i, Severity::Warning, ProblemCode::NotAFileLine, &message));
@@ -790,8 +790,8 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
         }
     }
     // The files the sender reads (`exec::build_body`).
-    for (i, (_, file)) in read_body_lines(&req.body, body_lines).into_iter().enumerate() {
-        let Some(FileReference { path, .. }) = file else { continue };
+    for (i, line) in body_lines_with_files(&req.body, body_lines).into_iter().enumerate() {
+        let Some(FileReference { path, .. }) = line.file else { continue };
         let message =
             format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
         let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
@@ -887,28 +887,37 @@ pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
     file_path(rest).map(|path| FileReference { substitute, path })
 }
 
-/// Each of `body`'s `lines` (as written), with the file it stands for if it's a File
-/// line the body reads when sent: every File line of an enabled body (ADR 0010). The
-/// one rule for which lines are read: the sender reads these and the parser names
-/// them (`BodyFile`, and the MissingFile problem). A form body's File lines are read
-/// too, and a form with one is then sent like a text body, without `&` joining.
-pub fn read_body_lines<'a>(body: &Body, lines: &[&'a str]) -> Vec<(&'a str, Option<FileReference<'a>>)> {
-    lines.iter().map(|&line| (line, body.enabled.then(|| file_reference(line)).flatten())).collect()
+/// A body line as written, with the file it stands for if it's a File line the body
+/// reads when sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyLine<'a> {
+    pub text: &'a str,
+    pub file: Option<FileReference<'a>>,
+}
+
+/// Each of `body`'s `lines` (as written), with its file if it's a File line: every
+/// File line of an enabled body is read (ADR 0010). The one rule for which lines are
+/// read: the sender reads these and the parser names them (`BodyFile`, and the
+/// MissingFile problem). A form body's File lines are read too, and a form with one is
+/// then sent like a text body, without `&` joining and without its comment lines.
+pub fn body_lines_with_files<'a>(body: &Body, lines: &[&'a str]) -> Vec<BodyLine<'a>> {
+    lines.iter().map(|&text| BodyLine { text, file: body.enabled.then(|| file_reference(text)).flatten() }).collect()
 }
 
 /// A line HttpDesk read as a file before ADR 0010 but that isn't a File line:
-/// `<path`, or an indented `< path`. Both editors send it as text.
-fn former_file_reference(line: &str) -> Option<FileReference<'_>> {
-    if file_reference(line).is_some() {
+/// `<path`, or an indented `< path`. Both editors send it as text. `<?xml` never was.
+fn was_a_file_line_before_adr_0010(line: &str) -> Option<FileReference<'_>> {
+    let t = line.trim();
+    if file_reference(line).is_some() || t.starts_with("<?") {
         return None;
     }
-    let (substitute, rest) = file_mark(line.trim())?;
+    let (substitute, rest) = file_mark(t)?;
     file_path(rest).map(|path| FileReference { substitute, path })
 }
 
-/// `<` or `<@` starting `line` (a single line, not `<?`), and the text after it.
+/// `<` or `<@` starting `line` (a single line), and the text after it.
 fn file_mark(line: &str) -> Option<(bool, &str)> {
-    if line.contains('\n') || line.starts_with("<?") {
+    if line.contains('\n') {
         return None;
     }
     let rest = line.strip_prefix('<')?;
@@ -928,7 +937,8 @@ pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
     if trimmed.is_empty() {
         return BodyMode::None;
     }
-    if file_reference(text.trim_start_matches(['\r', '\n'])).is_some() {
+    // As written: a line break before a File line is sent too, so that's no Whole-file body.
+    if file_reference(text).is_some() {
         return BodyMode::File;
     }
     let ct = content_type.unwrap_or("").to_ascii_lowercase();

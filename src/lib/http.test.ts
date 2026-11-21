@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fileLines from "../../crates/httpdesk-core/tests/fixtures/file-lines.json";
 import {
   applyUrlText,
   buildForm,
@@ -167,6 +168,11 @@ describe("file bodies", () => {
     expect(parseFileRef("<tag/>")).toBeNull();
     expect(parseFileRef("<?xml version=1.0")).toBeNull();
     expect(parseFileRef("< ./a.json\n< ./b.json")).toBeNull();
+  });
+
+  // The cases the core's `file_reference` runs too (crates/httpdesk-core/tests/file_line_parity.rs).
+  it.each(fileLines.cases)("reads the shared File line cases as the core does: $case", ({ text, file }) => {
+    expect(parseFileRef(text)).toEqual(file);
   });
 });
 
