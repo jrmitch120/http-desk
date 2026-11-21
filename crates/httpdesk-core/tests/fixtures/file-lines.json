@@ -1,0 +1,26 @@
+{
+  "about": "Which body lines are File lines (ADR 0010). Shared by the core's file_reference (tests/file_line_parity.rs, which also checks that detect_body_mode reads a body of the line as a Whole-file body exactly when it's a File line) and the frontend's parseFileRef (src/lib/http.test.ts); both must give these answers. text is a body line (or a whole body); file is null for text that is no File line (sent as written), else the path and whether it's <@ (its variables filled in).",
+  "cases": [
+    { "case": "< then a space", "text": "< ./f.txt", "file": { "path": "./f.txt", "substitute": false } },
+    { "case": "a tab after <", "text": "<\t./f.txt", "file": { "path": "./f.txt", "substitute": false } },
+    { "case": "trailing whitespace after the path is dropped", "text": "< ./f.txt  \t", "file": { "path": "./f.txt", "substitute": false } },
+    { "case": "<@ fills in the file's variables", "text": "<@ ./{{name}}.json", "file": { "path": "./{{name}}.json", "substitute": true } },
+    { "case": "a tab after <@", "text": "<@\t./f.txt", "file": { "path": "./f.txt", "substitute": true } },
+    { "case": "a path with spaces in it", "text": "< ./my file.txt", "file": { "path": "./my file.txt", "substitute": false } },
+    { "case": "<path, no space after the mark", "text": "<./f.txt", "file": null },
+    { "case": "<@path, no space after the mark", "text": "<@./f.txt", "file": null },
+    { "case": "an indented line", "text": "  < ./f.txt", "file": null },
+    { "case": "a tab-indented <@ line", "text": "\t<@ ./f.txt", "file": null },
+    { "case": "<? (an XML declaration)", "text": "<?xml version=\"1.0\"?>", "file": null },
+    { "case": "<? then a space", "text": "<? ./f.txt", "file": null },
+    { "case": "<<", "text": "<< ./f.txt", "file": null },
+    { "case": "a path starting with <", "text": "< <f.txt", "file": null },
+    { "case": "a path with > in it (an XML tag)", "text": "< a>b", "file": null },
+    { "case": "a tag", "text": "<tag/>", "file": null },
+    { "case": "a bare <", "text": "<", "file": null },
+    { "case": "< and only whitespace", "text": "<   ", "file": null },
+    { "case": "a bare <@", "text": "<@ ", "file": null },
+    { "case": "a line break before the File line: the sender keeps it, so it's no Whole-file body", "text": "\n< ./f.txt", "file": null },
+    { "case": "two File lines", "text": "< ./a.txt\n< ./b.txt", "file": null }
+  ]
+}

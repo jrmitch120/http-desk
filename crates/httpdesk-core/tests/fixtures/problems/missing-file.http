@@ -15,3 +15,18 @@ Content-Disposition: form-data; name="photo"; filename="photo.png"
 
 <@ ./photo.png
 --B--
+
+### A file among other body lines
+POST https://example.com/notes
+Content-Type: text/plain
+
+Dear {{name}},
+< ./letter.txt
+Regards
+
+### A file in a form body
+POST https://example.com/form
+Content-Type: application/x-www-form-urlencoded
+
+name={{name}}
+< ./fields.txt

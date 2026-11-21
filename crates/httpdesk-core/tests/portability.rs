@@ -42,6 +42,7 @@ const ROWS: &[(Construct, Support, usize)] = &[
     (C::GraphqlMethod, JetbrainsOnly, 2),
     (C::BodyFile, Portable, 5),
     (C::BodyFileWithVariables, VscodeOnly, 5),
+    (C::BodyFileLine, VscodeOnly, 6),
 ];
 
 fn fixture(construct: Construct) -> String {
@@ -120,6 +121,43 @@ fn disabled_lines_are_httpdesk_only_and_their_contents_are_not_read() {
     let text = "GET https://example.com/\n#~ X-Id: {{$guid}}\n#~| {\"at\": \"{{$timestamp -1 d}}\"}\n";
     let found: Vec<_> = portability(text).iter().map(|m| (m.line, m.construct)).collect();
     assert_eq!(found, [(2, C::DisabledLine), (3, C::DisabledLine)]);
+}
+
+#[test]
+fn only_a_file_line_is_marked_as_a_file() {
+    let marked = |body: &str| {
+        let text = format!("POST https://example.com/\nContent-Type: application/json\n\n{body}\n");
+        portability(&text).iter().map(|m| (m.line, m.construct)).collect::<Vec<_>>()
+    };
+    assert_eq!(marked("<\t./a.json  "), [(4, C::BodyFile)]);
+    assert_eq!(marked("<./a.json"), []);
+    assert_eq!(marked("<@./a.json"), []);
+    assert_eq!(marked("  < ./a.json"), []);
+    assert_eq!(marked("  <@ ./a.json"), []);
+    // Among other lines: `< file` is spliced differently by each editor, `<@ file` is VS Code's anywhere.
+    assert_eq!(marked("[\n< ./a.json\n<@ ./b.json\n]"), [(5, C::BodyFileLine), (6, C::BodyFileWithVariables)]);
+    assert_eq!(marked("[\n<./a.json\n  < ./b.json\n]"), []);
+    // A multipart part's file is read alone, as a Whole-file body is.
+    let multipart = "POST https://example.com/\nContent-Type: multipart/form-data; boundary=B\n\n--B\nContent-Disposition: form-data; name=\"f\"; filename=\"a.png\"\n\n< ./a.png\n--B--\n";
+    let found: Vec<_> = portability(multipart).iter().map(|m| (m.line, m.construct)).collect();
+    assert_eq!(found, [(7, C::BodyFile)]);
+}
+
+#[test]
+fn a_file_rows_hover_says_what_each_editor_sends() {
+    let hover = |c: Construct| portability(&fixture(c)).into_iter().find(|m| m.construct == c).unwrap().hover;
+    assert_eq!(
+        hover(C::BodyFile),
+        "Both editors send this file's content; Rider also fills in {{variables}} written in the file"
+    );
+    assert_eq!(
+        hover(C::BodyFileWithVariables),
+        "VS Code sends this file's content with its {{variables}} filled in; Rider sends the line as text"
+    );
+    assert_eq!(
+        hover(C::BodyFileLine),
+        "VS Code puts this file's content in place of the line; Rider does too, but drops the line breaks around it"
+    );
 }
 
 #[test]

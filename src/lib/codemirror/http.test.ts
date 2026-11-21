@@ -133,9 +133,39 @@ describe("files and scripts", () => {
     expect(token("POST /x\n\n<@ ./{{name}}.xml", "<@")).toBe("tok-operator");
   });
 
+  it("highlights only a File line: `<path` and an indented `< path` are body text", () => {
+    const body = (line: string) => `POST /x\nContent-Type: text/plain\n\n${line}\n`;
+    expect(token(body("<\t./f.txt  "), "./f.txt")).toBe("tok-link");
+    for (const line of ["<./f.txt", "<@./f.txt", "  < ./f.txt", "\t<@ ./f.txt"]) {
+      expect(token(body(line), "./f.txt"), line).not.toBe("tok-link");
+      expect(token(body(line), "<"), line).not.toBe("tok-operator");
+    }
+    const multipart = (line: string) =>
+      `POST /x\nContent-Type: multipart/form-data; boundary=b\n\n--b\nContent-Disposition: form-data; name="f"\n\n${line}\n--b--\n`;
+    expect(token(multipart("<./photo.png"), "./photo.png")).not.toBe("tok-link");
+    expect(token(multipart("  < ./photo.png"), "./photo.png")).not.toBe("tok-link");
+  });
+
   it("highlights the < references of a multipart body's parts", () => {
     const text = "POST /x\nContent-Type: multipart/form-data; boundary=b\n\n--b\nContent-Disposition: form-data; name=\"f\"\n\n< ./photo.png\n--b--\n";
     expect(token(text, "./photo.png")).toBe("tok-link");
+  });
+
+  it("highlights a File line among other body lines, as the sender reads it", () => {
+    const text = "POST /x\nContent-Type: text/plain\n\nbefore\n< ./f.txt\n<@ ./{{name}}.txt\nafter\n";
+    expect(token(text, "<")).toBe("tok-operator");
+    expect(token(text, "./f.txt")).toBe("tok-link");
+    expect(token(text, "<@")).toBe("tok-operator");
+    // In a JSON or XML body the rest is still read in its language.
+    const json = 'POST /x\nContent-Type: application/json\n\n[\n< ./item.json\n, {"id": 2}\n]\n';
+    expect(token(json, "./item.json")).toBe("tok-link");
+    expect(token(json, '"id"')).toBe("tok-propertyName");
+    const xml = "POST /x\nContent-Type: application/xml\n\n<items>\n< ./item.xml\n</items>\n";
+    expect(token(xml, "./item.xml")).toBe("tok-link");
+    expect(token(xml, "items")).toBe("tok-typeName");
+    // A form body with a File line is sent like a text body, its file spliced in.
+    const form = "POST /x\nContent-Type: application/x-www-form-urlencoded\n\na=1\n< ./f.txt\n";
+    expect(token(form, "./f.txt")).toBe("tok-link");
   });
 
   it("reads a body line starting with < as XML, not a reference, when there's more to the body", () => {

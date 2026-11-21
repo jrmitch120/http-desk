@@ -777,16 +777,25 @@ fn read_block(raw: &str, problems: &mut Vec<Problem>, files: &mut Vec<BodyFile>)
             req.extra_lines.extend(disabled_parts_raw.into_iter().map(ExtraLine::new));
         }
     }
-    // As the sender reads them (`exec::build_body`): a body that is one `< path` line,
-    // or a multipart body's `< path` lines.
+    // A line read as a file before ADR 0010 but sent as text now is warned about in a
+    // Whole-file body or a multipart body, where it was read. In a body with other
+    // lines it never was, and `<soap:Envelope`-like lines are content.
     if req.body.enabled && (body_lines.len() == 1 || req.body.mode == BodyMode::Multipart) {
         for (i, line) in body_lines.iter().enumerate() {
-            let Some(FileReference { path, .. }) = file_reference(line) else { continue };
-            let message =
-                format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
-            let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
-            files.push(BodyFile { path: path.to_string(), missing });
+            if let Some(FileReference { substitute, path }) = was_a_file_line_before_adr_0010(line) {
+                let mark = if substitute { "<@" } else { "<" };
+                let message = format!("Sent as text. Write `{mark} {path}` to read the file");
+                problems.push(problem_at(&lines, body_at + i, Severity::Warning, ProblemCode::NotAFileLine, &message));
+            }
         }
+    }
+    // The files the sender reads (`exec::build_body`).
+    for (i, line) in body_lines_with_files(&req.body, body_lines).into_iter().enumerate() {
+        let Some(FileReference { path, .. }) = line.file else { continue };
+        let message =
+            format!("{path} doesn't exist (relative to this file's folder), so the body can't be read from it");
+        let missing = problem_at(&lines, body_at + i, Severity::Error, ProblemCode::MissingFile, &message);
+        files.push(BodyFile { path: path.to_string(), missing });
     }
 
     Some((req, request_line_at))
@@ -866,20 +875,61 @@ pub struct FileReference<'a> {
     pub path: &'a str,
 }
 
-/// Reads `< path` or `<@ path` (the space is optional) from a single line. The
-/// editor and the sender both use this rule. `<tag>`, `<?xml` and `<<` are content.
+/// Reads a File line, `< path` or `<@ path`, from one line as written: the mark at
+/// the very start of the line, then a space or a tab (ADR 0010). Whitespace after the
+/// path is ignored. Every reader uses this rule: the editor, the sender, body-mode
+/// detection and the portability pass. `<tag>`, `<?xml` and `<<` are content.
 pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
-    let t = line.trim();
-    if t.contains('\n') || t.starts_with("<?") {
+    let (substitute, rest) = file_mark(line.trim_end())?;
+    if !rest.starts_with([' ', '\t']) {
         return None;
     }
-    let rest = t.strip_prefix('<')?;
-    let (substitute, path) = match rest.strip_prefix('@') {
+    file_path(rest).map(|path| FileReference { substitute, path })
+}
+
+/// A body line as written, with the file it stands for if it's a File line the body
+/// reads when sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyLine<'a> {
+    pub text: &'a str,
+    pub file: Option<FileReference<'a>>,
+}
+
+/// Each of `body`'s `lines` (as written), with its file if it's a File line: every
+/// File line of an enabled body is read (ADR 0010). The one rule for which lines are
+/// read: the sender reads these and the parser names them (`BodyFile`, and the
+/// MissingFile problem). A form body's File lines are read too, and a form with one is
+/// then sent like a text body, without `&` joining and without its comment lines.
+pub fn body_lines_with_files<'a>(body: &Body, lines: &[&'a str]) -> Vec<BodyLine<'a>> {
+    lines.iter().map(|&text| BodyLine { text, file: body.enabled.then(|| file_reference(text)).flatten() }).collect()
+}
+
+/// A line HttpDesk read as a file before ADR 0010 but that isn't a File line:
+/// `<path`, or an indented `< path`. Both editors send it as text. `<?xml` never was.
+fn was_a_file_line_before_adr_0010(line: &str) -> Option<FileReference<'_>> {
+    let t = line.trim();
+    if file_reference(line).is_some() || t.starts_with("<?") {
+        return None;
+    }
+    let (substitute, rest) = file_mark(t)?;
+    file_path(rest).map(|path| FileReference { substitute, path })
+}
+
+/// `<` or `<@` starting `line` (a single line), and the text after it.
+fn file_mark(line: &str) -> Option<(bool, &str)> {
+    if line.contains('\n') {
+        return None;
+    }
+    let rest = line.strip_prefix('<')?;
+    Some(match rest.strip_prefix('@') {
         Some(p) => (true, p),
         None => (false, rest),
-    };
-    let path = path.trim();
-    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(FileReference { substitute, path })
+    })
+}
+
+fn file_path(rest: &str) -> Option<&str> {
+    let path = rest.trim();
+    (!path.is_empty() && !path.starts_with('<') && !path.contains('>')).then_some(path)
 }
 
 pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
@@ -887,7 +937,8 @@ pub fn detect_body_mode(content_type: Option<&str>, text: &str) -> BodyMode {
     if trimmed.is_empty() {
         return BodyMode::None;
     }
-    if file_reference(trimmed).is_some() {
+    // As written: a line break before a File line is sent too, so that's no Whole-file body.
+    if file_reference(text).is_some() {
         return BodyMode::File;
     }
     let ct = content_type.unwrap_or("").to_ascii_lowercase();
