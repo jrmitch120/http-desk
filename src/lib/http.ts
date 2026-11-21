@@ -464,6 +464,11 @@ export function parseFileRef(text: string): FileRef | null {
   return { substitute: m[1] === "@", path };
 }
 
+/** Whether a body has a File line. A form body with one is sent like a text body (ADR 0010). */
+export function hasFileLine(text: string): boolean {
+  return text.split("\n").some((line) => parseFileRef(line) !== null);
+}
+
 // ------------------------------------------------------------------ multipart
 
 export interface MultipartPart {

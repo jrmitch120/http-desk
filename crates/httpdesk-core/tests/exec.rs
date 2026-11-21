@@ -266,6 +266,46 @@ async fn a_missing_file_among_other_body_lines_fails_the_send_before_anything_go
 }
 
 #[tokio::test]
+async fn a_form_body_with_a_file_line_is_sent_like_a_text_body() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    std::fs::write(dir.path().join("v.txt"), "&v={{v}}").unwrap();
+    let vars = env(&[("base", &server.uri()), ("v", "42")]);
+    let form = "Content-Type: application/x-www-form-urlencoded\n\n";
+    let cases = [
+        // Lines separated by `\n`, each File line replaced by its file, no `&` joining (ADR 0010, VS Code).
+        ("a=1\n< ./f.txt", "a=1\nX"),
+        ("a=1\n<@ ./v.txt", "a=1\n&v=42"),
+        ("< ./f.txt\n&b={{v}}", "X\n&b=42"),
+        // As in a text body, comment and `#~` lines are sent too.
+        ("# note\n#~ c=3\na=1\n< ./f.txt", "# note\n#~ c=3\na=1\nX"),
+        // A Whole-file form body is sent as its file, as before.
+        ("< ./f.txt", "X"),
+        // `<path` is no File line: the form is joined with `&` as before.
+        ("a=1\n<./f.txt", "a=1&<./f.txt"),
+    ];
+    for (body, expected) in cases {
+        let req = parse(&format!("POST {{{{base}}}}/echo\n{form}{body}\n")).requests.remove(0);
+        send(&req, vars.clone(), dir.path()).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_file_in_a_form_body_fails_the_send_before_anything_goes_out() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let vars = env(&[("base", &server.uri())]);
+    let req = parse("POST {{base}}/echo\nContent-Type: application/x-www-form-urlencoded\n\na=1\n< ./typo.txt\n")
+        .requests
+        .remove(0);
+    let err = send(&req, vars, dir.path()).await.unwrap_err();
+    assert!(matches!(err, ExecError::File { ref path, .. } if path.ends_with("typo.txt")), "{err}");
+    assert!(server.received_requests().await.unwrap().is_empty(), "nothing was sent");
+}
+
+#[tokio::test]
 async fn disabled_form_fields_are_not_sent() {
     let server = echo_server().await;
     let vars = env(&[("base", &server.uri())]);

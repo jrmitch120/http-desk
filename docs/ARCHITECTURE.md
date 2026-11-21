@@ -215,7 +215,7 @@ as the Source view shows it (`request_source`: as written while it matches, else
 is, and gives its problems and the files its body is read from (`BodyFile`: the path
 as written, and the `missing-file` error to report at the `< path` line if it doesn't
 exist), found as the sender finds them (`parser::read_body_lines`: every File line of
-an enabled body; in a form body only a Whole-file one, until #180). The parser can't tell whether a file exists: the
+an enabled body, a form body's included). The parser can't tell whether a file exists: the
 page asks the shell (`body_file_exists`, relative to the `.http` file's folder as
 `exec::body_file_path` resolves it, variables resolved by the page) and keeps the
 answer per path (`src/lib/problems.svelte.ts`). The check strip lists both as
@@ -1368,7 +1368,11 @@ Decisions made during implementation, beyond the plan above:
   save. To keep a body without sending it, disable the body instead.
 * **Form bodies** written one field per line are sent joined with `&`. `#` and `//` lines,
   `#~` disabled fields included, are skipped, as JetBrains and VS Code skip them, and so
-  is an `&` in front of the first field sent.
+  is an `&` in front of the first field sent. A form body with a File line is sent like a
+  text body instead, as VS Code sends it ([ADR-0010](adr/0010-file-lines-read-where-both-editors-read-them.md)):
+  lines separated by `\n`, each File line replaced by its file, the other lines filled in
+  as in a text body (comment and `#~` lines included), and no `&` joining. The body editor
+  shows such a form as text, not in the grid.
 * **Basic auth** is written as `Basic user password`, or `Basic user:password` when
   either part is empty. When the username contains whitespace, or the password has
   leading or trailing whitespace, it is written pre-encoded as `Basic <base64>`, because

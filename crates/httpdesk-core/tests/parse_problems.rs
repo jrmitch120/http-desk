@@ -86,7 +86,12 @@ fn a_requests_problems_are_placed_in_its_source() {
 fn a_file_a_body_reads_is_named_with_the_problem_to_report_if_it_is_missing() {
     assert_eq!(
         request_problems_in("missing-file.http"),
-        [(0, 5, 1, ProblemCode::MissingFile), (1, 8, 1, ProblemCode::MissingFile), (2, 6, 1, ProblemCode::MissingFile)]
+        [
+            (0, 5, 1, ProblemCode::MissingFile),
+            (1, 8, 1, ProblemCode::MissingFile),
+            (2, 6, 1, ProblemCode::MissingFile),
+            (3, 6, 1, ProblemCode::MissingFile)
+        ]
     );
     let file = parse(
         &std::fs::read_to_string(format!("{}/tests/fixtures/problems/missing-file.http", env!("CARGO_MANIFEST_DIR")))
@@ -99,7 +104,8 @@ fn a_file_a_body_reads_is_named_with_the_problem_to_report_if_it_is_missing() {
         [
             ("./payload.json".to_string(), Severity::Error),
             ("./photo.png".to_string(), Severity::Error),
-            ("./letter.txt".to_string(), Severity::Error)
+            ("./letter.txt".to_string(), Severity::Error),
+            ("./fields.txt".to_string(), Severity::Error)
         ]
     );
 }

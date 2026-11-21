@@ -4,6 +4,7 @@ import {
   buildForm,
   buildMultipart,
   composeUrl,
+  hasFileLine,
   hasScripts,
   newRequest,
   parseFileRef,
@@ -151,6 +152,12 @@ describe("file bodies", () => {
     expect(parseFileRef("< ./a.json")).toEqual({ substitute: false, path: "./a.json" });
     expect(parseFileRef("<@ ./a.json  \n")).toEqual({ substitute: true, path: "./a.json" });
     expect(parseFileRef("<\t./a.json")).toEqual({ substitute: false, path: "./a.json" });
+  });
+
+  it("finds a File line anywhere in a body, as the sender reads it", () => {
+    expect(hasFileLine("a=1\n< ./f.txt\n&b=2")).toBe(true);
+    expect(hasFileLine("a=1\n<@\t./f.txt")).toBe(true);
+    expect(hasFileLine("a=1\n<./f.txt\n  < ./f.txt\n&b=2")).toBe(false);
   });
 
   it("leaves `<path` and an indented `< path` as text, as both editors send them", () => {

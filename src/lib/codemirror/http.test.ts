@@ -163,9 +163,9 @@ describe("files and scripts", () => {
     const xml = "POST /x\nContent-Type: application/xml\n\n<items>\n< ./item.xml\n</items>\n";
     expect(token(xml, "./item.xml")).toBe("tok-link");
     expect(token(xml, "items")).toBe("tok-typeName");
-    // A form body joins its lines with `&`, sending such a line as text.
+    // A form body with a File line is sent like a text body, its file spliced in.
     const form = "POST /x\nContent-Type: application/x-www-form-urlencoded\n\na=1\n< ./f.txt\n";
-    expect(token(form, "./f.txt")).not.toBe("tok-link");
+    expect(token(form, "./f.txt")).toBe("tok-link");
   });
 
   it("reads a body line starting with < as XML, not a reference, when there's more to the body", () => {

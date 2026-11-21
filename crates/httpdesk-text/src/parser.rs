@@ -890,11 +890,10 @@ pub fn file_reference(line: &str) -> Option<FileReference<'_>> {
 /// Each of `body`'s `lines` (as written), with the file it stands for if it's a File
 /// line the body reads when sent: every File line of an enabled body (ADR 0010). The
 /// one rule for which lines are read: the sender reads these and the parser names
-/// them (`BodyFile`, and the MissingFile problem). A form body reads only a Whole-file
-/// body for now, its other lines being joined with `&` (#180).
+/// them (`BodyFile`, and the MissingFile problem). A form body's File lines are read
+/// too, and a form with one is then sent like a text body, without `&` joining.
 pub fn read_body_lines<'a>(body: &Body, lines: &[&'a str]) -> Vec<(&'a str, Option<FileReference<'a>>)> {
-    let reads = body.enabled && (body.mode != BodyMode::FormUrlEncoded || lines.len() == 1);
-    lines.iter().map(|&line| (line, reads.then(|| file_reference(line)).flatten())).collect()
+    lines.iter().map(|&line| (line, body.enabled.then(|| file_reference(line)).flatten())).collect()
 }
 
 /// A line HttpDesk read as a file before ADR 0010 but that isn't a File line:

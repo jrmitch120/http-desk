@@ -23,3 +23,10 @@ Content-Type: text/plain
 Dear {{name}},
 < ./letter.txt
 Regards
+
+### A file in a form body
+POST https://example.com/form
+Content-Type: application/x-www-form-urlencoded
+
+name={{name}}
+< ./fields.txt

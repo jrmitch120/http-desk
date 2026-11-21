@@ -312,15 +312,14 @@ function block(lines: Line[]): Node {
     const method = reqLine.children.find((c) => c.name === "Method");
     const verb = method ? request.text.slice(method.from - request.from, method.to - request.from) : "GET";
     // Every File line of a body is read from its file, as the sender reads it (the core's
-    // `read_body_lines`): a body of one is, and so are those among other lines. A form
-    // body's other lines are joined with `&`, so only a Whole-file one is read there.
+    // `read_body_lines`): a body of one is, and so are those among other lines, in a form
+    // body too (which is then sent like a text body).
     const fromFile = bodyLines.length === 1 && fileRef(bodyLines[0]);
     const contentType = (headers.get("content-type") ?? "").toLowerCase();
     const multipart = contentType.startsWith("multipart/");
-    const form = /x-www-form-urlencoded/.test(contentType) && !/json|xml/.test(contentType);
     const parts = bodyLines.flatMap((l) => {
       if (fromFile) return [fromFile];
-      const ref = multipart && l.text.startsWith("#~") ? node("DisabledLine", l.from, end(l)) : !form && fileRef(l);
+      const ref = multipart && l.text.startsWith("#~") ? node("DisabledLine", l.from, end(l)) : fileRef(l);
       return ref ? [ref] : withRefs(l, "Body", l.from, end(l)).children;
     });
     const kind = fromFile ? "Body" : bodyKind(verb, headers, bodyLines);
