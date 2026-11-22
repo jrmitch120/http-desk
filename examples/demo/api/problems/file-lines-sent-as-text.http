@@ -1,0 +1,17 @@
+# Lines HttpDesk read as files before ADR 0010, which VS Code and Rider send as
+# text: so does HttpDesk now, and the editor warns on each one. A File line is
+# `<` or `<@` at the very start of a line, then a space or a tab, then the path.
+
+@echo = https://httpbin.org/anything
+
+### 1. No space after `<`: sent as the text "<../files/payload.json", with a warning
+POST {{echo}}/no-space
+Content-Type: application/json
+
+<../files/payload.json
+
+### 2. Indented: sent as text, with a warning
+POST {{echo}}/indented
+Content-Type: application/json
+
+  < ../files/payload.json
