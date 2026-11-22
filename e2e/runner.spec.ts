@@ -327,3 +327,18 @@ test("the options' labels sit clear of their controls", async ({ page }) => {
   expect(field!.x + field!.width).toBeLessThanOrEqual(unit!.x);
   expect(unit!.x + unit!.width).toBeLessThanOrEqual(toggle!.x);
 });
+
+test("each result's status and time line up with the other rows', whatever the time", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await runFile(page, "api", "pets.http");
+  await expect(runner(page)).toContainText("3 passed · 0 failed");
+
+  // The mock answers every request in 38 ms: give the rows times of different widths.
+  const rows = runner(page).getByRole("listitem");
+  await rows.locator(".time").evaluateAll((els) => els.forEach((el, i) => (el.textContent = ["179 ms", "45 ms", "12.34 s"][i])));
+  const left = async (selector: string) =>
+    Promise.all((await rows.locator(selector).all()).map(async (el) => Math.round((await el.boundingBox())!.x)));
+  expect(new Set(await left(".badge:not(.method)")).size).toBe(1);
+  expect(new Set(await left(".time")).size).toBe(1);
+});
