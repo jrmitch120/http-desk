@@ -126,7 +126,7 @@
       (marks) => (portability = marks),
     );
   });
-  const sourceMarks = $derived(portabilityLineMarks(portability, app.portabilityLevel));
+  const sourceMarks = $derived(portabilityLineMarks(portability, app.portability));
 
   // Pre-send checks: the strip, and each section tab's count of Undefined variables.
   const checks = $derived(
@@ -137,7 +137,7 @@
           dir: app.folderOf(tab.path),
           file: doc.file.requests,
           found: { read: reading?.read, exists: (path) => sourceProblems.exists(tab.path, path) },
-          portability: { marks: portability, level: app.portabilityLevel },
+          portability: { marks: portability, settings: app.portability },
         })
       : [],
   );

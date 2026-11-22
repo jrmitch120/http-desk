@@ -57,7 +57,7 @@ test("a body read from a file that doesn't exist is flagged before sending, and 
 });
 
 test("a body file the workspace has isn't flagged", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, "?portability=vscode");
   // Its multipart part reads ./request-form-data.json, which the mock has next to it.
   await openRequest(page, ["samples", "jetbrains.http"], "Send a form with the text and file fields");
   await toggleSource(page);

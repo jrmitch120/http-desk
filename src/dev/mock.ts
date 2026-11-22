@@ -486,6 +486,8 @@ function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: E
   return { shared, private: priv };
 }
 let envFiles = splitEnvFiles(envSet, { shared: {} });
+/** The editors `?portability=` names, comma-separated. */
+const portabilityQuery = (new URLSearchParams(location.search).get("portability") ?? "").split(",");
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   // `?recent=/work/shop,/work/api`: more recent workspaces after the demo one (File → Open Recent).
@@ -503,6 +505,8 @@ let settings = {
   splitRatio: { horizontal: 0.5, vertical: 0.5 },
   showResolved: false,
   showSource: false,
+  // `?portability=vscode,rider` turns those editors on in Settings → Portability, as if the user had.
+  portabilityEditors: { vscode: portabilityQuery.includes("vscode"), rider: portabilityQuery.includes("rider") },
   portabilityWarnings: false,
   // `?envView=matrix` opens the Environments modal on the matrix, as if the user had picked it.
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",

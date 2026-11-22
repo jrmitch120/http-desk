@@ -94,8 +94,12 @@ struct AppSettings {
     /// Show the request's `.http` source in place of its sections.
     #[serde(deserialize_with = "or_default")]
     show_source: bool,
-    /// Show non-portable constructs as warnings rather than notes (Settings → Portability).
-    /// Off by default; kept here, never in the workspace.
+    /// The editors the user shares `.http` files with (Settings → Portability): Portability
+    /// notes show only for those turned on. Both off by default; kept here, never in the workspace.
+    #[serde(deserialize_with = "or_default")]
+    portability_editors: PortabilityEditors,
+    /// Show the Portability notes of the editors turned on as warnings rather than notes
+    /// (Settings → Portability). Off by default; kept here, never in the workspace.
     #[serde(deserialize_with = "or_default")]
     portability_warnings: bool,
     /// How the Environments modal shows variables.
@@ -159,6 +163,19 @@ impl HistorySettings {
             max_size: u64::from(self.max_size_mb.max(1)) * 1024 * 1024,
         }
     }
+}
+
+/// Settings → Portability's editor switches (see `AppSettings::portability_editors`), keyed
+/// as `EditorName` in src/lib/checks.ts. A switch saved alone keeps the other off.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PortabilityEditors {
+    /// Notes for lines that behave differently in VS Code REST Client.
+    #[serde(deserialize_with = "or_default")]
+    vscode: bool,
+    /// Notes for lines that behave differently in Rider.
+    #[serde(deserialize_with = "or_default")]
+    rider: bool,
 }
 
 /// The Runner's options in one workspace (see `AppSettings::runner_options`). The
@@ -254,6 +271,7 @@ impl Default for AppSettings {
             panel_height: 260.0,
             show_resolved: false,
             show_source: false,
+            portability_editors: PortabilityEditors::default(),
             portability_warnings: false,
             env_view: EnvView::List,
             env_matrix_widths: HashMap::new(),

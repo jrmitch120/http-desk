@@ -4,8 +4,10 @@
 // is the core's portability table (crates/httpdesk-text/src/portability.rs), which
 // the mock runs too (WASM).
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, treeItem, treeMenu } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, treeItem, treeMenu } from "./helpers";
 
+/** Both editors turned on in Settings → Portability: their notes show. */
+const BOTH = "?portability=vscode,rider";
 const source = (page: Page) => page.locator(".source-code");
 const strip = (page: Page) => page.getByRole("region", { name: "Pre-send checks" });
 
@@ -39,7 +41,7 @@ async function hoverMarkerOf(page: Page, text: string, editor = source(page)) {
 }
 
 test("a response handler is marked: Rider runs it, VS Code ignores it, and the strip notes the lines", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, BOTH);
   await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
   await showSource(page);
 
@@ -57,7 +59,7 @@ test("a response handler is marked: Rider runs it, VS Code ignores it, and the s
 });
 
 test("HttpDesk's own lines are marked as ignored by both editors, and the strip doesn't note them", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, BOTH);
   await openRequest(page, ["api", "pets.http"], "List pets");
   // Turning Headers off writes `# @httpdesk-disabled headers` above the request line.
   await page.locator(".subtab", { hasText: "Headers" }).click();
@@ -74,7 +76,7 @@ test("HttpDesk's own lines are marked as ignored by both editors, and the strip 
 });
 
 test("the marks follow text typed in the source, even while it doesn't read as a request", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, BOTH);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await showSource(page);
 
@@ -97,8 +99,60 @@ test("the marks follow text typed in the source, even while it doesn't read as a
   await expect(page.getByRole("tooltip")).toHaveText("Rider keeps this request out of its history; VS Code ignores @no-log");
 });
 
-test("turning on portability warnings makes a handler line's marker and the strip's note warnings, at once", async ({ page }) => {
+// #182: notes show only for the editors turned on in Settings → Portability, both off by default.
+test("nothing is marked until an editor is turned on; turning on VS Code marks what it reads differently at once", async ({ page }) => {
   await openApp(page);
+  await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+  await showSource(page);
+  await menuClick(page, "toggle-problems");
+  const problems = page.getByRole("region", { name: "Problems" });
+  await expect(source(page).locator(".cm-line", { hasText: "> {%" })).toBeVisible();
+  await expect(source(page).locator(".cm-line-mark")).toHaveCount(0);
+  await expect(strip(page)).toHaveCount(0);
+  await expect(problems).not.toContainText("behave differently");
+
+  await page.keyboard.press("Meta+Comma");
+  const settings = dialog(page, "Settings");
+  const [vscode, rider] = [settings.getByRole("switch", { name: "VS Code" }), settings.getByRole("switch", { name: "Rider" })];
+  const warnings = settings.getByRole("switch", { name: "Show portability notes as warnings" });
+  await expect(vscode).toHaveAttribute("aria-checked", "false");
+  await expect(rider).toHaveAttribute("aria-checked", "false");
+  // No notes to raise: the warnings switch waits for an editor.
+  await expect(warnings).toBeDisabled();
+  await expect(settings.getByText("Turn on an editor above")).toBeVisible();
+
+  await vscode.click();
+  await expect.poll(async () => (await mockState(page, "settings")).portabilityEditors).toEqual({ vscode: true, rider: false });
+  await expect(warnings).toBeEnabled();
+  await settings.getByRole("button", { name: "Done" }).click();
+
+  // The open request and the Problems panel follow without being reopened: VS Code's notes only.
+  await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-jetbrains-only/);
+  await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 3 and 13 of the .http source");
+  await expect(problems.getByRole("group", { name: "samples/jetbrains.http" })).toContainText(/lines? behaves? differently in VS Code/);
+  await expect(problems).not.toContainText("differently in Rider");
+
+  // Rider in its place: the handler, which only Rider runs, isn't Rider's to note.
+  await page.keyboard.press("Meta+Comma");
+  await rider.click();
+  await vscode.click();
+  await expect.poll(async () => (await mockState(page, "settings")).portabilityEditors).toEqual({ vscode: false, rider: true });
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(strip(page)).toHaveCount(0);
+  await expect(problems).not.toContainText("differently in VS Code");
+
+  // Turned off too, every mark goes, and the warnings switch waits again.
+  await page.keyboard.press("Meta+Comma");
+  await rider.click();
+  await expect(warnings).toBeDisabled();
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(source(page).locator(".cm-line-mark")).toHaveCount(0);
+  await expect(strip(page)).toHaveCount(0);
+  await expect(problems).not.toContainText("behave differently");
+});
+
+test("turning on portability warnings makes a handler line's marker and the strip's note warnings, at once", async ({ page }) => {
+  await openApp(page, BOTH);
   await openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
   await showSource(page);
   await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-jetbrains-only/);
@@ -119,7 +173,7 @@ test("turning on portability warnings makes a handler line's marker and the stri
 });
 
 test("the file view marks the lines that behave differently too, each with what both editors do", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, BOTH);
   await treeItem(page, "samples").click();
   await treeMenu(page, "jetbrains.http", "View file as text");
   const fileView = page.locator(".file-view .file-code");

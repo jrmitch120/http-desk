@@ -252,7 +252,9 @@ stringifying it). It owns the panel's list and the toggle's count (`list`, `coun
 the top bar and the panel area read): `src/lib/problemsList.ts` turns each file into its
 entries, its summary ("2 lines behave differently in VS Code") and its part of the count
 (the problems and Undefined variables, and the differing lines once the portability
-setting makes them warnings); portability notes take `app.portabilityLevel`. A body file
+setting makes them warnings). Portability notes follow `app.portability`: a file's rows
+and summary only for the editors turned on in Settings → Portability, at its level, and
+none while both are off; its memo lists a file again when an editor is switched. A body file
 path with variables is never reported missing here, as it depends on the environment.
 
 ---
@@ -836,9 +838,9 @@ Decisions made during implementation, beyond the plan above:
   nothing) and shows it with the exchange it reads (the request, its file, the time
   received and the status; `readingCard` in `src/lib/exchanges.ts`). Every Request
   variable's card also carries a quiet note that Rider refuses to send it (ADR-0007),
-  and so does the request's check strip, for as long as the request sends one
-  (a `portability` check, `riderRefuses`, a note in the info tone after any problems,
-  not a warning).
+  and so does the request's check strip, for as long as the request sends one and
+  Rider is turned on in Settings → Portability (a `portability` check, `riderRefuses`,
+  a note in the info tone after any problems, not a warning).
 * **Portability.** `crates/httpdesk-text/src/portability.rs` holds the portability
   table: every construct HttpDesk reads that the editors might treat differently
   (directives, dynamic variables, `> {% %}` handlers and `< {% %}` pre-request
@@ -851,14 +853,23 @@ Decisions made during implementation, beyond the plan above:
   parser's rules, and `request_portability` gives them for a request's source as the
   Source view shows it (`request_source`); while the Source view holds typed text,
   `portability_text` gives them for that text instead, so they follow what is typed,
-  like its problems. The Source view marks each line that isn't portable in a
-  gutter of its own (`lineMarks.ts`), whose hover says what each editor does, and the
-  check strip adds a `portability` note per editor the request behaves differently in.
-  HttpDesk-only lines behave alike in both editors, so they are marked but not noted.
-  Settings → Portability's "Show portability notes as warnings" (`portabilityWarnings`
-  in the app settings, off by default, never in the workspace) raises both to warnings
-  (`app.portabilityLevel`, read live by every view); HttpDesk-only lines stay as they
-  are, and a warning never blocks a send.
+  like its problems. Settings → Portability has a switch per editor, **VS Code** and
+  **Rider** (`portabilityEditors` in the app settings, keyed by `EditorName`, both off
+  by default, never in the workspace): the editors the user shares files with. Notes
+  show only for those turned on, filtered per construct in the page (`shownMarks` in
+  `src/lib/checks.ts`; the core's table is the same either way): VS Code's are the
+  constructs only Rider reads, Rider's those only VS Code reads, Request variables
+  among them. The Source view and the file view mark each line with a construct shown
+  in a gutter of its own (`lineMarks.ts`), whose hover lists those constructs, saying
+  what each editor does; a line with constructs for both editors, one turned on, is
+  marked with only that one's. The check strip adds a `portability` note per editor
+  turned on that the request behaves differently in. HttpDesk-only lines behave alike in
+  both editors, so they are shaded, not noted, and only while either editor is on.
+  "Show portability notes as warnings" (`portabilityWarnings`, an app setting too)
+  raises the notes of the editors turned on to warnings; while both are off it is
+  disabled ("Turn on an editor above") and keeps its value. Every view reads
+  `app.portability` (which editors, and the level) live; HttpDesk-only lines stay as
+  they are, and a warning never blocks a send.
   A `# @name` two requests in a file share is flagged in the request's check strip
   (`duplicateName` in `src/lib/checks.ts`); it never blocks the send.
 * **Undefined-variable checks** catch them before sending, without blocking it.

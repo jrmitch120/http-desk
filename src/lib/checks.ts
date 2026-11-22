@@ -69,6 +69,32 @@ export type EditorName = "vscode" | "rider";
 
 export const EDITOR_NAMES: Record<EditorName, string> = { vscode: "VS Code", rider: "Rider" };
 
+/** The editors, in the order notes about them are listed (and their switches in Settings → Portability). */
+export const EDITORS: readonly EditorName[] = ["vscode", "rider"];
+
+/**
+ * Which portability notes show, and how (Settings → Portability): those of each editor
+ * turned on in `editors`, the editors the user shares files with, at `level`.
+ */
+export interface PortabilitySettings {
+  editors: Record<EditorName, boolean>;
+  level: PortabilityLevel;
+}
+
+/** No editor turned on (the default): no portability notes at all. */
+export const PORTABILITY_OFF: PortabilitySettings = { editors: { vscode: false, rider: false }, level: "note" };
+
+/**
+ * The constructs of `marks` whose notes show by `settings`: for each editor turned on,
+ * those only the other editor reads, and HttpDesk-only constructs while either is on.
+ * Portable constructs, which nothing notes, are left out.
+ */
+export function shownMarks(marks: PortabilityMark[], { editors }: PortabilitySettings): PortabilityMark[] {
+  const shown = new Set<Support>(EDITORS.filter((e) => editors[e]).map((e) => OTHERS_ONLY[e]));
+  if (shown.size) shown.add("httpdesk-only");
+  return marks.filter((m) => shown.has(m.support));
+}
+
 /** What only the other editor reads, so it behaves differently in `editor`: for VS Code, what only Rider (JetBrains) reads. */
 const OTHERS_ONLY: Record<EditorName, Support> = { vscode: "jetbrains-only", rider: "vscode-only" };
 
@@ -91,31 +117,33 @@ export function differsText(n: number, editor: EditorName): string {
 export const isNote = (check: Check) => check.kind === "portability" && check.level === "note";
 
 /**
- * The portability notes for a request: a Request variable it sends (which Rider
- * refuses), then the lines of its source (`marks`, from `request_portability`) only
- * Rider reads, then those only VS Code reads. A Request variable is left to the
- * first, which counts only what is sent; portable and HttpDesk-only lines behave the
- * same in both editors.
+ * The portability notes for a request, of the editors `settings` turns on: a Request
+ * variable it sends (which Rider refuses), then the lines of its source (`marks`, from
+ * `request_portability`) only Rider reads (VS Code's note), then those only VS Code reads
+ * (Rider's). A Request variable is left to the first, which counts only what is sent;
+ * portable and HttpDesk-only lines behave the same in both editors.
  */
-export function portabilityChecks(req: Request, marks: PortabilityMark[], level: PortabilityLevel = "note"): Check[] {
+export function portabilityChecks(req: Request, marks: PortabilityMark[], { editors, level }: PortabilitySettings): Check[] {
   const notes: PortabilityNote[] = [];
-  const [read] = requestVariableReads(req);
+  const [read] = editors.rider ? requestVariableReads(req) : [];
   if (read) notes.push({ kind: "riderRefuses", name: read });
-  for (const editor of ["vscode", "rider"] as const) {
-    const lines = differingLines(marks, editor, { requestVariables: false });
+  for (const editor of EDITORS) {
+    const lines = editors[editor] ? differingLines(marks, editor, { requestVariables: false }) : [];
     if (lines.length) notes.push({ kind: "differs", editor, lines });
   }
   return notes.map((note) => ({ kind: "portability", level, note }));
 }
 
 /**
- * The `.http` source's gutter markers for `marks`: one per line that isn't portable,
- * in line order, its hover each construct's on that line. HttpDesk's own lines are
- * marked apart from the others, which at the `warning` level are warnings.
+ * The `.http` source's gutter markers for `marks`, of the editors `settings` turns on
+ * (`shownMarks`): one per line with a construct shown, in line order, its hover each
+ * such construct's on that line. HttpDesk-only lines are marked apart from the others,
+ * which at the `warning` level are warnings.
  */
-export function portabilityLineMarks(marks: PortabilityMark[], level: PortabilityLevel = "note"): LineMark[] {
+export function portabilityLineMarks(marks: PortabilityMark[], settings: PortabilitySettings): LineMark[] {
+  const { level } = settings;
   const byLine = new Map<number, PortabilityMark[]>();
-  for (const m of marks) if (m.support !== "portable") byLine.set(m.line, [...(byLine.get(m.line) ?? []), m]);
+  for (const m of shownMarks(marks, settings)) byLine.set(m.line, [...(byLine.get(m.line) ?? []), m]);
   return [...byLine]
     .sort(([a], [b]) => a - b)
     .map(([line, on]) => {
@@ -162,8 +190,8 @@ export interface CheckContext {
   file?: Request[];
   /** What the core and the shell found in its source: those problems come first, by line. */
   found?: SourceFindings;
-  /** The constructs in its source and the level its notes show at (`portabilityChecks`): those notes come last. */
-  portability?: { marks: PortabilityMark[]; level?: PortabilityLevel };
+  /** The constructs in its source, and which of their notes show and how (`portabilityChecks`): those notes come last. None show without `settings`. */
+  portability?: { marks: PortabilityMark[]; settings?: PortabilitySettings };
 }
 
 /** Everything the strip lists for a request, in order: problems first, then notes. Empty: the strip is hidden. */
@@ -175,7 +203,7 @@ export function requestChecks(req: Request, variables: VarProvider, { set = null
   if (missing) checks.push({ kind: "envMissing", env: envName, dir, fixes: [{ kind: "chooseEnvironment" }] });
   const env = missing ? null : envName;
   for (const check of referenceChecks(req, variables, file)) checks.push(check.kind === "undefined" ? { ...check, fixes: quickFixes(check.name, set, env) } : check);
-  checks.push(...portabilityChecks(req, portability.marks, portability.level));
+  checks.push(...portabilityChecks(req, portability.marks, portability.settings ?? PORTABILITY_OFF));
   return checks;
 }
 

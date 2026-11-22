@@ -50,7 +50,7 @@ test("a problem's message, shown from the keyboard or by hovering, isn't a word 
 });
 
 test("a gutter marker's hover, the app's own tooltip, isn't either", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, "?portability=vscode,rider");
   await treeItem(page, "samples").click();
   await treeMenu(page, "jetbrains.http", "View file as text");
   const marker = code(page).locator(".cm-line-mark").first();

@@ -8,7 +8,7 @@
 // Session's Global variables; the panel's list and the toggle's count are read here.
 import { untrack } from "svelte";
 import { api } from "./api";
-import { ReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
+import { ReferenceChecks, type OutsideScope, type PortabilitySettings } from "./checks";
 import { problemCount, problemFiles, type ProblemFile, type ProblemFilesMemo } from "./problemsList";
 import type { EnvironmentSet, FileProblems, OpenText } from "./types";
 import { envVariables } from "./vars";
@@ -28,8 +28,8 @@ export interface ProblemsHost {
   openText(path: string): OpenText | null;
   /** What `openText(path)` follows, as strings that stay the same while it's unchanged (live state: reading it tracks it). */
   openVersion(path: string): string[];
-  /** The level portability notes show at (Settings → Portability). */
-  readonly portabilityLevel: PortabilityLevel;
+  /** Which portability notes show, and how (Settings → Portability). */
+  readonly portability: PortabilitySettings;
   /** The environments the file at `path`'s requests use: its folder's (ADR-0004; live state). */
   environmentsOf(path: string): EnvironmentSet | null;
   /** The selected environment. */
@@ -68,7 +68,7 @@ export class WorkspaceProblems {
       if (!checks) this.kept.set(path, (checks = new ReferenceChecks()));
       return checks;
     };
-    return problemFiles(Object.values(this.files), this.host.portabilityLevel, scopeOf, kept, this.listed);
+    return problemFiles(Object.values(this.files), this.host.portability, scopeOf, kept, this.listed);
   });
   /** Each file's entry as last listed (`problemFiles`' memo): an edit to one open document lists only that one again. */
   private listed: ProblemFilesMemo = new WeakMap();

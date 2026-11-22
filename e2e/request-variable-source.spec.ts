@@ -161,8 +161,8 @@ test("a # @name another request in the file also has is flagged on the request",
   await expect(page.getByRole("region", { name: "Pre-send checks" })).toHaveCount(0);
 });
 
-test("a request with a Request variable always notes, quietly, that Rider refuses to send it", async ({ page }) => {
-  await openApp(page, "?chain=1");
+test("a request with a Request variable notes, quietly, that Rider refuses to send it, while Rider is turned on", async ({ page }) => {
+  await openApp(page, "?chain=1&portability=rider");
   await openRequest(page, ["api", "pets.http"], "Get pet image");
 
   const strip = page.getByRole("region", { name: "Pre-send checks" });
