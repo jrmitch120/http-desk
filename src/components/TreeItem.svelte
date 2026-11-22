@@ -114,7 +114,7 @@
   aria-level={depth + 1}
   data-path={node.path}
   tabindex="-1"
-  use:tooltip={node.path}
+  use:tooltip={{ text: node.path, slow: true }}
   onclick={toggle}
   onkeydown={(e) => e.key === "Enter" && toggle()}
   oncontextmenu={contextMenu}
