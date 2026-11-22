@@ -2,7 +2,7 @@
 // grid (#51): ghost row, delete with a tooltip, bulk edit, and an enable column
 // (#41). A disabled field is a `#~` line in the body text (ADR-0003).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests } from "./helpers";
+import { bodyEditor, openApp, openRequest, sentRequests } from "./helpers";
 
 type Sent = { body: { mode: string; text: string } };
 
@@ -186,4 +186,52 @@ test("a multipart part can be disabled and is held as #~ lines", async ({ page }
   await bodySwitch.click();
   await expect(grid.getByRole("checkbox", { name: "Enable debug" })).not.toBeChecked();
   await expect(grid.getByRole("checkbox", { name: "Enable note" })).toBeChecked();
+});
+
+test("a form body with a File line is edited as the text it's sent as, not as fields", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await page.getByRole("button", { name: "Body" }).click();
+  await bodyEditor(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("a=1\n< ./f.txt");
+  await page.getByRole("radiogroup", { name: "Body type" }).getByRole("radio", { name: "x-www-form-urlencoded", exact: true }).click();
+
+  // Sent like a text body (ADR 0010), so there are no fields to show; the File line stays as written.
+  await expect(page.getByRole("group", { name: "Form fields" })).toHaveCount(0);
+  await expect(page.getByText("Sent as text with its files read in")).toBeVisible();
+  await expect(bodyEditor(page)).toHaveText("a=1< ./f.txt");
+  await bodyEditor(page).click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type("\n&b=2");
+  const body = await send(page);
+  expect(body.mode).toBe("formUrlEncoded");
+  expect(body.text).toBe("a=1\n< ./f.txt\n&b=2");
+
+  // Without it, the fields are back.
+  await bodyEditor(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("a");
+  await expect(page.getByRole("group", { name: "Form fields" }).locator("input.c-name").first()).toHaveValue("a");
+  expect(errors).toEqual([]);
+});
+
+test("a form body written on one line opens in the grid without looping", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await page.getByRole("button", { name: "Body" }).click();
+  await bodyEditor(page).click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type("a=1&b=2");
+  await page.getByRole("radiogroup", { name: "Body type" }).getByRole("radio", { name: "x-www-form-urlencoded", exact: true }).click();
+
+  const grid = page.getByRole("group", { name: "Form fields" });
+  await expect(grid.locator(".kv-row:not(.ghost) input.c-name")).toHaveCount(2);
+  // The text stays as written until a field is edited.
+  expect((await send(page)).text).toBe("a=1&b=2");
+  expect(errors).toEqual([]);
 });

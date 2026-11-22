@@ -166,7 +166,7 @@ export interface Problem {
   message: string;
 }
 
-export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file" | "text-after-request";
+export type ProblemCode = "unparseable-request-line" | "header-after-body" | "unknown-directive" | "missing-file" | "not-a-file-line" | "text-after-request";
 
 /** A file a request's body is read from (`< path`): as written, and the problem to report if it doesn't exist. */
 export interface BodyFile {

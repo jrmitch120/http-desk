@@ -52,6 +52,7 @@ fn a_requests_source_parses_back_to_the_same_request() {
         "examples/demo/api/pets.http",
         "examples/demo/api/chaining.http",
         "examples/demo/api/httpbin.http",
+        "examples/demo/api/file-lines.http",
         "src/dev/jetbrains.http",
         "src/dev/pets.http",
     ];

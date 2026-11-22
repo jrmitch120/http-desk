@@ -11,7 +11,7 @@ import { htmlLanguage } from "@codemirror/lang-html";
 import { javascriptLanguage } from "@codemirror/lang-javascript";
 import { graphqlLanguage } from "./graphql";
 import { styleTags, tags as t } from "@lezer/highlight";
-import { segments } from "../http";
+import { parseFileRef, segments } from "../http";
 
 /**
  * The node names of the `.http` tree, for whatever reads it. Its shape:
@@ -311,12 +311,15 @@ function block(lines: Line[]): Node {
   if (bodyLines.length) {
     const method = reqLine.children.find((c) => c.name === "Method");
     const verb = method ? request.text.slice(method.from - request.from, method.to - request.from) : "GET";
-    // A body of one `< file` line is read from the file; a multipart body's parts can each be one.
+    // Every File line of a body is read from its file, as the sender reads it (the core's
+    // `body_lines_with_files`): a body of one is, and so are those among other lines, in a form
+    // body too (which is then sent like a text body).
     const fromFile = bodyLines.length === 1 && fileRef(bodyLines[0]);
-    const multipart = (headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/");
+    const contentType = (headers.get("content-type") ?? "").toLowerCase();
+    const multipart = contentType.startsWith("multipart/");
     const parts = bodyLines.flatMap((l) => {
       if (fromFile) return [fromFile];
-      const ref = multipart && (l.text.startsWith("#~") ? node("DisabledLine", l.from, end(l)) : fileRef(l));
+      const ref = multipart && l.text.startsWith("#~") ? node("DisabledLine", l.from, end(l)) : fileRef(l);
       return ref ? [ref] : withRefs(l, "Body", l.from, end(l)).children;
     });
     const kind = fromFile ? "Body" : bodyKind(verb, headers, bodyLines);
@@ -348,13 +351,12 @@ function filePath(line: Line, from: number): Node | null {
   return withRefs(line, "FilePath", pathFrom, pathFrom + path.length);
 }
 
-/** `< path` or `<@ path`: a body (or a multipart part) read from a file (the core's `file_reference`). */
+/** A File line, `< path` or `<@ path`, by the page's rule (`parseFileRef`, the core's `file_reference`). */
 function fileRef(line: Line): Node | null {
-  const { text, from } = trimmedOf(line);
-  if (!text.startsWith("<") || text.startsWith("<?")) return null;
-  const mark = text.startsWith("<@") ? 2 : 1;
-  const path = text.slice(mark).trim();
-  if (!path || path.startsWith("<") || path.includes(">")) return null;
+  const ref = parseFileRef(line.text);
+  if (!ref) return null;
+  const mark = ref.substitute ? 2 : 1;
+  const from = line.from;
   return node("FileRef", from, end(line), [node("FileMark", from, from + mark), filePath(line, from + mark)!]);
 }
 

@@ -47,6 +47,17 @@ An environment the user has marked as production: sending anything but GET, HEAD
 The mark is an app setting, not part of the env files.
 _Avoid_: live environment, protected environment
 
+### Bodies
+
+**File line**:
+A body line `< path` or `<@ path` that stands for a file's content, read when the request is sent; `<@` also fills in the `{{variables}}` in that content.
+It starts at the beginning of the line, and whitespace follows the `<` or `<@`: `<path` and an indented `< path` are body text.
+_Avoid_: file reference, body file line, input file
+
+**Whole-file body**:
+A body that is a single File line.
+_Avoid_: file body, file mode
+
 ### Sending
 
 **Exchange**:

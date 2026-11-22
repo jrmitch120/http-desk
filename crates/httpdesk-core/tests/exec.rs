@@ -164,14 +164,18 @@ async fn bodies_json_form_multipart_and_files() {
         ("Content-Type: application/x-www-form-urlencoded\n\nname=foo&\nv={{v}}", b"name=foo&v=42".to_vec()),
         ("Content-Type: application/json\n\n< ./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
         ("Content-Type: application/json\n\n<@ ./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
-        // No space after the marker: the editor shows it as a file body, so it is sent as one.
-        ("Content-Type: application/json\n\n<./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
-        ("Content-Type: application/json\n\n<@./payload.json", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // A tab after the marker, and spaces after the path, as VS Code reads them.
+        ("Content-Type: application/json\n\n<\t./payload.json", br#"{"from":"file","v":"{{v}}"}"#.to_vec()),
+        ("Content-Type: application/json\n\n<@ ./payload.json   ", br#"{"from":"file","v":"42"}"#.to_vec()),
+        // No space after the marker, or an indented line: both editors send it as text (ADR 0010).
+        ("Content-Type: application/json\n\n<./payload.json", b"<./payload.json".to_vec()),
+        ("Content-Type: application/json\n\n<@./payload.json", b"<@./payload.json".to_vec()),
+        ("Content-Type: application/json\n\n  < ./payload.json", b"  < ./payload.json".to_vec()),
         ("Content-Type: application/xml\n\n<tag/>", b"<tag/>".to_vec()),
     ];
     for (rest, expected) in cases {
         let req = parse(&format!("POST {{{{base}}}}/echo\n{rest}\n")).requests.remove(0);
-        let is_file = rest.contains("payload.json");
+        let is_file = expected.starts_with(br#"{"from":"file""#);
         assert_eq!(req.body.mode == BodyMode::File, is_file, "editor body mode for {rest}");
         send(&req, vars.clone(), dir.path()).await.unwrap();
         assert_eq!(last_request(&server).await.body, expected, "{rest}");
@@ -196,9 +200,124 @@ async fn bodies_json_form_multipart_and_files() {
     expected.extend(b"\r\n--B--\r\n");
     assert_eq!(got.body, expected);
 
+    // In a part too, `<path` and an indented `< path` are text.
+    let as_text = multipart.replace("< ./pic.bin", "<./pic.bin\n  < ./pic.bin");
+    send(&parse(&as_text).requests.remove(0), vars.clone(), dir.path()).await.unwrap();
+    let got = last_request(&server).await.body;
+    assert!(got.ends_with(b"\r\n\r\n<./pic.bin\r\n  < ./pic.bin\r\n--B--\r\n"), "{}", String::from_utf8_lossy(&got));
+
     let missing = parse("POST {{base}}/echo\n\n< ./nope.json\n").requests.remove(0);
     let err = send(&missing, vars, dir.path()).await.unwrap_err();
     assert!(matches!(err, ExecError::File { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn a_file_line_among_other_body_lines_is_replaced_by_its_file() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    std::fs::write(dir.path().join("g.txt"), "Y").unwrap();
+    std::fs::write(dir.path().join("vars.txt"), "v={{v}}").unwrap();
+    std::fs::write(dir.path().join("item.json"), r#"{"id": 1}"#).unwrap();
+    std::fs::write(dir.path().join("item.xml"), "<item>{{v}}</item>").unwrap();
+    let vars = env(&[("base", &server.uri()), ("v", "42")]);
+
+    let text = "Content-Type: text/plain\n\n";
+    let cases = [
+        // The line is replaced by the file, and the line breaks around it stay (ADR 0010).
+        (text, "before\n< ./f.txt\nafter", "before\nX\nafter"),
+        (text, "< ./f.txt\nafter", "X\nafter"),
+        (text, "before\n< ./f.txt", "before\nX"),
+        (text, "< ./f.txt\nand\n< ./g.txt", "X\nand\nY"),
+        (text, "< ./f.txt\n< ./g.txt", "X\nY"),
+        // The other lines are filled in as before; a `<` file is sent as it is, `<@` filled in.
+        (text, "{{v}}\n< ./vars.txt\n<@ ./vars.txt", "42\nv={{v}}\nv=42"),
+        // A tab after the mark and spaces after the path, as VS Code reads them.
+        (text, "a\n<\t./f.txt   \nb", "a\nX\nb"),
+        // `<path` and an indented `< path` are text, as both editors send them.
+        (text, "a\n<./f.txt\n  < ./f.txt", "a\n<./f.txt\n  < ./f.txt"),
+        ("Content-Type: application/json\n\n", "[\n< ./item.json\n]", "[\n{\"id\": 1}\n]"),
+        ("Content-Type: application/xml\n\n", "<items>\n<@ ./item.xml\n</items>", "<items>\n<item>42</item>\n</items>"),
+        (
+            "Content-Type: application/xml\n\n",
+            "<items>\n< ./item.xml\n</items>",
+            "<items>\n<item>{{v}}</item>\n</items>",
+        ),
+    ];
+    for (head, body, expected) in cases {
+        let req = parse(&format!("POST {{{{base}}}}/echo\n{head}{body}\n")).requests.remove(0);
+        send(&req, vars.clone(), dir.path()).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_line_break_before_a_file_line_is_sent_with_it() {
+    // So such a body is no Whole-file body (`detect_body_mode`, the page's `parseFileRef`).
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    let vars = env(&[("base", &server.uri())]);
+    let mut req = parse("POST {{base}}/echo\nContent-Type: text/plain\n\n< ./f.txt\n").requests.remove(0);
+    req.body.text = "\n< ./f.txt".into();
+    send(&req, vars, dir.path()).await.unwrap();
+    assert_eq!(last_request(&server).await.body, b"\nX");
+}
+
+#[tokio::test]
+async fn a_missing_file_among_other_body_lines_fails_the_send_before_anything_goes_out() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    let vars = env(&[("base", &server.uri())]);
+    let req = parse("POST {{base}}/echo\nContent-Type: text/plain\n\n< ./f.txt\nbefore\n< ./typo.txt\nafter\n")
+        .requests
+        .remove(0);
+    let err = send(&req, vars, dir.path()).await.unwrap_err();
+    assert!(matches!(err, ExecError::File { ref path, .. } if path.ends_with("typo.txt")), "{err}");
+    assert!(server.received_requests().await.unwrap().is_empty(), "nothing was sent");
+}
+
+#[tokio::test]
+async fn a_form_body_with_a_file_line_is_sent_like_a_text_body() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "X").unwrap();
+    std::fs::write(dir.path().join("v.txt"), "&v={{v}}").unwrap();
+    let vars = env(&[("base", &server.uri()), ("v", "42")]);
+    let form = "Content-Type: application/x-www-form-urlencoded\n\n";
+    let cases = [
+        // Lines separated by `\n`, each File line replaced by its file, no `&` joining (ADR 0010, VS Code).
+        ("a=1\n< ./f.txt", "a=1\nX"),
+        ("a=1\n<@ ./v.txt", "a=1\n&v=42"),
+        ("< ./f.txt\n&b={{v}}", "X\n&b=42"),
+        // Comment lines and `#~` disabled fields are skipped, as in any form body and as
+        // VS Code drops every `#` and `//` line of a request (ADR 0010).
+        ("# note\n#~ c=3\na=1\n// note\n  # indented\n< ./f.txt\n#~ d=4", "a=1\nX"),
+        ("a=1\n\n< ./f.txt", "a=1\n\nX"),
+        // A Whole-file form body is sent as its file, as before.
+        ("< ./f.txt", "X"),
+        // `<path` is no File line: the form is joined with `&` as before.
+        ("a=1\n<./f.txt", "a=1&<./f.txt"),
+    ];
+    for (body, expected) in cases {
+        let req = parse(&format!("POST {{{{base}}}}/echo\n{form}{body}\n")).requests.remove(0);
+        send(&req, vars.clone(), dir.path()).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_file_in_a_form_body_fails_the_send_before_anything_goes_out() {
+    let server = echo_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let vars = env(&[("base", &server.uri())]);
+    let req = parse("POST {{base}}/echo\nContent-Type: application/x-www-form-urlencoded\n\na=1\n< ./typo.txt\n")
+        .requests
+        .remove(0);
+    let err = send(&req, vars, dir.path()).await.unwrap_err();
+    assert!(matches!(err, ExecError::File { ref path, .. } if path.ends_with("typo.txt")), "{err}");
+    assert!(server.received_requests().await.unwrap().is_empty(), "nothing was sent");
 }
 
 #[tokio::test]

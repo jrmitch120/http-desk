@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
   import type { Request, BodyMode, FormatMode } from "../lib/types";
@@ -11,6 +12,7 @@
     buildMultipart,
     dirname,
     findHeader,
+    hasFileLine,
     parseFileRef,
     parseForm,
     parseMultipart,
@@ -50,10 +52,16 @@
   // written back on every edit in the grid. A disabled row is a `#~` line in the
   // text (ARCHITECTURE §5, ADR-0003).
   let formRows = $state<FormField[]>([]);
+  // Re-read when the text changes, not when the rows do: text that the grid would
+  // write differently (`a=1&b=2`) would otherwise be re-read forever.
   $effect(() => {
-    if (body.mode === "formUrlEncoded" && buildForm(formRows) !== body.text) formRows = parseForm(body.text);
+    const text = body.text;
+    if (body.mode === "formUrlEncoded" && untrack(() => buildForm(formRows)) !== text) formRows = parseForm(text);
   });
   const blankField = (): FormField => ({ name: "", value: "", enabled: true });
+  // A form with a File line is sent like a text body (ADR 0010), so it's edited as text:
+  // the grid would read the line as a field and write it back URL-encoded.
+  const formAsText = $derived(body.mode === "formUrlEncoded" && hasFileLine(body.text));
 
   let parts = $state<MultipartPart[]>([]);
   $effect(() => {
@@ -142,7 +150,7 @@
 <div class="content" class:off={!body.enabled && body.mode !== "none"}>
   {#if body.mode === "none"}
     <div class="none muted">This request does not have a body.</div>
-  {:else if body.mode === "formUrlEncoded"}
+  {:else if body.mode === "formUrlEncoded" && !formAsText}
     <KeyValueGrid bind:items={formRows} label="Form fields" columns={["enable", "name", "value", "delete"]} blank={blankField} carry={["comments", "after"]} separator="=" {variables} onchange={(rows) => (body.text = buildForm(rows))} />
   {:else if body.mode === "multipart"}
     <KeyValueGrid bind:items={parts} label="Form-data parts" columns={partColumns} blank={blankPart} carry={["kind", "contentType"]} onchange={(rows) => (body.text = buildMultipart(rows, boundary))} />
@@ -174,6 +182,9 @@
     <div class="code">
       <Editor value={body.text} onchange={(v) => (body.text = v)} {language} {variables} {onsend} placeholder="Request body" extensions={bodySyntaxHighlight} />
     </div>
+    {#if formAsText}
+      <p class="muted note">Sent as text with its files read in and its comment lines left out, not joined with <code>&amp;</code>, as VS Code sends a form with a <code>&lt; file</code> line. Without one, its fields are edited in a grid.</p>
+    {/if}
   {/if}
   {#if syntaxWarnings.length}
     <Banner severity="warning" inline class="syntax-warnings">

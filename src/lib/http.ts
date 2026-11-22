@@ -451,14 +451,22 @@ export interface FileRef {
   path: string;
 }
 
-/** `< path` or `<@ path` (space optional), the same rule as the sender. `<tag>` and `<?xml` are content. */
+/**
+ * A File line, `< path` or `<@ path`: the mark at the very start, then a space or a tab
+ * (the core's `file_reference`, ADR 0010). `<path`, an indented `< path`, `<tag>` and
+ * `<?xml` are content.
+ */
 export function parseFileRef(text: string): FileRef | null {
-  const t = text.trim();
-  const m = /^<(@?)\s*([^\n]*)$/.exec(t);
-  if (!m || t.startsWith("<?")) return null;
+  const m = /^<(@?)[ \t]([^\n]*)$/.exec(text.trimEnd());
+  if (!m) return null;
   const path = m[2].trim();
   if (path === "" || path.startsWith("<") || path.includes(">")) return null;
   return { substitute: m[1] === "@", path };
+}
+
+/** Whether a body has a File line. A form body with one is sent like a text body (ADR 0010). */
+export function hasFileLine(text: string): boolean {
+  return text.split("\n").some((line) => parseFileRef(line) !== null);
 }
 
 // ------------------------------------------------------------------ multipart

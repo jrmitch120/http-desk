@@ -86,7 +86,12 @@ fn a_requests_problems_are_placed_in_its_source() {
 fn a_file_a_body_reads_is_named_with_the_problem_to_report_if_it_is_missing() {
     assert_eq!(
         request_problems_in("missing-file.http"),
-        [(0, 5, 1, ProblemCode::MissingFile), (1, 8, 1, ProblemCode::MissingFile)]
+        [
+            (0, 5, 1, ProblemCode::MissingFile),
+            (1, 8, 1, ProblemCode::MissingFile),
+            (2, 6, 1, ProblemCode::MissingFile),
+            (3, 6, 1, ProblemCode::MissingFile)
+        ]
     );
     let file = parse(
         &std::fs::read_to_string(format!("{}/tests/fixtures/problems/missing-file.http", env!("CARGO_MANIFEST_DIR")))
@@ -94,16 +99,60 @@ fn a_file_a_body_reads_is_named_with_the_problem_to_report_if_it_is_missing() {
     );
     let paths: Vec<_> =
         file.requests.iter().flat_map(|r| request_problems(r).files).map(|f| (f.path, f.missing.severity)).collect();
-    assert_eq!(paths, [("./payload.json".to_string(), Severity::Error), ("./photo.png".to_string(), Severity::Error)]);
+    assert_eq!(
+        paths,
+        [
+            ("./payload.json".to_string(), Severity::Error),
+            ("./photo.png".to_string(), Severity::Error),
+            ("./letter.txt".to_string(), Severity::Error),
+            ("./fields.txt".to_string(), Severity::Error)
+        ]
+    );
+}
+
+#[test]
+fn a_line_in_a_body_with_other_lines_is_not_warned_about_as_text() {
+    // Never read as a file there, so nothing changed: an XML start tag over several lines is content.
+    let text = "POST https://e.com\nContent-Type: text/xml\n\n<soap:Envelope\n  xmlns:soap=\"http://www.w3.org/2003/05/soap-envelope\">\n<soap:Body/>\n</soap:Envelope>\n";
+    let parsed = parse_request(text);
+    assert_eq!(parsed.problems, []);
+    assert_eq!(parsed.files, []);
+}
+
+#[test]
+fn a_line_once_read_as_a_file_is_sent_as_text_with_a_warning() {
+    use ProblemCode::*;
+    assert_eq!(
+        problems_in("not-a-file-line.http"),
+        [
+            (7, 1, Severity::Warning, NotAFileLine),
+            (13, 3, Severity::Warning, NotAFileLine),
+            (22, 1, Severity::Warning, NotAFileLine)
+        ]
+    );
+    // Placed in each request's text, and no file is read.
+    assert_eq!(
+        request_problems_in("not-a-file-line.http"),
+        [(0, 5, 1, NotAFileLine), (1, 5, 3, NotAFileLine), (2, 8, 1, NotAFileLine)]
+    );
+    // The message says how to write the File line.
+    let parsed = parse_request("POST https://e.com\n\n<@./payload.json\n");
+    assert_eq!(parsed.problems[0].message, "Sent as text. Write `<@ ./payload.json` to read the file");
+    assert_eq!(parsed.files, []);
 }
 
 #[test]
 fn only_a_file_the_body_sends_is_read() {
     let files =
         |text: &str| request_problems(&parse(text).requests[0]).files.into_iter().map(|f| f.path).collect::<Vec<_>>();
-    // A `<` line among other body text is content, as the sender reads it.
+    // Every File line of a body with other lines is read, as the sender reads it.
     assert_eq!(
-        files("POST https://e.com\nContent-Type: text/plain\n\nfirst\n< ./not-a-file.txt\n"),
+        files("POST https://e.com\nContent-Type: text/plain\n\nfirst\n< ./a.txt\n<@ ./b.txt\nlast\n"),
+        ["./a.txt", "./b.txt"]
+    );
+    // `<path` and an indented `< path` there are text.
+    assert_eq!(
+        files("POST https://e.com\nContent-Type: text/plain\n\nfirst\n<./a.txt\n  < ./b.txt\n"),
         Vec::<String>::new()
     );
     // A disabled body isn't sent.
@@ -111,6 +160,10 @@ fn only_a_file_the_body_sends_is_read() {
     req.body.enabled = false;
     req.raw = None;
     assert_eq!(request_problems(&req).files, []);
+    assert_eq!(
+        files("POST https://e.com\nContent-Type: text/plain\n\n#~| first\n#~| < ./a.txt\n"),
+        Vec::<String>::new()
+    );
     // Nor is a disabled multipart part.
     let multipart = "POST https://e.com\nContent-Type: multipart/form-data; boundary=B\n\n--B\n#~ Content-Disposition: form-data; name=\"a\"\n#~\n#~ < ./a.png\n--B--\n";
     assert_eq!(files(multipart), Vec::<String>::new());

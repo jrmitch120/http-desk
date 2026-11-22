@@ -1,0 +1,133 @@
+# File lines (ADR 0010), against an echo server: look at "data" in the response
+# (or "form" for the form bodies).
+#
+# A File line is `<` or `<@` at the very start of a line, then a space or a
+# tab, then the path. `<` sends the file's bytes as they are; `<@` fills in
+# {{variables}} in it. The files are in ./files, none ending in a line break.
+# Lines that look like File lines but are sent as text (`<path`, an indented
+# `< path`) are in problems/file-lines-sent-as-text.http, as they're warned about.
+#
+# Run file: httpbin.org rate-limits (429) a burst of requests, so set the
+# Runner's Delay to about 1000 ms, or point @echo at a local httpbin
+# (docker run -p 8080:80 kennethreitz/httpbin, then http://localhost:8080/anything).
+# The last request fails on purpose: turn off "Stop on first failure" or it's
+# simply where the run ends.
+
+@who = HttpDesk
+@echo = https://httpbin.org/anything
+
+### 1. Whole-file body (unchanged): sends payload.json as it is
+POST {{echo}}/whole-file
+Content-Type: application/json
+
+< ./files/payload.json
+
+### 2. Whole-file body with <@: sends "Hello from HttpDesk"
+POST {{echo}}/whole-file-variables
+Content-Type: text/plain
+
+<@ ./files/greeting.txt
+
+### 3. A File line among other lines: sends "before\nthe spliced file\nafter"
+POST {{echo}}/splice
+Content-Type: text/plain
+
+before
+< ./files/note.txt
+after
+
+### 4. File lines at the start and the end, and two of them
+# Sends "the spliced file\nmiddle: HttpDesk\nthe spliced file"
+POST {{echo}}/start-and-end
+Content-Type: text/plain
+
+< ./files/note.txt
+middle: {{who}}
+< ./files/note.txt
+
+### 5. `<` keeps the file's {{ }}; `<@` fills them in
+# Sends "raw: Hello from {{who}}\nfilled: Hello from HttpDesk"
+POST {{echo}}/raw-vs-filled
+Content-Type: text/plain
+
+raw:
+< ./files/greeting.txt
+filled:
+<@ ./files/greeting.txt
+
+### 6. Spliced into JSON: the "json" field of the reply shows the parsed array
+POST {{echo}}/json
+Content-Type: application/json
+
+[
+< ./files/payload.json
+,
+< ./files/item.json
+]
+
+### 7. Spliced into XML; the multi-line start tag is content, with no warning
+POST {{echo}}/xml
+Content-Type: application/xml
+
+<pets
+  xmlns="urn:demo">
+< ./files/fragment.xml
+</pets>
+
+### 8. A tab after `<`, and spaces after the path: both still File lines
+POST {{echo}}/tab-and-trailing-spaces
+Content-Type: text/plain
+
+tab:
+<	./files/note.txt
+trailing spaces:
+< ./files/note.txt   
+
+### 9. Form body with a File line: sent like a text body, no `&` joining
+# Comment and #~ lines are left out, so the disabled field isn't sent.
+# Sends "a=1\nthe spliced file"; httpbin reads it as the form field a = "1\nthe spliced file".
+POST {{echo}}/form-with-file
+Content-Type: application/x-www-form-urlencoded
+
+a=1
+# a comment
+#~ &disabled=yes
+< ./files/note.txt
+
+### 10. Form body without File lines (unchanged): sends "a=1&b=2"
+POST {{echo}}/form
+Content-Type: application/x-www-form-urlencoded
+
+a=1
+&b=2
+#~ &disabled=yes
+
+### 11. Multipart file part (unchanged): uploads upload.txt
+POST {{echo}}/multipart
+Content-Type: multipart/form-data; boundary=B
+
+--B
+Content-Disposition: form-data; name="title"
+
+{{who}}
+--B
+Content-Disposition: form-data; name="file"; filename="upload.txt"
+Content-Type: text/plain
+
+< ./files/upload.txt
+--B--
+
+### 12. Disabled body: its File line isn't read, so the missing file isn't reported
+# Turn the body on in the Body tab to see the error appear.
+POST {{echo}}/disabled-body
+Content-Type: text/plain
+#~| before
+#~| < ./files/does-not-exist.txt
+
+### 13. Missing file among other lines: an error in the editor, and Send is blocked
+POST {{echo}}/missing
+Content-Type: text/plain
+
+before
+< ./files/does-not-exist.txt
+after

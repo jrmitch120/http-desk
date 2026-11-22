@@ -75,7 +75,12 @@ fn each_problem_code_is_reported_at_its_place_in_the_requests_source() {
     );
     assert_eq!(
         problems_of(&h, &root.join("missing-file.http")),
-        [problem(0, 5, 1, "error", "missing-file"), problem(1, 8, 1, "error", "missing-file")]
+        [
+            problem(0, 5, 1, "error", "missing-file"),
+            problem(1, 8, 1, "error", "missing-file"),
+            problem(2, 6, 1, "error", "missing-file"),
+            problem(3, 6, 1, "error", "missing-file")
+        ]
     );
 }
 
@@ -85,7 +90,14 @@ fn a_body_file_exists_once_it_is_there_relative_to_the_http_files_folder() {
     let (_ws, root) = workspace(&h);
     let file = root.join("missing-file.http");
     std::fs::write(root.join("payload.json"), "{}").unwrap();
-    assert_eq!(problems_of(&h, &file), [problem(1, 8, 1, "error", "missing-file")]);
+    assert_eq!(
+        problems_of(&h, &file),
+        [
+            problem(1, 8, 1, "error", "missing-file"),
+            problem(2, 6, 1, "error", "missing-file"),
+            problem(3, 6, 1, "error", "missing-file")
+        ]
+    );
 
     // Relative to the file's folder, not the workspace root; an absolute path as written.
     std::fs::create_dir(root.join("sub")).unwrap();

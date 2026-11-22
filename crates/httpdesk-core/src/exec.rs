@@ -20,7 +20,7 @@ use crate::cookies::{self, CookieJar, ResponseCookie};
 use crate::env::SslConfig;
 use crate::exchange::UnmatchedPath;
 use crate::model::*;
-use crate::parser::DISABLED_MARKER;
+use crate::parser::{self, BodyLine, FileReference, DISABLED_MARKER};
 use crate::query::{self, Part};
 use crate::vars::Resolver;
 
@@ -306,17 +306,18 @@ fn read_file(base_dir: &Path, path: &str) -> Result<Vec<u8>, ExecError> {
 /// Reads a body file by its path as written (variables resolved).
 type ReadFile<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, ExecError>;
 
-/// `< path` (raw) or `<@ path` (variables substituted). `None` if not a file reference.
-fn file_reference(line: &str, resolver: &Resolver, read: ReadFile) -> Option<Result<Vec<u8>, ExecError>> {
-    let crate::parser::FileReference { substitute, path } = crate::parser::file_reference(line)?;
-    let path = resolver.resolve(path);
-    Some(read(&path).map(|bytes| {
-        if substitute {
-            resolver.resolve(&String::from_utf8_lossy(&bytes)).into_bytes()
-        } else {
-            bytes
-        }
-    }))
+/// A File line's file: raw for `< path`, its variables filled in for `<@ path`.
+fn read_file_line(file: FileReference, resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
+    let bytes = read(&resolver.resolve(file.path))?;
+    Ok(if file.substitute { resolver.resolve(&String::from_utf8_lossy(&bytes)).into_bytes() } else { bytes })
+}
+
+/// A body line as sent: its file if it's a File line the body reads, else the line filled in.
+fn body_line(line: BodyLine, resolver: &Resolver, read: ReadFile) -> Result<Vec<u8>, ExecError> {
+    match line.file {
+        Some(file) => read_file_line(file, resolver, read),
+        None => Ok(resolver.resolve(line.text).into_bytes()),
+    }
 }
 
 fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option<Vec<u8>>, ExecError> {
@@ -324,28 +325,41 @@ fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option
         return Ok(None);
     }
     let text = body.text.trim_end();
-    if !text.contains('\n') {
-        if let Some(file) = file_reference(text, resolver, read) {
-            return file.map(Some);
+    let multipart = body.mode == BodyMode::Multipart;
+    let lines: Vec<&str> = if multipart {
+        // `#~` lines are disabled parts (see the parser).
+        text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)).collect()
+    } else {
+        text.split('\n').collect()
+    };
+    let lines = parser::body_lines_with_files(body, &lines);
+    if !multipart && lines.iter().all(|l| l.file.is_none()) {
+        let bytes = match body.mode {
+            BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
+            _ => resolver.resolve(text).into_bytes(),
+        };
+        return Ok(Some(bytes));
+    }
+    // A multipart body: each line then CRLF. Any other: each File line replaced by its
+    // file, the `\n`s around it kept (ADR 0010); a form's comment and `#~` lines are
+    // skipped, as `join_form_lines` skips them and VS Code drops them.
+    let form = body.mode == BodyMode::FormUrlEncoded;
+    let mut out = Vec::new();
+    for (i, line) in lines.into_iter().filter(|l| !(form && is_comment(l.text))).enumerate() {
+        if i > 0 && !multipart {
+            out.push(b'\n');
+        }
+        out.extend(body_line(line, resolver, read)?);
+        if multipart {
+            out.extend(b"\r\n");
         }
     }
-    let bytes = match body.mode {
-        BodyMode::Multipart => {
-            let mut out = Vec::new();
-            // `#~` lines are disabled parts (see the parser).
-            for line in text.lines().filter(|l| !l.starts_with(DISABLED_MARKER)) {
-                match file_reference(line, resolver, read) {
-                    Some(file) => out.extend(file?),
-                    None => out.extend(resolver.resolve(line).into_bytes()),
-                }
-                out.extend(b"\r\n");
-            }
-            out
-        }
-        BodyMode::FormUrlEncoded => resolver.resolve(&join_form_lines(text)).into_bytes(),
-        _ => resolver.resolve(text).into_bytes(),
-    };
-    Ok(Some(bytes))
+    Ok(Some(out))
+}
+
+/// A `#` or `//` comment line, `#~` disabled ones included, indented or not.
+fn is_comment(line: &str) -> bool {
+    parser::comment_body(line.trim()).is_some()
 }
 
 /// Joins a form body written one field per line with `&`. Lines that already
@@ -354,7 +368,7 @@ fn build_body(body: &Body, resolver: &Resolver, read: ReadFile) -> Result<Option
 /// VS Code do, and so is the `&` left in front of the first field sent.
 fn join_form_lines(text: &str) -> String {
     let mut out = String::new();
-    let fields = text.lines().map(str::trim).filter(|l| !l.is_empty() && crate::parser::comment_body(l).is_none());
+    let fields = text.lines().map(str::trim).filter(|l| !l.is_empty() && !is_comment(l));
     for line in fields {
         let line = if out.is_empty() { line.trim_start_matches('&') } else { line };
         if !out.is_empty() && !out.ends_with('&') && !line.starts_with('&') {

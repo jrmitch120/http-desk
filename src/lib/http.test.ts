@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import fileLines from "../../crates/httpdesk-core/tests/fixtures/file-lines.json";
 import {
   applyUrlText,
   buildForm,
   buildMultipart,
   composeUrl,
+  hasFileLine,
   hasScripts,
   newRequest,
   parseFileRef,
@@ -147,14 +149,30 @@ describe("form bodies", () => {
 });
 
 describe("file bodies", () => {
-  it("reads `< path` and `<@ path` with or without a space, as they are sent", () => {
+  it("reads a File line, `< path` or `<@ path`, as it is sent", () => {
     expect(parseFileRef("< ./a.json")).toEqual({ substitute: false, path: "./a.json" });
-    expect(parseFileRef("<./a.json")).toEqual({ substitute: false, path: "./a.json" });
-    expect(parseFileRef("<@./a.json\n")).toEqual({ substitute: true, path: "./a.json" });
-    expect(parseFileRef("<@ ./a.json")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<@ ./a.json  \n")).toEqual({ substitute: true, path: "./a.json" });
+    expect(parseFileRef("<\t./a.json")).toEqual({ substitute: false, path: "./a.json" });
+  });
+
+  it("finds a File line anywhere in a body, as the sender reads it", () => {
+    expect(hasFileLine("a=1\n< ./f.txt\n&b=2")).toBe(true);
+    expect(hasFileLine("a=1\n<@\t./f.txt")).toBe(true);
+    expect(hasFileLine("a=1\n<./f.txt\n  < ./f.txt\n&b=2")).toBe(false);
+  });
+
+  it("leaves `<path` and an indented `< path` as text, as both editors send them", () => {
+    expect(parseFileRef("<./a.json")).toBeNull();
+    expect(parseFileRef("<@./a.json")).toBeNull();
+    expect(parseFileRef("  < ./a.json")).toBeNull();
     expect(parseFileRef("<tag/>")).toBeNull();
     expect(parseFileRef("<?xml version=1.0")).toBeNull();
     expect(parseFileRef("< ./a.json\n< ./b.json")).toBeNull();
+  });
+
+  // The cases the core's `file_reference` runs too (crates/httpdesk-core/tests/file_line_parity.rs).
+  it.each(fileLines.cases)("reads the shared File line cases as the core does: $case", ({ text, file }) => {
+    expect(parseFileRef(text)).toEqual(file);
   });
 });
 
@@ -233,6 +251,13 @@ Content-Type: application/json
       ["element-name", "text", "Name"],
       ["data", "file", "./request-form-data.json"],
     ]);
+  });
+
+  it("takes a part's `<path` or indented `< path` as its text, as it is sent", () => {
+    const part = (content: string) => ["--B", 'Content-Disposition: form-data; name="f"; filename="x.bin"', "", content, "--B--"].join("\n");
+    expect(parseMultipart(part("<\t./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["file", "./x.bin"]]);
+    expect(parseMultipart(part("<./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["text", "<./x.bin"]]);
+    expect(parseMultipart(part("  < ./x.bin"), "B").map((p) => [p.kind, p.value])).toEqual([["text", "  < ./x.bin"]]);
   });
 });
 
