@@ -860,9 +860,10 @@ Decisions made during implementation, beyond the plan above:
   `src/lib/checks.ts`; the core's table is the same either way): VS Code's are the
   constructs only Rider reads, Rider's those only VS Code reads, Request variables
   among them. The Source view and the file view mark each line with a construct shown
-  in a gutter of its own (`lineMarks.ts`), whose hover lists those constructs, saying
-  what each editor does; a line with constructs for both editors, one turned on, is
-  marked with only that one's. The check strip adds a `portability` note per editor
+  in a gutter of its own (`lineMarks.ts`), whose hover lists those constructs, each
+  saying what the editor it is a note for does with it and naming no other (the table's
+  `hover`; HttpDesk-only lines name neither), so an editor turned off is never named; a
+  line with constructs for both editors, one turned on, is marked with only that one's. The check strip adds a `portability` note per editor
   turned on that the request behaves differently in. HttpDesk-only lines behave alike in
   both editors, so they are shaded, not noted, and only while either editor is on.
   "Show portability notes as warnings" (`portabilityWarnings`, an app setting too)

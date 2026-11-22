@@ -1,5 +1,5 @@
 // #170: lines that behave differently in VS Code or Rider. The .http source marks
-// each in its gutter, and hovering the marker says what each editor does with it;
+// each in its gutter, and hovering the marker says what the editor it differs in does;
 // the check strip notes how many lines differ in each editor. The classification
 // is the core's portability table (crates/httpdesk-text/src/portability.rs), which
 // the mock runs too (WASM).
@@ -46,11 +46,11 @@ test("a response handler is marked: Rider runs it, VS Code ignores it, and the s
   await showSource(page);
 
   await hoverMarkerOf(page, "> {%");
-  await expect(page.getByRole("tooltip")).toHaveText("Rider runs this response handler; VS Code ignores the script and sends its lines as body text");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code ignores this response handler and sends its lines as body text");
 
   // `# @timeout` is Rider's too; `# @no-redirect` works in both, so it isn't marked.
   await hoverMarkerOf(page, "# @timeout 30");
-  await expect(page.getByRole("tooltip")).toHaveText("Rider uses this read timeout; VS Code ignores @timeout");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code ignores @timeout");
   await expect(source(page).locator(".cm-line-mark")).toHaveCount(2);
 
   await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 3 and 13 of the .http source");
@@ -58,7 +58,7 @@ test("a response handler is marked: Rider runs it, VS Code ignores it, and the s
   await expect(strip(page).locator("li.note")).toHaveCount(1);
 });
 
-test("HttpDesk's own lines are marked as ignored by both editors, and the strip doesn't note them", async ({ page }) => {
+test("HttpDesk-only lines are shaded as read only by HttpDesk, and the strip doesn't note them", async ({ page }) => {
   await openApp(page, BOTH);
   await openRequest(page, ["api", "pets.http"], "List pets");
   // Turning Headers off writes `# @httpdesk-disabled headers` above the request line.
@@ -67,9 +67,9 @@ test("HttpDesk's own lines are marked as ignored by both editors, and the strip 
   await showSource(page);
 
   await hoverMarkerOf(page, "# @httpdesk-disabled headers");
-  await expect(page.getByRole("tooltip")).toHaveText("HttpDesk's own line (sections turned off): VS Code and Rider both ignore it");
+  await expect(page.getByRole("tooltip")).toHaveText("Only HttpDesk reads this line (sections turned off)");
   await hoverMarkerOf(page, "#~ &status=sold");
-  await expect(page.getByRole("tooltip")).toHaveText("Turned off in HttpDesk: VS Code and Rider both ignore this line");
+  await expect(page.getByRole("tooltip")).toHaveText("Turned off in HttpDesk; other editors ignore this line too");
 
   // Both editors ignore them alike, so the request doesn't behave differently in either.
   await expect(strip(page)).toHaveCount(0);
@@ -88,7 +88,7 @@ test("the marks follow text typed in the source, even while it doesn't read as a
   // for it, not for a line half typed (`# @no-l` reads as a description; CI hovered that).
   await expect(strip(page).getByRole("note")).toHaveText("1 line behaves differently in VS Code: line 6 of the .http source");
   await hoverMarkerOf(page, "# @timeout 5");
-  await expect(page.getByRole("tooltip")).toHaveText("Rider uses this read timeout; VS Code ignores @timeout");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code ignores @timeout");
 
   // Text that doesn't parse leaves the request as it was; the marks stay on the text shown.
   await page.keyboard.type("# @no-log\n");
@@ -96,7 +96,7 @@ test("the marks follow text typed in the source, even while it doesn't read as a
   await page.keyboard.type(" and more");
   await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 6 and 7 of the .http source");
   await hoverMarkerOf(page, "# @no-log");
-  await expect(page.getByRole("tooltip")).toHaveText("Rider keeps this request out of its history; VS Code ignores @no-log");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code ignores @no-log and keeps this request in its history");
 });
 
 // #182: notes show only for the editors turned on in Settings → Portability, both off by default.
@@ -172,20 +172,20 @@ test("turning on portability warnings makes a handler line's marker and the stri
   await expect(strip(page).getByRole("note")).toHaveText("2 lines behave differently in VS Code: lines 3 and 13 of the .http source");
 });
 
-test("the file view marks the lines that behave differently too, each with what both editors do", async ({ page }) => {
+test("the file view marks the lines that behave differently too, each with what its editor does", async ({ page }) => {
   await openApp(page, BOTH);
   await treeItem(page, "samples").click();
   await treeMenu(page, "jetbrains.http", "View file as text");
   const fileView = page.locator(".file-view .file-code");
   await hoverMarkerOf(page, "> {%", fileView);
-  await expect(page.getByRole("tooltip")).toHaveText("Rider runs this response handler; VS Code ignores the script and sends its lines as body text");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code ignores this response handler and sends its lines as body text");
 
   // A sign-in token only VS Code fetches, and the example server only Rider has.
   await fileView.locator(".cm-line", { hasText: "> {%" }).first().click();
   await page.keyboard.press("Home");
   await page.keyboard.type("X-Token: {{$aadToken}}\nX-Server: {{$exampleServer}}\n");
   await hoverMarkerOf(page, "X-Token: {{$aadToken}}", fileView);
-  await expect(page.getByRole("tooltip")).toContainText("VS Code signs in");
+  await expect(page.getByRole("tooltip")).toHaveText("Rider doesn't know this sign-in variable and sends it as written");
   await hoverMarkerOf(page, "X-Server: {{$exampleServer}}", fileView);
-  await expect(page.getByRole("tooltip")).toContainText("Rider puts its built-in example server here");
+  await expect(page.getByRole("tooltip")).toHaveText("VS Code doesn't know this variable and sends it as written");
 });
