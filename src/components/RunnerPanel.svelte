@@ -301,8 +301,11 @@
     font-size: 11.5px;
     white-space: nowrap;
   }
+  /* As wide as "999 ms" and "12.34 s" (monospace), so every row's status and time line up. */
   .time {
     font-family: var(--mono);
+    min-width: 7ch;
+    text-align: right;
   }
   .result {
     flex: 1;
