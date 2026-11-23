@@ -99,6 +99,19 @@ describe("checkReleaseVersion", () => {
     ]);
   });
 
+  it("ignores a crate patched in from a path, which keeps its own version", () => {
+    const files = manifests();
+    files["Cargo.toml"] += [
+      "[patch.crates-io]",
+      'serde_json_path_core = { path = "vendor/serde_json_path_core" }',
+      "",
+    ].join("\n");
+    files["Cargo.lock"] += ["", "[[package]]", 'name = "serde_json_path_core"', 'version = "0.2.2"', ""].join(
+      "\n",
+    );
+    expect(checkReleaseVersion("v0.1.3", files)).toEqual([]);
+  });
+
   it("rejects a Cargo.toml whose workspace version can't be found", () => {
     const files = manifests();
     files["Cargo.toml"] = '[workspace]\nmembers = ["src-tauri"]\n';
