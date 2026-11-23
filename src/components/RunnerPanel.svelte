@@ -124,7 +124,7 @@
   {#if runner}
     <div class="body">
       <!-- Every file's results move as one list (rovingList): one Tab stop; rows with nothing to show yet are skipped. -->
-      <div class="items" use:rovingList={{ activate: (row) => row.click() }}>
+      <div class="items" use:rovingList>
         {#each groups as g, gi (gi)}
           <div class="group" role="group" aria-label={g.file}>
             <div class="file selectable" aria-hidden="true"><Icon name="file" size={12} /><span class="name">{g.file}</span></div>

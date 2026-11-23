@@ -269,7 +269,7 @@
         {:else}
           <div class="usages-count muted">{rows.length} {rows.length === 1 ? "place" : "places"}</div>
           <!-- One Tab stop, the arrow keys move (rovingList); Enter clicks the row. -->
-          <div role="list" aria-label="Usages" use:rovingList={{ activate: (row) => row.click() }}>
+          <div role="list" aria-label="Usages" use:rovingList>
             {#each rows as row (row.key)}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
               <div role="listitem" tabindex="-1" class="list-row hit usage" class:disabled={row.disabled} onclick={() => app.openUsage(row.usage)}>

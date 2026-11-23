@@ -435,8 +435,9 @@ file view's outline, History, the Session panel, Problems, the Runner and Find u
   holding several lists (one per section, with headings and their buttons between,
   outside the lists) to move through them as one. Rows can hold buttons of their own;
   give those `tabindex="-1"`, so the list stays one Tab stop.
-- `{ activate(row), space?(row) }`: `activate` is what a click on the row does; Enter
-  runs it, and Space too unless the list gives `space` (History ticks Compare).
+- `{ activate?(row), space?(row) }`: Enter activates the row, and Space too unless the list
+  gives `space` (History ticks Compare). Activating clicks the row; give `activate` for
+  something else (the outline's Enter goes into the text, its click doesn't).
 - One Tab stop: the row last focused, else the list's current row (the one marked
   `aria-current`), else the first. When the current row changes while focus is
   elsewhere, the stop goes to it (the outline's stop follows the text cursor). When the
