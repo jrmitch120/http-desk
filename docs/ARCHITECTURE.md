@@ -1441,7 +1441,11 @@ Decisions made during implementation, beyond the plan above:
     prebuilt document in with its language taken out and put back in the same update
     (`putDoc`), so it's parsed like a new editor's (the start, then the text drawn)
     rather than for CodeMirror's 20 ms per-update budget toward its far end, and the
-    old document's unfinished parse isn't built into a tree first.
+    old document's unfinished parse isn't built into a tree first. The text drawn is
+    parsed only when the viewport ends within reach too: handing that tree to the view
+    sets off CodeMirror's own parse toward the viewport's end in the same task, and on
+    Raw's 50 MB line that end is the line's (#185). There only the start is coloured on
+    the first frame; the rest of what's drawn is coloured by the first idle-time parse.
   - *Far scrolls in a very tall document* (`scrollJumps.ts`). CodeMirror draws a
     document over 7 million px tall scaled down, except its viewport, so where a scroll
     position lands depends on where the viewport is; after a jump it went round up to
