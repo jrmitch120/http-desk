@@ -175,3 +175,40 @@ test("a List row's actions and its name's right-click menu offer Find usages", a
   await expect(modal).toHaveCount(0);
   await expect(usages(page)).toContainText("Usages of {{baseUrl}}");
 });
+
+// #192: the usages are one list: one Tab stop, the arrow keys move, and Enter goes to
+// a usage as a click does.
+test("the usages are one Tab stop that Up/Down/Home/End move through; Enter goes to the usage", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await findUsages(page, page.locator(".url-input"), "baseUrl");
+  const usage = (title: string) => usages(page).getByRole("listitem").filter({ hasText: title });
+  const close = usages(page).getByRole("button", { name: "Close usages" });
+
+  await close.focus();
+  await page.keyboard.press("Tab");
+  await expect(usage("List pets")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(usage("List pets")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(usage("Create pet")).toBeFocused();
+  await expect(usage("Create pet"), "shows the focus ring").toHaveCSS("outline-style", "solid");
+  await page.keyboard.press("End");
+  await expect(usage("Get pet image")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(usage("Get pet image")).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(usage("List pets")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+
+  // One stop: Tab leaves the list, and coming back lands on the usage last focused.
+  await page.keyboard.press("Tab");
+  await expect(usages(page).getByRole("listitem").and(page.locator(":focus"))).toHaveCount(0);
+  await close.focus();
+  await page.keyboard.press("Tab");
+  await expect(usage("Create pet")).toBeFocused();
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".tab.active")).toContainText("Create pet");
+  await expect(urlBar(page)).toBeFocused();
+});
