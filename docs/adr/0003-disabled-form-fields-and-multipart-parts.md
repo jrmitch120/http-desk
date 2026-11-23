@@ -14,3 +14,9 @@ The cost is the same as for disabled query params: on reload, disabled parts com
 - **Comment out disabled multipart parts in place.** Rejected: JetBrains sends them as content of the previous part (Appendix C, M1, M3, M5, M6).
 - **Write disabled form fields in the header area too, like multipart parts.** Rejected: in-place `#~` lines are safe in both clients, keep the field's position, and read naturally where the field was.
 - **Track disabled fields in a new `@httpdesk-*` directive.** Rejected: it adds metadata other editors can't read, and the values would have to be stored somewhere anyway.
+
+## Addendum: `#~` in any other body is a comment line, and is sent (#186)
+
+A `#~` line turns something off only where this ADR says it does: a field in a form-urlencoded body, a line of a multipart part (unindented, as HttpDesk drops it when sending), and the header area. In a JSON, XML, text or raw body it is a comment line like any `#` or `//` line, and HttpDesk sends it as written, as Rider does. HttpDesk doesn't drop comment lines from those bodies: they can be real content (GraphQL `#` comments, Markdown headings, `//` in JavaScript-like text).
+
+VS Code drops every comment line, and Rider drops one written on the body's first line or before a multipart body's first boundary (Appendix C, G4, G6 and M4), so the portability pass marks these lines instead of changing what's sent: such a line as `body-comment-first-line` (both editors drop it), and any later comment line, or a `#` or `//` line inside a multipart part, as `body-comment` (VS Code drops it). A form's comment lines get no note: every tool drops them.

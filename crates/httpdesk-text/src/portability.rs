@@ -61,6 +61,8 @@ pub enum Construct {
     BodyFile,
     BodyFileWithVariables,
     BodyFileLine,
+    BodyComment,
+    BodyCommentFirstLine,
 }
 
 impl Construct {
@@ -422,6 +424,25 @@ pub static TABLE: &[Row] = &[
         jetbrains: &[jb!("exploring-http-syntax.html#provide-request-body")],
         vscode: &[VSC_BODY],
     },
+    // ---- comment lines in a body (#186): sent by HttpDesk, except in a form ----
+    Row {
+        construct: Construct::BodyComment,
+        id: "body-comment",
+        support: Support::JetbrainsOnly,
+        label: "# or // in a body",
+        hover: "VS Code drops this line; HttpDesk sends it as body text",
+        jetbrains: &[JB_COMMENTS, RESEARCH],
+        vscode: &[VSC_COMMENTS, VSC_BODY, RESEARCH],
+    },
+    Row {
+        construct: Construct::BodyCommentFirstLine,
+        id: "body-comment-first-line",
+        support: Support::HttpdeskOnly,
+        label: "# or // on a body's first line",
+        hover: "Other editors drop this line; HttpDesk sends it as body text",
+        jetbrains: &[JB_COMMENTS, RESEARCH],
+        vscode: &[VSC_COMMENTS, VSC_BODY, RESEARCH],
+    },
 ];
 
 /// `construct`'s row. Every construct has one (a test checks).
@@ -562,10 +583,29 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
     // A `< file` that is a Whole-file body or a multipart part's content both editors send as
     // it is; among other lines, Rider drops the line breaks around it.
     let whole_file_or_part = matches!(request.body.mode, BodyMode::File | BodyMode::Multipart);
+    // A `#` or `//` line, `#~` ones included (#186, ADR 0003): every tool drops it from a
+    // form, and HttpDesk drops a `#~` line from a form or (unindented, as sent) a multipart
+    // body. Anywhere else HttpDesk sends it and VS Code drops it; Rider sends it too, but
+    // drops one on the body's first line, or before a multipart body's first boundary,
+    // which isn't a part (Appendix C, G4, G6, M4).
+    let (form, multipart) = (request.body.mode == BodyMode::FormUrlEncoded, request.body.mode == BodyMode::Multipart);
+    let rider_drops_before = if multipart {
+        (i..handler_at).find(|&j| lines[j].starts_with("--")).unwrap_or(handler_at)
+    } else {
+        (i..handler_at).find(|&j| !lines[j].trim().is_empty()).map_or(i, |j| j + 1)
+    };
     for (j, l) in lines.iter().enumerate().take(handler_at).skip(i) {
         let (t, at) = (l.trim(), first + j);
-        if t.starts_with(DISABLED_MARKER) {
+        let disabled = if multipart { l.starts_with(DISABLED_MARKER) } else { form && t.starts_with(DISABLED_MARKER) };
+        if disabled {
             marks.add(at, Construct::DisabledLine);
+        } else if parser::comment_body(t).is_some() {
+            if form {
+                continue;
+            }
+            marks
+                .add(at, if j < rider_drops_before { Construct::BodyCommentFirstLine } else { Construct::BodyComment });
+            marks.references(at, l);
         } else if let Some(r) = parser::file_reference(l) {
             marks.add(
                 at,
