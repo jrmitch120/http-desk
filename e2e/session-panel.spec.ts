@@ -5,7 +5,7 @@
 // List pets' response set three cookies the mock's jar keeps; `__mock.sentCookies`
 // is the Cookie header each send got from the jar.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, menuClick, mockState, openApp, openRequest, setMockResponse, tab, urlBar } from "./helpers";
+import { clipboard, dialog, menuClick, mockState, openApp, openRequest, setMockResponse, tab, urlBar } from "./helpers";
 
 const panel = (page: Page) => page.getByRole("region", { name: "Session" });
 const rows = (page: Page) => panel(page).getByRole("list", { name: "Session cookies" }).getByRole("listitem");
@@ -219,4 +219,108 @@ test("the Session's rows are one Tab stop, and Up/Down/Home/End move across its 
   }
   await page.keyboard.press("Tab");
   await expect(sessionRow(page, "theme")).toBeFocused();
+});
+
+test("a row clicked shows no focus ring; the row an arrow key moves to does", async ({ page }) => {
+  await fillSession(page);
+  const ring = (name: string) => sessionRow(page, name).evaluate((el) => getComputedStyle(el).outlineStyle);
+
+  await sessionRow(page, "createPet").locator("td").first().click();
+  await expect(sessionRow(page, "createPet")).toBeFocused();
+  expect(await ring("createPet")).toBe("none");
+  await page.keyboard.press("ArrowDown");
+  await expect(sessionRow(page, "loginToken")).toBeFocused();
+  await expect.poll(() => ring("loginToken")).not.toBe("none");
+});
+
+test("Enter on a named exchange opens it; on a Global variable or a cookie it copies the value", async ({ page }) => {
+  await fillSession(page);
+  const toast = (text: string) => page.locator(".toast", { hasText: text });
+
+  await sessionRow(page, "loginToken").focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => clipboard(page)).toBe("abc123");
+  await expect(toast("Global variable value copied")).toBeVisible();
+
+  await sessionRow(page, "theme").focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => clipboard(page)).toBe("dark");
+  await expect(toast("Cookie value copied")).toBeVisible();
+
+  await sessionRow(page, "createPet").focus();
+  await page.keyboard.press("Enter");
+  const shown = page.getByRole("dialog", { name: "createPet" });
+  await expect(shown).toContainText("201 Created");
+  await expect(shown).toContainText("api/pets.http");
+});
+
+test("Delete removes the focused row, and focus goes to the next row, else the one before, else the list", async ({ page }) => {
+  await fillSession(page);
+  const names = panel(page).getByRole("listitem").locator("td:first-child");
+
+  // The only Global variable: the next row is the first cookie.
+  await sessionRow(page, "loginToken").focus();
+  await page.keyboard.press("Delete");
+  await expect(names).toHaveText(["createPet", "session", "visits", "theme"]);
+  await expect(panel(page)).toContainText("No Global variables");
+  await expect(sessionRow(page, "session")).toBeFocused();
+
+  // The last row: the one before it.
+  await page.keyboard.press("End");
+  await page.keyboard.press("Delete");
+  await expect(names).toHaveText(["createPet", "session", "visits"]);
+  await expect(sessionRow(page, "visits")).toBeFocused();
+
+  // Backspace forgets a named exchange.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Backspace");
+  await expect(names).toHaveText(["session", "visits"]);
+  await expect(panel(page)).toContainText("No named exchanges");
+  await expect(sessionRow(page, "session")).toBeFocused();
+
+  // The last row of all: focus stays in the panel, on the (empty) list.
+  await page.keyboard.press("Delete");
+  await expect(sessionRow(page, "visits")).toBeFocused();
+  await page.keyboard.press("Delete");
+  await expect(panel(page)).toContainText("No cookies");
+  await expect(panel(page).locator(":focus")).toHaveCount(1);
+  await expect(panel(page).getByRole("button").and(page.locator(":focus"))).toHaveCount(0);
+  // And the cookies are gone from the Session, not just the panel.
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await setMockResponse(page, null);
+  await sendListPets(page);
+  expect((await sentCookies(page)).at(-1)).toBe("");
+});
+
+test("Shift+F10 opens a row's menu with the actions that apply to it", async ({ page }) => {
+  await fillSession(page);
+  const items = page.getByRole("menu").getByRole("menuitem");
+
+  await sessionRow(page, "createPet").focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(items).toHaveText(["Open", "Forget"]);
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sessionRow(page, "createPet")).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Shift+F10");
+  await expect(items).toHaveText(["Copy value", "Delete"]);
+  await page.keyboard.press("Enter");
+  await expect.poll(() => clipboard(page)).toBe("abc123");
+
+  // Delete from the menu moves focus on as the key does.
+  await page.keyboard.press("ArrowDown");
+  await expect(sessionRow(page, "session")).toBeFocused();
+  await page.keyboard.press("Shift+F10");
+  await expect(items).toHaveText(["Copy value", "Delete"]);
+  await items.filter({ hasText: "Delete" }).click();
+  await expect(sessionRow(page, "session")).toHaveCount(0);
+  await expect(sessionRow(page, "visits")).toBeFocused();
+
+  // Open, from the named exchange's menu.
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+F10");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "createPet" })).toContainText("201 Created");
 });
