@@ -413,7 +413,8 @@ Global classes in `src/app.css`, not components:
 - `.data-table`: the scrolling wrapper of a table of rows in a response tab (headers,
   cookies, the sent request). Inside it, `td.k` is a bold name column sized to its
   content, `td.v` a monospace value column, and `th` heads columns where a table has
-  them.
+  them. A table can be a list (the Session panel's): `role="list"` on the table, its
+  `<thead>` `aria-hidden`, and `.list-row` on each `<tr>`, which stays a table row.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
   `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
   Focus shows `--focus-ring`.

@@ -3,6 +3,7 @@
   `client.global.set`, which later requests in the workspace use as `{{name}}`, with
   a Delete button, and Clear Global variables. Read again whenever the Session
   changes, so a value a send's script sets shows up at once. No editing by hand.
+  Its rows are in the panel's list (sessionRow): Enter copies a value, Delete deletes it.
 -->
 <script lang="ts">
   import { api } from "../lib/api";
@@ -12,6 +13,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Icon from "./Icon.svelte";
   import SessionSection from "./SessionSection.svelte";
+  import { sessionRow } from "../lib/sessionList";
 
   const globals = sessionView<GlobalVariable[]>(() => api.sessionGlobals(), []);
   const list = $derived(globals.current ?? []);
@@ -20,17 +22,22 @@
 <SessionSection title="Global variables" count={globals.current?.length ?? null} clearLabel="Clear Global variables" onclear={() => app.clearGlobals()}>
   {#if list.length}
     <div class="data-table">
-      <table aria-label="Global variables">
-        <thead>
+      <table role="list" aria-label="Global variables">
+        <thead aria-hidden="true">
           <tr><th>Name</th><th>Value</th><th></th></tr>
         </thead>
-        <tbody>
+        <tbody role="presentation">
           {#each list as g (g.name)}
-            <tr>
+            <tr
+              {...sessionRow({
+                copy: { value: g.value, copied: "Global variable value copied" },
+                remove: { label: "Delete", run: () => app.deleteGlobal(g.name) },
+              })}
+            >
               <td class="name">{g.name}</td>
               <td class="value">{g.value}</td>
               <td class="actions">
-                <button class="icon-btn" aria-label="Delete Global variable {g.name}" use:tooltip onclick={() => app.deleteGlobal(g.name)}>
+                <button class="icon-btn" tabindex="-1" aria-label="Delete Global variable {g.name}" use:tooltip onclick={() => app.deleteGlobal(g.name)}>
                   <Icon name="trash" size={13} />
                 </button>
               </td>

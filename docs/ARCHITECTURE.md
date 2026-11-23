@@ -997,11 +997,14 @@ Decisions made during implementation, beyond the plan above:
   settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
-  (`SessionGlobals.svelte`, `SessionCookies.svelte` and `SessionNamedExchanges.svelte`), each a component that reads its part through
+  (`SessionNamedExchanges.svelte`, `SessionGlobals.svelte` and `SessionCookies.svelte`, in that order), each a component that reads its part through
   `sessionView`, which reads again whenever `app.sessionVersion` goes up (a send
   whose response set cookies, a named request's send, a send whose scripts ran, a delete
   or clear, another workspace), wrapped in `SessionSection` for
-  its heading, count and Clear button. The page's side of the Session (that version, the
+  its heading, count and Clear button. The sections' rows are one list
+  (`src/lib/sessionList.ts`, on `use:rovingList`; #194): Enter opens a named exchange or
+  copies a value, Delete forgets or deletes the row and focus goes to the next row (else
+  the one before, else the list), and Shift+F10 opens the row's menu. The page's side of the Session (that version, the
   exchange shapes completion reads, an opened exchange, the test markers, and the
   panel's deletes and clears) is `src/lib/session.svelte.ts`; workspace trust is
   `trust.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
