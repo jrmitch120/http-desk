@@ -57,6 +57,20 @@ test("⌘Enter with a tab focused sends the active request once and keeps the ac
   await expect(activeTab(page)).toContainText("List pets");
 });
 
+test("⌘Enter with an Explorer request row focused sends the active request once and keeps the active tab", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  // Focus another request's row: ⌘Enter must send the open one, not open the focused one.
+  await treeItem(page, "List pets").press("ArrowDown");
+  await expect(treeItem(page, "Create pet")).toBeFocused();
+  await page.keyboard.press("Meta+Enter");
+
+  await expect(page.getByText("200 OK")).toBeVisible();
+  expect(await sentRequests(page)).toHaveLength(1);
+  await expect(activeTab(page)).toContainText("List pets");
+  await expect(page.locator(".tabbar .tab")).toHaveCount(1);
+});
+
 test("⌘Enter with a row's checkbox focused sends once without toggling it", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
