@@ -194,14 +194,15 @@
     border-left: 2px solid transparent;
   }
   .row-item:hover {
-    background: var(--hover);
+    background-image: linear-gradient(var(--row-hover), var(--row-hover));
     color: var(--text);
   }
-  .row-item:focus-visible {
-    background: var(--hover);
+  :global(:root[data-focus-marks]) .row-item:focus {
+    outline: var(--focus-ring-row);
+    outline-offset: var(--focus-ring-row-offset);
   }
   .row-item.selected {
-    background: var(--accent-soft);
+    background-color: var(--accent-soft);
     color: var(--text);
   }
   .row-item.active {
@@ -217,7 +218,7 @@
     font-size: 12px;
   }
   .row-item.empty:hover {
-    background: none;
+    background-image: none;
   }
   .chev {
     width: 12px;

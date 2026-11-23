@@ -71,10 +71,10 @@
     cursor: default;
     opacity: 0.5;
   }
-  .toggle:focus-visible {
+  .toggle:focus {
     outline: none;
   }
-  .toggle:focus-visible .track {
+  :global(:root[data-focus-marks]) .toggle:focus .track {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

@@ -110,7 +110,7 @@
     font-variant-numeric: tabular-nums;
     color: var(--success);
   }
-  button:focus-visible {
+  :global(:root[data-focus-marks]) button:focus {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

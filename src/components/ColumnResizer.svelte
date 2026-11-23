@@ -113,10 +113,10 @@
   }
   .col-resizer:hover::after,
   .col-resizer.dragging::after,
-  .col-resizer:focus-visible::after {
+  :global(:root[data-focus-marks]) .col-resizer:focus::after {
     background: var(--focus);
   }
-  .col-resizer:focus-visible {
+  :global(:root[data-focus-marks]) .col-resizer:focus {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-inset);
   }

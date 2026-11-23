@@ -22,8 +22,9 @@ export default defineConfig({
   projects: [
     { name: "chromium", testIgnore: ["perf/**", "webkit/**"], use: { ...devices["Desktop Chrome"], colorScheme: "dark" } },
     // What only WebKit (the app's webview on macOS and Linux) gets wrong, in WebKit
-    // (`pnpm test:webkit`). Chromium runs everything else.
-    { name: "webkit", testMatch: "webkit/**/*.spec.ts", use: { ...devices["Desktop Safari"], colorScheme: "dark" } },
+    // (`pnpm test:webkit`). Chromium runs everything else. Focus marks run in both:
+    // WebKit is where drawing keyboard focus went wrong.
+    { name: "webkit", testMatch: ["webkit/**/*.spec.ts", "focus-marks.spec.ts"], use: { ...devices["Desktop Safari"], colorScheme: "dark" } },
     // Large responses keep the window responsive (`pnpm test:perf`). One step
     // at a time, so steps don't skew each other's timings (one worker: not
     // fully parallel still runs each file in a worker of its own), and with longer

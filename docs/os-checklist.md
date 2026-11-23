@@ -31,6 +31,8 @@ control or the popup layer.
       `<=` as separate characters, not ligatures (#118).
 - [ ] Tabbing shows the same 2px blue focus ring on buttons, inputs, switches, checkboxes,
       segmented options and the split separators.
+- [ ] After clicking an Explorer row, the Down arrow moves a thin blue ring to the next
+      row; clicking a row shows no ring (#189).
 - [ ] Scrollbars (sidebar tree, long response, Settings) are the thin themed ones, not
       the OS default.
 - [ ] Hovering an icon-only button shows the styled tooltip after a short delay, never

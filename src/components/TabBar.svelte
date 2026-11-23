@@ -134,7 +134,7 @@
     color: var(--text-2);
   }
   /* The strip scrolls, so it clips: the ring sits fully inside the tab. */
-  .tab:focus-visible {
+  :global(:root[data-focus-marks]) .tab:focus {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-inset);
   }
@@ -153,7 +153,7 @@
   }
   /* The bar is positioned, so it paints over the tab's own outline: move it
      inside the ring while the tab has keyboard focus. */
-  .tab.active:focus-visible::before {
+  :global(:root[data-focus-marks]) .tab.active:focus::before {
     top: var(--focus-ring-width);
     left: var(--focus-ring-width);
     right: var(--focus-ring-width);
