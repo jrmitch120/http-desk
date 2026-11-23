@@ -45,6 +45,20 @@ test("⌘⇧E with a search typed focuses the search box, which the results foll
   await expect(searchBox(page)).toBeFocused();
 });
 
+test("⌘⇧E with Find usages showing focuses the usages", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.locator(".url-input .cm-var", { hasText: "{{baseUrl}}" }).first().hover();
+  await page.locator(".popup-layer .var-card").getByRole("button", { name: "Find usages" }).click();
+  const usages = page.getByRole("list", { name: "Usages" }).getByRole("listitem");
+  await expect(usages.first()).toBeVisible();
+  await urlBar(page).click();
+
+  await page.keyboard.press("Meta+Shift+E");
+
+  await expect(usages.first()).toBeFocused();
+});
+
 test("⌘⇧E from the History view switches to the Explorer, on the row last focused there", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");

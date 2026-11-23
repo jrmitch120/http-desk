@@ -115,8 +115,9 @@
   /**
    * Focus Explorer: the row last focused, else the Tab stop (the open request's row,
    * else the first), else the empty tree. A search or Find usages in the tree's place
-   * takes focus instead: the search box, or the usages. False while there's nothing
-   * to focus yet (the tree still loading).
+   * takes focus instead: the search box, or the usages list's Tab stop (its Close
+   * button while there are none). False while there's nothing to focus yet (the tree
+   * still loading).
    */
   function focusExplorer(): boolean {
     if (query.trim() && searchInput) {
@@ -124,7 +125,7 @@
       return true;
     }
     if (usagesEl) {
-      (usagesEl.querySelector<HTMLElement>('[role="listitem"][tabindex="0"], .hit') ?? usagesEl.querySelector<HTMLElement>("button"))?.focus();
+      (usagesEl.querySelector<HTMLElement>('[role="listitem"][tabindex="0"]') ?? usagesEl.querySelector<HTMLElement>("button"))?.focus();
       return true;
     }
     if (!treeEl) return false;
