@@ -81,7 +81,7 @@
     background: var(--accent);
     border-color: var(--accent);
   }
-  .checkbox:focus-visible .box {
+  :global(:root[data-focus-marks]) .checkbox:focus .box {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

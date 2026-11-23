@@ -213,7 +213,7 @@
     padding: 0 var(--space-1) 0 var(--space-2);
     font-size: 12px;
   }
-  .select-trigger:focus-visible {
+  :global(:root[data-focus-marks]) .select-trigger:focus {
     border-color: var(--focus);
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);

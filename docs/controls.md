@@ -665,10 +665,15 @@ also for the size of small fixed elements that are not controls (a badge's heigh
 Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared
 by the bars above the response body (its toolbar, the JSONPath filter row, the editor's
 find bar), so their edges line up; `--radius` and `--radius-sm`;
-`outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
-`:focus-visible` for focus (a control flush against an edge that clips, such as a tab
-in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of
-the ring is cut off); and the `--popup-*` tokens for floating surfaces
+`outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` for focus, on
+`:root[data-focus-marks] .x:focus` (`:global(:root[data-focus-marks]) .x:focus` in a
+component), never `:focus-visible`: the app decides when keyboard focus is drawn
+(`src/lib/focusMarks.ts`, ADR-0002). Text fields use plain `:focus`, as their ring is
+always on. A control flush against an edge that clips, such as a tab in the scrolling
+tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of the ring is cut
+off. A row of a list shows focus with the thinner `--focus-ring-row` and
+`--focus-ring-row-offset`, a selection with a `--accent-soft` background-color and
+hover with `--row-hover` as a background-image, so a row can show all three; and the `--popup-*` tokens for floating surfaces
 (`--popup-card-min-width` and `--popup-card-max-width` size a variable's hover card). Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
 so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control

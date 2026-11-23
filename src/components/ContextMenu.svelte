@@ -92,9 +92,13 @@
     color: var(--text);
     outline: none;
   }
-  .item:hover:not(:disabled),
-  .item:focus-visible {
+  .item:hover:not(:disabled) {
     background: var(--accent-soft);
+  }
+  :global(:root[data-focus-marks]) .item:focus {
+    background: var(--accent-soft);
+    outline: var(--focus-ring-row);
+    outline-offset: var(--focus-ring-row-offset);
   }
   .item:disabled {
     opacity: 0.45;

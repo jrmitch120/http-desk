@@ -580,7 +580,7 @@
   }
   /* The line runs to the grid's right edge, which clips: inset the ring so all
      of it shows. */
-  .desc:focus-visible,
+  :global(:root[data-focus-marks]) .desc:focus,
   .desc-edit {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-inset);
@@ -641,9 +641,9 @@
   .kv :global(.var-field.cell:focus-within) {
     background: var(--panel-2);
   }
-  /* Text cells match :focus-visible on a click too, so they keep the ring then.
-     A VarField cell shows it while its editor (or static rendering) has focus. */
-  .kv :global(.cell:focus-visible),
+  /* Text cells keep the ring whenever they have focus, as text fields do. A
+     VarField cell shows it while its editor (or static rendering) has focus. */
+  .kv :global(.cell:focus),
   .kv :global(.var-field.cell:focus-within) {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);

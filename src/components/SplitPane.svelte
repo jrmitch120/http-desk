@@ -191,7 +191,7 @@
   .separator.dragging::after {
     background: color-mix(in srgb, var(--focus) 35%, transparent);
   }
-  .separator:focus-visible {
+  :global(:root[data-focus-marks]) .separator:focus {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }
