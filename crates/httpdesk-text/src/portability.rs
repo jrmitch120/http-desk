@@ -585,10 +585,15 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
     let whole_file_or_part = matches!(request.body.mode, BodyMode::File | BodyMode::Multipart);
     // A `#` or `//` line, `#~` ones included (#186, ADR 0003): every tool drops it from a
     // form, and HttpDesk drops a `#~` line from a form or (unindented, as sent) a multipart
-    // body. Anywhere else HttpDesk and Rider send it and VS Code drops it, as Rider drops
-    // one on the body's first line too.
+    // body. Anywhere else HttpDesk sends it and VS Code drops it; Rider sends it too, but
+    // drops one on the body's first line, or before a multipart body's first boundary,
+    // which isn't a part (Appendix C, G4, G6, M4).
     let (form, multipart) = (request.body.mode == BodyMode::FormUrlEncoded, request.body.mode == BodyMode::Multipart);
-    let body_first = (i..handler_at).find(|&j| !lines[j].trim().is_empty());
+    let rider_drops_before = if multipart {
+        (i..handler_at).find(|&j| lines[j].starts_with("--")).unwrap_or(handler_at)
+    } else {
+        (i..handler_at).find(|&j| !lines[j].trim().is_empty()).map_or(i, |j| j + 1)
+    };
     for (j, l) in lines.iter().enumerate().take(handler_at).skip(i) {
         let (t, at) = (l.trim(), first + j);
         let disabled = if multipart { l.starts_with(DISABLED_MARKER) } else { form && t.starts_with(DISABLED_MARKER) };
@@ -598,8 +603,8 @@ fn block(raw: &str, lines: &[&str], first: usize, marks: &mut Marks) {
             if form {
                 continue;
             }
-            let first_line = !multipart && Some(j) == body_first;
-            marks.add(at, if first_line { Construct::BodyCommentFirstLine } else { Construct::BodyComment });
+            marks
+                .add(at, if j < rider_drops_before { Construct::BodyCommentFirstLine } else { Construct::BodyComment });
             marks.references(at, l);
         } else if let Some(r) = parser::file_reference(l) {
             marks.add(

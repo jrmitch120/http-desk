@@ -254,3 +254,15 @@ fn a_file_line_among_comment_lines_keeps_its_mark() {
 fn a_comment_line_that_is_sent_has_its_variables_noted_too() {
     assert_eq!(body_marks("text/plain", "hello\n# {{$guid}}"), [(5, C::BodyComment), (5, C::VscodeDynamicVariable)]);
 }
+
+#[test]
+fn a_comment_before_a_multipart_bodys_first_boundary_is_noted_as_dropped_by_both_editors() {
+    // Rider drops text before the first boundary, as it isn't a part (Appendix C, M4).
+    assert_eq!(
+        body_marks(
+            "multipart/form-data; boundary=B",
+            "# preamble\n--B\nContent-Disposition: form-data; name=\"a\"\n\n// in a\n--B--"
+        ),
+        [(4, C::BodyCommentFirstLine), (8, C::BodyComment)]
+    );
+}

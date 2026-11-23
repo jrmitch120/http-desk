@@ -379,7 +379,8 @@ async fn disabled_multipart_parts_are_not_sent() {
 async fn comment_lines_in_a_body_are_sent_except_in_a_form_or_a_disabled_part() {
     let server = echo_server().await;
     let vars = env(&[("base", &server.uri())]);
-    let lines = "# hash\n// slashes\n#~ tilde";
+    let sent = ["# hash", "// slashes"];
+    let lines = format!("{}\n#~ tilde", sent.join("\n"));
     let cases = [
         ("application/json", format!("{{\n{lines}\n}}"), format!("{{\n{lines}\n}}")),
         ("text/plain", format!("{lines}\nhello"), format!("{lines}\nhello")),
@@ -387,7 +388,13 @@ async fn comment_lines_in_a_body_are_sent_except_in_a_form_or_a_disabled_part() 
         (
             "multipart/form-data; boundary=B",
             format!("--B\nContent-Disposition: form-data; name=\"a\"\n\n{lines}\n--B--"),
-            "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n# hash\r\n// slashes\r\n--B--\r\n".to_string(),
+            format!("--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n{}\r\n--B--\r\n", sent.join("\r\n")),
+        ),
+        // Only an unindented `#~` line is a disabled part line: an indented one is part content.
+        (
+            "multipart/form-data; boundary=B",
+            "--B\nContent-Disposition: form-data; name=\"a\"\n\n  #~ indented\n--B--".to_string(),
+            "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n  #~ indented\r\n--B--\r\n".to_string(),
         ),
     ];
     for (content_type, body, expected) in cases {
