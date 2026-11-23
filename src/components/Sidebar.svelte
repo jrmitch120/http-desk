@@ -1,8 +1,4 @@
 <script module lang="ts">
-  /** The last `app.focusSearch` ask the search box took focus for. */
-  let focusAsked = 0;
-  /** The last `app.focusExplorer` ask (Focus Explorer) the Explorer took focus for. */
-  let explorerAsked = 0;
   /** The Explorer row last focused (`rowId`), kept while the Explorer isn't shown
    *  (the History view in its place), for Focus Explorer to go back to. */
   let lastRow: string | null = null;
@@ -13,6 +9,7 @@
   import { app } from "../lib/store.svelte";
   import { usageRows } from "../lib/usages";
   import { shortcutHint } from "../lib/commands";
+  import { plainEnter } from "../lib/platform";
   import { errorMessage } from "../lib/api";
   import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
@@ -20,7 +17,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { rovingList } from "../lib/rovingList";
+  import { focusList, rovingList } from "../lib/rovingList";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import WorkspaceHistory from "./WorkspaceHistory.svelte";
   import type { SidebarView } from "../lib/store.svelte";
@@ -43,8 +40,8 @@
   // Each ask once, even when the box only appears later (the sidebar shown, or the
   // Explorer view picked, for it), and not again when the Explorer comes back.
   $effect(() => {
-    if (app.focusSearch !== focusAsked && searchInput) {
-      focusAsked = app.focusSearch;
+    if (app.searchFocusWanted && searchInput) {
+      app.searchFocusWanted = false;
       searchInput.focus();
     }
   });
@@ -91,7 +88,7 @@
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (hits.length) selected = Math.max(0, Math.min(hits.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
-    } else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && hits[selected]) app.openSearchHit(hits[selected]); // ⌘Enter / Ctrl+Enter is left to Send
+    } else if (plainEnter(e) && hits[selected]) app.openSearchHit(hits[selected]);
   }
 
   let rootDrop = $state(false);
@@ -101,6 +98,7 @@
   // between rows. TreeItem renders rows with tabindex -1; this sets the one at 0.
   let treeEl: HTMLDivElement | undefined = $state();
   let usagesEl: HTMLElement | undefined = $state();
+  let closeUsages: HTMLButtonElement | undefined = $state();
   const rows = () => [...(treeEl?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])];
   const level = (row: HTMLElement | undefined) => Number(row?.getAttribute("aria-level") ?? 0);
   const isRow = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "treeitem";
@@ -125,7 +123,7 @@
       return true;
     }
     if (usagesEl) {
-      (usagesEl.querySelector<HTMLElement>('[role="listitem"][tabindex="0"]') ?? usagesEl.querySelector<HTMLElement>("button"))?.focus();
+      if (!focusList(usagesEl)) closeUsages?.focus();
       return true;
     }
     if (!treeEl) return false;
@@ -136,10 +134,10 @@
 
   // Each ask once, when the Explorer is on screen (the sidebar shown, the tree listed).
   $effect(() => {
-    if (app.focusExplorer === explorerAsked || !app.sidebarShown || app.sidebarView !== "explorer") return;
+    if (!app.explorerFocusWanted || !app.sidebarShown || app.sidebarView !== "explorer") return;
     // Again as the tree, search results or usages come and go, until one takes focus.
     void [treeEl, usagesEl, searchInput, query];
-    if (untrack(focusExplorer)) explorerAsked = app.focusExplorer;
+    if (untrack(focusExplorer)) app.explorerFocusWanted = false;
   });
 
   $effect(() => {
@@ -260,7 +258,7 @@
       <section class="usages" bind:this={usagesEl} aria-label="Usages of {app.usages.name}">
         <div class="usages-head">
           <span class="usages-title ellipsis">Usages of <code>{`{{${app.usages.name}}}`}</code></span>
-          <button class="icon-btn" aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
+          <button class="icon-btn" bind:this={closeUsages} aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
         </div>
         {#if !rows}
           <div class="none muted">Searching…</div>
@@ -269,7 +267,7 @@
         {:else}
           <div class="usages-count muted">{rows.length} {rows.length === 1 ? "place" : "places"}</div>
           <!-- One Tab stop, the arrow keys move (rovingList); Enter clicks the row. -->
-          <div role="list" aria-label="Usages" use:rovingList={{ activate: (row) => row.click() }}>
+          <div role="list" aria-label="Usages" use:rovingList>
             {#each rows as row (row.key)}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
               <div role="listitem" tabindex="-1" class="list-row hit usage" class:disabled={row.disabled} onclick={() => app.openUsage(row.usage)}>

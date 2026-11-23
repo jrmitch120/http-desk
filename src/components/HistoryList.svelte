@@ -8,7 +8,7 @@
   A list (`use:rovingList`): one Tab stop, the arrow keys move, Enter opens. With
   `onselect`, each row has a box to select it (for Compare), which Space ticks; with
   `onmenu`, a context menu (Shift+F10 too); with `ondelete`, Delete (or Backspace) on a
-  row deletes it. `footer` ends the list (HistoryView's "Show more"), and `onlast` runs
+  row deletes it. `footer` follows the list (HistoryView's "Show more"), and `onlast` runs
   as the keyboard reaches the last row, so it can list more.
 -->
 <script lang="ts">
@@ -19,7 +19,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Checkbox from "./Checkbox.svelte";
-  import { rovingList } from "../lib/rovingList";
+  import { deletesRow, rovingList } from "../lib/rovingList";
 
   interface Props {
     entries: HistorySummary[];
@@ -51,7 +51,7 @@
   function onRowKey(event: KeyboardEvent, entry: HistorySummary) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if ((event.key === "ArrowDown" || event.key === "End") && isLast(event.currentTarget)) onlast?.();
-    if (!ondelete || (event.key !== "Delete" && event.key !== "Backspace")) return;
+    if (!ondelete || !deletesRow(event)) return;
     event.preventDefault();
     ondelete(entry);
   }
@@ -61,7 +61,8 @@
     if (!(event.target as Element).closest('[role="checkbox"]')) onopen(entry);
   }
 
-  const keys = $derived({
+  /** What Enter (open) and Space (tick Compare) do on a row. */
+  const rowActions = $derived({
     activate: (row: HTMLElement) => {
       const entry = entryOf(row);
       if (entry) onopen(entry);
@@ -91,51 +92,54 @@
   {#if e.size !== null || !narrow}<span class="metric muted size">{e.size === null ? "" : formatBytes(e.size)}</span>{/if}
 {/snippet}
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="entries" class:narrow role="list" aria-label="History entries" use:rovingList={keys} onfocusin={(ev) => isLast(ev.target) && onlast?.()}>
-  {#each entries as e, i (e.id)}
-    <!-- The list's keys are rovingList's (Enter opens, Space ticks Compare); Delete and the menu are the row's. -->
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-    <div
-      role="listitem"
-      tabindex="-1"
-      class="list-row entry"
-      class:selectable={!!onselect}
-      class:current={e.id === current}
-      aria-current={e.id === current || undefined}
-      data-id={e.id}
-      onclick={(ev) => onRowClick(ev, e)}
-      oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))}
-      onkeydown={(ev) => onRowKey(ev, e)}
-    >
-      {#if onselect}
-        <Checkbox class="select" tabindex={-1} checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
-      {/if}
-      <div class="row">
-        {#if narrow}
-          <span class="line">
+<!-- It scrolls: the list, then `footer` after it (outside the list, so the list stays rows alone). -->
+<div class="entries" class:narrow>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div role="list" aria-label="History entries" use:rovingList={rowActions} onfocusin={(ev) => isLast(ev.target) && onlast?.()}>
+    {#each entries as e, i (e.id)}
+      <!-- The list's keys are rovingList's (Enter opens, Space ticks Compare); Delete and the menu are the row's. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+      <div
+        role="listitem"
+        tabindex="-1"
+        class="list-row entry"
+        class:selectable={!!onselect}
+        class:current={e.id === current}
+        aria-current={e.id === current || undefined}
+        data-id={e.id}
+        onclick={(ev) => onRowClick(ev, e)}
+        oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))}
+        onkeydown={(ev) => onRowKey(ev, e)}
+      >
+        {#if onselect}
+          <Checkbox class="select" tabindex={-1} checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
+        {/if}
+        <div class="row">
+          {#if narrow}
+            <span class="line">
+              <Badge method={e.method} />
+              <span class="url mono" use:tooltip={e.url}>{e.url}</span>
+              <span class="spacer"></span>
+              {@render outcome(e)}
+            </span>
+            <span class="line sub">
+              {#if file}<span class="file ellipsis">{e.link.file ?? "No file"}</span>{/if}
+              <span class="spacer"></span>
+              {@render metrics(e)}
+            </span>
+          {:else}
             <Badge method={e.method} />
-            <span class="url mono" use:tooltip={e.url}>{e.url}</span>
+            <span class="url mono">{e.url}</span>
+            {#if file}<span class="file muted ellipsis">{e.link.file ?? "No file"}</span>{/if}
             <span class="spacer"></span>
             {@render outcome(e)}
-          </span>
-          <span class="line sub">
-            {#if file}<span class="file ellipsis">{e.link.file ?? "No file"}</span>{/if}
-            <span class="spacer"></span>
             {@render metrics(e)}
-          </span>
-        {:else}
-          <Badge method={e.method} />
-          <span class="url mono">{e.url}</span>
-          {#if file}<span class="file muted ellipsis">{e.link.file ?? "No file"}</span>{/if}
-          <span class="spacer"></span>
-          {@render outcome(e)}
-          {@render metrics(e)}
-        {/if}
+          {/if}
+        </div>
       </div>
-    </div>
-  {/each}
-  {#if footer}<div class="footer" role="none">{@render footer()}</div>{/if}
+    {/each}
+  </div>
+  {#if footer}<div class="footer">{@render footer()}</div>{/if}
 </div>
 
 <style>

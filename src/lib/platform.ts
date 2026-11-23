@@ -74,6 +74,9 @@ export function editorKey(s: Shortcut, os: OS = currentOS()): string {
 /** The parts of a `KeyboardEvent` a shortcut is matched against. */
 export type KeyPress = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
 
+/** Enter without ⌘ or Ctrl: with either held it's the app's (⌘Enter / Ctrl+Enter sends). */
+export const plainEnter = (e: KeyPress): boolean => e.key === "Enter" && !e.metaKey && !e.ctrlKey;
+
 /**
  * Whether `e` is shortcut `s` on `os`. Mod is ⌘ on macOS and Ctrl elsewhere,
  * and the other one must not be held; Alt and Shift must match exactly.

@@ -12,7 +12,7 @@ import { createAttachmentKey } from "svelte/attachments";
 import { errorMessage } from "./api";
 import { writeClipboard } from "./clipboard";
 import { menu, type MenuItem } from "./menu.svelte";
-import { rovingList } from "./rovingList";
+import { deletesRow, focusList, LIST, ROW, rovingList } from "./rovingList";
 import { app } from "./store.svelte";
 
 export interface SessionRowActions {
@@ -24,13 +24,10 @@ export interface SessionRowActions {
   remove: { label: string; run: () => Promise<void> };
 }
 
-const ROW = '[role="listitem"]';
 const actions = new WeakMap<HTMLElement, SessionRowActions>();
-const lists = new WeakSet<HTMLElement>();
 
 /** `use:sessionList` on the element holding the sections' lists: their rows move as one. */
 export function sessionList(node: HTMLElement) {
-  lists.add(node);
   return rovingList(node, { activate });
 }
 
@@ -43,8 +40,7 @@ export function sessionRow(row: SessionRowActions) {
     [createAttachmentKey()]: (node: HTMLElement) => {
       actions.set(node, row);
       const onkeydown = (e: KeyboardEvent) => {
-        if (e.target !== node || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-        if (e.key !== "Delete" && e.key !== "Backspace") return;
+        if (e.target !== node || e.defaultPrevented || !deletesRow(e)) return;
         e.preventDefault();
         void remove(node);
       };
@@ -84,23 +80,19 @@ async function copy({ value, copied }: { value: string; copied: string }) {
   }
 }
 
-/** Removes the row; once it's gone, focus goes to the row now in its place, else the one before, else the list. */
+/**
+ * Removes the row; once it's gone, focus goes to the list's Tab stop, which rovingList
+ * has moved to the row now in its place, else the one before, else the list.
+ */
 async function remove(node: HTMLElement) {
-  const list = listOf(node);
-  const before = list ? rowsOf(list) : [];
-  const at = before.indexOf(node);
+  const list = node.closest<HTMLElement>(LIST);
+  const count = list ? rowsOf(list).length : 0;
   await actions.get(node)?.remove.run();
-  if (!list || !(await rowsChange(list, before.length))) return;
+  if (!list || !(await rowsChange(list, count))) return;
   const focused = document.activeElement;
   // Focus moved on (elsewhere, not lost with the row): leave it.
   if (focused && focused !== document.body && !list.contains(focused)) return;
-  const rows = rowsOf(list);
-  (rows[Math.min(at, rows.length - 1)] ?? list).focus();
-}
-
-function listOf(node: HTMLElement): HTMLElement | null {
-  for (let el = node.parentElement; el; el = el.parentElement) if (lists.has(el)) return el;
-  return null;
+  focusList(list);
 }
 
 const rowsOf = (list: HTMLElement) => [...list.querySelectorAll<HTMLElement>(ROW)];

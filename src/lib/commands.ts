@@ -10,6 +10,7 @@ import { updates } from "./updates.svelte";
 import { DOCUMENTATION_URL, openLink, RELEASE_NOTES_URL, reportIssue } from "./about";
 import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
+import { showFocusMarks } from "./focusMarks";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings } from "./types";
 import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
@@ -93,7 +94,7 @@ const withRequest = () => {
 };
 const withSettings = () => app.settings !== null;
 /** Focus is in the panel area (PanelArea.svelte): a panel's command hides it from there. */
-const focusInPanel = () => !!globalThis.document?.activeElement?.closest(".panel-area");
+const focusInPanel = () => !!globalThis.document?.activeElement?.closest("[data-panel-area]");
 
 /** Asks for a folder and opens it as the workspace. */
 async function openFolder() {
@@ -281,14 +282,16 @@ const COMMANDS: Command[] = [
     run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
   },
   {
-    // As in VS Code (Show Explorer).
+    // As in VS Code (Show Explorer). It, Focus History, ⌘J and ⌘⇧M move focus into a
+    // list, so they turn the focus marks on (a ⌘ chord alone doesn't) and it's drawn there.
     id: "focus-explorer",
     label: "Focus Explorer",
     shortcut: { mod: true, shift: true, key: "e" },
     enabled: inWorkspace,
     run: () => {
+      showFocusMarks();
       app.showSidebar("explorer");
-      app.focusExplorer++;
+      app.explorerFocusWanted = true;
     },
   },
   {
@@ -297,8 +300,9 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, shift: true, key: "h" },
     enabled: inWorkspace,
     run: () => {
+      showFocusMarks();
       app.showSidebar("history");
-      app.focusHistory++;
+      app.historyFocusWanted = true;
     },
   },
   {
@@ -307,7 +311,10 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, key: "j" },
     enabled: inWorkspace,
     checked: () => app.panel === "session",
-    run: () => app.togglePanel("session", focusInPanel()),
+    run: () => {
+      showFocusMarks();
+      app.togglePanel("session", focusInPanel());
+    },
   },
   {
     id: "toggle-runner",
@@ -323,7 +330,10 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, shift: true, key: "m" },
     enabled: inWorkspace,
     checked: () => app.panel === "problems",
-    run: () => app.togglePanel("problems", focusInPanel()),
+    run: () => {
+      showFocusMarks();
+      app.togglePanel("problems", focusInPanel());
+    },
   },
   { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {
@@ -352,7 +362,7 @@ const COMMANDS: Command[] = [
     // The search box is in the sidebar.
     run: () => {
       app.showSidebar();
-      app.focusSearch++;
+      app.searchFocusWanted = true;
     },
   },
   {

@@ -28,7 +28,7 @@
 <div class="problems">
   {#if files.length}
     <!-- Every file's entries move as one list (rovingList): one Tab stop, the arrow keys cross files. -->
-    <div class="items" use:rovingList={{ activate: (row) => row.click() }}>
+    <div class="items" use:rovingList>
       {#each files as f (f.path)}
         <div class="group" role="group" aria-label={label(f.path)}>
           <div class="file">

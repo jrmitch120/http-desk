@@ -163,10 +163,18 @@ test("the outline is one Tab stop: the request under the text cursor, else the r
   await expect(row(page, FORM)).toBeFocused();
 });
 
+test("⌘Enter right after clicking an outline row sends the request clicked", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+  await row(page, "Basic auth").click();
+
+  await page.keyboard.press("Meta+Enter");
+  await expect.poll(async () => (await sentRequests(page)).map((r) => r.url)).toEqual(["{{host}}/basic-auth/user/passwd"]);
+  await expect(activeTab(page)).toContainText("Basic auth");
+});
+
 test("⌘Enter on an outline row is the app's: it sends the request under the cursor", async ({ page }) => {
   await openAsText(page, "samples", "jetbrains.http");
   await row(page, "Basic auth").click();
-  await expect(row(page, "Basic auth")).toHaveAttribute("aria-current", "true");
   await page.keyboard.press("ArrowDown");
 
   await page.keyboard.press("Meta+Enter");

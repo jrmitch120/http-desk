@@ -183,8 +183,10 @@
     return latest ? (requestAt(requestBlocks(latest.doc, latest.tree), latest.cursor)?.index ?? null) : null;
   }
 
+  /** Puts the cursor at `block`'s request, which Send sends from now on (not once the outline catches up). */
   function show(block: RequestBlock, focus: boolean) {
     editor?.revealAt(block.start, { focus });
+    app.setFileCursor(tab.id, requestNow());
   }
 
   // The outline is a list (`rovingList`): one stop in the Tab order (the request under the

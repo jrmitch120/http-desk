@@ -64,7 +64,7 @@
     if (app.panel) return;
     untrack(() => {
       const focused = document.activeElement;
-      if (focused?.closest(".panel-area") || focused?.matches('[role="separator"][aria-label="Resize panel"]')) focusRequests();
+      if (focused?.closest("[data-panel-area]") || focused?.matches('[role="separator"][aria-label="Resize panel"]')) focusRequests();
     });
   });
 

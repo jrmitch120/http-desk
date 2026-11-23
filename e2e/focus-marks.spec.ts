@@ -46,6 +46,21 @@ test("a clicked row shows no ring, and a key press brings it back", async ({ pag
   await expectRing(row);
 });
 
+test("a shortcut or a typed letter on a clicked row shows no ring; a focus command does", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const row = treeItem(page, "Create pet");
+  await row.click();
+  // Neither moves nor acts on the row: the ring stays off.
+  await page.keyboard.press("Meta+C");
+  await expectNoRing(row);
+  await page.keyboard.press("x");
+  await expectNoRing(row);
+  // Focus Explorer is a keyboard command that moves focus: where it lands is ringed.
+  await page.keyboard.press("Meta+Shift+E");
+  await expectRing(row);
+});
+
 test("a context menu opened with a right-click shows the ring on the item the arrows reach", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");

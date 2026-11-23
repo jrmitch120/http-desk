@@ -1,6 +1,6 @@
 // Every list's keyboard (#188): one Tab stop, the arrow keys to move, Enter to act.
 //
-//   <div role="list" aria-label="Requests" use:rovingList={{ activate: (row) => open(row) }}>
+//   <div role="list" aria-label="Usages" use:rovingList>
 //     <div role="listitem" tabindex="-1" class="list-row" onclick={…}>…</div>
 //   </div>
 //
@@ -13,8 +13,8 @@
 // in its place takes it.
 //
 // Keys, on a focused row, without ⌘/Ctrl/Alt (those are app shortcuts, ADR-0005):
-// Up/Down and Home/End move, stopping at the ends; Enter activates the row, and so
-// does Space unless the list gives `space`. Rows marked `aria-disabled="true"` are
+// Up/Down and Home/End move, stopping at the ends; Enter activates the row (clicks it,
+// unless the list gives `activate`), and so does Space unless the list gives `space`. Rows marked `aria-disabled="true"` are
 // skipped. Every key it handles is `preventDefault`ed. Any other key (Delete,
 // Shift+F10, the ContextMenu key) is the list's own: handle it on the rows or the
 // list, or leave it to the window's context-menu path.
@@ -25,17 +25,21 @@
 // Tab stop, else on the list itself, whose first row takes focus when rows arrive.
 
 export interface RovingListOptions {
-  /** A row's action: Enter, and Space unless `space` is given. What a click does. */
-  activate(row: HTMLElement): void;
+  /** A row's action: Enter, and Space unless `space` is given. A click on the row, unless given. */
+  activate?(row: HTMLElement): void;
   /** Space on a row, in place of `activate` (History ticks the row's Compare box). */
   space?(row: HTMLElement): void;
 }
 
-const ROW = '[role="listitem"]';
-/** Marks an element `use:rovingList` is on, for `focusList`. */
-const LIST = "[data-roving-list]";
+/** A row of a list. */
+export const ROW = '[role="listitem"]';
+/** Marks an element `use:rovingList` is on: the list a row is in is `row.closest(LIST)`. */
+export const LIST = "[data-roving-list]";
 /** Lists `focusList` focused before they had rows: the first row to come takes focus. */
 const awaitingRows = new WeakSet<HTMLElement>();
+
+/** Delete or Backspace without ⌘/Ctrl/Alt: the key a list that deletes rows deletes the focused one with. */
+export const deletesRow = (e: KeyboardEvent): boolean => (e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && !e.altKey;
 
 /**
  * Puts focus in the list `scope` is, or the first one it holds: on the list's Tab
@@ -51,7 +55,9 @@ export function focusList(scope: Element): boolean {
   return true;
 }
 
-export function rovingList(list: HTMLElement, options: RovingListOptions) {
+const click = (row: HTMLElement) => row.click();
+
+export function rovingList(list: HTMLElement, options: RovingListOptions = {}) {
   let opts = options;
   /** The row in the Tab order, and the index it was at (where its replacement comes from). */
   let stop: HTMLElement | null = null;
@@ -98,8 +104,8 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
     else if (e.key === "ArrowUp") to = all[Math.max(i - 1, 0)];
     else if (e.key === "Home") to = all[0];
     else if (e.key === "End") to = all[all.length - 1];
-    else if (e.key === "Enter") opts.activate(row);
-    else if (e.key === " ") (opts.space ?? opts.activate)(row);
+    else if (e.key === "Enter") (opts.activate ?? click)(row);
+    else if (e.key === " ") (opts.space ?? opts.activate ?? click)(row);
     else return;
     e.preventDefault();
     if (to && to !== row) to.focus();
@@ -120,7 +126,7 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
   settle();
 
   return {
-    update(next: RovingListOptions) {
+    update(next: RovingListOptions = {}) {
       opts = next;
     },
     destroy() {
