@@ -377,5 +377,7 @@ describe("re-parsing after an edit (#168)", () => {
       tree = httpLanguage.parser.parse(text, fragments);
       expect(nodes(tree)).toEqual(nodes(httpLanguage.parser.parse(text)));
     }
-  });
+    // 400 parses of a 14 kB text, each listed and compared: about 2 s alone, past the
+    // default 5 s on a shared CI runner with every other test file running beside it.
+  }, 30_000);
 });

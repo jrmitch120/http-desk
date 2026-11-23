@@ -19,9 +19,11 @@ export function checkReleaseVersion(tag, files) {
     ["src-tauri/tauri.conf.json", JSON.parse(files["src-tauri/tauri.conf.json"]).version],
     ["Cargo.toml", tomlTables(files["Cargo.toml"]).find((t) => t.header === "[workspace.package]")?.version],
   ];
-  // Workspace crates are the lockfile packages that don't come from a registry or git.
+  // Workspace crates are the lockfile packages that don't come from a registry or git,
+  // less any crate patched in from a path: a vendored copy keeps its upstream version.
+  const patched = patchedCrates(files["Cargo.toml"]);
   for (const pkg of tomlTables(files["Cargo.lock"])) {
-    if (pkg.header === "[[package]]" && pkg.source === undefined) {
+    if (pkg.header === "[[package]]" && pkg.source === undefined && !patched.has(pkg.name)) {
       found.push(["Cargo.lock", pkg.version, pkg.name]);
     }
   }
@@ -31,6 +33,26 @@ export function checkReleaseVersion(tag, files) {
     problems.push(`${file} has ${what}, but the tag is ${tag}`);
   }
   return problems;
+}
+
+/**
+ * Names the crates a Cargo manifest replaces in its `[patch.*]` tables.
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+function patchedCrates(text) {
+  const names = new Set();
+  let inPatch = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[")) {
+      inPatch = trimmed.startsWith("[patch.");
+      continue;
+    }
+    const m = /^([A-Za-z0-9_-]+)\s*=/.exec(trimmed);
+    if (inPatch && m) names.add(m[1]);
+  }
+  return names;
 }
 
 /**
