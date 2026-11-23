@@ -375,6 +375,14 @@ textarea.input {
   outline: var(--focus-ring-row);
   outline-offset: var(--focus-ring-row-offset);
 }
+/* A table's row as a list's row (the Session panel's): it stays a table row, with the
+   row's hover and focus ring. */
+tr.list-row {
+  display: table-row;
+  border-left: 0;
+  color: inherit;
+  cursor: default;
+}
 
 .link {
   color: var(--focus);

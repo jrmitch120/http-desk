@@ -21,7 +21,7 @@ async function setUrl(page: Page, text: string) {
 const card = (page: Page) => page.locator(".popup-layer .var-card");
 const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
 const panel = (page: Page) => page.getByRole("region", { name: "Session" });
-const exchanges = (page: Page) => panel(page).getByRole("table", { name: "Named exchanges" }).locator("tbody tr");
+const exchanges = (page: Page) => panel(page).getByRole("list", { name: "Named exchanges" }).getByRole("listitem");
 const RIDER = "Rider refuses to send a request containing this";
 
 /** Hovers the URL bar's Request variable, from off the bar so the hover starts fresh. */
@@ -97,7 +97,7 @@ test("Named exchanges lists each named request's latest exchange as sends happen
   await sendCreatePet(page);
 
   await expect(exchanges(page)).toHaveCount(1);
-  const cells = exchanges(page).first().getByRole("cell");
+  const cells = exchanges(page).first().locator("td");
   await expect(cells.nth(0)).toHaveText("createPet");
   await expect(cells.nth(1)).toHaveText("api/pets.http");
   await expect(cells.nth(2)).toHaveText("201");
