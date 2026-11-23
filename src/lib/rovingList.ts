@@ -31,9 +31,10 @@ export interface RovingListOptions {
   space?(row: HTMLElement): void;
 }
 
-const ROW = '[role="listitem"]';
-/** Marks an element `use:rovingList` is on, for `focusList`. */
-const LIST = "[data-roving-list]";
+/** A row of a list. */
+export const ROW = '[role="listitem"]';
+/** Marks an element `use:rovingList` is on: the list a row is in is `row.closest(LIST)`. */
+export const LIST = "[data-roving-list]";
 /** Lists `focusList` focused before they had rows: the first row to come takes focus. */
 const awaitingRows = new WeakSet<HTMLElement>();
 
