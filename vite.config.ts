@@ -15,5 +15,6 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"] },
   },
   build: { target: "es2022", chunkSizeWarningLimit: 2000 },
-  test: { include: ["src/**/*.test.ts", "scripts/**/*.test.ts"] },
+  // The guardrails read stylesheets with ?raw, which Vitest empties unless CSS is processed.
+  test: { include: ["src/**/*.test.ts", "scripts/**/*.test.ts"], css: true },
 });
