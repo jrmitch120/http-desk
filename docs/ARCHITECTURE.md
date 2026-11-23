@@ -994,7 +994,11 @@ Decisions made during implementation, beyond the plan above:
 * **The Session panel** shows what the workspace's Session holds. It lives in the
   panel area below the tabs and requests (`PanelArea.svelte`, docked by App.svelte in a
   stacked `SplitPane` whose sized pane is the second (`end`), its height kept in
-  settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). The
+  settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). A
+  panel's command (⌘J, ⇧⌘M, Show Runner) shows its panel and puts focus in its list
+  (`app.togglePanel` asks with `panelFocusWanted`, and `PanelArea` focuses the list with
+  `focusList`, else the panel itself); with the panel showing and focus elsewhere it only
+  focuses the list, and from inside the panel it hides it (#195). The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
   (`SessionNamedExchanges.svelte`, `SessionGlobals.svelte` and `SessionCookies.svelte`, in that order), each a component that reads its part through
@@ -1336,7 +1340,7 @@ Decisions made during implementation, beyond the plan above:
   report nothing and the panel shows them as "Didn't run". A run never replaces what a
   tab shows, but it updates the Session (exchanges, cookies) and the requests' test
   markers. The Runner panel (`RunnerPanel.svelte`) is a panel of the panel area beside
-  the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner toggles it),
+  the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner shows and focuses it, or hides it from inside),
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts or

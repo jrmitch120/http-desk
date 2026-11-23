@@ -2716,12 +2716,15 @@ describe("the Session panel", () => {
     });
   });
 
-  it("the Session command shows the panel, and runs again to hide it", () => {
+  it("the Session command shows the panel; run again it hides it only with focus in the panel (#195)", () => {
     app.panel = null;
     expect(runCommand("toggle-session")).toBe(true);
     expect(app.panel).toBe("session");
     expect(command("toggle-session").checked?.()).toBe(true);
+    // Focus is elsewhere (no page here): it focuses the panel's list instead.
     runCommand("toggle-session");
+    expect(app.panel).toBe("session");
+    app.togglePanel("session", true);
     expect(app.panel).toBeNull();
   });
 });

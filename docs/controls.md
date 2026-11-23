@@ -396,8 +396,9 @@ Global classes in `src/app.css`, not components:
   the top bar's Problems toggle, whose `aria-label` says the count too. With
   `.attention` it's warning-toned while not pressed (there are problems to see).
 - `.list-row`: a full-width row of a list that opens or shows what it names when
-  clicked: the Problems panel's entries (each opening the file view at its line) and the
-  file view's outline (each scrolling to its request). A list's keys are
+  clicked: the file view's outline (each scrolling to its request), History, the
+  Session panel's rows, the Problems panel's entries (each opening the file view at its
+  line), the Runner's results and Find usages. A list's keys are
   [`use:rovingList`](#userovinglist)'s. Its height is at least
   `--control-h-icon`; it hovers like a row, and `.current` with `aria-current="true"`
   marks the row for where the user is (the outline's request under the cursor) with an
@@ -424,8 +425,8 @@ Global classes in `src/app.css`, not components:
 ### use:rovingList
 
 `src/lib/rovingList.ts`. Every list of rows works the same from the keyboard: the
-file view's outline, and History, the Session panel, Problems, the Runner and Find
-usages as they move onto it (#188). The Explorer is a tree and keeps its own keys.
+file view's outline, History, the Session panel, Problems, the Runner and Find usages
+(#188). The Explorer is a tree and keeps its own keys.
 
 - Roles: the rows are `role="listitem"` elements written with `tabindex="-1"`, inside a
   `role="list"` with an `aria-label`. Put the action on that list, or on an element
@@ -439,6 +440,11 @@ usages as they move onto it (#188). The Explorer is a tree and keeps its own key
   elsewhere, the stop goes to it (the outline's stop follows the text cursor). When the
   stop's row goes, the row now in its place takes it. The list itself takes focus from
   code (`tabindex="-1"`) for when it has no rows.
+- `focusList(scope)` puts focus in a list from code (a command, or a panel as it shows):
+  the list `scope` is or the first one inside it takes focus on its Tab stop, else (no
+  rows yet, as while a panel's rows load) the list itself does, and its first row takes
+  focus when it arrives. It returns false if `scope` holds no list. The panel area uses
+  it for ⌘J, ⇧⌘M and Show Runner.
 - Keys on a focused row: Up/Down and Home/End move, stopping at the ends, and the row
   focused is scrolled into view. Rows marked `aria-disabled="true"` are skipped. No
   type-to-jump. Keys with ⌘, Ctrl or Alt held are left to the app's shortcuts, and every

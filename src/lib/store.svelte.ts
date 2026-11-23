@@ -275,6 +275,8 @@ class AppStore {
   modal = $state<ModalKind>(null);
   /** The panel shown below the requests, if any. */
   panel = $state<PanelId | null>(null);
+  /** Set to ask the panel area to put focus in the shown panel's list; it clears this. */
+  panelFocusWanted = $state(false);
   /** What the sidebar shows. Not part of the Layout: each start shows the Explorer. */
   sidebarView = $state<SidebarView>("explorer");
   dialog =$state<DialogState | null>(null);
@@ -1473,9 +1475,17 @@ class AppStore {
     return api.promptAnswers(tab.key);
   }
 
-  /** Shows `panel` below the requests, or hides it if it's the one shown. */
-  togglePanel(panel: PanelId) {
-    this.panel = this.panel === panel ? null : panel;
+  /**
+   * A panel's command (⌘J, ⌘⇧M, Show Runner): shows `panel` below the requests and
+   * puts focus in its list, or, with focus in it already (`focusInPanel`), hides it.
+   */
+  togglePanel(panel: PanelId, focusInPanel: boolean) {
+    if (this.panel === panel && focusInPanel) {
+      this.panel = null;
+      return;
+    }
+    this.panel = panel;
+    this.panelFocusWanted = true;
   }
 
   /**

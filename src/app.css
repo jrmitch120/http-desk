@@ -341,8 +341,9 @@ textarea.input {
 }
 
 /* A full-width row of a list that does something when clicked (opens what it names):
-   the Problems panel's entries, the file view's outline. `.current` marks the row for
-   where the user is, with `aria-current`. A list's keys are `use:rovingList`'s. */
+   the file view's outline, History, the Session panel, Problems, the Runner and Find
+   usages. `.current` marks the row for where the user is, with `aria-current`. A
+   list's keys are `use:rovingList`'s. */
 .list-row {
   display: flex;
   align-items: center;
