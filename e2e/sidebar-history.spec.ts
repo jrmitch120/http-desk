@@ -59,7 +59,7 @@ test("an entry opens read-only in the response viewer, and closing it releases i
   await send(page);
   await showHistory(page);
 
-  await entries(page).first().getByRole("button").click();
+  await entries(page).first().click();
 
   const opened = dialog(page, "History entry");
   await expect(opened).toContainText("from api/pets.http");
@@ -71,7 +71,7 @@ test("an entry opens read-only in the response viewer, and closing it releases i
   await expect(viewer.getByText("••••••••")).toBeVisible();
   // Nothing to send again or browse from here: it's an entry, not a request.
   await expect(viewer.getByRole("radiogroup", { name: "Response pane" })).toHaveCount(0);
-  await expect(entries(page).first().getByRole("button")).toHaveAttribute("aria-current", "true");
+  await expect(entries(page).first()).toHaveAttribute("aria-current", "true");
 
   await page.keyboard.press("Escape");
   await expect(opened).toBeHidden();
@@ -146,7 +146,7 @@ test("entries whose request was renamed or whose file was deleted still appear",
   await expect(entries(page)).toHaveCount(2);
   await expect(entries(page).nth(0)).toContainText("samples/jetbrains.http");
   await expect(entries(page).nth(1)).toContainText("api/pets.http");
-  await entries(page).nth(1).getByRole("button").click();
+  await entries(page).nth(1).click();
   await expect(dialog(page, "History entry").locator(".body .cm-content")).toContainText('"name": "Rex"');
 });
 
@@ -211,7 +211,7 @@ test("Restore request from an entry opened in the sidebar brings its request bac
   await openRequest(page, ["api", "pets.http"], "List pets");
   await showHistory(page);
 
-  await entries(page).first().getByRole("button").click();
+  await entries(page).first().click();
   await dialog(page, "History entry").getByRole("button", { name: "Restore request" }).click();
 
   await expect(dialog(page, "History entry")).toHaveCount(0);
@@ -236,7 +236,7 @@ test("the sidebar's History compares an entry with the next newer one of its req
   const listPetsNewer = await entries(page).nth(1).locator(".metric").first().textContent();
 
   // The oldest entry's next newer one of the same request, not the newest in the list.
-  await entries(page).nth(2).getByRole("button").click({ button: "right" });
+  await entries(page).nth(2).click({ button: "right" });
   await page.getByRole("menuitem", { name: /^Compare with the next newer entry/ }).click();
   await expect(compare).toContainText(`vs. ${listPetsNewer}`);
   await expect(compare.locator(".cm-merge-b .cm-changedLine")).toContainText(['"name": "Max"']);

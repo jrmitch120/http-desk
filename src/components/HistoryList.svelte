@@ -5,9 +5,11 @@
   request's in the response pane, one line a row, and the workspace's in the
   sidebar, `narrow` (two lines a row).
 
-  With `onselect`, each row has a box to select it (for Compare); with `onmenu`, a
-  context menu; with `ondelete`, Delete (or Backspace) on a row deletes it. `footer`
-  ends the list (HistoryView's "Show more").
+  A list (`use:rovingList`): one Tab stop, the arrow keys move, Enter opens. With
+  `onselect`, each row has a box to select it (for Compare), which Space ticks; with
+  `onmenu`, a context menu (Shift+F10 too); with `ondelete`, Delete (or Backspace) on a
+  row deletes it. `footer` ends the list (HistoryView's "Show more"), and `onlast` runs
+  as the keyboard reaches the last row, so it can list more.
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
@@ -17,6 +19,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Checkbox from "./Checkbox.svelte";
+  import { rovingList } from "../lib/rovingList";
 
   interface Props {
     entries: HistorySummary[];
@@ -36,15 +39,40 @@
     ondelete?: (entry: HistorySummary) => void;
     /** After the last row. */
     footer?: Snippet;
+    /** Focus reached the last row, or Down or End was pressed on it (to list more). */
+    onlast?: () => void;
   }
 
-  let { entries, onopen, file = false, narrow = false, current = null, selected = [], onselect, onmenu, ondelete, footer }: Props = $props();
+  let { entries, onopen, file = false, narrow = false, current = null, selected = [], onselect, onmenu, ondelete, footer, onlast }: Props = $props();
+
+  const entryOf = (row: HTMLElement) => entries.find((e) => String(e.id) === row.dataset.id);
+  const isLast = (row: EventTarget | null) => row instanceof HTMLElement && row.dataset.id === String(entries.at(-1)?.id);
 
   function onRowKey(event: KeyboardEvent, entry: HistorySummary) {
-    if (!ondelete || (event.key !== "Delete" && event.key !== "Backspace") || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if ((event.key === "ArrowDown" || event.key === "End") && isLast(event.currentTarget)) onlast?.();
+    if (!ondelete || (event.key !== "Delete" && event.key !== "Backspace")) return;
     event.preventDefault();
     ondelete(entry);
   }
+
+  /** A click on the row opens it; one on its Compare box only ticks the box. */
+  function onRowClick(event: MouseEvent, entry: HistorySummary) {
+    if (!(event.target as Element).closest('[role="checkbox"]')) onopen(entry);
+  }
+
+  const keys = $derived({
+    activate: (row: HTMLElement) => {
+      const entry = entryOf(row);
+      if (entry) onopen(entry);
+    },
+    space: onselect
+      ? (row: HTMLElement) => {
+          const entry = entryOf(row);
+          if (entry) onselect(entry, !selected.includes(entry.id));
+        }
+      : undefined,
+  });
 </script>
 
 {#snippet outcome(e: HistorySummary)}
@@ -63,13 +91,27 @@
   {#if e.size !== null || !narrow}<span class="metric muted size">{e.size === null ? "" : formatBytes(e.size)}</span>{/if}
 {/snippet}
 
-<ul class="entries" class:narrow aria-label="History entries">
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div class="entries" class:narrow role="list" aria-label="History entries" use:rovingList={keys} onfocusin={(ev) => isLast(ev.target) && onlast?.()}>
   {#each entries as e, i (e.id)}
-    <li class="entry" class:selectable={!!onselect} class:current={e.id === current}>
+    <!-- The list's keys are rovingList's (Enter opens, Space ticks Compare); Delete and the menu are the row's. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div
+      role="listitem"
+      tabindex="-1"
+      class="list-row entry"
+      class:selectable={!!onselect}
+      class:current={e.id === current}
+      aria-current={e.id === current || undefined}
+      data-id={e.id}
+      onclick={(ev) => onRowClick(ev, e)}
+      oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))}
+      onkeydown={(ev) => onRowKey(ev, e)}
+    >
       {#if onselect}
-        <Checkbox class="select" checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
+        <Checkbox class="select" tabindex={-1} checked={selected.includes(e.id)} label="Select for Compare" onchange={(on) => onselect(e, on)} />
       {/if}
-      <button class="row" aria-current={e.id === current || undefined} onclick={() => onopen(e)} oncontextmenu={onmenu && ((ev) => onmenu(ev, e, i))} onkeydown={(ev) => onRowKey(ev, e)}>
+      <div class="row">
         {#if narrow}
           <span class="line">
             <Badge method={e.method} />
@@ -90,11 +132,11 @@
           {@render outcome(e)}
           {@render metrics(e)}
         {/if}
-      </button>
-    </li>
+      </div>
+    </div>
   {/each}
-  {#if footer}<li class="footer" role="none">{@render footer()}</li>{/if}
-</ul>
+  {#if footer}<div class="footer" role="none">{@render footer()}</div>{/if}
+</div>
 
 <style>
   .entries {
@@ -105,13 +147,11 @@
     min-height: 0;
     flex: 1;
   }
+  /* A `.list-row` (hover, current and focus), laid out here. */
   .entry {
-    display: flex;
-    align-items: center;
-  }
-  .entry:hover,
-  .entry.current {
-    background: var(--hover);
+    gap: 0;
+    padding: 0;
+    color: var(--text);
   }
   .row {
     display: flex;
@@ -120,13 +160,6 @@
     flex: 1;
     min-width: 0;
     padding: 5px 16px;
-    border: 0;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-    text-align: left;
-    cursor: pointer;
   }
   .narrow .row {
     flex-direction: column;
