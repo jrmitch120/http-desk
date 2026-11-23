@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { activeTab, bodyEditor, openApp, openRequest, sentRequests, tab, treeItem, urlBar } from "./helpers";
+import { activeTab, bodyEditor, openApp, openRequest, searchBox, searchResults, sentRequests, tab, treeItem, urlBar } from "./helpers";
 
 // The OS is forced with `?platform=` (openApp defaults to mac), so a test
 // presses that OS's keys whatever machine runs it.
@@ -64,6 +64,21 @@ test("⌘Enter with an Explorer request row focused sends the active request onc
   await treeItem(page, "List pets").press("ArrowDown");
   await expect(treeItem(page, "Create pet")).toBeFocused();
   await page.keyboard.press("Meta+Enter");
+
+  await expect(page.getByText("200 OK")).toBeVisible();
+  expect(await sentRequests(page)).toHaveLength(1);
+  await expect(activeTab(page)).toContainText("List pets");
+  await expect(page.locator(".tabbar .tab")).toHaveCount(1);
+});
+
+test("⌘Enter in the Explorer search sends the active request once and doesn't open the highlighted result", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.keyboard.press("Meta+P");
+  await page.keyboard.type("create");
+  await expect(searchResults(page)).toHaveText([/Create pet/]);
+  await expect(searchResults(page).nth(0)).toHaveAttribute("aria-selected", "true");
+  await searchBox(page).press("Meta+Enter");
 
   await expect(page.getByText("200 OK")).toBeVisible();
   expect(await sentRequests(page)).toHaveLength(1);
