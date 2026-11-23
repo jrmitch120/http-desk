@@ -827,7 +827,10 @@ fn portability_editors_start_off_and_a_file_without_them_loads_them_off() {
     for (old, editors) in [
         (r#"{"theme":"light","portabilityWarnings":true}"#, off.clone()),
         (r#"{"theme":"light","portabilityWarnings":true,"portabilityEditors":"yes"}"#, off.clone()),
-        (r#"{"theme":"light","portabilityWarnings":true,"portabilityEditors":{"vscode":true}}"#, json!({ "vscode": true, "rider": false })),
+        (
+            r#"{"theme":"light","portabilityWarnings":true,"portabilityEditors":{"vscode":true}}"#,
+            json!({ "vscode": true, "rider": false }),
+        ),
     ] {
         let json = serde_json::to_value(serde_json::from_str::<super::AppSettings>(old).unwrap()).unwrap();
         assert_eq!(
