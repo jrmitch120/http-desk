@@ -51,7 +51,7 @@ jobs:
   # One OS is enough. The Chromium tests are split over 4 jobs (#199). Each keeps
   # Playwright's default workers (half the runner's 4 vCPUs, so 2), as many as
   # before the split, so timing-sensitive tests see the same load.
-  browser:
+  chromium:
     name: browser (chromium ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-22.04
     strategy:
@@ -132,6 +132,21 @@ jobs:
           name: playwright-results-webkit
           path: test-results/
           retention-days: 7
+
+  # The one check branch protection requires for the browser tests: it passes only
+  # if every Chromium shard and WebKit passed, so the required check stays the same
+  # when the shards change. Runs even when they fail (always()), because a skipped
+  # required check counts as passed.
+  browser:
+    if: always()
+    needs: [chromium, webkit]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Every Chromium shard and WebKit passed
+        run: |
+          echo "chromium: ${{ needs.chromium.result }}, webkit: ${{ needs.webkit.result }}"
+          test "${{ needs.chromium.result }}" = success
+          test "${{ needs.webkit.result }}" = success
 
   # Large responses keep the window responsive (e2e/perf): each step fails if it
   # blocks the main thread over 50 ms. Its own job, so the timings aren't skewed
