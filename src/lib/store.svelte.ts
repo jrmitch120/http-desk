@@ -288,6 +288,10 @@ class AppStore {
   starting = $state(true);
   /** Bumped to ask the sidebar search box to take focus. */
   focusSearch = $state(0);
+  /** Bumped to ask the sidebar's Explorer, or its History list, to take focus (Focus
+   *  Explorer, Focus History): on the row last focused, else the list's current row. */
+  focusExplorer = $state(0);
+  focusHistory = $state(0);
   /** Fix-it requests from the error panel, each cleared by the component that
    *  acts on it: the Settings section to scroll to when the modal opens, the tab
    *  whose request editor should show its Settings, and the environment picker. */
@@ -441,8 +445,8 @@ class AppStore {
       .catch(() => {});
   }
 
-  /** Shows the sidebar if it's hidden, on `view`, for what puts its results there
-   *  (Search Requests and Find usages, in the Explorer). */
+  /** Shows the sidebar if it's hidden, on `view`, for what puts its results or focus there
+   *  (Search Requests and Find usages, in the Explorer; Focus Explorer and Focus History). */
   showSidebar(view: SidebarView = "explorer") {
     this.sidebarView = view;
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });

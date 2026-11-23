@@ -1,12 +1,18 @@
 <script module lang="ts">
   /** The last `app.focusSearch` ask the search box took focus for. */
   let focusAsked = 0;
+  /** The last `app.focusExplorer` ask (Focus Explorer) the Explorer took focus for. */
+  let explorerAsked = 0;
+  /** The Explorer row last focused (`rowId`), kept while the Explorer isn't shown
+   *  (the History view in its place), for Focus Explorer to go back to. */
+  let lastRow: string | null = null;
 </script>
 
 <script lang="ts">
   import { untrack } from "svelte";
   import { app } from "../lib/store.svelte";
   import { usageRows } from "../lib/usages";
+  import { shortcutHint } from "../lib/commands";
   import { errorMessage } from "../lib/api";
   import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
@@ -19,9 +25,10 @@
   import WorkspaceHistory from "./WorkspaceHistory.svelte";
   import type { SidebarView } from "../lib/store.svelte";
 
+  // Each hints the command that shows it and focuses its list.
   const VIEWS: SegmentedOption<SidebarView>[] = [
-    { value: "explorer", label: "Explorer" },
-    { value: "history", label: "History" },
+    { value: "explorer", label: "Explorer", tooltip: `Explorer (${shortcutHint("focus-explorer")})` },
+    { value: "history", label: "History", tooltip: `History (${shortcutHint("focus-history")})` },
   ];
 
   let query = $state("");
@@ -93,6 +100,7 @@
   // focused, else the active request, else the first), and the arrow keys move
   // between rows. TreeItem renders rows with tabindex -1; this sets the one at 0.
   let treeEl: HTMLDivElement | undefined = $state();
+  let usagesEl: HTMLElement | undefined = $state();
   const rows = () => [...(treeEl?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])];
   const level = (row: HTMLElement | undefined) => Number(row?.getAttribute("aria-level") ?? 0);
   const isRow = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "treeitem";
@@ -100,6 +108,39 @@
   function makeCurrent(row: HTMLElement) {
     for (const r of rows()) r.tabIndex = r === row ? 0 : -1;
   }
+
+  /** What identifies a row across the tree being rebuilt: its request, else its path. */
+  const rowId = (row: HTMLElement) => (row.dataset.key ? `${row.dataset.file}#${row.dataset.key}` : (row.dataset.path ?? ""));
+
+  /**
+   * Focus Explorer: the row last focused, else the Tab stop (the open request's row,
+   * else the first), else the empty tree. A search or Find usages in the tree's place
+   * takes focus instead: the search box, or the usages list's Tab stop (its Close
+   * button while there are none). False while there's nothing to focus yet (the tree
+   * still loading).
+   */
+  function focusExplorer(): boolean {
+    if (query.trim() && searchInput) {
+      searchInput.focus();
+      return true;
+    }
+    if (usagesEl) {
+      (usagesEl.querySelector<HTMLElement>('[role="listitem"][tabindex="0"]') ?? usagesEl.querySelector<HTMLElement>("button"))?.focus();
+      return true;
+    }
+    if (!treeEl) return false;
+    const all = rows();
+    (all.find((r) => rowId(r) === lastRow) ?? all.find((r) => r.tabIndex === 0) ?? treeEl.querySelector<HTMLElement>('[role="treeitem"].active') ?? all[0] ?? treeEl).focus();
+    return true;
+  }
+
+  // Each ask once, when the Explorer is on screen (the sidebar shown, the tree listed).
+  $effect(() => {
+    if (app.focusExplorer === explorerAsked || !app.sidebarShown || app.sidebarView !== "explorer") return;
+    // Again as the tree, search results or usages come and go, until one takes focus.
+    void [treeEl, usagesEl, searchInput, query];
+    if (untrack(focusExplorer)) explorerAsked = app.focusExplorer;
+  });
 
   $effect(() => {
     const el = treeEl;
@@ -216,7 +257,7 @@
       </div>
     {:else if app.usages}
       {@const rows = app.usages.usages && usageRows(app.usages.usages, app.root ?? "")}
-      <section class="usages" aria-label="Usages of {app.usages.name}">
+      <section class="usages" bind:this={usagesEl} aria-label="Usages of {app.usages.name}">
         <div class="usages-head">
           <span class="usages-title ellipsis">Usages of <code>{`{{${app.usages.name}}}`}</code></span>
           <button class="icon-btn" aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
@@ -252,7 +293,11 @@
         aria-multiselectable="true"
         tabindex="-1"
         onkeydown={onTreeKey}
-        onfocusin={(e) => isRow(e.target) && makeCurrent(e.target)}
+        onfocusin={(e) => {
+          if (!isRow(e.target)) return;
+          makeCurrent(e.target);
+          lastRow = rowId(e.target);
+        }}
         class:drop={rootDrop}
         ondragover={(e) => {
           if (e.target === e.currentTarget) {

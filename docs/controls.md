@@ -65,8 +65,10 @@ a line there for a new kind of field.
 `SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
 pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
-- Props: `options` (`{ value, label, icon?, count? }[]`), `value`, `onchange(value)`,
+- Props: `options` (`{ value, label, icon?, count?, tooltip? }[]`), `value`, `onchange(value)`,
   `label` (the group's accessible name, required), `disabled?`.
+- `tooltip` puts a tooltip on one option, for a shortcut that picks it (the sidebar's
+  Explorer and History hint Focus Explorer and Focus History).
 - `count` shows a number after the label and is part of the option's name ("Headers 4").
   Leave it out and nothing shows; pass `0` only where an empty option says something
   (a response with no headers), so empty tabs don't fill up with zeros.

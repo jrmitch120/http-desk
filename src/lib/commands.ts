@@ -37,6 +37,8 @@ export type CommandId =
   | "show-source"
   | "view-file-as-text"
   | "toggle-sidebar"
+  | "focus-explorer"
+  | "focus-history"
   | "toggle-session"
   | "toggle-runner"
   | "toggle-problems"
@@ -275,6 +277,27 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     checked: () => app.sidebarShown,
     run: () => void app.updateSettings({ sidebarHidden: app.sidebarShown }),
+  },
+  {
+    // As in VS Code (Show Explorer).
+    id: "focus-explorer",
+    label: "Focus Explorer",
+    shortcut: { mod: true, shift: true, key: "e" },
+    enabled: inWorkspace,
+    run: () => {
+      app.showSidebar("explorer");
+      app.focusExplorer++;
+    },
+  },
+  {
+    id: "focus-history",
+    label: "Focus History",
+    shortcut: { mod: true, shift: true, key: "h" },
+    enabled: inWorkspace,
+    run: () => {
+      app.showSidebar("history");
+      app.focusHistory++;
+    },
   },
   {
     id: "toggle-session",

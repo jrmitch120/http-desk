@@ -178,7 +178,8 @@
     </div>
   {/if}
   {#if entries?.length === 0}
-    <div class="empty-state small">{filtered ? "No History entries match" : empty}</div>
+    <!-- Focusable from code: where Focus History lands while there are no entries. -->
+    <div class="empty-state small" tabindex="-1">{filtered ? "No History entries match" : empty}</div>
   {:else if entries}
     <HistoryList {entries} onopen={open} current={shown} file={workspace} narrow={workspace} {selected} onselect={select} onmenu={entryMenu} ondelete={(e) => app.history.delete(e)} footer={more ? showMoreButton : undefined} onlast={showMore} />
   {/if}

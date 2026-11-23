@@ -82,6 +82,9 @@ export function menuLayout(os: OS): TopMenu[] {
       : [native("undo"), native("redo"), SEP, native("cut"), native("copy"), native("paste"), native("selectAll")];
   const view: MenuEntry[] = [
     cmd("toggle-sidebar"),
+    cmd("focus-explorer"),
+    cmd("focus-history"),
+    SEP,
     cmd("toggle-session"),
     cmd("toggle-runner"),
     cmd("toggle-problems"),

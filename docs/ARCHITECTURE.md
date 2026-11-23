@@ -68,7 +68,7 @@ src/                    Svelte 5 frontend
   lib/history.svelte.ts History as the page sees it: each History view (`HistoryViewId`: a tab's, the sidebar's) and the entry it opened, what Compare compares an entry with (`compareTarget`), comparisons, a restored tab's last response, deleting and clearing (Restore request is `app.restoreRequest`)
   components/HistoryView.svelte, HistoryList.svelte  a History view, shared by both: filters (status class, text), pages, opening an entry, the row menu (Open, Compare, Delete), Compare selected, and (the sidebar's only) Clear workspace history; and its rows
   components/RequestHistory.svelte  the request's History view in the response pane
-  components/WorkspaceHistory.svelte, HistoryEntryView.svelte  the sidebar's History view (the whole workspace's), and an entry opened from it (with Restore request)
+  components/WorkspaceHistory.svelte, HistoryEntryView.svelte  the sidebar's History view (the whole workspace's, where Focus History puts focus), and an entry opened from it (with Restore request)
   components/HistoryOff.svelte  what a History view shows while the History switch is off, linking to the setting
   components/HistorySettings.svelte  Settings → History: the History switch, retention's limits, where History is kept, Clear all history
   lib/compare.ts, components/CompareView.svelte  Compare: two responses' bodies and headers in CodeMirror's merge view; bodies over 1 MB aren't compared, only their headers
