@@ -77,6 +77,7 @@ test("the entries are one Tab stop that Up/Down/Home/End move through across fil
   await expect(broken).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(upload).toBeFocused();
+  await expect(upload, "shows the focus ring").toHaveCSS("outline-style", "solid");
   await page.keyboard.press("ArrowDown");
   await expect(upload).toBeFocused();
   await page.keyboard.press("Home");

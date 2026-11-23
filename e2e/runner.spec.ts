@@ -364,6 +364,7 @@ test("the results are one Tab stop that the arrow keys move through, skipping ro
   await expect(state(page, "Create pet", "Passed")).toBeVisible();
   await page.keyboard.press("ArrowDown");
   await expect(row(page, "Create pet")).toBeFocused();
+  await expect(row(page, "Create pet"), "shows the focus ring").toHaveCSS("outline-style", "solid");
   await page.keyboard.press("Enter");
   const viewer = runner(page).locator(".result");
   await expect(viewer.locator(".statusbar")).toContainText("201 Created");

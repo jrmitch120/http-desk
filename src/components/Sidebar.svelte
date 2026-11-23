@@ -14,6 +14,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { rovingList } from "../lib/rovingList";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import WorkspaceHistory from "./WorkspaceHistory.svelte";
   import type { SidebarView } from "../lib/store.svelte";
@@ -226,15 +227,19 @@
           <div class="none muted">Nothing in the workspace uses <code>{`{{${app.usages.name}}}`}</code>.</div>
         {:else}
           <div class="usages-count muted">{rows.length} {rows.length === 1 ? "place" : "places"}</div>
-          {#each rows as row (row.key)}
-            <button class="hit usage" class:disabled={row.disabled} onclick={() => app.openUsage(row.usage)}>
-              {#if row.method}<Badge method={row.method} />{:else}<span class="usage-icon"><Icon name={row.usage.kind === "environment" ? "globe" : "code"} size={13} /></span>{/if}
-              <span class="hit-text">
-                <span class="ellipsis">{row.title}</span>
-                <span class="file ellipsis">{row.where}{row.disabled ? " · disabled" : ""}</span>
-              </span>
-            </button>
-          {/each}
+          <!-- One Tab stop, the arrow keys move (rovingList); Enter clicks the row. -->
+          <div role="list" aria-label="Usages" use:rovingList={{ activate: (row) => row.click() }}>
+            {#each rows as row (row.key)}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <div role="listitem" tabindex="-1" class="list-row hit usage" class:disabled={row.disabled} onclick={() => app.openUsage(row.usage)}>
+                {#if row.method}<Badge method={row.method} />{:else}<span class="usage-icon"><Icon name={row.usage.kind === "environment" ? "globe" : "code"} size={13} /></span>{/if}
+                <span class="hit-text">
+                  <span class="ellipsis">{row.title}</span>
+                  <span class="file ellipsis">{row.where}{row.disabled ? " · disabled" : ""}</span>
+                </span>
+              </div>
+            {/each}
+          </div>
         {/if}
       </section>
     {:else if app.tree}
