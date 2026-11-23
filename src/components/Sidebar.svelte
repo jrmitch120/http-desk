@@ -21,7 +21,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { rovingList } from "../lib/rovingList";
+  import { focusList, rovingList } from "../lib/rovingList";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import WorkspaceHistory from "./WorkspaceHistory.svelte";
   import type { SidebarView } from "../lib/store.svelte";
@@ -102,6 +102,7 @@
   // between rows. TreeItem renders rows with tabindex -1; this sets the one at 0.
   let treeEl: HTMLDivElement | undefined = $state();
   let usagesEl: HTMLElement | undefined = $state();
+  let closeUsages: HTMLButtonElement | undefined = $state();
   const rows = () => [...(treeEl?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])];
   const level = (row: HTMLElement | undefined) => Number(row?.getAttribute("aria-level") ?? 0);
   const isRow = (t: EventTarget | null): t is HTMLElement => t instanceof HTMLElement && t.getAttribute("role") === "treeitem";
@@ -126,7 +127,7 @@
       return true;
     }
     if (usagesEl) {
-      (usagesEl.querySelector<HTMLElement>('[role="listitem"][tabindex="0"]') ?? usagesEl.querySelector<HTMLElement>("button"))?.focus();
+      if (!focusList(usagesEl)) closeUsages?.focus();
       return true;
     }
     if (!treeEl) return false;
@@ -261,7 +262,7 @@
       <section class="usages" bind:this={usagesEl} aria-label="Usages of {app.usages.name}">
         <div class="usages-head">
           <span class="usages-title ellipsis">Usages of <code>{`{{${app.usages.name}}}`}</code></span>
-          <button class="icon-btn" aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
+          <button class="icon-btn" bind:this={closeUsages} aria-label="Close usages" use:tooltip onclick={() => app.closeUsages()}><Icon name="x" size={12} /></button>
         </div>
         {#if !rows}
           <div class="none muted">Searching…</div>
