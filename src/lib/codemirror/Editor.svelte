@@ -89,15 +89,18 @@
    * only its first 3000 characters; the rest would stay uncoloured until
    * CodeMirror's idle-time parse (100 ms or more). Up to the end of the text
    * drawn, not of the viewport: the viewport takes in the whole of a long line
-   * (a 50 MB minified body) though only part of it is drawn. Nothing when the
-   * text drawn is parsed already, or ends too far on to reach in time: handing
-   * the new tree to the view costs CodeMirror another parse of up to 20 ms
-   * toward the viewport's end, which on that line is 50 MB away.
+   * though only part of it is drawn. Nothing when the text drawn is parsed
+   * already, or when the viewport (so the text drawn too) ends too far on to
+   * reach in time: handing the new tree to the view sets off CodeMirror's own
+   * parse of up to 20 ms toward the viewport's end, on top of ours, in the same
+   * task (#185). So Raw on a 50 MB minified body, whose viewport is its whole
+   * line, is coloured past its first 3000 characters only from the first
+   * idle-time parse.
    */
   function parseDrawn(v: EditorView) {
     const drawnTo = v.visibleRanges.at(-1)?.to ?? v.viewport.to;
     const parsed = syntaxTree(v.state).length;
-    if (drawnTo > parsed && drawnTo - parsed <= PARSE_REACH) forceParsing(v, drawnTo, PARSE_ON_MOUNT_MS);
+    if (drawnTo > parsed && v.viewport.to - parsed <= PARSE_REACH) forceParsing(v, drawnTo, PARSE_ON_MOUNT_MS);
   }
 
   let host: HTMLDivElement;
