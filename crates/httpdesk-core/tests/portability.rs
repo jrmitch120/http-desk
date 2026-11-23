@@ -43,6 +43,8 @@ const ROWS: &[(Construct, Support, usize)] = &[
     (C::BodyFile, Portable, 5),
     (C::BodyFileWithVariables, VscodeOnly, 5),
     (C::BodyFileLine, VscodeOnly, 6),
+    (C::BodyComment, JetbrainsOnly, 5),
+    (C::BodyCommentFirstLine, HttpdeskOnly, 4),
 ];
 
 fn fixture(construct: Construct) -> String {
@@ -191,4 +193,64 @@ fn a_requests_marks_are_placed_in_its_source_as_the_source_view_shows_it() {
     assert_eq!(httpdesk_core::request_source(&request), text);
     let found: Vec<_> = request_portability(&request).iter().map(|m| (m.line, m.construct)).collect();
     assert_eq!(found, [(5, C::NoLogDirective), (7, C::DisabledLine)]);
+}
+
+/// #186: what each tool does with a `#` or `//` line in a body depends on the body's
+/// kind (docs/research/http-comment-compat.md, row 1d and Appendix C).
+fn body_marks(content_type: &str, body: &str) -> Vec<(usize, Construct)> {
+    let text = format!("POST https://example.com/\nContent-Type: {content_type}\n\n{body}\n");
+    portability(&text).iter().map(|m| (m.line, m.construct)).collect()
+}
+
+#[test]
+fn a_comment_line_in_a_sent_as_written_body_is_noted() {
+    // HttpDesk and Rider send it, VS Code drops it; on the body's first line Rider drops it too.
+    for content_type in ["application/json", "text/plain", "application/xml", "application/octet-stream"] {
+        assert_eq!(
+            body_marks(content_type, "// note\n{\n# a note\n  // indented\n\"a\": 1\n}"),
+            [(4, C::BodyCommentFirstLine), (6, C::BodyComment), (7, C::BodyComment)],
+            "{content_type}"
+        );
+    }
+}
+
+#[test]
+fn a_disabled_marker_in_a_sent_as_written_body_is_a_comment_line_not_a_disabled_one() {
+    // HttpDesk sends `#~` lines in these bodies: only form fields and multipart parts are turned off.
+    assert_eq!(
+        body_marks("application/json", "#~ first\n{\n#~ \"a\": 1\n}"),
+        [(4, C::BodyCommentFirstLine), (6, C::BodyComment)]
+    );
+    assert_eq!(body_marks("text/plain", "hello\n#~ world"), [(5, C::BodyComment)]);
+}
+
+#[test]
+fn in_a_form_a_disabled_field_is_still_disabled_and_a_comment_is_not_noted() {
+    // Every tool drops a form's comment lines; only HttpDesk reads `#~` as a turned-off field.
+    assert_eq!(
+        body_marks("application/x-www-form-urlencoded", "# note\na=1\n#~ &b={{$guid}}\n// note {{$guid}}\n&c=3"),
+        [(6, C::DisabledLine)]
+    );
+}
+
+#[test]
+fn in_a_multipart_body_a_comment_is_noted_and_a_disabled_part_line_is_still_disabled() {
+    let body = "--B\n# note\nContent-Disposition: form-data; name=\"a\"\n\n// part text\n#~ --B\n#~ Content-Disposition: form-data; name=\"b\"\n--B--";
+    assert_eq!(
+        body_marks("multipart/form-data; boundary=B", body),
+        [(5, C::BodyComment), (8, C::BodyComment), (9, C::DisabledLine), (10, C::DisabledLine)]
+    );
+}
+
+#[test]
+fn a_file_line_among_comment_lines_keeps_its_mark() {
+    assert_eq!(
+        body_marks("application/json", "# head\n[\n< ./a.json\n// tail\n]"),
+        [(4, C::BodyCommentFirstLine), (6, C::BodyFileLine), (7, C::BodyComment)]
+    );
+}
+
+#[test]
+fn a_comment_line_that_is_sent_has_its_variables_noted_too() {
+    assert_eq!(body_marks("text/plain", "hello\n# {{$guid}}"), [(5, C::BodyComment), (5, C::VscodeDynamicVariable)]);
 }

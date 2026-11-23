@@ -373,6 +373,31 @@ async fn disabled_multipart_parts_are_not_sent() {
     }
 }
 
+/// #186: HttpDesk sends a body's `#`, `//` and `#~` lines as written (as Rider does past
+/// the first line), dropping them only from a form, and a `#~` line from a multipart body.
+#[tokio::test]
+async fn comment_lines_in_a_body_are_sent_except_in_a_form_or_a_disabled_part() {
+    let server = echo_server().await;
+    let vars = env(&[("base", &server.uri())]);
+    let lines = "# hash\n// slashes\n#~ tilde";
+    let cases = [
+        ("application/json", format!("{{\n{lines}\n}}"), format!("{{\n{lines}\n}}")),
+        ("text/plain", format!("{lines}\nhello"), format!("{lines}\nhello")),
+        ("application/x-www-form-urlencoded", format!("a=1\n{lines}\n&b=2"), "a=1&b=2".to_string()),
+        (
+            "multipart/form-data; boundary=B",
+            format!("--B\nContent-Disposition: form-data; name=\"a\"\n\n{lines}\n--B--"),
+            "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n# hash\r\n// slashes\r\n--B--\r\n".to_string(),
+        ),
+    ];
+    for (content_type, body, expected) in cases {
+        let text = format!("POST {{{{base}}}}/echo\nContent-Type: {content_type}\n\n{body}\n");
+        let req = parse(&text).requests.remove(0);
+        send(&req, vars.clone(), Path::new(".")).await.unwrap();
+        assert_eq!(String::from_utf8(last_request(&server).await.body).unwrap(), expected, "{content_type}");
+    }
+}
+
 #[tokio::test]
 async fn redirects_timeouts_and_methods() {
     let server = MockServer::start().await;
