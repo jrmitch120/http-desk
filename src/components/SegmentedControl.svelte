@@ -7,6 +7,8 @@
     /** A number shown after the label (how many items the option holds). Left
      *  out, nothing shows; pass 0 only where "none" is worth saying. */
     count?: number;
+    /** A tooltip on the option (a shortcut that picks it). */
+    tooltip?: string;
   }
 </script>
 
@@ -14,6 +16,7 @@
   // Pick one of a few options (ADR 0002). An ARIA radiogroup with roving focus:
   // Tab reaches the checked option, arrow keys (and Home/End) move and select.
   import Icon from "./Icon.svelte";
+  import { tooltip } from "../lib/popup/tooltip.svelte";
 
   interface Props {
     options: readonly SegmentedOption<T>[];
@@ -58,6 +61,7 @@
       {disabled}
       bind:this={buttons[i]}
       onclick={() => o.value !== value && onchange(o.value)}
+      use:tooltip={o.tooltip ?? null}
     >
       {#if o.icon}<Icon name={o.icon} size={13} />{/if}{o.label}
       <!-- The space keeps the name "Headers 4" for screen readers; flex layout drops it visually. -->

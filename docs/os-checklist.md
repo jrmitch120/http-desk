@@ -61,6 +61,9 @@ control or the popup layer.
       (pressing ⌘B toggles once, not twice), Ctrl+B in the label on Windows, and no
       shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
       with the search box focused.
+- [ ] Focus Explorer (⇧⌘E / Ctrl+Shift+E) and Focus History (⇧⌘H / Ctrl+Shift+H), from
+      the URL bar with the sidebar hidden: each shows it on its view with a row ringed,
+      and the arrow keys move from there. Each runs once on macOS, not twice.
 
 ## Request editor
 
