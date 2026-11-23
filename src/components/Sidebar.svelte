@@ -13,6 +13,7 @@
   import { app } from "../lib/store.svelte";
   import { usageRows } from "../lib/usages";
   import { shortcutHint } from "../lib/commands";
+  import { plainEnter } from "../lib/platform";
   import { errorMessage } from "../lib/api";
   import { basename, joinPath } from "../lib/http";
   import type { SearchHit } from "../lib/types";
@@ -91,7 +92,7 @@
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (hits.length) selected = Math.max(0, Math.min(hits.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
-    } else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && hits[selected]) app.openSearchHit(hits[selected]); // ⌘Enter / Ctrl+Enter is left to Send
+    } else if (plainEnter(e) && hits[selected]) app.openSearchHit(hits[selected]);
   }
 
   let rootDrop = $state(false);

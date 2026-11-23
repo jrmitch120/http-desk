@@ -2,7 +2,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
-  import { currentOS } from "../lib/platform";
+  import { currentOS, plainEnter } from "../lib/platform";
   import { basename, displayName, joinPath } from "../lib/http";
   import type { TreeNode } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
@@ -28,9 +28,6 @@
   $effect(() => {
     if (open && !isDir && !app.docs[node.path]) app.loadDoc(node.path);
   });
-
-  /** Enter without ⌘/Ctrl: with either held, the key is left to app shortcuts (⌘Enter / Ctrl+Enter sends). */
-  const plainEnter = (e: KeyboardEvent) => e.key === "Enter" && !e.metaKey && !e.ctrlKey;
 
   const reveal = () => revealItemInDir(node.path).catch((e) => app.toast("error", String(e)));
 

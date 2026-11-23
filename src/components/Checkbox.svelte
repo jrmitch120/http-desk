@@ -8,6 +8,7 @@
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { plainEnter } from "../lib/platform";
 
   interface Props {
     checked: boolean;
@@ -40,7 +41,7 @@
   onkeydown={(e) => {
     // Shortcuts (⌘Enter / Ctrl+Enter sends) pass through: a modified Enter doesn't
     // activate a button, so only a plain Enter needs stopping.
-    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) e.preventDefault();
+    if (plainEnter(e)) e.preventDefault();
   }}
 >
   <span class="box">
