@@ -94,7 +94,7 @@ const withRequest = () => {
 };
 const withSettings = () => app.settings !== null;
 /** Focus is in the panel area (PanelArea.svelte): a panel's command hides it from there. */
-const focusInPanel = () => !!globalThis.document?.activeElement?.closest(".panel-area");
+const focusInPanel = () => !!globalThis.document?.activeElement?.closest("[data-panel-area]");
 
 /** Asks for a folder and opens it as the workspace. */
 async function openFolder() {

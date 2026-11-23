@@ -4,7 +4,7 @@
   resizable split. A new panel is a `PanelId`, a line in PANELS and a command
   that shows it (src/lib/commands.ts). A panel's command asks for focus
   (`app.panelFocusWanted`): it goes to the panel's list (`focusList`), else to the
-  panel's body.
+  panel's body. It's marked `data-panel-area`, for code that asks whether focus is in it.
 -->
 <script lang="ts">
   import { tick, type Component } from "svelte";
@@ -37,7 +37,7 @@
   });
 </script>
 
-<div class="panel-area">
+<div class="panel-area" data-panel-area>
   <div class="head">
     <SegmentedControl options={PANELS} value={shown.value} label="Panels" onchange={(p) => (app.panel = p)} />
     <span class="spacer"></span>
