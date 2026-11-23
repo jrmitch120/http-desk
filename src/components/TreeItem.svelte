@@ -29,6 +29,9 @@
     if (open && !isDir && !app.docs[node.path]) app.loadDoc(node.path);
   });
 
+  /** Enter without ⌘/Ctrl: with either held, the key is left to app shortcuts (⌘Enter / Ctrl+Enter sends). */
+  const plainEnter = (e: KeyboardEvent) => e.key === "Enter" && !e.metaKey && !e.ctrlKey;
+
   const reveal = () => revealItemInDir(node.path).catch((e) => app.toast("error", String(e)));
 
   function contextMenu(e: MouseEvent) {
@@ -116,7 +119,7 @@
   tabindex="-1"
   use:tooltip={{ text: node.path, slow: true }}
   onclick={toggle}
-  onkeydown={(e) => e.key === "Enter" && toggle()}
+  onkeydown={(e) => plainEnter(e) && toggle()}
   oncontextmenu={contextMenu}
   ondragstart={(e) => e.dataTransfer?.setData("text/x-httpdesk-path", node.path)}
   ondragover={(e) => {
@@ -162,7 +165,7 @@
         aria-level={depth + 2}
         tabindex="-1"
         onclick={(e) => clickRequest(e, req._key!)}
-        onkeydown={(e) => e.key === "Enter" && openRequest(req._key!)}
+        onkeydown={(e) => plainEnter(e) && openRequest(req._key!)}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
         <Badge method={req.method} />

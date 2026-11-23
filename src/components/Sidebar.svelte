@@ -83,7 +83,7 @@
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (hits.length) selected = Math.max(0, Math.min(hits.length - 1, selected + (e.key === "ArrowDown" ? 1 : -1)));
-    } else if (e.key === "Enter" && hits[selected]) app.openSearchHit(hits[selected]);
+    } else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && hits[selected]) app.openSearchHit(hits[selected]); // ⌘Enter / Ctrl+Enter is left to Send
   }
 
   let rootDrop = $state(false);
