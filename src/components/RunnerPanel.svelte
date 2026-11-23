@@ -131,8 +131,9 @@
             <div role="list" aria-label={g.file}>
               {#each g.items as { item: i, index } (index)}
                 {@const waiting = !i.response && !i.error}
-                <!-- The list's keys are rovingList's: Enter clicks the row. A waiting row takes no focus from a click either. -->
-                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+                <!-- The list's keys are rovingList's: Enter clicks the row. A waiting row is aria-disabled, which is how
+                     rovingList skips it (and how a screen reader hears it can't open yet); it takes no focus from a click either. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions, a11y_role_supports_aria_props -->
                 <div
                   role="listitem"
                   tabindex="-1"
