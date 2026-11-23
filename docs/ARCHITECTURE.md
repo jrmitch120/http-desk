@@ -1441,7 +1441,12 @@ Decisions made during implementation, beyond the plan above:
     string (Copy path reads it through `doc.iter()`, in slices). A line longer than a
     piece is kept as its pieces and joined once, in a task of its own: appended piece by
     piece it would be a chain of strings, which the engine copies into one the first
-    time the editor reads it, in the task that opens the document. The documents (Raw,
+    time the editor reads it, in the task that opens the document. That join is the
+    one task allowed past 50 ms: a 50 MB line is one 50 MB copy however it's made
+    (decoding the bytes at once is no faster), some 25 ms on a fast machine and 55–65 ms
+    on CI's runners. It runs inside the `docBuilder: join the last line` performance
+    measure, and the perf test that opens Raw allows the long task holding it up to
+    100 ms, and no other (#185). The documents (Raw,
     Pretty, Hex) and the preview's `blob:` URL are kept per editor tab outside any
     component (`responseDocs.ts`), so switching tabs and back neither fetches nor builds
     again, and they go when the tab releases the response. `Editor.svelte` swaps a new
