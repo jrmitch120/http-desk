@@ -362,7 +362,7 @@ describe("the source's gutter markers for portability", () => {
     ]);
   });
 
-  it("are warnings at the warning level, except HttpDesk's own lines", () => {
+  it("are warnings at the warning level, except HttpDesk-only lines", () => {
     const marks = [mark(2, "note-directive", "vscode-only"), mark(4, "disabled-line", "httpdesk-only")];
     expect(portabilityLineMarks(marks, { ...BOTH, level: "warning" }).map((m) => m.kind)).toEqual(["warning", "httpdesk-only"]);
   });

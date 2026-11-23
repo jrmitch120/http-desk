@@ -61,7 +61,7 @@ export interface Body {
 
 /**
  * How VS Code (REST Client) and Rider (JetBrains) treat a construct: both alike, only
- * one of them, or neither (HttpDesk's own lines, written as comments).
+ * one of them, or neither (HttpDesk-only lines, written as comments).
  */
 export type Support = "portable" | "jetbrains-only" | "vscode-only" | "httpdesk-only";
 

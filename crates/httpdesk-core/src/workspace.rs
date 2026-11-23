@@ -291,7 +291,7 @@ pub struct FileProblems {
     pub problems: Vec<Problem>,
     /// The lines that behave differently in VS Code or Rider: the constructs only one of
     /// them reads ([`Support::JetbrainsOnly`], [`Support::VscodeOnly`]). Portable lines
-    /// and HttpDesk's own, which both ignore, aren't listed.
+    /// and HttpDesk-only lines, which both ignore, aren't listed.
     pub portability: Vec<PortabilityMark>,
     /// What the text reads as, when it has a `{{reference}}` or a `@name`: the page finds
     /// the file's Undefined variables and shared `# @name`s in it itself, as it knows the

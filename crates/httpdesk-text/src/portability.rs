@@ -22,7 +22,7 @@ pub enum Support {
     JetbrainsOnly,
     /// VS Code (REST Client) reads it; Rider doesn't.
     VscodeOnly,
-    /// HttpDesk's own, written as a comment: both editors ignore it.
+    /// An HttpDesk-only line, written as a comment: both editors ignore it.
     HttpdeskOnly,
 }
 
