@@ -31,7 +31,7 @@ async function setHeaders(page: Page, text: string) {
 
 async function openHistoryEntry(page: Page, nth: number) {
   await page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" }).click();
-  await entries(page).nth(nth).getByRole("button").click();
+  await entries(page).nth(nth).click();
 }
 
 test("restoring an older entry brings back its URL, headers and body as unsaved edits, variables as written", async ({ page }) => {

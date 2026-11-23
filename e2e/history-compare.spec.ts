@@ -20,7 +20,7 @@ async function send(page: Page, kind: string | null = null) {
 }
 
 async function compareFromMenu(page: Page, index: number, item: RegExp) {
-  await entries(page).nth(index).getByRole("button").click({ button: "right" });
+  await entries(page).nth(index).click({ button: "right" });
   await page.getByRole("menuitem", { name: item }).click();
 }
 
@@ -62,7 +62,7 @@ test("with no current response, Compare uses the next newer entry and says so", 
   const newer = await entries(page).nth(0).locator(".metric").first().textContent();
 
   // The newest entry has nothing newer to compare with.
-  await entries(page).nth(0).getByRole("button").click({ button: "right" });
+  await entries(page).nth(0).click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: /^Compare/ })).toBeDisabled();
   await page.keyboard.press("Escape");
 
@@ -112,7 +112,7 @@ test("a response from History isn't the current response: Compare uses the next 
   const newer = await entries(page).nth(0).locator(".metric").first().textContent();
 
   // The newest entry is the response shown: there's nothing to compare it with.
-  await entries(page).nth(0).getByRole("button").click({ button: "right" });
+  await entries(page).nth(0).click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: /^Compare/ })).toBeDisabled();
   await page.keyboard.press("Escape");
 

@@ -198,7 +198,8 @@ the app's Menu instead:
 
 - Props: `checked`, `onchange(next)`, `indeterminate?` (mixed state; wins over
   `checked`), `label?` (accessible name for a bare box), `children?` (a visible label
-  inside the button, part of the click target), `tooltip?`, `class?`.
+  inside the button, part of the click target), `tooltip?`, `class?`, `tabindex?` (-1
+  for a box in a [`use:rovingList`](#userovinglist) row, which is the Tab stop).
 - Variants: a bare box with `label` (grid rows: `Enable <name>`, `Enable all`); a labelled
   row with children (OpenAPI operations, "Substitute {{variables}} inside the file"); a
   mixed "all" box with `indeterminate`. Clicking a mixed box checks it.
