@@ -18,28 +18,33 @@
   import { untrack } from "svelte";
   import { app } from "../lib/store.svelte";
   import { WORKSPACE_HISTORY } from "../lib/history.svelte";
+  import { focusList, ROW } from "../lib/rovingList";
   import HistoryOff from "./HistoryOff.svelte";
   import HistoryView from "./HistoryView.svelte";
 
   let section: HTMLElement | undefined = $state();
 
-  const ENTRY = '[role="list"][aria-label="History entries"] [role="listitem"]';
-
+  // The History entries are the only list rows in the view.
   function onfocusin(e: FocusEvent) {
-    const row = e.target instanceof HTMLElement && e.target.matches(ENTRY) ? e.target : null;
+    const row = e.target instanceof HTMLElement && e.target.matches(ROW) ? e.target : null;
     if (row?.dataset.id) lastEntry = { root: app.root, id: row.dataset.id };
   }
 
-  /** What Focus History focuses, or null while the entries are still loading. */
-  function target(el: HTMLElement): HTMLElement | null {
-    const list = el.querySelector<HTMLElement>('[role="list"][aria-label="History entries"]');
-    if (list) {
-      const rows = [...list.querySelectorAll<HTMLElement>('[role="listitem"]')];
-      const last = lastEntry?.root === app.root ? rows.find((r) => r.dataset.id === lastEntry?.id) : undefined;
-      return last ?? rows.find((r) => r.tabIndex === 0) ?? rows.find((r) => r.hasAttribute("aria-current")) ?? rows[0] ?? list;
+  /**
+   * Focus History: the entry last focused here, else the list's Tab stop (`focusList`);
+   * with no entries (or History off), what says so. False while the entries are still
+   * loading, before there's a list.
+   */
+  function focusHistory(el: HTMLElement): boolean {
+    const rows = lastEntry?.root === app.root ? [...el.querySelectorAll<HTMLElement>(ROW)] : [];
+    const last = rows.find((r) => r.dataset.id === lastEntry?.id);
+    if (last) last.focus();
+    else if (!focusList(el)) {
+      const empty = el.querySelector<HTMLElement>('.empty-state[tabindex="-1"]') ?? el.querySelector<HTMLElement>(".empty-state button");
+      if (!empty) return false;
+      empty.focus();
     }
-    // No entries (or History off): what says so.
-    return el.querySelector<HTMLElement>('.empty-state[tabindex="-1"]') ?? el.querySelector<HTMLElement>(".empty-state button");
+    return true;
   }
 
   // Each ask once, when the sidebar shows the list (or its empty message).
@@ -48,13 +53,12 @@
     if (!el || !app.historyFocusWanted || !app.sidebarShown) return;
     return untrack(() => {
       const tryFocus = () => {
-        const to = target(el);
-        if (!to) return false;
+        if (!focusHistory(el)) return false;
         app.historyFocusWanted = false;
-        to.focus();
         return true;
       };
       if (tryFocus()) return;
+      // The list comes once the entries have loaded.
       const observer = new MutationObserver(() => tryFocus() && observer.disconnect());
       observer.observe(el, { childList: true, subtree: true });
       return () => observer.disconnect();
