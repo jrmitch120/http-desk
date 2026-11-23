@@ -3,7 +3,7 @@
 // last focused, else the open request's row (Explorer) or the first entry (History),
 // else the list itself while it's empty. Ctrl+Shift off macOS.
 import { expect, test, type Page } from "@playwright/test";
-import { menuClick, menuItem, openApp, openRequest, searchBox, searchResults, seedHistory, treeItem, urlBar } from "./helpers";
+import { hasRing, menuClick, menuItem, openApp, openRequest, searchBox, searchResults, seedHistory, treeItem, urlBar } from "./helpers";
 
 const aside = (page: Page) => page.locator("aside");
 const sidebarView = (page: Page, name: "Explorer" | "History") => page.getByRole("radiogroup", { name: "Sidebar" }).getByRole("radio", { name });
@@ -28,7 +28,7 @@ test("⌘⇧E from the editor shows a hidden sidebar on the Explorer and focuses
   await expect(aside(page)).toBeVisible();
   await expect(treeItem(page, "List pets")).toBeFocused();
   // Ringed: a key press, after the click into the editor.
-  await expect.poll(() => treeItem(page, "List pets").evaluate((row) => getComputedStyle(row).outlineStyle)).not.toBe("none");
+  await expect.poll(() => hasRing(treeItem(page, "List pets"))).toBe(true);
   // The tree's keys go on from there.
   await page.keyboard.press("ArrowUp");
   await expect(treeItem(page, "pets.http")).toBeFocused();
