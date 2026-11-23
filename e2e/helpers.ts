@@ -60,6 +60,18 @@ export function activeTab(page: Page): Locator {
   return page.getByRole("tablist", { name: "Open requests" }).getByRole("tab", { selected: true });
 }
 
+/**
+ * Whether `el` (or its descendant `part`) draws a focus ring, as computed: an outline,
+ * or an inset box-shadow (a row with an accent left edge draws its ring that way, so
+ * the ring runs beside the edge instead of over it).
+ */
+export function hasRing(el: Locator, part?: string): Promise<boolean> {
+  return el.evaluate((node, part) => {
+    const s = getComputedStyle(part ? node.querySelector(part)! : node);
+    return s.outlineStyle !== "none" || s.boxShadow.includes("inset");
+  }, part);
+}
+
 /** Presses Tab until `target` has keyboard focus (as a keyboard user would reach it), at most `presses` times. */
 export async function tabTo(page: Page, target: Locator, presses = 40): Promise<void> {
   for (let i = 0; i < presses && !(await target.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press("Tab");

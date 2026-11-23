@@ -206,6 +206,11 @@
     border-left-color: var(--accent);
     color: var(--text);
   }
+  /* The ring beside the accent edge, not over it. */
+  :global(:root[data-focus-marks]) .row-item.active:focus {
+    outline: none;
+    box-shadow: var(--focus-ring-row-inside);
+  }
   .row-item.dropping {
     background: var(--accent-soft);
     outline: 1px dashed var(--accent);

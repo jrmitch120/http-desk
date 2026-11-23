@@ -64,6 +64,11 @@
      lays over the selection fill (as a background-image) instead of hiding it. */
   --focus-ring-row: 1px solid var(--focus);
   --focus-ring-row-offset: -1px;
+  /* The same ring on a row that has an accent left edge (the open request, a list's
+     current row), drawn as `box-shadow` instead of `outline`. An inset shadow sits
+     inside the border, so the ring runs beside the whole 2px edge instead of over its
+     outer pixel; on the other sides it covers the same pixels as the outline. */
+  --focus-ring-row-inside: inset 0 0 0 1px var(--focus);
   --row-hover: rgba(255, 255, 255, 0.05);
 
   /* spacing scale, on a 4px grid */
@@ -375,6 +380,10 @@ textarea.input {
 :root[data-focus-marks] .list-row:focus {
   outline: var(--focus-ring-row);
   outline-offset: var(--focus-ring-row-offset);
+}
+:root[data-focus-marks] .list-row.current:focus {
+  outline: none;
+  box-shadow: var(--focus-ring-row-inside);
 }
 /* A table's row as a list's row (the Session panel's): it stays a table row, with the
    row's hover and focus ring. */
