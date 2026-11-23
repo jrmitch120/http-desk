@@ -92,3 +92,84 @@ test("after clicking an outline row, focus stays in the outline and Down moves t
   await page.keyboard.press("ArrowDown");
   await expect(row(page, "Basic auth")).toBeFocused();
 });
+
+test("Up/Down/Home/End move through the outline and stop at its ends", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+  await row(page, "Post with JSON body").click();
+
+  await page.keyboard.press("End");
+  await expect(row(page, FORM)).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row(page, FORM)).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(row(page, "Basic auth")).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(row(page, "Get request with a header")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(row(page, "Get request with a header")).toBeFocused();
+  // Moving focus isn't choosing: the cursor stays in the request clicked.
+  await expect(row(page, "Post with JSON body")).toHaveAttribute("aria-current", "true");
+});
+
+test("Enter on an outline row puts the text cursor at that request, with the text focused", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+  await row(page, "Get request with a header").click();
+  await page.keyboard.press("End");
+
+  await page.keyboard.press("Enter");
+  await expect(fileView(page).locator(".cm-content")).toBeFocused();
+  await expect(line(page, `### ${FORM}`)).toBeInViewport();
+  await expect(row(page, FORM)).toHaveAttribute("aria-current", "true");
+  // Typing goes in at the request.
+  await page.keyboard.type("X");
+  await expect(line(page, `X### ${FORM}`)).toBeVisible();
+});
+
+test("a double-click on an outline row puts the text cursor at that request, with the text focused", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+
+  await row(page, FORM).dblclick();
+  await expect(fileView(page).locator(".cm-content")).toBeFocused();
+  await expect(row(page, FORM)).toHaveAttribute("aria-current", "true");
+  await page.keyboard.type("X");
+  await expect(line(page, `X### ${FORM}`)).toBeVisible();
+});
+
+test("the outline is one Tab stop: the request under the text cursor, else the row last focused", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+  // The Request button is the stop before the outline; the text is the one after.
+  const before = page.locator(".file-view .crumbs").getByRole("button", { name: "Request" });
+  await line(page, "GET {{host}}/basic-auth/user/passwd").click();
+  await expect(row(page, "Basic auth")).toHaveAttribute("aria-current", "true");
+
+  // Into the outline: the row under the cursor.
+  await before.focus();
+  await page.keyboard.press("Tab");
+  await expect(row(page, "Basic auth")).toBeFocused();
+  // Out of it in one Tab either way, and back to the row last focused.
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Shift+Tab");
+  await expect(before).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(row(page, "Multi-line query")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(fileView(page).locator(".cm-content")).toBeFocused();
+
+  // The cursor moved since: the stop follows it.
+  await line(page, `### ${FORM}`).click();
+  await expect(row(page, FORM)).toHaveAttribute("aria-current", "true");
+  await before.focus();
+  await page.keyboard.press("Tab");
+  await expect(row(page, FORM)).toBeFocused();
+});
+
+test("⌘Enter on an outline row is the app's: it sends the request under the cursor", async ({ page }) => {
+  await openAsText(page, "samples", "jetbrains.http");
+  await row(page, "Basic auth").click();
+  await expect(row(page, "Basic auth")).toHaveAttribute("aria-current", "true");
+  await page.keyboard.press("ArrowDown");
+
+  await page.keyboard.press("Meta+Enter");
+  await expect.poll(async () => (await sentRequests(page)).map((r) => r.url)).toEqual(["{{host}}/basic-auth/user/passwd"]);
+  await expect(activeTab(page)).toContainText("Basic auth");
+});

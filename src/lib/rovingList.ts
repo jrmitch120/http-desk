@@ -46,7 +46,11 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
   function setStop(row: HTMLElement | null, all = rows()) {
     stop = row;
     if (row) stopIndex = all.indexOf(row);
-    for (const r of list.querySelectorAll<HTMLElement>(ROW)) r.tabIndex = r === row ? 0 : -1;
+    // Only what changes: a long list (a large file's outline) isn't touched row by row on each cursor move.
+    for (const r of list.querySelectorAll<HTMLElement>(ROW)) {
+      const want = r === row ? 0 : -1;
+      if (r.tabIndex !== want) r.tabIndex = want;
+    }
   }
 
   /** Puts the Tab stop on a real row after rows, or the current one, change. */
