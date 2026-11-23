@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { newRequest } from "./http";
 import { makeVarProvider, type Scope } from "./vars";
-import { bodyFilePaths, isNote, portabilityLineMarks, quickFixes, requestChecks, undefinedVariables, type PortabilityLevel, type SourceFindings } from "./checks";
+import { bodyFilePaths, isNote, portabilityLineMarks, quickFixes, requestChecks, undefinedVariables, type PortabilitySettings, type SourceFindings } from "./checks";
 import type { BodyFile, EnvironmentSet, PortabilityMark, Problem, Request, Support } from "./types";
 
 const scope = (over: Partial<Scope> = {}): Scope => ({ env: {}, fileVars: [], requestVars: [], envName: "dev", ...over });
+/** Which portability notes show: both editors' (`BOTH`), or the given editors' at the note level. */
+const BOTH: PortabilitySettings = { editors: { vscode: true, rider: true }, level: "note" };
+const only = (...on: ("vscode" | "rider")[]): PortabilitySettings => ({ editors: { vscode: on.includes("vscode"), rider: on.includes("rider") }, level: "note" });
 const request = (edit: (r: Request) => void): Request => {
   const r = newRequest();
   edit(r);
@@ -166,7 +169,7 @@ describe("a # @name another request in the file also has", () => {
 });
 
 describe("the note that Rider refuses a Request variable", () => {
-  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })));
+  const checksOf = (req: Request) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login", "me"] })), { portability: { marks: [], settings: only("rider") } });
   const notes = (req: Request) => checksOf(req).filter((c) => c.kind === "portability" && c.note.kind === "riderRefuses");
 
   it("is there whenever a request sends one, naming the first request read", () => {
@@ -246,8 +249,8 @@ describe("the notes about lines that behave differently in VS Code or Rider", ()
     mark(5, "request-variable", "vscode-only"),
     mark(7, "response-handler", "jetbrains-only"),
   ];
-  const checksOf = (req: Request, marks: PortabilityMark[], level?: PortabilityLevel) =>
-    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), { portability: { marks, level } });
+  const checksOf = (req: Request, marks: PortabilityMark[], settings: PortabilitySettings = BOTH) =>
+    requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), { portability: { marks, settings } });
 
   it("count the lines VS Code and Rider each treat differently, after the problems", () => {
     const req = request((r) => (r.url = "{{base}}/items"));
@@ -276,11 +279,67 @@ describe("the notes about lines that behave differently in VS Code or Rider", ()
 
   it("are warnings, not notes, at the warning level", () => {
     const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.id}}"));
-    const checks = checksOf(req, MARKS, "warning");
+    const checks = checksOf(req, MARKS, { ...BOTH, level: "warning" });
     expect(checks.map((c) => [c.kind, isNote(c)])).toEqual([
       ["portability", false],
       ["portability", false],
       ["portability", false],
+    ]);
+  });
+});
+
+describe("portability notes, by the editors turned on in Settings → Portability", () => {
+  const mark = (line: number, construct: string, support: Support): PortabilityMark => ({ line, construct, support, label: construct, hover: `${construct} hover` });
+  // A file with `# @no-log` (Rider only), `# @prompt` (VS Code only), a Request variable and `# @desc` (HttpDesk only).
+  const MARKS = [
+    mark(1, "no-log-directive", "jetbrains-only"),
+    mark(2, "prompt-directive", "vscode-only"),
+    mark(3, "request-variable", "vscode-only"),
+    mark(4, "httpdesk-description", "httpdesk-only"),
+  ];
+  const req = request((r) => (r.url = "https://example.com/{{login.response.body.$.token}}"));
+  const checks = (settings: PortabilitySettings) => requestChecks(req, makeVarProvider(scope({ requestNames: ["login"] })), { portability: { marks: MARKS, settings } });
+  const strip = (settings: PortabilitySettings) => checks(settings).map((c) => c.kind === "portability" && c.note);
+  const gutter = (settings: PortabilitySettings) => portabilityLineMarks(MARKS, settings).map((m) => [m.line, m.kind]);
+
+  it("show nothing while both editors are off, nor shade HttpDesk-only lines", () => {
+    expect(strip(only())).toEqual([]);
+    expect(gutter(only())).toEqual([]);
+    expect(gutter({ ...only(), level: "warning" })).toEqual([]);
+  });
+
+  it("with only VS Code on, note what only Rider reads, and not what Rider refuses", () => {
+    expect(strip(only("vscode"))).toEqual([{ kind: "differs", editor: "vscode", lines: [1] }]);
+    expect(gutter(only("vscode"))).toEqual([
+      [1, "jetbrains-only"],
+      [4, "httpdesk-only"],
+    ]);
+  });
+
+  it("with only Rider on, note what only VS Code reads, the Request variable among it", () => {
+    expect(strip(only("rider"))).toEqual([
+      { kind: "riderRefuses", name: "login" },
+      { kind: "differs", editor: "rider", lines: [2] },
+    ]);
+    expect(gutter(only("rider"))).toEqual([
+      [2, "vscode-only"],
+      [3, "vscode-only"],
+      [4, "httpdesk-only"],
+    ]);
+  });
+
+  it("mark a line with constructs for both editors when one is on, its hover only that editor's", () => {
+    const both = [mark(5, "jetbrains-dynamic-variable", "jetbrains-only"), mark(5, "vscode-dynamic-variable", "vscode-only")];
+    expect(portabilityLineMarks(both, only("rider"))).toEqual([{ line: 5, kind: "vscode-only", text: "vscode-dynamic-variable hover" }]);
+    expect(portabilityLineMarks(both, only("vscode"))).toEqual([{ line: 5, kind: "jetbrains-only", text: "jetbrains-dynamic-variable hover" }]);
+  });
+
+  it("raise only the notes of the editor that's on to warnings", () => {
+    const warnings = { ...only("vscode"), level: "warning" } as const;
+    expect(checks(warnings).map((c) => [c.kind, isNote(c)])).toEqual([["portability", false]]);
+    expect(gutter(warnings)).toEqual([
+      [1, "warning"],
+      [4, "httpdesk-only"],
     ]);
   });
 });
@@ -296,15 +355,15 @@ describe("the source's gutter markers for portability", () => {
       mark(3, "vscode-dynamic-variable", "vscode-only"),
       mark(4, "disabled-line", "httpdesk-only"),
     ];
-    expect(portabilityLineMarks(marks)).toEqual([
+    expect(portabilityLineMarks(marks, BOTH)).toEqual([
       { line: 3, kind: "jetbrains-only", text: "jetbrains-dynamic-variable hover\nvscode-dynamic-variable hover" },
       { line: 4, kind: "httpdesk-only", text: "disabled-line hover" },
       { line: 7, kind: "jetbrains-only", text: "response-handler hover" },
     ]);
   });
 
-  it("are warnings at the warning level, except HttpDesk's own lines", () => {
+  it("are warnings at the warning level, except HttpDesk-only lines", () => {
     const marks = [mark(2, "note-directive", "vscode-only"), mark(4, "disabled-line", "httpdesk-only")];
-    expect(portabilityLineMarks(marks, "warning").map((m) => m.kind)).toEqual(["warning", "httpdesk-only"]);
+    expect(portabilityLineMarks(marks, { ...BOTH, level: "warning" }).map((m) => m.kind)).toEqual(["warning", "httpdesk-only"]);
   });
 });

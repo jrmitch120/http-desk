@@ -4,7 +4,8 @@
   (`app.problems`, read by the shell off the main thread), grouped by file, each with
   a summary of those lines. Each entry shows its line and message; clicking it opens
   the file's file view at that line. Open documents are listed as they are in the app,
-  unsaved edits included. Portability notes show at `app.portabilityLevel`.
+  unsaved edits included. Portability notes show as `app.portability` says: only for
+  the editors turned on, at its level.
 -->
 <script lang="ts">
   import { app } from "../lib/store.svelte";

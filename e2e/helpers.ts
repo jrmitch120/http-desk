@@ -99,6 +99,7 @@ export interface MockState {
     exec: Record<string, unknown>;
     showResolved: boolean;
     showSource: boolean;
+    portabilityEditors: { vscode: boolean; rider: boolean };
     portabilityWarnings: boolean;
     envView: "matrix" | "list";
     envMatrixWidths?: Record<string, { variable?: number | null; columns: Record<string, number> }>;

@@ -14,6 +14,7 @@
   import NumberField from "./NumberField.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import { THEMES } from "../lib/themes";
+  import { EDITOR_NAMES, EDITORS, type EditorName } from "../lib/checks";
   import Toggle from "./Toggle.svelte";
 
   // Edits apply straight to the live settings, through the same save path as the
@@ -40,6 +41,13 @@
 
   function set(patch: Partial<AppSettings>) {
     app.updateSettings(patch);
+  }
+
+  /** Whether either editor is turned on in Settings → Portability: else no notes show, so their level means nothing. */
+  const editorsOn = $derived(EDITORS.some((e) => app.portability.editors[e]));
+
+  function setEditor(editor: EditorName, on: boolean) {
+    set({ portabilityEditors: { ...app.portability.editors, [editor]: on } });
   }
 
   function setExec(patch: Partial<ExecSettings>) {
@@ -111,12 +119,27 @@
 
       <section>
         <h3>Portability</h3>
+        {#each EDITORS as editor (editor)}
+          <div class="setting">
+            <div class="label">
+              <span>{EDITOR_NAMES[editor]}</span>
+              <small class="muted">Mark lines of <span class="mono">.http</span> files that behave differently in {EDITOR_NAMES[editor]}, for files you share with it</small>
+            </div>
+            <Toggle ariaLabel={EDITOR_NAMES[editor]} checked={app.portability.editors[editor]} onchange={(v) => setEditor(editor, v)} />
+          </div>
+        {/each}
         <div class="setting">
           <div class="label">
             <span>Show portability notes as warnings</span>
-            <small class="muted">For teams whose <span class="mono">.http</span> files must work in both VS Code and Rider. Lines only one of them reads are marked as warnings; they never block a send.</small>
+            <small class="muted">
+              {#if editorsOn}
+                For teams whose <span class="mono">.http</span> files must work in the editors above. The lines they read differently are marked as warnings; they never block a send.
+              {:else}
+                Turn on an editor above
+              {/if}
+            </small>
           </div>
-          <Toggle ariaLabel="Show portability notes as warnings" checked={settings.portabilityWarnings === true} onchange={(v) => set({ portabilityWarnings: v })} />
+          <Toggle ariaLabel="Show portability notes as warnings" disabled={!editorsOn} checked={settings.portabilityWarnings === true} onchange={(v) => set({ portabilityWarnings: v })} />
         </div>
       </section>
 

@@ -2,10 +2,11 @@
 // each file's entries by line, a summary of the lines that behave differently in VS Code
 // or Rider, and the count on the panel's toggle. Besides what the shell found, each file's
 // Undefined variables and shared `# @name`s, found here as the check strip finds them
-// (the page knows the selected environment and the Session). Portability notes take the
-// level the setting gives them (`app.portabilityLevel`): notes, or warnings for teams
-// that need files to work in both editors. None of it ever blocks a send.
-import { differingLines, differsText, ReferenceChecks, type OutsideScope, type PortabilityLevel } from "./checks";
+// (the page knows the selected environment and the Session). Portability notes are
+// listed only for the editors turned on in Settings → Portability (`app.portability`),
+// at the level it gives them: notes, or warnings for teams that need files to work in
+// those editors. None of it ever blocks a send.
+import { differingLines, differsText, EDITORS, ReferenceChecks, shownMarks, type EditorName, type OutsideScope, type PortabilitySettings } from "./checks";
 import { fileUnderlines, textRead } from "./codemirror/underlines";
 import type { FileProblems, HttpFile } from "./types";
 
@@ -55,11 +56,14 @@ function referenceEntries(file: HttpFile, outside: OutsideScope, kept: Reference
  * references aren't looked at. `kept` keeps each file's reference checks between readings.
  */
 /** What `problemFiles` made of a file last time, while what it was made from is the same: one file read again doesn't have every other listed again. */
-export type ProblemFilesMemo = WeakMap<FileProblems, { level: PortabilityLevel; scope: OutsideScope | undefined; made: ProblemFile[] }>;
+export type ProblemFilesMemo = WeakMap<FileProblems, { portability: PortabilitySettings; scope: OutsideScope | undefined; made: ProblemFile[] }>;
+
+/** Whether `a` and `b` show the same portability notes the same way. */
+const samePortability = (a: PortabilitySettings, b: PortabilitySettings) => a.level === b.level && EDITORS.every((e) => a.editors[e] === b.editors[e]);
 
 export function problemFiles(
   files: FileProblems[],
-  level: PortabilityLevel,
+  portability: PortabilitySettings,
   outside?: (path: string) => OutsideScope,
   kept: (path: string) => ReferenceChecks = () => new ReferenceChecks(),
   memo?: ProblemFilesMemo,
@@ -69,32 +73,30 @@ export function problemFiles(
     .flatMap((f) => {
       const scope = outside?.(f.path);
       const known = memo?.get(f);
-      if (known && known.level === level && known.scope === scope) return known.made;
-      const made = listed(f, level, scope, kept);
-      memo?.set(f, { level, scope, made });
+      if (known && samePortability(known.portability, portability) && known.scope === scope) return known.made;
+      const made = listed(f, portability, scope, kept);
+      memo?.set(f, { portability, scope, made });
       return made;
     });
 }
 
 /** One file's entry in the panel's list, or none with nothing to show. */
-function listed(f: FileProblems, level: PortabilityLevel, scope: OutsideScope | undefined, kept: (path: string) => ReferenceChecks): ProblemFile[] {
-  {
-    {
-      const references = f.file && scope ? referenceEntries(f.file, scope, kept(f.path)) : [];
-      const entries: ProblemEntry[] = [
-        ...f.problems.map((p) => ({ line: p.line, tone: p.severity, message: p.message, column: p.column })),
-        ...references,
-        ...f.portability.map((m) => ({ line: m.line, tone: level, message: m.hover })),
-      ];
-      if (!entries.length) return [];
-      // A stable sort keeps problems before notes on one line.
-      entries.sort((a, b) => a.line - b.line);
-      const differing = (["vscode", "rider"] as const).map((editor) => [editor, differingLines(f.portability, editor).length] as const);
-      const summary = differing.flatMap(([editor, n]) => (n ? [differsText(n, editor)] : []));
-      const count = f.problems.length + references.length + (level === "warning" ? differing.reduce((n, [, lines]) => n + lines, 0) : 0);
-      return [{ path: f.path, entries, summary, count }];
-    }
-  }
+function listed(f: FileProblems, portability: PortabilitySettings, scope: OutsideScope | undefined, kept: (path: string) => ReferenceChecks): ProblemFile[] {
+  const { editors, level } = portability;
+  const references = f.file && scope ? referenceEntries(f.file, scope, kept(f.path)) : [];
+  const entries: ProblemEntry[] = [
+    ...f.problems.map((p) => ({ line: p.line, tone: p.severity, message: p.message, column: p.column })),
+    ...references,
+    ...shownMarks(f.portability, portability).map((m) => ({ line: m.line, tone: level, message: m.hover })),
+  ];
+  if (!entries.length) return [];
+  // A stable sort keeps problems before notes on one line.
+  entries.sort((a, b) => a.line - b.line);
+  const editorsOn = EDITORS.filter((editor) => editors[editor]);
+  const differing = editorsOn.map((editor): [EditorName, number] => [editor, differingLines(f.portability, editor).length]);
+  const summary = differing.flatMap(([editor, n]) => (n ? [differsText(n, editor)] : []));
+  const count = f.problems.length + references.length + (level === "warning" ? differing.reduce((n, [, lines]) => n + lines, 0) : 0);
+  return [{ path: f.path, entries, summary, count }];
 }
 
 /** The count on the panel's toggle. */

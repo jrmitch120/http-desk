@@ -817,6 +817,30 @@ fn the_sidebar_starts_shown_and_hiding_it_is_remembered() {
     }
 }
 
+/// #182: both Portability editors start off. A file without the switches (an older
+/// version's), or with values that aren't bools, loads with them off; one switch
+/// saved alone keeps the other off. The rest of the file is kept.
+#[test]
+fn portability_editors_start_off_and_a_file_without_them_loads_them_off() {
+    let off = json!({ "vscode": false, "rider": false });
+    assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["portabilityEditors"], off);
+    for (old, editors) in [
+        (r#"{"theme":"light","portabilityWarnings":true}"#, off.clone()),
+        (r#"{"theme":"light","portabilityWarnings":true,"portabilityEditors":"yes"}"#, off.clone()),
+        (
+            r#"{"theme":"light","portabilityWarnings":true,"portabilityEditors":{"vscode":true}}"#,
+            json!({ "vscode": true, "rider": false }),
+        ),
+    ] {
+        let json = serde_json::to_value(serde_json::from_str::<super::AppSettings>(old).unwrap()).unwrap();
+        assert_eq!(
+            (&json["portabilityEditors"], json["portabilityWarnings"].as_bool(), json["theme"].as_str()),
+            (&editors, Some(true), Some("light")),
+            "{old}"
+        );
+    }
+}
+
 /// #94: the zoom starts at 100%, and a zoom is remembered.
 #[test]
 fn the_zoom_starts_at_100_percent_and_is_remembered() {

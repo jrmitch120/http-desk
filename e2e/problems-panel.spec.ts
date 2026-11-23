@@ -44,7 +44,7 @@ test("an Undefined variable typed in a request is listed at its line, for the se
 });
 
 test("a file's portability summary says how many lines behave differently, and the panel follows an edit", async ({ page }) => {
-  await openApp(page, "?problems=1");
+  await openApp(page, "?problems=1&portability=vscode");
   await menuClick(page, "toggle-problems");
   // samples/jetbrains.http has Rider-only handlers and directives.
   await expect(group(page, "samples/jetbrains.http")).toContainText(/\d+ lines? behaves? differently in VS Code/);

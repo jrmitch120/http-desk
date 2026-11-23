@@ -61,7 +61,7 @@ export interface Body {
 
 /**
  * How VS Code (REST Client) and Rider (JetBrains) treat a construct: both alike, only
- * one of them, or neither (HttpDesk's own lines, written as comments).
+ * one of them, or neither (HttpDesk-only lines, written as comments).
  */
 export type Support = "portable" | "jetbrains-only" | "vscode-only" | "httpdesk-only";
 
@@ -707,8 +707,11 @@ export interface AppSettings {
   showResolved: boolean;
   /** Show the request's `.http` source in place of its sections (the .http button, Request → Show .http Source). */
   showSource: boolean;
-  /** Show non-portable constructs (the gutter's markers, the check strip's portability notes) as
-   *  warnings, for teams whose files must work in both VS Code and Rider. Off by default; never blocks a send. */
+  /** The editors the user shares `.http` files with (Settings → Portability), by `EditorName`:
+   *  Portability notes show only for those turned on. Both off by default. */
+  portabilityEditors: { vscode: boolean; rider: boolean };
+  /** Show the Portability notes of the editors turned on (the gutter's markers, the check strip's
+   *  portability notes) as warnings, for teams whose files must work in them. Off by default; never blocks a send. */
   portabilityWarnings: boolean;
   /** How the Environments modal shows variables: every environment side by side, or one at a time. */
   envView: "matrix" | "list";

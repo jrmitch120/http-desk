@@ -128,7 +128,7 @@
     // In a file with mixed endings the text keeps each `\r\n`; the editor's document has one character per break.
     return lineBreak ? inDocument(found.text, all) : all;
   });
-  const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portabilityLevel));
+  const marks = $derived(portabilityLineMarks(found?.portability ?? [], app.portability));
 
   // The outline: the requests of the text shown. The one under the cursor is the
   // explorer's selection, and the one Send (⌘Enter) sends.

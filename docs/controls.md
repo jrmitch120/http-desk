@@ -186,7 +186,8 @@ the app's Menu instead:
 
 - Props: `checked`, `onchange(next)`, `label?` (visible text after the switch),
   `ariaLabel?` (the name when there's no visible label), `title?` (tooltip text; by
-  default it says what a click does).
+  default it says what a click does), `disabled?` (greyed out, keeping its state, for a
+  setting that means nothing until another is on; say why in the setting's hint).
 - Use for a setting that applies at once (Settings, request settings) and for a whole
   request section (`SectionBar.svelte` wraps it in the Params / Headers / Auth / Body
   header bar).
@@ -602,8 +603,8 @@ undefined, used in Headers and Authorization", with its fixes; ARCHITECTURE §10
 environment the request's folder doesn't define (`envMissing`), a `# @name` other
 requests in the file share (`duplicateName`), and the portability notes (`portability`:
 how many lines behave differently in VS Code or Rider, and a Request variable Rider
-refuses to send). Notes show info-toned (`li.note`), or as warnings at the warning level
-(Settings → Portability).
+refuses to send), only for the editors turned on in Settings → Portability. Notes show
+info-toned (`li.note`), or as warnings at the warning level (Settings → Portability).
 
 - Props: `checks` (`Check[]` from `src/lib/checks.ts`; empty renders nothing) and
   `onfix(check, fix)`. It is a `region` named "Pre-send checks", with a list item per

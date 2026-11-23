@@ -11,8 +11,10 @@
     label?: string;
     /** Accessible name when there's no `label` (the setting it controls). */
     ariaLabel?: string;
+    /** Greyed out, and clicks do nothing; it keeps showing `checked`. */
+    disabled?: boolean;
   }
-  let { checked, onchange, title = "", label = "", ariaLabel }: Props = $props();
+  let { checked, onchange, title = "", label = "", ariaLabel, disabled = false }: Props = $props();
 </script>
 
 <button
@@ -22,7 +24,8 @@
   role="switch"
   aria-checked={checked}
   aria-label={ariaLabel}
-  use:tooltip={title || (checked ? "Enabled — click to disable" : "Disabled — click to enable")}
+  {disabled}
+  use:tooltip={title || (disabled ? "" : checked ? "Enabled — click to disable" : "Disabled — click to enable")}
   onclick={(e) => {
     e.stopPropagation();
     onchange(!checked);
@@ -63,6 +66,10 @@
     border-radius: 50%;
     background: var(--muted);
     transition: transform 0.15s, background 0.15s;
+  }
+  .toggle:disabled {
+    cursor: default;
+    opacity: 0.5;
   }
   .toggle:focus-visible {
     outline: none;

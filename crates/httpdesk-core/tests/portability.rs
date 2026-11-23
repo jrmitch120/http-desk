@@ -143,21 +143,32 @@ fn only_a_file_line_is_marked_as_a_file() {
     assert_eq!(found, [(7, C::BodyFile)]);
 }
 
+/// #182: a note is for one editor, the one the line behaves differently in, and its
+/// hover names only that editor, so a note shown with only one editor turned on never
+/// names the other. HttpDesk-only lines, shaded while either is on, name neither.
 #[test]
-fn a_file_rows_hover_says_what_each_editor_sends() {
+fn each_hover_names_only_the_editor_its_note_is_for() {
+    for row in TABLE {
+        let (vscode, rider) = (row.hover.contains("VS Code"), row.hover.contains("Rider"));
+        let named = match row.support {
+            JetbrainsOnly => (true, false),
+            VscodeOnly => (false, true),
+            HttpdeskOnly => (false, false),
+            Portable => continue,
+        };
+        assert_eq!((vscode, rider), named, "{}: {}", row.id, row.hover);
+    }
+}
+
+#[test]
+fn a_file_rows_hover_says_what_the_editor_it_differs_in_sends() {
     let hover = |c: Construct| portability(&fixture(c)).into_iter().find(|m| m.construct == c).unwrap().hover;
     assert_eq!(
         hover(C::BodyFile),
         "Both editors send this file's content; Rider also fills in {{variables}} written in the file"
     );
-    assert_eq!(
-        hover(C::BodyFileWithVariables),
-        "VS Code sends this file's content with its {{variables}} filled in; Rider sends the line as text"
-    );
-    assert_eq!(
-        hover(C::BodyFileLine),
-        "VS Code puts this file's content in place of the line; Rider does too, but drops the line breaks around it"
-    );
+    assert_eq!(hover(C::BodyFileWithVariables), "Rider sends this line as text, not the file's content");
+    assert_eq!(hover(C::BodyFileLine), "Rider drops the line breaks around this file's content");
 }
 
 #[test]
@@ -168,7 +179,7 @@ fn marks_are_sent_to_the_page_as_json_with_their_hover() {
     assert_eq!(json["construct"], "response-handler");
     assert_eq!(json["support"], "jetbrains-only");
     let hover = json["hover"].as_str().unwrap();
-    assert!(hover.contains("Rider runs") && hover.contains("VS Code ignores"), "{hover}");
+    assert_eq!(hover, "VS Code ignores this response handler and sends its lines as body text");
 }
 
 #[test]

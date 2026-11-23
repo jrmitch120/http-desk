@@ -16,7 +16,7 @@ import { environmentNames, environmentsFor, folderLabel, folderOf, nearestEnvFol
 import { extractToEnvironments, extractToFile, targetEnvironments, type ExtractTarget } from "./extract";
 import type { Definition } from "./codemirror/setup";
 import type { MatrixSort } from "./envMatrix";
-import type { PortabilityLevel } from "./checks";
+import type { PortabilitySettings } from "./checks";
 import { SHARED } from "./vars";
 import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
@@ -252,9 +252,13 @@ class AppStore {
   /** The zoom of the whole interface. A missing, non-numeric or out-of-range
    *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
   zoom = $derived(zoomOf(this.settings?.zoom));
-  /** How non-portable constructs show (Settings → Portability): as warnings only when the
-   *  setting is `true`; missing or anything else in a hand-edited settings file, notes. */
-  portabilityLevel = $derived<PortabilityLevel>(this.settings?.portabilityWarnings === true ? "warning" : "note");
+  /** Which Portability notes show, and how (Settings → Portability): an editor's only when its
+   *  switch is `true`, as warnings only when that setting is `true`. Missing, or anything else in a
+   *  hand-edited settings file: the editor off, notes. */
+  portability = $derived<PortabilitySettings>({
+    editors: { vscode: this.settings?.portabilityEditors?.vscode === true, rider: this.settings?.portabilityEditors?.rider === true },
+    level: this.settings?.portabilityWarnings === true ? "warning" : "note",
+  });
   /** The webview zoom last asked for, to skip repeat calls. */
   private webviewZoom: number | undefined = undefined;
   /** The theme in effect, with System resolved through the OS appearance. */
@@ -1741,8 +1745,8 @@ class AppStore {
       },
       openText: (path) => store.texts.openText(path),
       openVersion: (path) => store.texts.openVersion(path),
-      get portabilityLevel() {
-        return store.portabilityLevel;
+      get portability() {
+        return store.portability;
       },
       environmentsOf: (path) => store.envSetFor(path),
       get envName() {

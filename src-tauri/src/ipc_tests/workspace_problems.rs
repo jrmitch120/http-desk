@@ -13,7 +13,7 @@ use super::Harness;
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/httpdesk-core/tests/fixtures");
 
 /// A workspace holding the problem fixtures, three portability ones (in a folder; one
-/// only HttpDesk's own lines), a file with nothing to report, and a broken file in an
+/// with HttpDesk-only lines alone), a file with nothing to report, and a broken file in an
 /// ignored folder; opened.
 fn workspace(h: &Harness) -> (tempfile::TempDir, PathBuf) {
     let ws = tempfile::tempdir().unwrap();
@@ -119,7 +119,7 @@ fn every_files_problems_and_portability_notes_are_listed_by_line_in_the_file() {
             // `# @prompt` is VS Code's, a `> {% %}` handler Rider's.
             ("portable/prompt-directive.http".into(), (vec![], vec![mark(2, "vscode-only")])),
             ("portable/response-handler.http".into(), (vec![], vec![mark(4, "jetbrains-only")])),
-            // `# @timeout` is Rider's, `# @prompt` and `# @note` VS Code's. HttpDesk's own lines
+            // `# @timeout` is Rider's, `# @prompt` and `# @note` VS Code's. HttpDesk-only lines
             // (`# @httpdesk-disabled`, `# @param`) are ignored by both, so they're no note.
             (
                 "unknown-directive.http".into(),

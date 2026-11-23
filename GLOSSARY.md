@@ -83,6 +83,18 @@ Sending a selection of requests (a file, a folder, or chosen requests) in order,
 A request in a run fails on a network error, a script error, a failed test or a blocked send; an error status alone is not a failure.
 _Avoid_: batch, collection run
 
+### Portability
+
+**Portability note**:
+A mark on a line of a `.http` file that behaves differently in VS Code or in Rider than in HttpDesk.
+Notes for an editor show only while the user has that editor turned on in Settings → Portability (one app setting per editor, both off by default); the user's choice says which editors they share files with.
+_Avoid_: portability marker, compatibility warning, editor mark
+
+**HttpDesk-only line**:
+A line only HttpDesk reads, which both VS Code and Rider ignore: a description, a turned-off section, API key auth.
+It is shaded, not noted, and only while either editor is turned on.
+_Avoid_: HttpDesk's own line, private directive
+
 ### Editing
 
 **Layout**:

@@ -4,9 +4,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, showEnvironmentMatrix, urlBar } from "./helpers";
 
-/** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version). */
-async function openSection(page: Page, section: "Headers" | "Settings"): Promise<void> {
-  await openApp(page);
+/** Opens List pets (the `local` environment is selected: baseUrl, Secret token; shared: version), with the app opened with `query`. */
+async function openSection(page: Page, section: "Headers" | "Settings", query = ""): Promise<void> {
+  await openApp(page, query);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.locator(".subtab", { hasText: section }).click();
 }
@@ -147,7 +147,8 @@ test("Edit on a File variable declared in a request shows its line in that reque
 });
 
 test("an undefined variable, or a dynamic one, has no Edit; only a named one has Find usages", async ({ page }) => {
-  await openSection(page, "Headers");
+  // VS Code on, so the strip's note is there to wait for (`headerValue`).
+  await openSection(page, "Headers", "?portability=vscode");
   const cell = await headerValue(page, "{{nope}} {{$uuid}}", ["VS Code"]);
   for (const [name, buttons] of [
     ["{{nope}}", ["Find usages"]],
@@ -162,7 +163,8 @@ test("an undefined variable, or a dynamic one, has no Edit; only a named one has
 });
 
 test("a dynamic variable's card says what it generates and the arguments it takes", async ({ page }) => {
-  await openSection(page, "Headers");
+  // Both editors on, so the strip's notes are there to wait for (`headerValue`).
+  await openSection(page, "Headers", "?portability=vscode,rider");
   const cell = await headerValue(page, "{{$uuid}} {{$timestamp -1 d}}", ["VS Code", "Rider"]);
 
   await cell.locator(".cm-var", { hasText: "{{$uuid}}" }).hover();

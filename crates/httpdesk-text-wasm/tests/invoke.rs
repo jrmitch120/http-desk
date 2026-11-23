@@ -126,7 +126,7 @@ fn request_portability_marks_the_lines_of_the_source() {
             "construct": "disabled-line",
             "support": "httpdesk-only",
             "label": "#~",
-            "hover": "Turned off in HttpDesk: VS Code and Rider both ignore this line",
+            "hover": "Turned off in HttpDesk; other editors ignore this line too",
         }])
     );
 }

@@ -970,15 +970,15 @@ describe("zoom", () => {
   });
 });
 
-describe("portability warnings (Settings → Portability)", () => {
+describe("portability notes (Settings → Portability)", () => {
   const loaded = (extra: Record<string, unknown>) =>
     ({ theme: "dark", recentWorkspaces: [], environments: {}, ...extra }) as unknown as AppSettings;
   const req = newRequest();
   const marks: PortabilityMark[] = [{ line: 1, construct: "no-log", support: "jetbrains-only", label: "# @no-log", hover: "VS Code ignores it" }];
-  /** The strip's portability entries and the source's markers, at the level the settings give. */
+  /** The strip's portability entries and the source's markers, as the settings show them. */
   const shown = () => {
-    const checks = requestChecks(req, makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: "dev" }), { portability: { marks, level: app.portabilityLevel } });
-    return { strip: checks.filter((c) => c.kind === "portability").map((c) => [isNote(c), c.level]), gutter: portabilityLineMarks(marks, app.portabilityLevel).map((m) => m.kind) };
+    const checks = requestChecks(req, makeVarProvider({ env: {}, fileVars: [], requestVars: [], envName: "dev" }), { portability: { marks, settings: app.portability } });
+    return { strip: checks.filter((c) => c.kind === "portability").map((c) => [isNote(c), c.level]), gutter: portabilityLineMarks(marks, app.portability).map((m) => m.kind) };
   };
 
   beforeEach(() => {
@@ -988,27 +988,35 @@ describe("portability warnings (Settings → Portability)", () => {
   });
 
   it.each([
-    ["missing", {}, "note"],
-    ["not a bool", { portabilityWarnings: "yes" }, "note"],
-    ["off", { portabilityWarnings: false }, "note"],
-    ["on", { portabilityWarnings: true }, "warning"],
-  ])("are quiet notes unless the setting is on (%s)", async (_, extra, level) => {
+    ["missing", {}, { vscode: false, rider: false }, "note"],
+    ["not an object", { portabilityEditors: "yes", portabilityWarnings: "yes" }, { vscode: false, rider: false }, "note"],
+    ["not bools", { portabilityEditors: { vscode: "on", rider: 1 }, portabilityWarnings: true }, { vscode: false, rider: false }, "warning"],
+    ["one on", { portabilityEditors: { vscode: true }, portabilityWarnings: false }, { vscode: true, rider: false }, "note"],
+    ["both on, as warnings", { portabilityEditors: { vscode: true, rider: true }, portabilityWarnings: true }, { vscode: true, rider: true }, "warning"],
+  ])("show only for the editors turned on, as quiet notes unless warnings are on (%s)", async (_, extra, editors, level) => {
     api.getSettings.mockResolvedValue(loaded(extra));
     await app.init();
-    expect(app.portabilityLevel).toBe(level);
+    expect(app.portability).toEqual({ editors, level });
   });
 
-  it("turn portability notes into warnings when switched on, and back when off, saving each", async () => {
+  it("show once an editor is turned on, become warnings when switched on, and keep the warnings while the editor is off, saving each", async () => {
     app.settings = loaded({});
+    expect(shown()).toEqual({ strip: [], gutter: [] });
+
+    await app.updateSettings({ portabilityEditors: { vscode: true, rider: false } });
     expect(shown()).toEqual({ strip: [[true, "note"]], gutter: ["jetbrains-only"] });
+    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ portabilityEditors: { vscode: true, rider: false } }));
 
     await app.updateSettings({ portabilityWarnings: true });
     expect(shown()).toEqual({ strip: [[false, "warning"]], gutter: ["warning"] });
     expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ portabilityWarnings: true }));
 
-    await app.updateSettings({ portabilityWarnings: false });
-    expect(shown()).toEqual({ strip: [[true, "note"]], gutter: ["jetbrains-only"] });
-    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ portabilityWarnings: false }));
+    await app.updateSettings({ portabilityEditors: { vscode: false, rider: false } });
+    expect(shown()).toEqual({ strip: [], gutter: [] });
+    expect(app.settings?.portabilityWarnings).toBe(true);
+
+    await app.updateSettings({ portabilityEditors: { vscode: true, rider: false } });
+    expect(shown()).toEqual({ strip: [[false, "warning"]], gutter: ["warning"] });
   });
 });
 

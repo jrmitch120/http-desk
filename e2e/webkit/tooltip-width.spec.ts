@@ -50,15 +50,21 @@ test("a problem's message, shown from the keyboard or by hovering, isn't a word 
 });
 
 test("a gutter marker's hover, the app's own tooltip, isn't either", async ({ page }) => {
-  await openApp(page);
+  await openApp(page, "?portability=vscode,rider");
   await treeItem(page, "samples").click();
   await treeMenu(page, "jetbrains.http", "View file as text");
-  const marker = code(page).locator(".cm-line-mark").first();
-  await expect(marker).toBeVisible();
-  await page.mouse.move(0, 0);
-  await marker.hover();
+  const markers = code(page).locator(".cm-line-mark");
+  await expect(markers.first()).toBeVisible();
+  // The response handler's: a message long enough to show the width (each says only
+  // what one editor does, and most are short).
   const tip = page.getByRole("tooltip");
-  await expect(tip).toBeVisible();
+  for (let i = 0; i < (await markers.count()); i++) {
+    await page.mouse.move(0, 0);
+    await markers.nth(i).hover();
+    await expect(tip).toBeVisible();
+    if ((await tip.textContent())?.includes("response handler")) break;
+  }
+  await expect(tip).toHaveText("VS Code ignores this response handler and sends its lines as body text");
   const shown = await shape(tip);
   expect(shown.width).toBeGreaterThan(200);
   expect(shown.lines).toBeLessThanOrEqual(3);
