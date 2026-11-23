@@ -29,6 +29,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
   import { editorMemoryKey } from "../lib/editorMemory";
+  import { rovingList } from "../lib/rovingList";
 
   let { tab }: { tab: Tab } = $props();
 
@@ -186,18 +187,15 @@
     editor?.revealAt(block.start, { focus });
   }
 
-  // The outline is one stop in the tab order (its current entry); the arrow keys move through it.
+  // The outline is a list (`rovingList`): one stop in the Tab order (the request under the
+  // cursor, until a row is focused), and the arrow keys move through it. A click shows a
+  // request and leaves focus in the list; Enter or a double-click goes into the text.
   let outline = $state<HTMLElement>();
-  function outlineKey(e: KeyboardEvent) {
-    const move = { ArrowDown: 1, ArrowUp: -1, Home: -Infinity, End: Infinity }[e.key];
-    if (move === undefined || !outline) return;
-    const rows = [...outline.querySelectorAll<HTMLElement>(".list-row")];
-    const at = rows.indexOf(document.activeElement as HTMLElement);
-    const to = rows[Math.max(0, Math.min(rows.length - 1, move === -Infinity ? 0 : move === Infinity ? rows.length - 1 : at + move))];
-    if (!to) return;
-    e.preventDefault();
-    to.focus();
-  }
+  const blockOf = (row: HTMLElement) => blocks[[...(outline?.querySelectorAll(".list-row") ?? [])].indexOf(row)];
+  const showRow = (row: HTMLElement, focus: boolean) => {
+    const block = blockOf(row);
+    if (block) show(block, focus);
+  };
   // The entry of the request under the cursor stays in sight as the cursor moves through a long file.
   $effect(() => {
     if (!currentEntry || !outline) return;
@@ -289,17 +287,31 @@
     </div>
     {#if shown}
       <div class="file-body">
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <nav class="outline" aria-label="Outline" bind:this={outline} onkeydown={outlineKey}>
-          <!-- Nothing in a row reads its place: a request added or removed above moves the rest without touching them (#168). -->
-          {#each entries as entry (entry)}
-            <button class="list-row" class:current={entry === currentEntry} aria-current={entry === currentEntry ? "true" : undefined} tabindex={entry === (currentEntry ?? entries[0]) ? 0 : -1} onclick={() => show(blocks[entries.indexOf(entry)], true)} use:tooltip={entry.label}>
-              <Badge method={entry.method} />
-              <span class="label ellipsis">{entry.label}</span>
-            </button>
+        <nav class="outline" aria-label="Outline" bind:this={outline}>
+          {#if entries.length}
+            <div class="rows" role="list" aria-label="Requests" use:rovingList={{ activate: (row) => showRow(row, true) }}>
+              <!-- Nothing in a row reads its place: a request added or removed above moves the rest without touching them (#168). -->
+              {#each entries as entry (entry)}
+                <!-- The list's keys are rovingList's; a double-click goes into the text, as Enter does. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+                <div
+                  role="listitem"
+                  tabindex="-1"
+                  class="list-row"
+                  class:current={entry === currentEntry}
+                  aria-current={entry === currentEntry ? "true" : undefined}
+                  onclick={(e) => showRow(e.currentTarget, false)}
+                  ondblclick={(e) => showRow(e.currentTarget, true)}
+                  use:tooltip={entry.label}
+                >
+                  <Badge method={entry.method} />
+                  <span class="label ellipsis">{entry.label}</span>
+                </div>
+              {/each}
+            </div>
           {:else}
             <div class="none muted">No requests</div>
-          {/each}
+          {/if}
         </nav>
         <div class="file-code">
           <Editor
@@ -397,6 +409,8 @@
     /* Its size is the layout's, not its entries': typing in the text lays out and paints none of it (#168). */
     contain: strict;
     overflow-y: auto;
+  }
+  .rows {
     display: flex;
     flex-direction: column;
     gap: 1px;
