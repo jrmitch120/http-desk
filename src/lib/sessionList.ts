@@ -12,7 +12,7 @@ import { createAttachmentKey } from "svelte/attachments";
 import { errorMessage } from "./api";
 import { writeClipboard } from "./clipboard";
 import { menu, type MenuItem } from "./menu.svelte";
-import { focusList, LIST, ROW, rovingList } from "./rovingList";
+import { deletesRow, focusList, LIST, ROW, rovingList } from "./rovingList";
 import { app } from "./store.svelte";
 
 export interface SessionRowActions {
@@ -40,8 +40,7 @@ export function sessionRow(row: SessionRowActions) {
     [createAttachmentKey()]: (node: HTMLElement) => {
       actions.set(node, row);
       const onkeydown = (e: KeyboardEvent) => {
-        if (e.target !== node || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-        if (e.key !== "Delete" && e.key !== "Backspace") return;
+        if (e.target !== node || e.defaultPrevented || !deletesRow(e)) return;
         e.preventDefault();
         void remove(node);
       };

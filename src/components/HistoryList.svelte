@@ -19,7 +19,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Badge from "./Badge.svelte";
   import Checkbox from "./Checkbox.svelte";
-  import { rovingList } from "../lib/rovingList";
+  import { deletesRow, rovingList } from "../lib/rovingList";
 
   interface Props {
     entries: HistorySummary[];
@@ -51,7 +51,7 @@
   function onRowKey(event: KeyboardEvent, entry: HistorySummary) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if ((event.key === "ArrowDown" || event.key === "End") && isLast(event.currentTarget)) onlast?.();
-    if (!ondelete || (event.key !== "Delete" && event.key !== "Backspace")) return;
+    if (!ondelete || !deletesRow(event)) return;
     event.preventDefault();
     ondelete(entry);
   }

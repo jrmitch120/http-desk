@@ -452,7 +452,8 @@ file view's outline, History, the Session panel, Problems, the Runner and Find u
   focused is scrolled into view. Rows marked `aria-disabled="true"` are skipped. No
   type-to-jump. Keys with ⌘, Ctrl or Alt held are left to the app's shortcuts, and every
   key it handles is `preventDefault`ed (ADR-0005). Anything else is the list's own:
-  handle Delete on the rows or the list, and give a row menu through `oncontextmenu`
+  handle Delete on the rows or the list (`deletesRow(e)`: Delete or Backspace, Shift
+  allowed), and give a row menu through `oncontextmenu`
   ([Menu](#menu)), which Shift+F10 and the Menu key already open under the focused row.
 - A click focuses the row (it can take focus), so focus stays in the list; a row whose
   click moves focus elsewhere should do that on a double-click or Enter instead (the

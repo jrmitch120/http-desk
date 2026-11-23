@@ -38,6 +38,9 @@ export const LIST = "[data-roving-list]";
 /** Lists `focusList` focused before they had rows: the first row to come takes focus. */
 const awaitingRows = new WeakSet<HTMLElement>();
 
+/** Delete or Backspace without ⌘/Ctrl/Alt: the key a list that deletes rows deletes the focused one with. */
+export const deletesRow = (e: KeyboardEvent): boolean => (e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && !e.altKey;
+
 /**
  * Puts focus in the list `scope` is, or the first one it holds: on the list's Tab
  * stop, else (no rows yet) on the list, until a row arrives to take it. False if
