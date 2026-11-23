@@ -1,9 +1,9 @@
 <!--
   A History view (`view`): the open workspace's entries (the sidebar's), or one
   request's (`request`, a tab's), newest first, narrowed by status class and text
-  (both filtered in the shell's query), HISTORY_PAGE at a time: scrolling to the end
-  lists the next page. It lists again after each send (keeping as many as it showed)
-  and when the workspace changes. Used by WorkspaceHistory and RequestHistory, which
+  (both filtered in the shell's query), HISTORY_PAGE at a time: scrolling to the end,
+  or the keyboard reaching the last row, lists the next page. It lists again after
+  each send (keeping as many as it showed) and when the workspace changes. Used by WorkspaceHistory and RequestHistory, which
   show the entry it opens.
 
   Clicking an entry opens it read-only in the view (`app.history.open`). Its context
@@ -180,7 +180,7 @@
   {#if entries?.length === 0}
     <div class="empty-state small">{filtered ? "No History entries match" : empty}</div>
   {:else if entries}
-    <HistoryList {entries} onopen={open} current={shown} file={workspace} narrow={workspace} {selected} onselect={select} onmenu={entryMenu} ondelete={(e) => app.history.delete(e)} footer={more ? showMoreButton : undefined} />
+    <HistoryList {entries} onopen={open} current={shown} file={workspace} narrow={workspace} {selected} onselect={select} onmenu={entryMenu} ondelete={(e) => app.history.delete(e)} footer={more ? showMoreButton : undefined} onlast={showMore} />
   {/if}
 </div>
 
