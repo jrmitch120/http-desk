@@ -1,8 +1,4 @@
 <script module lang="ts">
-  /** The last `app.focusSearch` ask the search box took focus for. */
-  let focusAsked = 0;
-  /** The last `app.focusExplorer` ask (Focus Explorer) the Explorer took focus for. */
-  let explorerAsked = 0;
   /** The Explorer row last focused (`rowId`), kept while the Explorer isn't shown
    *  (the History view in its place), for Focus Explorer to go back to. */
   let lastRow: string | null = null;
@@ -44,8 +40,8 @@
   // Each ask once, even when the box only appears later (the sidebar shown, or the
   // Explorer view picked, for it), and not again when the Explorer comes back.
   $effect(() => {
-    if (app.focusSearch !== focusAsked && searchInput) {
-      focusAsked = app.focusSearch;
+    if (app.searchFocusWanted && searchInput) {
+      app.searchFocusWanted = false;
       searchInput.focus();
     }
   });
@@ -138,10 +134,10 @@
 
   // Each ask once, when the Explorer is on screen (the sidebar shown, the tree listed).
   $effect(() => {
-    if (app.focusExplorer === explorerAsked || !app.sidebarShown || app.sidebarView !== "explorer") return;
+    if (!app.explorerFocusWanted || !app.sidebarShown || app.sidebarView !== "explorer") return;
     // Again as the tree, search results or usages come and go, until one takes focus.
     void [treeEl, usagesEl, searchInput, query];
-    if (untrack(focusExplorer)) explorerAsked = app.focusExplorer;
+    if (untrack(focusExplorer)) app.explorerFocusWanted = false;
   });
 
   $effect(() => {

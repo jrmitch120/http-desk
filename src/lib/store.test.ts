@@ -869,10 +869,10 @@ describe("the sidebar", () => {
 
   it("is shown by Search Requests, which then focuses its search box", () => {
     app.settings!.sidebarHidden = true;
-    const asked = app.focusSearch;
+    app.searchFocusWanted = false;
     runCommand("search");
     expect(app.sidebarShown).toBe(true);
-    expect(app.focusSearch).toBe(asked + 1);
+    expect(app.searchFocusWanted).toBe(true);
   });
 
   it("is shown by Find usages, which lists its results there", async () => {

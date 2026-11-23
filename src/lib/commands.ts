@@ -291,7 +291,7 @@ const COMMANDS: Command[] = [
     run: () => {
       showFocusMarks();
       app.showSidebar("explorer");
-      app.focusExplorer++;
+      app.explorerFocusWanted = true;
     },
   },
   {
@@ -302,7 +302,7 @@ const COMMANDS: Command[] = [
     run: () => {
       showFocusMarks();
       app.showSidebar("history");
-      app.focusHistory++;
+      app.historyFocusWanted = true;
     },
   },
   {
@@ -362,7 +362,7 @@ const COMMANDS: Command[] = [
     // The search box is in the sidebar.
     run: () => {
       app.showSidebar();
-      app.focusSearch++;
+      app.searchFocusWanted = true;
     },
   },
   {

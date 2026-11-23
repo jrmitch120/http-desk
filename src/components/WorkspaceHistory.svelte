@@ -5,12 +5,10 @@
   workspace's History; the entry opened shows read-only in HistoryEntryView. While
   the History switch is off it says so instead (HistoryOff).
 
-  Focus History (`app.focusHistory`) focuses the entry last focused here, else the
-  list's Tab stop, once the list has loaded; an empty History, its empty message.
+  Focus History (`app.historyFocusWanted`) focuses the entry last focused here, else
+  the list's Tab stop, once the list has loaded; an empty History, its empty message.
 -->
 <script module lang="ts">
-  /** The last `app.focusHistory` ask the list took focus for. */
-  let historyAsked = 0;
   /** The entry last focused, and in which workspace: kept while the Explorer shows
    *  in this view's place (which unmounts it), for Focus History to go back to. */
   let lastEntry: { root: string | null; id: string } | null = null;
@@ -47,13 +45,12 @@
   // Each ask once, when the sidebar shows the list (or its empty message).
   $effect(() => {
     const el = section;
-    const ask = app.focusHistory;
-    if (!el || ask === historyAsked || !app.sidebarShown) return;
+    if (!el || !app.historyFocusWanted || !app.sidebarShown) return;
     return untrack(() => {
       const tryFocus = () => {
         const to = target(el);
         if (!to) return false;
-        historyAsked = ask;
+        app.historyFocusWanted = false;
         to.focus();
         return true;
       };
