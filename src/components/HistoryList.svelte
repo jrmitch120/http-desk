@@ -61,7 +61,8 @@
     if (!(event.target as Element).closest('[role="checkbox"]')) onopen(entry);
   }
 
-  const keys = $derived({
+  /** What Enter (open) and Space (tick Compare) do on a row. */
+  const rowActions = $derived({
     activate: (row: HTMLElement) => {
       const entry = entryOf(row);
       if (entry) onopen(entry);
@@ -92,7 +93,7 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="entries" class:narrow role="list" aria-label="History entries" use:rovingList={keys} onfocusin={(ev) => isLast(ev.target) && onlast?.()}>
+<div class="entries" class:narrow role="list" aria-label="History entries" use:rovingList={rowActions} onfocusin={(ev) => isLast(ev.target) && onlast?.()}>
   {#each entries as e, i (e.id)}
     <!-- The list's keys are rovingList's (Enter opens, Space ticks Compare); Delete and the menu are the row's. -->
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->

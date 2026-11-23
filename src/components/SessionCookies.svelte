@@ -19,7 +19,7 @@
 
   const cookies = sessionView<StoredCookie[]>(() => api.sessionCookies(), []);
   const list = $derived(cookies.current ?? []);
-  const row = (i: number) =>
+  const rowAttrs = (i: number) =>
     sessionRow({
       copy: { value: list[i].value, copied: "Cookie value copied" },
       remove: { label: "Delete", run: () => app.deleteCookie(list[i]) },
@@ -34,7 +34,7 @@
 
 <SessionSection title="Cookies" count={cookies.current?.length ?? null} clearLabel="Clear cookies" onclear={() => app.clearCookies()}>
   {#if list.length}
-    <CookieTable rows={list.map(storedCookieRow)} label="Session cookies" extra={{ heading: "", cell: remove }} list={row} />
+    <CookieTable rows={list.map(storedCookieRow)} label="Session cookies" extra={{ heading: "", cell: remove }} {rowAttrs} />
   {:else if cookies.current}
     <div class="none muted">No cookies. Cookies that responses set are kept here and sent on later requests to the same site.</div>
   {/if}
