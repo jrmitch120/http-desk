@@ -92,6 +92,8 @@ const withRequest = () => {
   return !!tab && !app.isOrphaned(tab) && !!app.requestFor(tab);
 };
 const withSettings = () => app.settings !== null;
+/** Focus is in the panel area (PanelArea.svelte): a panel's command hides it from there. */
+const focusInPanel = () => !!globalThis.document?.activeElement?.closest(".panel-area");
 
 /** Asks for a folder and opens it as the workspace. */
 async function openFolder() {
@@ -305,14 +307,14 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, key: "j" },
     enabled: inWorkspace,
     checked: () => app.panel === "session",
-    run: () => app.togglePanel("session"),
+    run: () => app.togglePanel("session", focusInPanel()),
   },
   {
     id: "toggle-runner",
     label: "Show Runner",
     enabled: inWorkspace,
     checked: () => app.panel === "runner",
-    run: () => app.togglePanel("runner"),
+    run: () => app.togglePanel("runner", focusInPanel()),
   },
   {
     id: "toggle-problems",
@@ -321,7 +323,7 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, shift: true, key: "m" },
     enabled: inWorkspace,
     checked: () => app.panel === "problems",
-    run: () => app.togglePanel("problems"),
+    run: () => app.togglePanel("problems", focusInPanel()),
   },
   { id: "clear-session", label: "Clear Session…", enabled: inWorkspace, run: () => void app.clearSession() },
   zoomStep("zoom-in", "Zoom In", zoomIn, {

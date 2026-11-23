@@ -37,6 +37,9 @@ test("after a send that sets cookies, the open panel lists them with their attri
   await expect(cells(2)).toHaveText(["theme", "dark", "example.com", "/", "Tue, 01 Dec 2026 00:00:00 GMT", "", "", "", ""]);
   await expect(panel(page).getByRole("heading", { name: /^Cookies/ })).toContainText("3");
 
+  // Focus is on Send: ⌘J puts it in the panel, then hides the panel (#195).
+  await page.keyboard.press("Meta+j");
+  await expect(rows(page).first()).toBeFocused();
   await page.keyboard.press("Meta+j");
   await expect(panel(page)).toBeHidden();
 });

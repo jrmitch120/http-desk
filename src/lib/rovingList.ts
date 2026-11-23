@@ -20,6 +20,9 @@
 // list, or leave it to the window's context-menu path.
 //
 // Focus draws its ring from the focus marks (`.list-row` does, see focusMarks.ts).
+//
+// `focusList(scope)` puts focus in a list from code (a command, a panel shown): on its
+// Tab stop, else on the list itself, whose first row takes focus when rows arrive.
 
 export interface RovingListOptions {
   /** A row's action: Enter, and Space unless `space` is given. What a click does. */
@@ -29,6 +32,24 @@ export interface RovingListOptions {
 }
 
 const ROW = '[role="listitem"]';
+/** Marks an element `use:rovingList` is on, for `focusList`. */
+const LIST = "[data-roving-list]";
+/** Lists `focusList` focused before they had rows: the first row to come takes focus. */
+const awaitingRows = new WeakSet<HTMLElement>();
+
+/**
+ * Puts focus in the list `scope` is, or the first one it holds: on the list's Tab
+ * stop, else (no rows yet) on the list, until a row arrives to take it. False if
+ * there's no list in `scope`.
+ */
+export function focusList(scope: Element): boolean {
+  const list = scope.matches(LIST) ? scope : scope.querySelector(LIST);
+  if (!(list instanceof HTMLElement)) return false;
+  const stop = list.querySelector<HTMLElement>(`${ROW}[tabindex="0"]`);
+  if (!stop) awaitingRows.add(list);
+  (stop ?? list).focus();
+  return true;
+}
 
 export function rovingList(list: HTMLElement, options: RovingListOptions) {
   let opts = options;
@@ -59,10 +80,12 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
     const now = currentRow(all);
     const currentMoved = now !== current;
     current = now;
-    if (currentMoved && now && !list.contains(document.activeElement)) return setStop(now, all);
-    if (stop && all.includes(stop)) return setStop(stop, all);
+    if (currentMoved && now && !list.contains(document.activeElement)) setStop(now, all);
+    else if (stop && all.includes(stop)) setStop(stop, all);
     // Nothing focused yet, or its row went: the current row, else the row now in its place.
-    setStop(stop ? (all[Math.min(stopIndex, all.length - 1)] ?? null) : (now ?? all[0] ?? null), all);
+    else setStop(stop ? (all[Math.min(stopIndex, all.length - 1)] ?? null) : (now ?? all[0] ?? null), all);
+    // Focus put on the list before it had rows (focusList) goes to the first that comes.
+    if (stop && awaitingRows.delete(list) && document.activeElement === list) stop.focus();
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -89,6 +112,7 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
   }
 
   if (!list.hasAttribute("tabindex")) list.tabIndex = -1;
+  list.dataset.rovingList = "";
   list.addEventListener("keydown", onkeydown);
   list.addEventListener("focusin", onfocusin);
   const observer = new MutationObserver(settle);
@@ -101,6 +125,7 @@ export function rovingList(list: HTMLElement, options: RovingListOptions) {
     },
     destroy() {
       observer.disconnect();
+      delete list.dataset.rovingList;
       list.removeEventListener("keydown", onkeydown);
       list.removeEventListener("focusin", onfocusin);
     },
