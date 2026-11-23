@@ -8,7 +8,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { dialog, menuClick, mockState, openApp, openRequest, setMockResponse, tab, urlBar } from "./helpers";
 
 const panel = (page: Page) => page.getByRole("region", { name: "Session" });
-const rows = (page: Page) => panel(page).getByRole("table", { name: "Session cookies" }).locator("tbody tr");
+const rows = (page: Page) => panel(page).getByRole("list", { name: "Session cookies" }).getByRole("listitem");
 const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
 const sentCookies = (page: Page) => mockState(page, "sentCookies");
 
@@ -27,9 +27,10 @@ test("after a send that sets cookies, the open panel lists them with their attri
   await send(page);
 
   await expect(rows(page)).toHaveCount(3);
-  const headers = panel(page).getByRole("columnheader");
+  // The column headings are for the eye: each row reads as a list item (#194).
+  const headers = panel(page).locator("thead th");
   await expect(headers).toHaveText(["Name", "Value", "Domain", "Path", "Expires", "Secure", "HttpOnly", "SameSite", ""]);
-  const cells = (i: number) => rows(page).nth(i).getByRole("cell");
+  const cells = (i: number) => rows(page).nth(i).locator("td");
   // By domain, then path, then name; the Set-Cookie that didn't parse isn't kept.
   await expect(cells(0)).toHaveText(["session", "abc123", "127.0.0.1", "/", "Session", "Yes", "Yes", "Lax", ""]);
   await expect(cells(1).first()).toHaveText("visits");
@@ -116,7 +117,7 @@ test("Clear session takes the test markers off the tab and the tree row (#138)",
 
 // #139: `?globals=1` has List pets' handler store the Global variable `loginToken`, and
 // samples/jetbrains.http's "Get request with a header" (another file) use `{{loginToken}}`.
-const globalRows = (page: Page) => panel(page).getByRole("table", { name: "Global variables" }).locator("tbody tr");
+const globalRows = (page: Page) => panel(page).getByRole("list", { name: "Global variables" }).getByRole("listitem");
 const tokenMark = (page: Page, state: "ok" | "bad") => urlBar(page).locator(`.cm-var-${state}`, { hasText: "{{loginToken}}" });
 const undefinedCheck = (page: Page) => page.getByText("is undefined, used in");
 
@@ -132,7 +133,7 @@ test("a Global variable a handler stores is listed at once, defines {{loginToken
   await send(page);
 
   await expect(globalRows(page)).toHaveCount(1);
-  await expect(globalRows(page).first().getByRole("cell")).toHaveText(["loginToken", "abc123", ""]);
+  await expect(globalRows(page).first().locator("td")).toHaveText(["loginToken", "abc123", ""]);
   await expect(panel(page).getByRole("heading", { name: /^Global variables/ })).toContainText("1");
   await tab(page, "Get request with a header").click();
   await expect(tokenMark(page, "ok")).toBeVisible();
@@ -169,4 +170,53 @@ test("Clear session clears the Global variables, and another workspace starts wi
   await menuClick(page, "open-recent:/work/shop");
   await expect.poll(() => mockState(page, "settings").then((s) => s.recentWorkspaces[0])).toBe("/work/shop");
   await expect(panel(page)).toContainText("No Global variables");
+});
+
+// #194: the Session panel is one list of rows across its sections, in order: Named
+// exchanges, Global variables, Cookies. With `?chain=1&globals=1&trusted=1&response=cookies`,
+// sending Create pet keeps the exchange `createPet`, and sending List pets the Global
+// variable `loginToken`; both responses set the cookies session, visits and theme.
+const sessionRow = (page: Page, name: string) => panel(page).getByRole("listitem").filter({ has: page.getByText(name, { exact: true }) });
+const clearButton = (page: Page, name: string) => panel(page).getByRole("button", { name });
+
+async function fillSession(page: Page) {
+  await openApp(page, "?chain=1&globals=1&trusted=1&response=cookies");
+  await openRequest(page, ["api", "pets.http"], "Create pet");
+  await send(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await send(page);
+  await menuClick(page, "toggle-session");
+  await expect(panel(page).getByRole("listitem")).toHaveCount(5);
+}
+
+test("the Session's rows are one Tab stop, and Up/Down/Home/End move across its sections", async ({ page }) => {
+  await fillSession(page);
+
+  await clearButton(page, "Clear named exchanges").focus();
+  await page.keyboard.press("Tab");
+  await expect(sessionRow(page, "createPet")).toBeFocused();
+  for (const name of ["loginToken", "session", "visits", "theme", "theme"]) {
+    await page.keyboard.press("ArrowDown");
+    await expect(sessionRow(page, name)).toBeFocused();
+  }
+  await page.keyboard.press("Home");
+  await expect(sessionRow(page, "createPet")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(sessionRow(page, "createPet")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(sessionRow(page, "theme")).toBeFocused();
+
+  // The headings' Clear buttons stay in the Tab order; the rows' own buttons don't.
+  await page.keyboard.press("Shift+Tab");
+  await expect(clearButton(page, "Clear cookies")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(clearButton(page, "Clear Global variables")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(clearButton(page, "Clear named exchanges")).toBeFocused();
+  for (const name of ["Clear Global variables", "Clear cookies"]) {
+    await page.keyboard.press("Tab");
+    await expect(clearButton(page, name)).toBeFocused();
+  }
+  await page.keyboard.press("Tab");
+  await expect(sessionRow(page, "theme")).toBeFocused();
 });
