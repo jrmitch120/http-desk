@@ -42,7 +42,7 @@ test("sending twice lists two entries newest first, and an entry opens read-only
   await expect(entries(page).nth(0)).toContainText("17 B");
   await expect(entries(page).nth(1)).not.toContainText("17 B");
 
-  await entries(page).nth(1).getByRole("button").click();
+  await entries(page).nth(1).click();
 
   const entry = page.getByRole("region", { name: "History entry" });
   await expect(entry.locator(".body .cm-content")).toContainText('"name": "Rex"');
@@ -64,7 +64,7 @@ test("the pane's title switches between the response and History; an entry stays
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
   await historyButton(page).click();
-  await entries(page).first().getByRole("button").click();
+  await entries(page).first().click();
   const entry = page.getByRole("region", { name: "History entry" });
   await expect(entry).toBeVisible();
 
@@ -94,7 +94,7 @@ test("a binary entry previews like a live response, and its body saves to a file
   await send(page);
   await historyButton(page).click();
 
-  await entries(page).first().getByRole("button").click();
+  await entries(page).first().click();
 
   const entry = page.getByRole("region", { name: "History entry" });
   const img = entry.getByRole("img", { name: "Response preview" });

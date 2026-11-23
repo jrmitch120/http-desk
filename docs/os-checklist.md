@@ -31,6 +31,8 @@ control or the popup layer.
       `<=` as separate characters, not ligatures (#118).
 - [ ] Tabbing shows the same 2px blue focus ring on buttons, inputs, switches, checkboxes,
       segmented options and the split separators.
+- [ ] After clicking an Explorer row, the Down arrow moves a thin blue ring to the next
+      row; clicking a row shows no ring (#189).
 - [ ] Scrollbars (sidebar tree, long response, Settings) are the thin themed ones, not
       the OS default.
 - [ ] Hovering an icon-only button shows the styled tooltip after a short delay, never
@@ -59,6 +61,9 @@ control or the popup layer.
       (pressing ⌘B toggles once, not twice), Ctrl+B in the label on Windows, and no
       shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
       with the search box focused.
+- [ ] Focus Explorer (⇧⌘E / Ctrl+Shift+E) and Focus History (⇧⌘H / Ctrl+Shift+H), from
+      the URL bar with the sidebar hidden: each shows it on its view with a row ringed,
+      and the arrow keys move from there. Each runs once on macOS, not twice.
 
 ## Request editor
 

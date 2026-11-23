@@ -2,7 +2,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { app } from "../lib/store.svelte";
   import { menu, type MenuItem } from "../lib/menu.svelte";
-  import { currentOS } from "../lib/platform";
+  import { currentOS, plainEnter } from "../lib/platform";
   import { basename, displayName, joinPath } from "../lib/http";
   import type { TreeNode } from "../lib/types";
   import TreeItem from "./TreeItem.svelte";
@@ -116,7 +116,7 @@
   tabindex="-1"
   use:tooltip={{ text: node.path, slow: true }}
   onclick={toggle}
-  onkeydown={(e) => e.key === "Enter" && toggle()}
+  onkeydown={(e) => plainEnter(e) && toggle()}
   oncontextmenu={contextMenu}
   ondragstart={(e) => e.dataTransfer?.setData("text/x-httpdesk-path", node.path)}
   ondragover={(e) => {
@@ -162,7 +162,7 @@
         aria-level={depth + 2}
         tabindex="-1"
         onclick={(e) => clickRequest(e, req._key!)}
-        onkeydown={(e) => e.key === "Enter" && openRequest(req._key!)}
+        onkeydown={(e) => plainEnter(e) && openRequest(req._key!)}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >
         <Badge method={req.method} />
@@ -191,19 +191,25 @@
     border-left: 2px solid transparent;
   }
   .row-item:hover {
-    background: var(--hover);
+    background-image: linear-gradient(var(--row-hover), var(--row-hover));
     color: var(--text);
   }
-  .row-item:focus-visible {
-    background: var(--hover);
+  :global(:root[data-focus-marks]) .row-item:focus {
+    outline: var(--focus-ring-row);
+    outline-offset: var(--focus-ring-row-offset);
   }
   .row-item.selected {
-    background: var(--accent-soft);
+    background-color: var(--accent-soft);
     color: var(--text);
   }
   .row-item.active {
     border-left-color: var(--accent);
     color: var(--text);
+  }
+  /* The ring beside the accent edge, not over it. */
+  :global(:root[data-focus-marks]) .row-item.active:focus {
+    outline: none;
+    box-shadow: var(--focus-ring-row-inside);
   }
   .row-item.dropping {
     background: var(--accent-soft);
@@ -214,7 +220,7 @@
     font-size: 12px;
   }
   .row-item.empty:hover {
-    background: none;
+    background-image: none;
   }
   .chev {
     width: 12px;

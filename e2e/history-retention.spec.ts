@@ -30,7 +30,7 @@ test("an entry whose text body was over the cap shows it cut off, marked Truncat
   await expect(page.getByText("Truncated at 10 MB")).toHaveCount(0);
   await historyButton(page).click();
 
-  await requestEntries(page).first().getByRole("button").click();
+  await requestEntries(page).first().click();
 
   const entry = page.getByRole("region", { name: "History entry" });
   await expect(entry.getByText("Truncated at 10 MB")).toBeVisible();
@@ -52,7 +52,7 @@ async function createPetBody(page: Page, bytes: number) {
 /** The opened entry's Request tab. */
 async function entryRequestTab(page: Page) {
   await historyButton(page).click();
-  await requestEntries(page).first().getByRole("button").click();
+  await requestEntries(page).first().click();
   const entry = page.getByRole("region", { name: "History entry" });
   await entry.getByRole("radio", { name: /^Request/ }).click();
   return entry;
@@ -89,7 +89,7 @@ test("an entry whose binary body was over the cap keeps only its headers and siz
   await send(page);
   await historyButton(page).click();
 
-  await requestEntries(page).first().getByRole("button").click();
+  await requestEntries(page).first().click();
 
   const entry = page.getByRole("region", { name: "History entry" });
   await expect(entry.getByText("History keeps only the headers and size of a binary body over 10 MB")).toBeVisible();
@@ -107,13 +107,13 @@ test("deleting an entry from the request's History asks first, then removes it",
   await historyButton(page).click();
   await expect(requestEntries(page)).toHaveCount(2);
 
-  await requestEntries(page).first().getByRole("button").click({ button: "right" });
+  await requestEntries(page).first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   const confirm = dialog(page, "Delete this History entry?");
   await confirm.getByRole("button", { name: "Cancel" }).click();
   await expect(requestEntries(page)).toHaveCount(2);
 
-  await requestEntries(page).first().getByRole("button").click({ button: "right" });
+  await requestEntries(page).first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   await confirm.getByRole("button", { name: "Delete" }).click();
 
@@ -129,7 +129,7 @@ test("Delete on a row of the sidebar's History deletes it after confirming", asy
   await openApp(page);
   await showSidebarHistory(page);
 
-  await sidebarEntries(page).first().getByRole("button").focus();
+  await sidebarEntries(page).first().focus();
   await page.keyboard.press("Delete");
   await dialog(page, "Delete this History entry?").getByRole("button", { name: "Delete" }).click();
 
@@ -142,11 +142,11 @@ test("an entry open in a tab's History closes when it's deleted from the sidebar
   await openRequest(page, ["api", "pets.http"], "List pets");
   await send(page);
   await historyButton(page).click();
-  await requestEntries(page).first().getByRole("button").click();
+  await requestEntries(page).first().click();
   await expect(page.getByRole("region", { name: "History entry" })).toBeVisible();
   await showSidebarHistory(page);
 
-  await sidebarEntries(page).first().getByRole("button").click({ button: "right" });
+  await sidebarEntries(page).first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete…" }).click();
   await dialog(page, "Delete this History entry?").getByRole("button", { name: "Delete" }).click();
 

@@ -1,13 +1,16 @@
 <!--
   The Session panel: what the workspace's Session holds, one section per kind
   (each a component that reads its part and clears it), and Clear session, which
-  empties all of it. A new section is its component and one line below.
+  empties all of it. A new section is its component and one line below. The
+  sections' rows are one list (src/lib/sessionList.ts): the arrow keys run through
+  them all, while each heading and its Clear button stay outside it.
 -->
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import SessionCookies from "./SessionCookies.svelte";
   import SessionGlobals from "./SessionGlobals.svelte";
   import SessionNamedExchanges from "./SessionNamedExchanges.svelte";
+  import { sessionList } from "../lib/sessionList";
 </script>
 
 <div class="session">
@@ -15,10 +18,10 @@
     <span class="muted">Kept in memory for this workspace until you open another or quit. Never saved.</span>
     <button class="btn small danger" onclick={() => app.clearSession()}>Clear session</button>
   </div>
-  <div class="sections">
+  <div class="sections" use:sessionList>
+    <SessionNamedExchanges />
     <SessionGlobals />
     <SessionCookies />
-    <SessionNamedExchanges />
   </div>
 </div>
 

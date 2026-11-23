@@ -275,6 +275,8 @@ class AppStore {
   modal = $state<ModalKind>(null);
   /** The panel shown below the requests, if any. */
   panel = $state<PanelId | null>(null);
+  /** Set to ask the panel area to put focus in the shown panel's list; it clears this. */
+  panelFocusWanted = $state(false);
   /** What the sidebar shows. Not part of the Layout: each start shows the Explorer. */
   sidebarView = $state<SidebarView>("explorer");
   dialog =$state<DialogState | null>(null);
@@ -286,8 +288,14 @@ class AppStore {
   /** True until `init` has finished reopening the last workspace, so the
    *  Welcome screen doesn't flash first. */
   starting = $state(true);
-  /** Bumped to ask the sidebar search box to take focus. */
-  focusSearch = $state(0);
+  /** Set to ask the sidebar search box to take focus; it clears this once it has.
+   *  Like `panelFocusWanted`, and the next two. */
+  searchFocusWanted = $state(false);
+  /** Set to ask the sidebar's Explorer, or its History list, to take focus (Focus
+   *  Explorer, Focus History): on the row last focused, else the list's current row.
+   *  Each clears its own once it has, which may be only once it has loaded. */
+  explorerFocusWanted = $state(false);
+  historyFocusWanted = $state(false);
   /** Fix-it requests from the error panel, each cleared by the component that
    *  acts on it: the Settings section to scroll to when the modal opens, the tab
    *  whose request editor should show its Settings, and the environment picker. */
@@ -441,8 +449,8 @@ class AppStore {
       .catch(() => {});
   }
 
-  /** Shows the sidebar if it's hidden, on `view`, for what puts its results there
-   *  (Search Requests and Find usages, in the Explorer). */
+  /** Shows the sidebar if it's hidden, on `view`, for what puts its results or focus there
+   *  (Search Requests and Find usages, in the Explorer; Focus Explorer and Focus History). */
   showSidebar(view: SidebarView = "explorer") {
     this.sidebarView = view;
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });
@@ -1473,9 +1481,17 @@ class AppStore {
     return api.promptAnswers(tab.key);
   }
 
-  /** Shows `panel` below the requests, or hides it if it's the one shown. */
-  togglePanel(panel: PanelId) {
-    this.panel = this.panel === panel ? null : panel;
+  /**
+   * A panel's command (⌘J, ⌘⇧M, Show Runner): shows `panel` below the requests and
+   * puts focus in its list, or, with focus in it already (`focusInPanel`), hides it.
+   */
+  togglePanel(panel: PanelId, focusInPanel: boolean) {
+    if (this.panel === panel && focusInPanel) {
+      this.panel = null;
+      return;
+    }
+    this.panel = panel;
+    this.panelFocusWanted = true;
   }
 
   /**

@@ -869,10 +869,10 @@ describe("the sidebar", () => {
 
   it("is shown by Search Requests, which then focuses its search box", () => {
     app.settings!.sidebarHidden = true;
-    const asked = app.focusSearch;
+    app.searchFocusWanted = false;
     runCommand("search");
     expect(app.sidebarShown).toBe(true);
-    expect(app.focusSearch).toBe(asked + 1);
+    expect(app.searchFocusWanted).toBe(true);
   });
 
   it("is shown by Find usages, which lists its results there", async () => {
@@ -2716,13 +2716,23 @@ describe("the Session panel", () => {
     });
   });
 
-  it("the Session command shows the panel, and runs again to hide it", () => {
-    app.panel = null;
-    expect(runCommand("toggle-session")).toBe(true);
-    expect(app.panel).toBe("session");
-    expect(command("toggle-session").checked?.()).toBe(true);
-    runCommand("toggle-session");
-    expect(app.panel).toBeNull();
+  it("the Session command shows the panel; run again it hides it only with focus in the panel (#195)", () => {
+    // No page here: a document with focus nowhere, whose focus marks the command turns on.
+    const was = globalThis.document;
+    vi.stubGlobal("document", { activeElement: null, documentElement: { toggleAttribute: () => {} } });
+    try {
+      app.panel = null;
+      expect(runCommand("toggle-session")).toBe(true);
+      expect(app.panel).toBe("session");
+      expect(command("toggle-session").checked?.()).toBe(true);
+      // Focus is elsewhere: it focuses the panel's list instead.
+      runCommand("toggle-session");
+      expect(app.panel).toBe("session");
+      app.togglePanel("session", true);
+      expect(app.panel).toBeNull();
+    } finally {
+      vi.stubGlobal("document", was);
+    }
   });
 });
 

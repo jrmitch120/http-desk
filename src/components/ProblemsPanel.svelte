@@ -12,6 +12,7 @@
   import { relativePath } from "../lib/http";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { rovingList } from "../lib/rovingList";
 
   const files = $derived(app.problems.list);
   const label = (path: string) => (app.root ? relativePath(app.root, path).replace(/^\.\//, "") : path);
@@ -26,24 +27,25 @@
 
 <div class="problems">
   {#if files.length}
-    <div class="items">
+    <!-- Every file's entries move as one list (rovingList): one Tab stop, the arrow keys cross files. -->
+    <div class="items" use:rovingList>
       {#each files as f (f.path)}
         <div class="group" role="group" aria-label={label(f.path)}>
           <div class="file">
             <Icon name="file" size={12} /><span class="name selectable">{label(f.path)}</span>
             {#each f.summary as line (line)}<span class="summary" role="note">{line}</span>{/each}
           </div>
-          <ol>
+          <div role="list" aria-label={label(f.path)}>
             {#each f.entries as e, i (i)}
-              <li>
-                <button class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line, column: e.column })} use:clipped={e.message}>
-                  <span class="icon" role="img" aria-label={TONES[e.tone]}><Icon name={e.tone === "note" ? "info" : "alert"} size={12} /></span>
-                  <span class="line">Line {e.line}</span>
-                  <span class="message">{e.message}</span>
-                </button>
-              </li>
+              <!-- The list's keys are rovingList's: Enter clicks the row. -->
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+              <div role="listitem" tabindex="-1" class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line, column: e.column })} use:clipped={e.message}>
+                <span class="icon" role="img" aria-label={TONES[e.tone]}><Icon name={e.tone === "note" ? "info" : "alert"} size={12} /></span>
+                <span class="line">Line {e.line}</span>
+                <span class="message">{e.message}</span>
+              </div>
             {/each}
-          </ol>
+          </div>
         </div>
       {/each}
     </div>
@@ -64,11 +66,6 @@
     min-height: 0;
     overflow: auto;
     padding: var(--space-1) 0;
-  }
-  ol {
-    list-style: none;
-    margin: 0;
-    padding: 0;
   }
   /* A group off screen isn't laid out or painted: a workspace may list thousands of entries. */
   .group {

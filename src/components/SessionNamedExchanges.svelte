@@ -3,7 +3,8 @@
   exchange in the Session, which its file's Request variables read, with its file,
   status and when it arrived. One opens in the response viewer (ExchangeView) or is
   forgotten; Clear forgets them all, so every Request variable reads as unsent. Read
-  again whenever the Session changes, so a send shows up at once.
+  again whenever the Session changes, so a send shows up at once. Its rows are the
+  first of the panel's list (sessionRow): Enter opens one, Delete forgets it.
 -->
 <script lang="ts">
   import { api } from "../lib/api";
@@ -15,6 +16,7 @@
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import SessionSection from "./SessionSection.svelte";
+  import { sessionRow } from "../lib/sessionList";
 
   const exchanges = sessionView<NamedExchange[]>(() => api.namedExchanges(), []);
   const list = $derived(exchanges.current ?? []);
@@ -23,22 +25,22 @@
 <SessionSection title="Named exchanges" count={exchanges.current?.length ?? null} clearLabel="Clear named exchanges" onclear={() => app.clearNamedExchanges()}>
   {#if list.length}
     <div class="data-table">
-      <table aria-label="Named exchanges">
-        <thead>
+      <table role="list" aria-label="Named exchanges">
+        <thead aria-hidden="true">
           <tr><th>Name</th><th>File</th><th>Status</th><th>Received</th><th></th></tr>
         </thead>
-        <tbody>
+        <tbody role="presentation">
           {#each list as e (`${e.file}\0${e.name}`)}
-            <tr>
+            <tr {...sessionRow({ open: () => app.openExchange(e), remove: { label: "Forget", run: () => app.removeNamedExchange(e) } })}>
               <td class="name">{e.name}</td>
               <td class="mono">{workspaceFile(app.root, e.file)}</td>
               <td><Badge status={e.status}>{e.status}</Badge></td>
               <td class="nowrap">{receivedAt(e.received)}</td>
               <td class="actions">
-                <button class="icon-btn" aria-label="Open {e.name}" use:tooltip={"Show this exchange's response"} onclick={() => app.openExchange(e)}>
+                <button class="icon-btn" tabindex="-1" aria-label="Open {e.name}" use:tooltip={"Show this exchange's response"} onclick={() => app.openExchange(e)}>
                   <Icon name="reveal" size={13} />
                 </button>
-                <button class="icon-btn" aria-label="Forget {e.name}" use:tooltip={"Forget this exchange: its Request variables read as not sent"} onclick={() => app.removeNamedExchange(e)}>
+                <button class="icon-btn" tabindex="-1" aria-label="Forget {e.name}" use:tooltip={"Forget this exchange: its Request variables read as not sent"} onclick={() => app.removeNamedExchange(e)}>
                   <Icon name="trash" size={13} />
                 </button>
               </td>

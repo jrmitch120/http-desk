@@ -59,6 +59,16 @@ describe("commandForKey", () => {
     expect(on("mac", press("b", { ctrlKey: true }))).toBeUndefined();
   });
 
+  it("focuses the Explorer with ⇧⌘E and History with ⇧⌘H, Ctrl+Shift elsewhere, apart from ⌘E and ⌥⌘E", () => {
+    expect(on("mac", press("E", { metaKey: true, shiftKey: true }))).toBe("focus-explorer");
+    expect(on("mac", press("H", { metaKey: true, shiftKey: true }))).toBe("focus-history");
+    expect(on("windows", press("E", { ctrlKey: true, shiftKey: true }))).toBe("focus-explorer");
+    expect(on("linux", press("H", { ctrlKey: true, shiftKey: true }))).toBe("focus-history");
+    expect(on("mac", press("e", { metaKey: true }))).toBe("manage-environments");
+    expect(on("mac", press("´", { code: "KeyE", metaKey: true, altKey: true }))).toBe("choose-environment");
+    expect(on("mac", press("h", { metaKey: true }))).toBeUndefined();
+  });
+
   it("shows the Session panel with ⌘J on macOS and Ctrl+J elsewhere", () => {
     expect(on("mac", press("j", { metaKey: true }))).toBe("toggle-session");
     expect(on("windows", press("j", { ctrlKey: true }))).toBe("toggle-session");

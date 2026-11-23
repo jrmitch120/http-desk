@@ -4,6 +4,7 @@ import { mount } from "svelte";
 import "./fonts/fonts.css";
 import "./app.css";
 import App from "./App.svelte";
+import { trackFocusMarks } from "./lib/focusMarks";
 
 // Browser-only dev mode with a mocked backend (see src/dev/mock.ts).
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) await import("./dev/mock");
@@ -16,6 +17,7 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) await import("./d
 // files are local, so this takes a few milliseconds.
 await Promise.allSettled([...document.fonts].map((face) => face.load()));
 
+trackFocusMarks();
 const app = mount(App, { target: document.getElementById("app")! });
 
 export default app;

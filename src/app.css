@@ -58,6 +58,18 @@
   --focus-ring: var(--focus-ring-width) solid var(--focus);
   --focus-ring-offset: -1px;
   --focus-ring-inset: calc(-1 * var(--focus-ring-width));
+  /* A focused row in a list draws a thinner ring, inside the row, so it reads
+     apart from a selected row's fill (--accent-soft) and a hovered row's fainter
+     --row-hover fill; a row can show all three. --row-hover is translucent so it
+     lays over the selection fill (as a background-image) instead of hiding it. */
+  --focus-ring-row: 1px solid var(--focus);
+  --focus-ring-row-offset: -1px;
+  /* The same ring on a row that has an accent left edge (the open request, a list's
+     current row), drawn as `box-shadow` instead of `outline`. An inset shadow sits
+     inside the border, so the ring runs beside the whole 2px edge instead of over its
+     outer pixel; on the other sides it covers the same pixels as the outline. */
+  --focus-ring-row-inside: inset 0 0 0 1px var(--focus);
+  --row-hover: rgba(255, 255, 255, 0.05);
 
   /* spacing scale, on a 4px grid */
   --space-1: 4px;
@@ -103,6 +115,7 @@
   --accent: #e8572a;
   --accent-hover: #f0663a;
   --accent-soft: rgba(232, 87, 42, 0.1);
+  --row-hover: rgba(0, 0, 0, 0.04);
   --m-get: #108a4c;
   --m-post: #a86b00;
   --m-put: #1f6fd1;
@@ -214,11 +227,8 @@ textarea.input {
   resize: vertical;
 }
 
-.btn:focus-visible,
-.icon-btn:focus-visible,
-.link:focus-visible,
-.copyable:focus-visible,
-.subtab:focus-visible {
+/* Keyboard focus shows while focus marks are on (src/lib/focusMarks.ts). */
+:root[data-focus-marks] :is(.btn, .icon-btn, .link, .copyable, .subtab):focus {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
@@ -336,8 +346,9 @@ textarea.input {
 }
 
 /* A full-width row of a list that does something when clicked (opens what it names):
-   the Problems panel's entries, the file view's outline. `.current` marks the row for
-   where the user is, with `aria-current`. */
+   the file view's outline, History, the Session panel, Problems, the Runner and Find
+   usages. `.current` marks the row for where the user is, with `aria-current`. A
+   list's keys are `use:rovingList`'s. */
 .list-row {
   display: flex;
   align-items: center;
@@ -355,18 +366,32 @@ textarea.input {
   text-align: left;
   cursor: pointer;
 }
+/* Like the Explorer's rows: hover is a fainter fill laid over any other fill,
+   and keyboard focus a thin ring, so the current row can be focused and hovered. */
 .list-row:hover {
-  background: var(--hover);
+  background-image: linear-gradient(var(--row-hover), var(--row-hover));
   color: var(--text);
 }
 .list-row.current {
-  background: var(--accent-soft);
+  background-color: var(--accent-soft);
   border-left-color: var(--accent);
   color: var(--text);
 }
-.list-row:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-ring-inset);
+:root[data-focus-marks] .list-row:focus {
+  outline: var(--focus-ring-row);
+  outline-offset: var(--focus-ring-row-offset);
+}
+:root[data-focus-marks] .list-row.current:focus {
+  outline: none;
+  box-shadow: var(--focus-ring-row-inside);
+}
+/* A table's row as a list's row (the Session panel's): it stays a table row, with the
+   row's hover and focus ring. */
+tr.list-row {
+  display: table-row;
+  border-left: 0;
+  color: inherit;
+  cursor: default;
 }
 
 .link {

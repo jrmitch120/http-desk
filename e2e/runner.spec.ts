@@ -33,7 +33,7 @@ test("Run file sends every request in order and the panel shows each result, whi
   await expect(runner(page)).toContainText("3 passed · 0 failed");
   await expect(row(page, "Create pet")).toContainText("201");
 
-  await row(page, "Create pet").getByRole("button").click();
+  await row(page, "Create pet").click();
   const viewer = runner(page).locator(".result");
   await expect(viewer.locator(".statusbar")).toContainText("201 Created");
   await expect(viewer.locator(".cm-content")).toContainText('"method": "POST"');
@@ -341,4 +341,45 @@ test("each result's status and time line up with the other rows', whatever the t
     Promise.all((await rows.locator(selector).all()).map(async (el) => Math.round((await el.boundingBox())!.x)));
   expect(new Set(await left(".badge:not(.method)")).size).toBe(1);
   expect(new Set(await left(".time")).size).toBe(1);
+});
+
+// #192: the results are one list: one Tab stop, the arrow keys move, rows still
+// waiting are skipped, and Enter shows a result as a click does.
+test("the results are one Tab stop that the arrow keys move through, skipping rows still waiting; Enter shows the response", async ({ page }) => {
+  await openApp(page, "?download=slow");
+  await runFile(page, "api", "pets.http");
+  const stopOnFailure = runner(page).getByRole("switch", { name: "Stop on first failure" });
+  await expect(state(page, "List pets", "Passed")).toBeVisible();
+
+  // Create pet is sending and Get pet image waiting: there's nowhere else to go.
+  await stopOnFailure.focus();
+  await page.keyboard.press("Tab");
+  await expect(row(page, "List pets")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row(page, "List pets")).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(row(page, "List pets")).toBeFocused();
+
+  // Once a row has its response, focus can reach it.
+  await expect(state(page, "Create pet", "Passed")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(row(page, "Create pet")).toBeFocused();
+  await expect(row(page, "Create pet"), "shows the focus ring").toHaveCSS("outline-style", "solid");
+  await page.keyboard.press("Enter");
+  const viewer = runner(page).locator(".result");
+  await expect(viewer.locator(".statusbar")).toContainText("201 Created");
+
+  await page.keyboard.press("Home");
+  await expect(row(page, "List pets")).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(row(page, "List pets")).toBeFocused();
+  // Moving isn't opening: the response shown is still Create pet's.
+  await expect(viewer.locator(".statusbar")).toContainText("201 Created");
+
+  // One stop: Tab leaves the list, and coming back lands on the row last focused.
+  await page.keyboard.press("Tab");
+  await expect(runner(page).getByRole("listitem").and(page.locator(":focus"))).toHaveCount(0);
+  await stopOnFailure.focus();
+  await page.keyboard.press("Tab");
+  await expect(row(page, "List pets")).toBeFocused();
 });

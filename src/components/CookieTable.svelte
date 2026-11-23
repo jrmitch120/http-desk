@@ -3,9 +3,12 @@
   look the response viewer's Cookies tab and the Session panel's Cookies section
   share. A row that didn't parse shows its raw Set-Cookie and the reason. The
   caller adds a last column (the hop that set it, a Delete button) with `extra`.
+  With `rowAttrs`, the table is a list of rows instead (the Session panel's, which
+  spreads `sessionRow` on each), and its copy buttons leave the Tab order.
 -->
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import type { HTMLAttributes } from "svelte/elements";
   import type { CookieRow } from "../lib/cookies";
   import { copyable } from "../lib/copyable";
   import { tooltip } from "../lib/popup/tooltip.svelte";
@@ -16,24 +19,26 @@
     label: string;
     /** The last column's heading and cell, if any. */
     extra?: { heading: string; cell: Snippet<[number]> };
+    /** Makes the table a list: each row's attributes (`role="listitem"` and its keys). */
+    rowAttrs?: (i: number) => HTMLAttributes<HTMLTableRowElement>;
   }
 
-  let { rows, label, extra }: Props = $props();
+  let { rows, label, extra, rowAttrs }: Props = $props();
 
   const ATTRIBUTES = ["Name", "Value", "Domain", "Path", "Expires", "Secure", "HttpOnly", "SameSite"];
 </script>
 
 <div class="data-table">
-  <table aria-label={label}>
-    <thead>
+  <table aria-label={label} role={rowAttrs ? "list" : undefined}>
+    <thead aria-hidden={rowAttrs ? "true" : undefined}>
       <tr>
         {#each ATTRIBUTES as c (c)}<th>{c}</th>{/each}
         {#if extra}<th>{extra.heading}</th>{/if}
       </tr>
     </thead>
-    <tbody>
+    <tbody role={rowAttrs ? "presentation" : undefined}>
       {#each rows as c, i (i)}
-        <tr>
+        <tr {...rowAttrs?.(i)}>
           {#if c.parseError}
             <td class="unparsed" colspan={ATTRIBUTES.length}>
               <div class="mono selectable">{c.raw}</div>
@@ -45,7 +50,7 @@
             </td>
             <td class="v">
               {#if c.value}
-                <button class="copyable" use:tooltip={"Click to copy"} use:copyable={{ value: c.value, copied: "Cookie value copied" }}>{c.value}</button>
+                <button class="copyable" tabindex={rowAttrs ? -1 : undefined} use:tooltip={"Click to copy"} use:copyable={{ value: c.value, copied: "Cookie value copied" }}>{c.value}</button>
               {:else}
                 <span class="muted">(empty)</span>
               {/if}

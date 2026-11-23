@@ -10,6 +10,7 @@
   import { formatDuration, relativePath } from "../lib/http";
   import { menu } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { rovingList } from "../lib/rovingList";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import NumberField from "./NumberField.svelte";
@@ -122,44 +123,50 @@
   </div>
   {#if runner}
     <div class="body">
-      <div class="items">
+      <!-- Every file's results move as one list (rovingList): one Tab stop; rows with nothing to show yet are skipped. -->
+      <div class="items" use:rovingList>
         {#each groups as g, gi (gi)}
           <div class="group" role="group" aria-label={g.file}>
             <div class="file selectable" aria-hidden="true"><Icon name="file" size={12} /><span class="name">{g.file}</span></div>
-            <ol>
+            <div role="list" aria-label={g.file}>
               {#each g.items as { item: i, index } (index)}
-                <li>
-                  <button
-                    class="row {i.state}"
-                    class:selected={selected === index}
-                    aria-current={selected === index}
-                    disabled={!i.response && !i.error}
-                    onclick={() => (selected = index)}
-                  >
-                    <span class="state" data-state={i.state} role="img" aria-label={STATE_LABEL[i.state]}>
-                      {#if i.state === "sending"}<span class="spinner"></span>
-                      {:else if i.state === "passed"}<Icon name="check" size={12} />
-                      {:else if i.state === "failed"}<Icon name="x" size={12} />
-                      {:else if i.state === "cancelled" || i.state === "notRun"}<Icon name="minus" size={12} />
-                      {/if}
-                    </span>
-                    <Badge method={i.method} />
-                    <span class="name">{i.name}</span>
-                    {#if i.unsaved}<span class="unsaved" use:tooltip={"Sent from its open tab's unsaved edits"}>unsaved</span>{/if}
-                    <span class="spacer"></span>
-                    {#if i.response}
-                      <span class="tests muted">{tests(i)}</span>
-                      <Badge status={i.response.status}>{i.response.status}</Badge>
-                      <span class="time muted">{formatDuration(i.response.timeMs)}</span>
-                    {:else if i.error}
-                      <Badge tone="danger">Error</Badge>
-                    {:else}
-                      <span class="muted">{STATE_LABEL[i.state]}</span>
+                {@const waiting = !i.response && !i.error}
+                <!-- The list's keys are rovingList's: Enter clicks the row. A waiting row is aria-disabled, which is how
+                     rovingList skips it (and how a screen reader hears it can't open yet); it takes no focus from a click either. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions, a11y_role_supports_aria_props -->
+                <div
+                  role="listitem"
+                  tabindex="-1"
+                  class="list-row row {i.state}"
+                  class:selected={selected === index}
+                  aria-current={selected === index}
+                  aria-disabled={waiting}
+                  onmousedown={(e) => waiting && e.preventDefault()}
+                  onclick={() => !waiting && (selected = index)}
+                >
+                  <span class="state" data-state={i.state} role="img" aria-label={STATE_LABEL[i.state]}>
+                    {#if i.state === "sending"}<span class="spinner"></span>
+                    {:else if i.state === "passed"}<Icon name="check" size={12} />
+                    {:else if i.state === "failed"}<Icon name="x" size={12} />
+                    {:else if i.state === "cancelled" || i.state === "notRun"}<Icon name="minus" size={12} />
                     {/if}
-                  </button>
-                </li>
+                  </span>
+                  <Badge method={i.method} />
+                  <span class="name">{i.name}</span>
+                  {#if i.unsaved}<span class="unsaved" use:tooltip={"Sent from its open tab's unsaved edits"}>unsaved</span>{/if}
+                  <span class="spacer"></span>
+                  {#if i.response}
+                    <span class="tests muted">{tests(i)}</span>
+                    <Badge status={i.response.status}>{i.response.status}</Badge>
+                    <span class="time muted">{formatDuration(i.response.timeMs)}</span>
+                  {:else if i.error}
+                    <Badge tone="danger">Error</Badge>
+                  {:else}
+                    <span class="muted">{STATE_LABEL[i.state]}</span>
+                  {/if}
+                </div>
               {/each}
-            </ol>
+            </div>
           </div>
         {/each}
       </div>
@@ -219,18 +226,11 @@
     min-height: 0;
   }
   .items {
-    list-style: none;
-    margin: 0;
     padding: 4px 0;
     width: 46%;
     min-width: 280px;
     overflow: auto;
     border-right: 1px solid var(--border);
-  }
-  .items ol {
-    list-style: none;
-    margin: 0;
-    padding: 0;
   }
   .group + .group {
     margin-top: 4px;
@@ -243,28 +243,19 @@
     font-size: 11.5px;
     color: var(--muted);
   }
+  /* A `.list-row` (its hover and focus ring), in the text colour, with no edge: the
+     open result is a selection, filled. */
   .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 4px 12px;
-    border: 0;
-    background: none;
+    padding: var(--space-1) var(--space-3);
+    border-left: 0;
     color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-    text-align: left;
-    cursor: pointer;
   }
-  .row:disabled {
+  .row[aria-disabled="true"] {
     cursor: default;
-  }
-  .row:not(:disabled):hover {
-    background: var(--hover);
+    background-image: none;
   }
   .row.selected {
-    background: var(--accent-soft);
+    background-color: var(--accent-soft);
   }
   .row.notRun .name,
   .row.cancelled .name,

@@ -337,7 +337,7 @@
   }
   .lock.active,
   .m-cell:hover .lock,
-  .lock:focus-visible {
+  :global(:root[data-focus-marks]) .lock:focus {
     opacity: 1;
   }
   /* Like the row's actions: shown on hover, and while the cell has focus. */
@@ -370,7 +370,7 @@
     background: var(--hover);
     color: var(--text);
   }
-  .head-btn:focus-visible {
+  :global(:root[data-focus-marks]) .head-btn:focus {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

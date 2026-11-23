@@ -8,6 +8,7 @@
   import type { Snippet } from "svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { plainEnter } from "../lib/platform";
 
   interface Props {
     checked: boolean;
@@ -20,9 +21,11 @@
     tooltip?: string;
     /** Extra class on the root, for laying out a labelled row. */
     class?: string;
+    /** -1 for a box in a list row: the row is the Tab stop (`use:rovingList`); the box stays clickable. */
+    tabindex?: number;
     children?: Snippet;
   }
-  let { checked, indeterminate = false, onchange, label, tooltip: tooltipText, class: className = "", children }: Props = $props();
+  let { checked, indeterminate = false, onchange, label, tooltip: tooltipText, class: className = "", tabindex, children }: Props = $props();
 </script>
 
 <button
@@ -32,12 +35,13 @@
   class:on={checked || indeterminate}
   aria-checked={indeterminate ? "mixed" : checked}
   aria-label={label}
+  {tabindex}
   use:tooltip={tooltipText ?? null}
   onclick={() => onchange(indeterminate ? true : !checked)}
   onkeydown={(e) => {
     // Shortcuts (⌘Enter / Ctrl+Enter sends) pass through: a modified Enter doesn't
     // activate a button, so only a plain Enter needs stopping.
-    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) e.preventDefault();
+    if (plainEnter(e)) e.preventDefault();
   }}
 >
   <span class="box">
@@ -81,7 +85,7 @@
     background: var(--accent);
     border-color: var(--accent);
   }
-  .checkbox:focus-visible .box {
+  :global(:root[data-focus-marks]) .checkbox:focus .box {
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }

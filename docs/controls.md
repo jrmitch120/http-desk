@@ -47,7 +47,7 @@ a line there for a new kind of field.
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
-| A row of a list that opens or shows what it names | [`.list-row`](#buttons-inputs-and-links) |
+| A list of rows that each open or show what they name | [`use:rovingList`](#userovinglist), rows styled [`.list-row`](#buttons-inputs-and-links) |
 | An icon button with a count beside it | [`.icon-btn.counted`](#buttons-inputs-and-links) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A grid column the user can resize | a [KeyValueGrid](#keyvaluegrid) column's `resize` ([ColumnResizer](#columnresizer)) |
@@ -65,8 +65,10 @@ a line there for a new kind of field.
 `SegmentedControl.svelte`, with `type SegmentedOption` from its module script. A row of
 pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 
-- Props: `options` (`{ value, label, icon?, count? }[]`), `value`, `onchange(value)`,
+- Props: `options` (`{ value, label, icon?, count?, tooltip? }[]`), `value`, `onchange(value)`,
   `label` (the group's accessible name, required), `disabled?`.
+- `tooltip` puts a tooltip on one option, for a shortcut that picks it (the sidebar's
+  Explorer and History hint Focus Explorer and Focus History).
 - `count` shows a number after the label and is part of the option's name ("Headers 4").
   Leave it out and nothing shows; pass `0` only where an empty option says something
   (a response with no headers), so empty tabs don't fill up with zeros.
@@ -198,7 +200,8 @@ the app's Menu instead:
 
 - Props: `checked`, `onchange(next)`, `indeterminate?` (mixed state; wins over
   `checked`), `label?` (accessible name for a bare box), `children?` (a visible label
-  inside the button, part of the click target), `tooltip?`, `class?`.
+  inside the button, part of the click target), `tooltip?`, `class?`, `tabindex?` (-1
+  for a box in a [`use:rovingList`](#userovinglist) row, which is the Tab stop).
 - Variants: a bare box with `label` (grid rows: `Enable <name>`, `Enable all`); a labelled
   row with children (OpenAPI operations, "Substitute {{variables}} inside the file"); a
   mixed "all" box with `indeterminate`. Clicking a mixed box checks it.
@@ -395,8 +398,10 @@ Global classes in `src/app.css`, not components:
   the top bar's Problems toggle, whose `aria-label` says the count too. With
   `.attention` it's warning-toned while not pressed (there are problems to see).
 - `.list-row`: a full-width row of a list that opens or shows what it names when
-  clicked: the Problems panel's entries (each opening the file view at its line) and the
-  file view's outline (each scrolling to its request). Its height is at least
+  clicked: the file view's outline (each scrolling to its request), History, the
+  Session panel's rows, the Problems panel's entries (each opening the file view at its
+  line), the Runner's results and Find usages. A list's keys are
+  [`use:rovingList`](#userovinglist)'s. Its height is at least
   `--control-h-icon`; it hovers like a row, and `.current` with `aria-current="true"`
   marks the row for where the user is (the outline's request under the cursor) with an
   accent bar. A list sets only its own inset (the panel indents rows under their file).
@@ -409,7 +414,8 @@ Global classes in `src/app.css`, not components:
 - `.data-table`: the scrolling wrapper of a table of rows in a response tab (headers,
   cookies, the sent request). Inside it, `td.k` is a bold name column sized to its
   content, `td.v` a monospace value column, and `th` heads columns where a table has
-  them.
+  them. A table can be a list (the Session panel's): `role="list"` on the table, its
+  `<thead>` `aria-hidden`, and `.list-row` on each `<tr>`, which stays a table row.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
   `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
   Focus shows `--focus-ring`.
@@ -417,6 +423,42 @@ Global classes in `src/app.css`, not components:
   Icons are `aria-hidden`, so the button around them carries the name.
 
 ## Lists and layout
+
+### use:rovingList
+
+`src/lib/rovingList.ts`. Every list of rows works the same from the keyboard: the
+file view's outline, History, the Session panel, Problems, the Runner and Find usages
+(#188). The Explorer is a tree and keeps its own keys.
+
+- Roles: the rows are `role="listitem"` elements written with `tabindex="-1"`, inside a
+  `role="list"` with an `aria-label`. Put the action on that list, or on an element
+  holding several lists (one per section, with headings and their buttons between,
+  outside the lists) to move through them as one. Rows can hold buttons of their own;
+  give those `tabindex="-1"`, so the list stays one Tab stop.
+- `{ activate?(row), space?(row) }`: Enter activates the row, and Space too unless the list
+  gives `space` (History ticks Compare). Activating clicks the row; give `activate` for
+  something else (the outline's Enter goes into the text, its click doesn't).
+- One Tab stop: the row last focused, else the list's current row (the one marked
+  `aria-current`), else the first. When the current row changes while focus is
+  elsewhere, the stop goes to it (the outline's stop follows the text cursor). When the
+  stop's row goes, the row now in its place takes it. The list itself takes focus from
+  code (`tabindex="-1"`) for when it has no rows.
+- `focusList(scope)` puts focus in a list from code (a command, or a panel as it shows):
+  the list `scope` is or the first one inside it takes focus on its Tab stop, else (no
+  rows yet, as while a panel's rows load) the list itself does, and its first row takes
+  focus when it arrives. It returns false if `scope` holds no list. The panel area uses
+  it for ⌘J, ⇧⌘M and Show Runner.
+- Keys on a focused row: Up/Down and Home/End move, stopping at the ends, and the row
+  focused is scrolled into view. Rows marked `aria-disabled="true"` are skipped. No
+  type-to-jump. Keys with ⌘, Ctrl or Alt held are left to the app's shortcuts, and every
+  key it handles is `preventDefault`ed (ADR-0005). Anything else is the list's own:
+  handle Delete on the rows or the list (`deletesRow(e)`: Delete or Backspace, Shift
+  allowed), and give a row menu through `oncontextmenu`
+  ([Menu](#menu)), which Shift+F10 and the Menu key already open under the focused row.
+- A click focuses the row (it can take focus), so focus stays in the list; a row whose
+  click moves focus elsewhere should do that on a double-click or Enter instead (the
+  outline's rows go into the text).
+- Style rows with `.list-row`, whose focus ring follows the focus marks.
 
 ### KeyValueGrid
 
@@ -665,10 +707,15 @@ also for the size of small fixed elements that are not controls (a badge's heigh
 Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared
 by the bars above the response body (its toolbar, the JSONPath filter row, the editor's
 find bar), so their edges line up; `--radius` and `--radius-sm`;
-`outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` on
-`:focus-visible` for focus (a control flush against an edge that clips, such as a tab
-in the scrolling tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of
-the ring is cut off); and the `--popup-*` tokens for floating surfaces
+`outline: var(--focus-ring); outline-offset: var(--focus-ring-offset)` for focus, on
+`:root[data-focus-marks] .x:focus` (`:global(:root[data-focus-marks]) .x:focus` in a
+component), never `:focus-visible`: the app decides when keyboard focus is drawn
+(`src/lib/focusMarks.ts`, ADR-0002). Text fields use plain `:focus`, as their ring is
+always on. A control flush against an edge that clips, such as a tab in the scrolling
+tab strip, uses `outline-offset: var(--focus-ring-inset)` so none of the ring is cut
+off. A row of a list shows focus with the thinner `--focus-ring-row` and
+`--focus-ring-row-offset`, a selection with a `--accent-soft` background-color and
+hover with `--row-hover` as a background-image, so a row can show all three; and the `--popup-*` tokens for floating surfaces
 (`--popup-card-min-width` and `--popup-card-max-width` size a variable's hover card). Colours
 come from the theme tokens (`--panel`, `--border`, `--text`, `--accent`, `--danger` and
 so on; `--on-accent` for text and marks on a solid accent or danger fill), so a control

@@ -68,7 +68,7 @@ src/                    Svelte 5 frontend
   lib/history.svelte.ts History as the page sees it: each History view (`HistoryViewId`: a tab's, the sidebar's) and the entry it opened, what Compare compares an entry with (`compareTarget`), comparisons, a restored tab's last response, deleting and clearing (Restore request is `app.restoreRequest`)
   components/HistoryView.svelte, HistoryList.svelte  a History view, shared by both: filters (status class, text), pages, opening an entry, the row menu (Open, Compare, Delete), Compare selected, and (the sidebar's only) Clear workspace history; and its rows
   components/RequestHistory.svelte  the request's History view in the response pane
-  components/WorkspaceHistory.svelte, HistoryEntryView.svelte  the sidebar's History view (the whole workspace's), and an entry opened from it (with Restore request)
+  components/WorkspaceHistory.svelte, HistoryEntryView.svelte  the sidebar's History view (the whole workspace's, where Focus History puts focus), and an entry opened from it (with Restore request)
   components/HistoryOff.svelte  what a History view shows while the History switch is off, linking to the setting
   components/HistorySettings.svelte  Settings → History: the History switch, retention's limits, where History is kept, Clear all history
   lib/compare.ts, components/CompareView.svelte  Compare: two responses' bodies and headers in CodeMirror's merge view; bodies over 1 MB aren't compared, only their headers
@@ -994,14 +994,21 @@ Decisions made during implementation, beyond the plan above:
 * **The Session panel** shows what the workspace's Session holds. It lives in the
   panel area below the tabs and requests (`PanelArea.svelte`, docked by App.svelte in a
   stacked `SplitPane` whose sized pane is the second (`end`), its height kept in
-  settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). The
+  settings as `panelHeight`), shown and hidden by View → Show Session (⌘J / Ctrl+J). A
+  panel's command (⌘J, ⇧⌘M, Show Runner) shows its panel and puts focus in its list
+  (`app.togglePanel` asks with `panelFocusWanted`, and `PanelArea` focuses the list with
+  `focusList`, else the panel itself); with the panel showing and focus elsewhere it only
+  focuses the list, and from inside the panel it hides it (#195). The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
-  (`SessionGlobals.svelte`, `SessionCookies.svelte` and `SessionNamedExchanges.svelte`), each a component that reads its part through
+  (`SessionNamedExchanges.svelte`, `SessionGlobals.svelte` and `SessionCookies.svelte`, in that order), each a component that reads its part through
   `sessionView`, which reads again whenever `app.sessionVersion` goes up (a send
   whose response set cookies, a named request's send, a send whose scripts ran, a delete
   or clear, another workspace), wrapped in `SessionSection` for
-  its heading, count and Clear button. The page's side of the Session (that version, the
+  its heading, count and Clear button. The sections' rows are one list
+  (`src/lib/sessionList.ts`, on `use:rovingList`; #194): Enter opens a named exchange or
+  copies a value, Delete forgets or deletes the row and focus goes to the next row (else
+  the one before, else the list), and Shift+F10 opens the row's menu. The page's side of the Session (that version, the
   exchange shapes completion reads, an opened exchange, the test markers, and the
   panel's deletes and clears) is `src/lib/session.svelte.ts`; workspace trust is
   `trust.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
@@ -1333,7 +1340,7 @@ Decisions made during implementation, beyond the plan above:
   report nothing and the panel shows them as "Didn't run". A run never replaces what a
   tab shows, but it updates the Session (exchanges, cookies) and the requests' test
   markers. The Runner panel (`RunnerPanel.svelte`) is a panel of the panel area beside
-  the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner toggles it),
+  the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner shows and focuses it, or hides it from inside),
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts or

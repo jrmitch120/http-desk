@@ -16,6 +16,8 @@
 // while it's shown, so assistive tech reads it as the description. Icon-only
 // buttons need an `aria-label` (their accessible name); the tooltip repeats it.
 
+import { focusMarksOn } from "../focusMarks";
+
 /** Hover/focus time before a tooltip appears. */
 export const TOOLTIP_DELAY = 400;
 /**
@@ -112,10 +114,10 @@ export function tooltip(node: HTMLElement, arg?: TooltipArg) {
     clicked = true;
     stop();
   };
-  // Keyboard focus only: a click also focuses (and text inputs match
-  // :focus-visible even then), and shouldn't pop a tooltip.
+  // Keyboard focus only (focus marks on): a click also focuses, and shouldn't
+  // pop a tooltip.
   const onFocus = () => {
-    if (!clicked && node.matches(":focus-visible")) start();
+    if (!clicked && focusMarksOn()) start();
   };
   // A focused element Svelte removes blurs while the block removing it is still
   // updating, where changing state is forbidden: hide once that's done.
