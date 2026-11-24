@@ -184,6 +184,13 @@
     background: var(--panel);
     border-bottom: 1px solid var(--border);
   }
+  /* A pressed topbar toggle (sidebar shown, Problems open) looks quietly pressed, not
+     accent: accent here is kept for what needs attention. Unpressed ones keep the
+     shared look (no background, muted icon). Icon buttons elsewhere are unchanged. */
+  .topbar .icon-btn.active {
+    background: var(--hover);
+    color: var(--text);
+  }
   .ws {
     display: flex;
     align-items: center;
