@@ -11,6 +11,7 @@ import { makeVarProvider } from "./vars";
 const api = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
   saveHttpFile: vi.fn(),
+  setWindowTheme: vi.fn(async (_theme: "light" | "dark" | "system") => {}),
   createFile: vi.fn(),
   createDir: vi.fn(),
   renamePath: vi.fn(),
@@ -78,9 +79,8 @@ const {
 } = api;
 vi.mock("./api", () => ({ api, errorMessage: (e: unknown) => String(e) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-const win = vi.hoisted(() => ({ setTheme: vi.fn(async (_theme: "light" | "dark" | null) => {}) }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}), setTheme: win.setTheme }),
+  getCurrentWindow: () => ({ onCloseRequested: vi.fn(), setTitle: vi.fn(async () => {}) }),
 }));
 const webview = vi.hoisted(() => ({ setZoom: vi.fn(async (_zoom: number) => {}) }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ setZoom: webview.setZoom }) }));
@@ -1045,7 +1045,7 @@ describe("theme", () => {
 
   beforeEach(() => {
     vi.stubGlobal("document", { documentElement: { dataset: {} } });
-    win.setTheme.mockClear();
+    api.setWindowTheme.mockClear();
     app.toasts = [];
     return () => vi.unstubAllGlobals();
   });
@@ -1055,7 +1055,7 @@ describe("theme", () => {
     await start(theme);
     expect(applied()).toBe(theme);
     expect(app.effectiveTheme).toBe(theme);
-    expect(win.setTheme).toHaveBeenLastCalledWith(theme);
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith(theme);
   });
 
   it.each([
@@ -1067,7 +1067,7 @@ describe("theme", () => {
     expect(applied()).toBe(theme);
     expect(app.effectiveTheme).toBe(theme);
     // The native window follows the OS too, so its title bar and scrollbars agree.
-    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith("system");
   });
 
   it("switches live when the OS appearance changes while System is chosen", async () => {
@@ -1077,6 +1077,16 @@ describe("theme", () => {
     expect(applied()).toBe("dark");
     os.set(false);
     expect(applied()).toBe("light");
+  });
+
+  it("asks the shell nothing when the OS appearance changes while System is chosen", async () => {
+    const os = osAppearance(false);
+    await start("system");
+    api.setWindowTheme.mockClear();
+    os.set(true);
+    os.set(false);
+    // The window already follows the OS, so its theme hasn't changed.
+    expect(api.setWindowTheme).not.toHaveBeenCalled();
   });
 
   it("ignores OS appearance changes while a fixed theme is chosen", async () => {
@@ -1091,10 +1101,16 @@ describe("theme", () => {
     await start("light");
     await app.updateSettings({ theme: "system" });
     expect(applied()).toBe("dark");
-    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith("system");
     await app.updateSettings({ theme: "light" });
     expect(applied()).toBe("light");
-    expect(win.setTheme).toHaveBeenLastCalledWith("light");
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith("light");
+    await app.updateSettings({ theme: "dark" });
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith("dark");
+    // Saving another setting leaves the window theme alone.
+    api.setWindowTheme.mockClear();
+    await app.updateSettings({ zoom: 1.1 });
+    expect(api.setWindowTheme).not.toHaveBeenCalled();
   });
 
   it("follows the OS when the settings have no theme", async () => {
@@ -1109,7 +1125,7 @@ describe("theme", () => {
     expect(app.themeChoice).toBe("system");
     expect(applied()).toBe("light");
     expect(app.effectiveTheme).toBe("light");
-    expect(win.setTheme).toHaveBeenLastCalledWith(null);
+    expect(api.setWindowTheme).toHaveBeenLastCalledWith("system");
   });
 });
 

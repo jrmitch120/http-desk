@@ -237,6 +237,8 @@ export const api = {
   saveLayout: (root: string, layout: Layout) => invoke<void>("save_layout", { root, layout }),
   /** Whether any open file has unsaved edits (macOS asks before a logout then). */
   setUnsaved: (unsaved: boolean) => invoke<void>("set_unsaved", { unsaved }),
+  /** Sets the native window theme for the Theme setting: pinned for light and dark, following the OS for system (theme.rs). */
+  setWindowTheme: (theme: AppSettings["theme"]) => invoke<void>("set_window_theme", { theme }),
 
   /** The app's version, OS and architecture (About HttpDesk, Report an Issue). */
   appInfo: () => invoke<AppInfo>("app_info"),

@@ -8,7 +8,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
-    "core:window:allow-set-theme",
     "core:window:allow-destroy",
     "core:window:allow-close",
     "core:webview:allow-set-webview-zoom",

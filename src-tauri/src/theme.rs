@@ -8,8 +8,8 @@ use tauri::{Manager, Theme};
 /// Creates the app's only window, "main" from tauri.conf.json (which has
 /// `"create": false`), in the saved `theme` and `zoom` settings; runs at setup once
 /// settings are loaded (most IPC tests make their own window). The page's
-/// `applyTheme()` and `applyZoom()` take over once settings arrive over IPC,
-/// setting the same theme and zoom again.
+/// `applyTheme()` (through `set_window_theme`) and `applyZoom()` take over once
+/// settings arrive over IPC, setting the same theme and zoom again.
 ///
 /// The window is created hidden and shown once its saved size and place are
 /// restored (window_state.rs), so it never appears at the default size first.
@@ -39,6 +39,22 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         window.set_background_color(Some(background(window.theme().unwrap_or(Theme::Dark))))?;
     }
     crate::window_state::show_restored(&window)
+}
+
+/// Sets the native window theme for the Theme setting `theme` (light, dark or
+/// system): a fixed theme pins it, System (or anything unknown) lets it follow the
+/// OS. The page's `applyTheme()` calls this only when the window-level theme changes.
+#[tauri::command]
+pub fn set_window_theme<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    #[allow(unused_variables)] state: tauri::State<'_, crate::AppState>,
+    theme: String,
+) -> Result<(), String> {
+    let fixed = window_theme(&theme);
+    window.set_theme(fixed).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    state.window_themes.lock().unwrap().push(fixed);
+    Ok(())
 }
 
 /// `--bg` in src/app.css for each theme (checked by a test).
