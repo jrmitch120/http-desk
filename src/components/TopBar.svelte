@@ -30,7 +30,6 @@
       ...app.envNames.map((name) => ({ value: name, label: name, note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined })),
     ];
   });
-  const layout = $derived(app.settings?.layout ?? "horizontal");
   const problems = $derived(app.problems.count);
 
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
@@ -120,11 +119,11 @@
   </button>
   <button
     class="icon-btn"
-    aria-label={layout === "horizontal" ? "Show response below" : "Show response on the right"}
+    aria-label={app.responsePosition === "horizontal" ? "Show response below" : "Show response on the right"}
     use:tooltip
-    onclick={() => app.updateSettings({ layout: layout === "horizontal" ? "vertical" : "horizontal" })}
+    onclick={() => app.updateSettings({ layout: app.responsePosition === "horizontal" ? "vertical" : "horizontal" })}
   >
-    <Icon name={layout === "horizontal" ? "rows" : "columns"} />
+    <Icon name={app.responsePosition === "horizontal" ? "rows" : "columns"} />
   </button>
   <button
     class="icon-btn theme-btn"
