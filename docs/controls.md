@@ -135,7 +135,7 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   - Menu button: pass `{ anchor: button, label }`. It opens under the button, a click on
     the button isn't "outside", and focus returns to it. Set `aria-haspopup="menu"` and
     `aria-expanded={menu.isOpenFrom(button)}` on the button, and close a second click
-    with `menu.close(false)` (the top bar's theme button).
+    with `menu.close(false)` (the Runner's Export button).
   - A thing's own "…" actions (a grid row, a matrix column header): `ActionsButton.svelte`
     (`label`, `items()`, `tip?`, `skipTab?`) is that menu button with the `more` icon. It
     is hidden until the pointer is over, or focus is in, the nearest element marked

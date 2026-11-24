@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { activeTab, dialog, openApp, openRequest, tab, treeItem, treeMenu, urlBar } from "./helpers";
+import { activeTab, dialog, importOpenApiButton, openApp, openRequest, tab, treeItem, treeMenu, urlBar } from "./helpers";
 
 test("a confirm dialog focuses its primary button, keeps Tab inside and gives focus back on close", async ({ page }) => {
   await openApp(page);
@@ -77,7 +77,7 @@ test("an irreversible permanent delete focuses Cancel, so a double Enter keeps t
 
 test("the OpenAPI Overwrite dialog focuses Cancel", async ({ page }) => {
   await openApp(page, "?openapiConflicts=1");
-  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await importOpenApiButton(page).click();
   await page.getByPlaceholder("/path/to/openapi.yaml").fill("/demo/openapi.yaml");
   await page.keyboard.press("Enter");
   await page.getByPlaceholder("Choose a folder").fill("/demo/swagger-petstore");
