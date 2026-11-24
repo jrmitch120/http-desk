@@ -93,6 +93,7 @@ export function menuLayout(os: OS): TopMenu[] {
     cmd("zoom-out"),
     cmd("zoom-reset"),
     SEP,
+    cmd("toggle-response-position"),
     { kind: "submenu", label: "Response Position", items: [cmd("response-right"), cmd("response-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];
