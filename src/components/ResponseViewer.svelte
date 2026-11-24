@@ -217,7 +217,7 @@
             <!-- Only a request tab's pane has the split it moves. Its icon and description
                  show where the response is now and what a click does. -->
             <button
-              class="icon-btn"
+              class="icon-btn quiet"
               class:active={below}
               aria-label={responsePosition("vertical").label}
               aria-pressed={below}

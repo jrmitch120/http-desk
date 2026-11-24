@@ -403,7 +403,8 @@ Global classes in `src/app.css`, not components:
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the top bar's sidebar and Problems toggles (`e2e/topbar-toggles.spec.ts`). Pressed
+  the top bar's sidebar and Problems toggles (`e2e/topbar-toggles.spec.ts`) and the
+  response viewer's response-position toggle (a layout choice, not attention). Pressed
   icon buttons elsewhere (Wrap lines, the find bar's) keep the accent.
 - `.list-row`: a full-width row of a list that opens or shows what it names when
   clicked: the file view's outline (each scrolling to its request), History, the
