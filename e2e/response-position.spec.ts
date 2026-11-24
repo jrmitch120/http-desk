@@ -14,6 +14,9 @@ const statusBar = (page: Page) => page.locator(".statusbar").filter({ has: page.
 async function expectPosition(page: Page, position: "right" | "below") {
   await expect(split(page)).toHaveAttribute("aria-orientation", position === "below" ? "horizontal" : "vertical");
   await expect(toggle(page)).toHaveAttribute("aria-pressed", position === "below" ? "true" : "false");
+  // A pressed toggle is marked .active too, as every owned toggle (docs/controls.md).
+  if (position === "below") await expect(toggle(page)).toHaveClass(/\bactive\b/);
+  else await expect(toggle(page)).not.toHaveClass(/\bactive\b/);
 }
 
 /** The toggle is the last thing in the status bar, at its right edge. */
@@ -136,6 +139,17 @@ test("the icon and tooltip show where the response is now, what a click does and
   await toggle(page).click();
   await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
   expect(await icon()).toBe(onRight);
+});
+
+test("screen readers get where the response is and what a click does, without hovering", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await expect(toggle(page)).toHaveAccessibleName("Response below");
+  await expect(toggle(page)).toHaveAccessibleDescription("Response on the right. Click to move it below (⌥⌘R)");
+
+  await page.keyboard.press("Meta+Alt+KeyR");
+  await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle(page)).toHaveAccessibleDescription("Response below. Click to move it to the right (⌥⌘R)");
 });
 
 for (const { os, keys, hint } of [

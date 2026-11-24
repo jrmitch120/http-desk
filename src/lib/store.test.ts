@@ -2750,6 +2750,15 @@ describe("the Session panel", () => {
       vi.stubGlobal("document", was);
     }
   });
+
+  it("hiding a panel hides it wherever focus is, and leaves another panel showing", () => {
+    app.panel = "problems";
+    app.hidePanel("problems");
+    expect(app.panel).toBeNull();
+    app.panel = "session";
+    app.hidePanel("problems");
+    expect(app.panel).toBe("session");
+  });
 });
 
 describe("per-directory environments", () => {
