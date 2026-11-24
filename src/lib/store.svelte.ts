@@ -34,6 +34,7 @@ import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
+  ResponsePosition,
   EnvironmentSet,
   ExchangeShape,
   EnvironmentSettings,
@@ -246,6 +247,9 @@ class AppStore {
   themeChoice = $derived<AppSettings["theme"]>(
     this.settings?.theme === "light" || this.settings?.theme === "dark" ? this.settings.theme : "system",
   );
+  /** The Response position: the response on the right ("horizontal", also for a
+   *  missing or hand-edited value) or below ("vertical"). Stored under `layout`. */
+  responsePosition = $derived<ResponsePosition>(this.settings?.layout === "vertical" ? "vertical" : "horizontal");
   /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
    *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
   sidebarShown = $derived(this.settings?.sidebarHidden !== true);

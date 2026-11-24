@@ -106,6 +106,8 @@ export interface MockState {
   /** The settings it last saved. */
   settings: {
     theme: string;
+    /** The Response position, under its pre-rename key. */
+    layout: "horizontal" | "vertical";
     zoom: number;
     recentWorkspaces: string[];
     exec: Record<string, unknown>;
