@@ -12,6 +12,7 @@
 // (calibrated on #58 with the Fold all step, 66–71 ms there and 69–72 ms here).
 import { expect, test, type Page } from "@playwright/test";
 import { mockState, openApp, openRequest, tab } from "../helpers";
+import { JOIN_MEASURE } from "../../src/lib/codemirror/docBuilder";
 import { expectNoLongTasks } from "./longtasks";
 import { FOLD_ALL_LIMIT } from "../../src/lib/codemirror/foldAll";
 
@@ -104,7 +105,8 @@ test("1. sending and receiving the 50 MB body", async ({ page }) => {
 });
 
 // A line this long is too long to show unwrapped (#119), so Raw opens wrapped,
-// with Wrap lines on but disabled.
+// with Wrap lines on but disabled. Its one string is a 50 MB copy, which can't
+// be split across tasks: the task that makes it may take up to 100 ms (#185).
 test("2. opening Raw (a single 50 MB line), wrapped, and scrolling it to the end", async ({ page }) => {
   await prepare(page);
   await sendAndShowPretty(page);
@@ -118,7 +120,7 @@ test("2. opening Raw (a single 50 MB line), wrapped, and scrolling it to the end
     await expect(page.getByRole("tooltip")).toHaveText("Lines too long to unwrap");
     await scrollToEnd(page);
     await expect(editor(page)).toContainText(NEAR_THE_END);
-  });
+  }, { measure: JOIN_MEASURE, maxMs: 100 });
 });
 
 test("3. opening Pretty and scrolling it top to bottom", async ({ page }) => {

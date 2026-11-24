@@ -109,6 +109,16 @@ export class DocBuilder {
 }
 
 /**
+ * The name of the performance measure around the task that ends the document,
+ * where a long last line is joined into one string. Copying a line as long as a
+ * 50 MB minified body is one copy whichever way it's done (decoding the bytes at
+ * once is no faster): some 25 ms on a fast machine, 55-65 ms on CI's runners. So
+ * this task alone may run past 50 ms (#185); the perf tests read the measure to
+ * tell it from any other long task. Each build replaces the last one's measure.
+ */
+export const JOIN_MEASURE = "docBuilder: join the last line";
+
+/**
  * Builds the document for the UTF-8 `bytes`, a piece at a time, awaiting
  * `pause()` between pieces (to give the browser a turn). The end, which may
  * join a long last line, gets a turn of its own too: after the last piece, and
@@ -122,7 +132,10 @@ export async function buildDoc(bytes: ArrayBuffer, pause: () => Promise<void>): 
   }
   if (bytes.byteLength <= PIECE_BYTES) return b.finish();
   await pause();
+  const start = performance.now();
   const doc = b.finish();
+  performance.clearMeasures(JOIN_MEASURE);
+  performance.measure(JOIN_MEASURE, { start });
   await pause();
   return doc;
 }
