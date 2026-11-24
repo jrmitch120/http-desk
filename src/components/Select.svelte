@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import type { BadgeTone } from "./Badge.svelte";
+
   export interface SelectOption<V extends string = string> {
     value: V;
     label: string;
@@ -7,7 +9,7 @@
     /** A short remark after the option in the list, muted (the environment picker: "not defined for api/"). */
     note?: string;
     /** A Badge after the option's label, in the list and on the trigger (the environment picker: a red "Prod"). */
-    badge?: { text: string; tone?: "neutral" | "success" | "danger" };
+    badge?: { text: string; tone?: BadgeTone };
   }
 </script>
 

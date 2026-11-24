@@ -18,7 +18,7 @@
     ]);
   }
 
-  const PROD = { text: "Prod", tone: "danger" } as const;
+  const PRODUCTION_BADGE = { text: "Prod", tone: "danger" } as const;
 
   // Every environment in the workspace (ADR-0004). With a request open, names its folder
   // doesn't define are marked: picking one sends that request with no environment.
@@ -33,7 +33,7 @@
         label: name,
         note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined,
         // Production comes from the app settings, as for the production send guard.
-        badge: app.environmentSettings(name).production ? PROD : undefined,
+        badge: app.environmentSettings(name).production ? PRODUCTION_BADGE : undefined,
       })),
     ];
   });
@@ -42,7 +42,7 @@
   // A pressed toggle: clicking it while the panel is open closes the panel, wherever
   // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
   function toggleProblems() {
-    if (app.panel === "problems") app.panel = null;
+    if (app.panel === "problems") app.hidePanel("problems");
     else runCommand("toggle-problems");
   }
 
@@ -95,7 +95,7 @@
     <!-- Problems: a status indicator, always shown. Muted at zero; with problems, the
          count in the warning colour. It opens and closes the Problems panel. -->
     <button
-      class="icon-btn"
+      class="icon-btn quiet"
       class:active={app.panel === "problems"}
       class:counted={problems > 0}
       class:attention={problems > 0}
@@ -110,7 +110,7 @@
 
   <div class="group">
     <button
-      class="icon-btn"
+      class="icon-btn quiet"
       class:active={app.sidebarShown}
       aria-label="Show sidebar"
       aria-pressed={app.sidebarShown}
@@ -153,17 +153,6 @@
   /* A little extra space between groups, no divider lines. */
   .group + .group {
     margin-left: var(--space-3);
-  }
-  /* A pressed topbar toggle (sidebar shown, Problems open) looks quietly pressed, not
-     accent: accent here is kept for what needs attention. Unpressed ones keep the
-     shared look (no background, muted icon). Icon buttons elsewhere are unchanged. */
-  .topbar .icon-btn.active {
-    background: var(--hover);
-    color: var(--text);
-  }
-  /* The Problems count stays warning-toned while its panel is open, too. */
-  .topbar .icon-btn.attention .count {
-    color: var(--warning);
   }
   .ws {
     display: flex;

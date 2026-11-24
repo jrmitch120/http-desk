@@ -705,7 +705,7 @@ export interface AppSettings {
   panelHeight: number;
   /** The zoom of the whole interface, `1` being 100% (View → Zoom In / Zoom Out / Actual Size, ⌘= / ⌘- / ⌘0). */
   zoom: number;
-  /** Request pane's share (0..1) of the request/response split, per layout. */
+  /** Request pane's share (0..1) of the request/response split, per Response position. */
   splitRatio: Record<ResponsePosition, number>;
   /** Show the resolved preview under the URL bar. */
   showResolved: boolean;

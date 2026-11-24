@@ -35,6 +35,7 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import RequestHistory from "./RequestHistory.svelte";
   import Self from "./ResponseViewer.svelte";
+  import { responsePosition } from "../lib/responsePositions";
   import { HISTORY_BODY_CAP_TEXT, sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
@@ -42,6 +43,7 @@
   // remembers the viewer's choices and keeps the body's documents.
   let { tab, result }: { tab: RequestTab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
   const viewId = untrack(() => tab?.id ?? result!.id);
+  const uid = $props.id();
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
@@ -151,29 +153,19 @@
     if (!res.contentEncoding) return `Body ${formatBytes(res.bodySize)} · ${headers}`;
     return `Transferred ${formatBytes(res.transferredSize)} (${res.contentEncoding}) · Decoded ${formatBytes(res.bodySize)} · ${headers}`;
   });
+  /** Copy and Save: a response with a body kept, once its send is done. */
+  const bodyActions = $derived(!!res && !run?.loading && !noBody);
+  const below = $derived(app.responsePosition === "vertical");
+  /** Where the response is now, what a click does, and the shortcut. */
+  const positionTip = $derived(
+    `${below ? `${responsePosition("vertical").label}. Click to move it to the right` : `${responsePosition("horizontal").label}. Click to move it below`} (${shortcutHint("toggle-response-position")})`,
+  );
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
 <!-- The pane's title: which of the tab's response and its request's History it shows. -->
 {#snippet paneSwitch(t: RequestTab)}
   <div class="pane-switch"><SegmentedControl label="Response pane" options={PANES} value={showingHistory ? "history" : "response"} onchange={(v) => app.history.show(t.id, v === "history")} /></div>
-{/snippet}
-
-<!-- The Response position toggle, at the status bar's right end: only a request tab's
-     pane has the split it moves. Its icon and tooltip show where the response is now. -->
-{#snippet positionToggle()}
-  {#if historyTab}
-    {@const below = app.responsePosition === "vertical"}
-    <button
-      class="icon-btn position-toggle"
-      aria-label="Response below"
-      aria-pressed={below}
-      use:tooltip={`${below ? "Response below. Click to move it to the right" : "Response on the right. Click to move it below"} (${shortcutHint("toggle-response-position")})`}
-      onclick={() => runCommand("toggle-response-position")}
-    >
-      <Icon name={below ? "rows" : "columns"} />
-    </button>
-  {/if}
 {/snippet}
 
 {#snippet fromHistory()}
@@ -183,16 +175,67 @@
 {/snippet}
 
 <div class="viewer">
-  {#if historyTab && showingHistory}
+  <!-- The status bar: a request tab's always (its Response/History switch), else a
+       result's once it has a run. Body actions and the Response position toggle sit
+       together at its right end. -->
+  {#if historyTab || run}
     <div class="statusbar">
-      {@render paneSwitch(historyTab)}
-      {#if openedEntry}
-        <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close({ tab: historyTab.id })}><Icon name="chevron-left" />Back</button>
-        <span class="muted small sent">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
-        <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
+      {#if historyTab}{@render paneSwitch(historyTab)}{:else}<span class="title">Response</span>{/if}
+      {#if showingHistory}
+        {#if openedEntry}
+          <button class="btn small ghost" aria-label="Back to History" use:tooltip={"Back to the list"} onclick={() => app.history.close({ tab: historyTab!.id })}><Icon name="chevron-left" />Back</button>
+          <span class="muted small sent">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
+          <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab!.path, historyTab!.key, openedEntry.source)}>Restore request</button>
+        {/if}
+      {:else if run?.loading}
+        <span class="loading">
+          <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
+          {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
+        </span>
+        <span class="spacer"></span>
+        {#if tab}<button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>{/if}
+      {:else if run?.cancelled && !res}
+        <Badge size="md">Cancelled</Badge>
+        {@render fromHistory()}
+      {:else if run && res}
+        {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
+        <span class="tip" use:tooltip={statusTooltip}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
+        <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
+        <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
+        {@render fromHistory()}
+      {:else if run?.error}
+        <Badge size="md" tone="danger">Error</Badge>
+        {@render fromHistory()}
       {/if}
-      {@render positionToggle()}
+      {#if bodyActions || historyTab}
+        <span class="body-actions">
+          {#if bodyActions}
+            <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
+            <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+          {/if}
+          {#if historyTab}
+            <!-- Only a request tab's pane has the split it moves. Its icon and description
+                 show where the response is now and what a click does. -->
+            <button
+              class="icon-btn"
+              class:active={below}
+              aria-label={responsePosition("vertical").label}
+              aria-pressed={below}
+              aria-describedby="{uid}-position"
+              use:tooltip={positionTip}
+              onclick={() => runCommand("toggle-response-position")}
+            >
+              <Icon name={responsePosition(app.responsePosition).icon!} />
+            </button>
+            <!-- The tooltip's text, for screen readers without hovering (a hidden node still describes). -->
+            <span id="{uid}-position" hidden>{positionTip}</span>
+          {/if}
+        </span>
+      {/if}
     </div>
+  {/if}
+
+  {#if historyTab && showingHistory}
     {#if openedEntry}
       <section class="entry" aria-label="History entry">
         {#key openedEntry.tab.id}<Self tab={openedEntry.tab} />{/key}
@@ -201,12 +244,6 @@
       <RequestHistory tab={historyTab} />
     {/if}
   {:else if !run}
-    {#if historyTab}
-      <div class="statusbar">
-        {@render paneSwitch(historyTab)}
-        {@render positionToggle()}
-      </div>
-    {/if}
     <div class="empty-state">
       <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <rect x="10" y="14" width="52" height="44" rx="6" stroke="var(--border-strong)" stroke-width="2" />
@@ -217,41 +254,6 @@
       <div class="muted small"><kbd>{shortcutHint("send")}</kbd></div>
     </div>
   {:else}
-    <div class="statusbar">
-      {#if historyTab}{@render paneSwitch(historyTab)}{:else}<span class="title">Response</span>{/if}
-      {#if run.loading}
-        <span class="loading">
-          <span class="spinner"></span>Sending… {formatDuration(now - run.startedAt)}
-          {#if run.received !== undefined}<span class="received">{formatBytes(run.received)} received</span>{/if}
-        </span>
-        <span class="spacer"></span>
-        {#if tab}<button class="btn small" onclick={() => app.cancel(tab.id)}>Cancel</button>{/if}
-      {:else if run.cancelled && !res}
-        <Badge size="md">Cancelled</Badge>
-        {@render fromHistory()}
-      {:else if res}
-        {#if run.cancelled}<span class="tip" use:tooltip={"The last send was cancelled; this is the response before it"}><Badge size="md">Cancelled</Badge></span>{/if}
-        <span class="tip" use:tooltip={statusTooltip}><Badge size="md" status={res.status}>{res.status} {res.statusText}</Badge></span>
-        <span class="metric" use:tooltip={timeTooltip}><span class="muted">Time</span> {formatDuration(res.timeMs)}</span>
-        <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
-        {@render fromHistory()}
-        <span class="spacer"></span>
-        {#if !noBody || historyTab}
-        <span class="body-actions">
-          {#if !noBody}
-            <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
-            <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
-          {/if}
-          {@render positionToggle()}
-        </span>
-        {/if}
-      {:else if run.error}
-        <Badge size="md" tone="danger">Error</Badge>
-        {@render fromHistory()}
-      {/if}
-      {#if !res || run.loading}{@render positionToggle()}{/if}
-    </div>
-
     {#if run.cancelled && !res}
       <div class="empty-state small">Request cancelled.</div>
     {:else if run.error && !run.loading}
@@ -326,10 +328,6 @@
   .body-actions {
     display: flex;
     gap: 2px;
-    margin-left: auto;
-  }
-  /* Always last, at the right end of whichever row it lands on. */
-  .position-toggle {
     margin-left: auto;
   }
   /* Its options side by side, never squeezed onto two rows. */

@@ -250,6 +250,10 @@ class AppStore {
   /** The Response position: the response on the right ("horizontal", also for a
    *  missing or hand-edited value) or below ("vertical"). Stored under `layout`. */
   responsePosition = $derived<ResponsePosition>(this.settings?.layout === "vertical" ? "vertical" : "horizontal");
+  /** Moves the response to `position` and keeps the choice in settings (under `layout`). */
+  setResponsePosition(position: ResponsePosition): Promise<boolean> {
+    return this.updateSettings({ layout: position });
+  }
   /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
    *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
   sidebarShown = $derived(this.settings?.sidebarHidden !== true);
@@ -1495,6 +1499,11 @@ class AppStore {
     }
     this.panel = panel;
     this.panelFocusWanted = true;
+  }
+
+  /** Hides `panel` if it's the one showing, wherever focus is (the topbar's pressed Problems button). */
+  hidePanel(panel: PanelId) {
+    if (this.panel === panel) this.panel = null;
   }
 
   /**

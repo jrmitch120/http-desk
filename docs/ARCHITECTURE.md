@@ -1412,7 +1412,7 @@ Decisions made during implementation, beyond the plan above:
   * Existing files are never overwritten without confirmation: generation first
     runs dry, reports conflicts, and the UI asks before writing. The confirmation
     names open files with unsaved edits that would be replaced.
-* **Settings** (timeouts, redirects, TLS, theme, layout, recent workspaces) are
+* **Settings** (timeouts, redirects, TLS, theme, Response position, recent workspaces) are
   app metadata, stored in the OS config dir (`HTTPDESK_CONFIG_DIR` overrides it) and
   written atomically. Per-request overrides are standard directives in the file.
 * **Theme** (System, Light or Dark): the page CSS defaults to dark, and the frontend
@@ -1440,7 +1440,7 @@ Decisions made during implementation, beyond the plan above:
 * **Zoom** (View → Zoom In / Zoom Out / Actual Size, #94) zooms the whole webview
   (`setZoom`), so everything scales together. The levels run from 50% to 150%
   (`ZOOM_LEVELS` in src/lib/zoom.ts): at the minimum window size (960×600) 175% already
-  pushes the TopBar's theme and settings buttons out of the window, so 175% and 200%
+  pushes the TopBar's sidebar and settings buttons out of the window, so 175% and 200%
   were left out rather than reworking the layout for them. The setting is `zoom`
   (`1` = 100%); anything that isn't a number in that range is 100%, and a value between
   two levels applies as written. theme.rs applies it to the main window while it's

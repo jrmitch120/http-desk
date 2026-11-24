@@ -13,6 +13,7 @@ import { focusedEditActions, type EditActions } from "./editMenu";
 import { showFocusMarks } from "./focusMarks";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings, ResponsePosition } from "./types";
+import { responsePosition } from "./responsePositions";
 import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
@@ -104,13 +105,13 @@ async function openFolder() {
 }
 
 /** A View → Response Position choice. */
-function responsePositionChoice(id: CommandId, label: string, position: ResponsePosition): Command {
+function responsePositionChoice(id: CommandId, position: ResponsePosition): Command {
   return {
     id,
-    label,
+    label: responsePosition(position).menuLabel,
     enabled: withSettings,
     checked: () => app.responsePosition === position,
-    run: () => void app.updateSettings({ layout: position }),
+    run: () => void app.setResponsePosition(position),
   };
 }
 
@@ -386,10 +387,10 @@ const COMMANDS: Command[] = [
     // Not Ctrl+Alt+L: that locks the screen on GNOME.
     shortcut: { mod: true, alt: true, key: "r" },
     enabled: withSettings,
-    run: () => void app.updateSettings({ layout: app.responsePosition === "horizontal" ? "vertical" : "horizontal" }),
+    run: () => void app.setResponsePosition(app.responsePosition === "horizontal" ? "vertical" : "horizontal"),
   },
-  responsePositionChoice("response-right", "Response on the Right", "horizontal"),
-  responsePositionChoice("response-below", "Response Below", "vertical"),
+  responsePositionChoice("response-right", "horizontal"),
+  responsePositionChoice("response-below", "vertical"),
   themeChoice("theme-system", "System", "system"),
   themeChoice("theme-light", "Light", "light"),
   themeChoice("theme-dark", "Dark", "dark"),
