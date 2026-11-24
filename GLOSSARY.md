@@ -102,6 +102,11 @@ How the user left a workspace: its open tabs in order, the active tab, each tab'
 It is kept per workspace and comes back when the workspace reopens; pane sizes are an app setting, not part of it.
 _Avoid_: session, workbench, restore state
 
+**Response position**:
+Where a request tab shows the response beside the request: on the right or below.
+It is one app setting for every workspace, not part of a workspace's Layout.
+_Avoid_: response layout, orientation, layout
+
 **File view**:
 A tab showing a whole `.http` file as one editable text: file variables, comments between requests and every request together.
 It and the file's request tabs edit the same document, so each shows the other's edits; text that doesn't parse leaves the document as it last read.
