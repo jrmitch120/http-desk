@@ -19,6 +19,8 @@
     ]);
   }
 
+  const PROD = { text: "Prod", tone: "danger" } as const;
+
   // Every environment in the workspace (ADR-0004). With a request open, names its folder
   // doesn't define are marked: picking one sends that request with no environment.
   const envOptions: SelectOption[] = $derived.by(() => {
@@ -27,7 +29,13 @@
     const note = tab && app.root ? `not defined for ${folderLabel(app.folderOf(tab.path))}` : "";
     return [
       { value: "", label: "No environment" },
-      ...app.envNames.map((name) => ({ value: name, label: name, note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined })),
+      ...app.envNames.map((name) => ({
+        value: name,
+        label: name,
+        note: tab && !own?.environments.some((e) => e.name === name) ? note : undefined,
+        // Production comes from the app settings, as for the production send guard.
+        badge: app.environmentSettings(name).production ? PROD : undefined,
+      })),
     ];
   });
   const problems = $derived(app.problems.count);
@@ -219,7 +227,8 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--panel-2);
-    color: var(--success);
+    /* Neutral unless the user gave the environment a colour (.tinted). */
+    color: var(--text);
   }
   .env.none {
     color: var(--muted);

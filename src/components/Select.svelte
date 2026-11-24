@@ -6,6 +6,8 @@
     color?: string;
     /** A short remark after the option in the list, muted (the environment picker: "not defined for api/"). */
     note?: string;
+    /** A Badge after the option's label, in the list and on the trigger (the environment picker: a red "Prod"). */
+    badge?: { text: string; tone?: "neutral" | "success" | "danger" };
   }
 </script>
 
@@ -19,6 +21,7 @@
   // Controlled: it calls `onchange` and the caller updates `value`.
   import { popup, type CloseReason } from "../lib/popup/popup";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
 
   interface Props {
@@ -151,6 +154,7 @@
   onblur={close}
 >
   <span class="value" style:color={current?.color}>{current?.label ?? value}</span>
+  {#if current?.badge}<Badge tone={current.badge.tone}>{current.badge.text}</Badge>{/if}
   <Icon name="chevron-down" size={size === "sm" ? 11 : 12} />
 </button>
 
@@ -184,7 +188,7 @@
         >
           <span class="check">{#if !item.created && item.value === value}<Icon name="check" size={12} stroke={2.4} />{/if}</span><span class="label"
             >{item.label}</span
-          >{#if item.note}<span class="note">{item.note}</span>{/if}
+          >{#if item.badge}<Badge tone={item.badge.tone}>{item.badge.text}</Badge>{/if}{#if item.note}<span class="note">{item.note}</span>{/if}
         </div>
       {/each}
     </div>
