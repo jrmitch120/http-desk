@@ -73,8 +73,8 @@ pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
   Leave it out and nothing shows; pass `0` only where an empty option says something
   (a response with no headers), so empty tabs don't fill up with zeros.
 - One look and one size, on purpose: every switch in the app (body type, the response
-  viewer's tabs, response view, the response pane's Response | History, Settings theme
-  and layout, OpenAPI source and grouping) must match.
+  viewer's tabs, response view, the response pane's Response | History, Settings Theme
+  and Response position, OpenAPI source and grouping) must match.
   `e2e/segmented-control.spec.ts` compares their computed styles, so don't restyle one
   from its parent.
 - Keyboard: Tab reaches the checked option; arrows and Home/End move and select (wrapping).
@@ -90,7 +90,7 @@ pill buttons for one exclusive choice; an ARIA `radiogroup` of `radio` buttons.
 `Select.svelte`, with `type SelectOption` from its module script. A dropdown: the trigger
 is a select-only `combobox` button, and the `listbox` opens in the popup layer.
 
-- Props: `options` (`{ value, label, color?, note? }[]`), `value`, `onchange(value)`, `label`
+- Props: `options` (`{ value, label, color?, note?, badge? }[]`), `value`, `onchange(value)`, `label`
   (accessible name of the trigger and the list, required), `create?`, `size?`, `mono?`,
   `tooltip?`, `class?`.
 - Variants:
@@ -102,6 +102,9 @@ is a select-only `combobox` button, and the `listbox` opens in the popup layer.
   - `note` per option adds a short muted remark after it in the list (not on the
     trigger). The environment picker marks names the active request's folder doesn't
     define with "not defined for api/".
+  - `badge` per option (`{ text, tone? }`, `tone` being a [Badge](#badge)'s) shows a
+    Badge after the option's label, in the list and on the trigger. The environment
+    picker marks production environments with a red "Prod".
   - `create(query)` offers a `Use <value>` item when the typed text matches no option
     (the method dropdown's custom methods); return `null` to offer nothing.
   - Borderless (the top bar's environment picker): the caller sets `border-color` and
@@ -396,7 +399,12 @@ Global classes in `src/app.css`, not components:
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
   the top bar's Problems toggle, whose `aria-label` says the count too. With
-  `.attention` it's warning-toned while not pressed (there are problems to see).
+  `.attention` it's warning-toned while not pressed (there are problems to see), and
+  pressed, its count stays warning-toned.
+  `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
+  text colour instead of accent. Use it where accent is kept for what needs attention:
+  the top bar's sidebar and Problems toggles (`e2e/topbar-toggles.spec.ts`). Pressed
+  icon buttons elsewhere (Wrap lines, the find bar's) keep the accent.
 - `.list-row`: a full-width row of a list that opens or shows what it names when
   clicked: the file view's outline (each scrolling to its request), History, the
   Session panel's rows, the Problems panel's entries (each opening the file view at its
