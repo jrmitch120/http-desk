@@ -5,7 +5,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { updates } from "../lib/updates.svelte";
   import { app } from "../lib/store.svelte";
-  import type { AppSettings, ExecSettings } from "../lib/types";
+  import type { AppSettings, ExecSettings, ResponsePosition } from "../lib/types";
   import Banner from "./Banner.svelte";
   import HistorySettings from "./HistorySettings.svelte";
   import Icon from "./Icon.svelte";
@@ -23,7 +23,7 @@
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
 
-  const layouts: SegmentedOption<AppSettings["layout"]>[] = [
+  const positions: SegmentedOption<ResponsePosition>[] = [
     { value: "horizontal", label: "Response on the right", icon: "columns" },
     { value: "vertical", label: "Response below", icon: "rows" },
   ];
@@ -108,8 +108,8 @@
           <SegmentedControl label="Theme" options={THEMES} value={app.themeChoice} onchange={(v) => set({ theme: v })} />
         </div>
         <div class="setting">
-          <div class="label"><span>Layout</span></div>
-          <SegmentedControl label="Layout" options={layouts} value={settings.layout} onchange={(v) => set({ layout: v })} />
+          <div class="label"><span>Response position</span></div>
+          <SegmentedControl label="Response position" options={positions} value={app.responsePosition} onchange={(v) => set({ layout: v })} />
         </div>
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>

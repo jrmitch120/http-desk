@@ -12,7 +12,7 @@ import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
 import { showFocusMarks } from "./focusMarks";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
-import type { AppSettings } from "./types";
+import type { AppSettings, ResponsePosition } from "./types";
 import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
@@ -50,8 +50,8 @@ export type CommandId =
   | "search"
   | "choose-environment"
   | "manage-environments"
-  | "layout-right"
-  | "layout-below"
+  | "response-right"
+  | "response-below"
   | "theme-system"
   | "theme-light"
   | "theme-dark"
@@ -102,14 +102,14 @@ async function openFolder() {
   if (typeof dir === "string") await app.openWorkspace(dir);
 }
 
-/** A View → Response Layout choice. */
-function layoutChoice(id: CommandId, label: string, layout: AppSettings["layout"]): Command {
+/** A View → Response Position choice. */
+function responsePositionChoice(id: CommandId, label: string, position: ResponsePosition): Command {
   return {
     id,
     label,
     enabled: withSettings,
-    checked: () => (app.settings?.layout ?? "horizontal") === layout,
-    run: () => void app.updateSettings({ layout }),
+    checked: () => app.responsePosition === position,
+    run: () => void app.updateSettings({ layout: position }),
   };
 }
 
@@ -379,8 +379,8 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => (app.modal = "env"),
   },
-  layoutChoice("layout-right", "Response on the Right", "horizontal"),
-  layoutChoice("layout-below", "Response Below", "vertical"),
+  responsePositionChoice("response-right", "Response on the Right", "horizontal"),
+  responsePositionChoice("response-below", "Response Below", "vertical"),
   themeChoice("theme-system", "System", "system"),
   themeChoice("theme-light", "Light", "light"),
   themeChoice("theme-dark", "Dark", "dark"),
