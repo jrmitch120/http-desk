@@ -3,9 +3,12 @@
 //! muda draws the menu bar strip itself, from the window theme, but Windows draws
 //! the dropdowns (and every other Win32 menu of the process, such as Alt+Space)
 //! from the process's preferred app mode. tao only *allows* dark mode, so without
-//! this the dropdowns follow the Windows app mode. tao also resets the app mode
-//! whenever the window theme is set, so `apply` must run after that, every time.
-//! On macOS and Linux `apply` does nothing.
+//! this the dropdowns follow the Windows app mode. tao sets the app mode when its
+//! event loop starts, and a later tao could set it with the window theme too, so
+//! `apply` runs after the window theme is set, every time: `theme::set_theme` does
+//! both. On macOS and Linux `apply` does nothing.
+
+use crate::theme::ThemeSetting;
 
 /// uxtheme's `PreferredAppMode` values this module uses (`Default`, 0, is unused).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,33 +21,45 @@ pub enum AppMode {
     ForceLight = 3,
 }
 
-/// The menu app mode for a Theme setting: a fixed theme forces it, System (or
-/// anything unknown) follows Windows.
+/// The menu app mode for a Theme setting: a fixed theme forces it, System follows
+/// Windows.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn app_mode(choice: &str) -> AppMode {
-    match choice {
-        "light" => AppMode::ForceLight,
-        "dark" => AppMode::ForceDark,
-        _ => AppMode::AllowDark,
+pub fn app_mode(setting: ThemeSetting) -> AppMode {
+    match setting {
+        ThemeSetting::Light => AppMode::ForceLight,
+        ThemeSetting::Dark => AppMode::ForceDark,
+        ThemeSetting::System => AppMode::AllowDark,
     }
 }
 
-/// Puts the process's menus in the Theme setting `choice`. Call it after the
-/// window theme is set. Does nothing if uxtheme lacks the functions, or off Windows.
+/// Whether ordinal 135 is `SetPreferredAppMode` on this Windows build: it is from
+/// Windows 10 1903 (build 18362); before that it is `AllowDarkModeForApp(bool)`.
+/// tao makes the same check.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sets_app_mode(build: u32) -> bool {
+    build >= 18362
+}
+
+/// Puts the process's menus in the Theme `setting`. Call it after the window theme
+/// is set, on the main thread (`theme::set_theme` does both). Does nothing before
+/// Windows 10 1903, if uxtheme lacks the functions, or off Windows.
 #[cfg(windows)]
-pub fn apply(choice: &str) {
+pub fn apply(setting: ThemeSetting) {
+    if !sets_app_mode(windows_version::OsVersion::current().build) {
+        return;
+    }
     if let Some(uxtheme) = uxtheme::get() {
         // SAFETY: both pointers come from uxtheme with these signatures (ordinals
-        // 135 and 136 since Windows 10 1903), and take no pointers.
+        // 135 and 136 since Windows 10 1903, checked above), and take no pointers.
         unsafe {
-            (uxtheme.set_preferred_app_mode)(app_mode(choice) as i32);
+            (uxtheme.set_preferred_app_mode)(app_mode(setting) as i32);
             (uxtheme.flush_menu_themes)();
         }
     }
 }
 
 #[cfg(not(windows))]
-pub fn apply(_choice: &str) {}
+pub fn apply(_setting: ThemeSetting) {}
 
 #[cfg(windows)]
 mod uxtheme {
@@ -93,9 +108,16 @@ mod tests {
 
     #[test]
     fn a_fixed_theme_forces_the_menu_mode_and_system_follows_windows() {
-        assert_eq!(app_mode("light"), AppMode::ForceLight);
-        assert_eq!(app_mode("dark"), AppMode::ForceDark);
-        assert_eq!(app_mode("system"), AppMode::AllowDark);
-        assert_eq!(app_mode("sepia"), AppMode::AllowDark);
+        assert_eq!(app_mode(ThemeSetting::Light), AppMode::ForceLight);
+        assert_eq!(app_mode(ThemeSetting::Dark), AppMode::ForceDark);
+        assert_eq!(app_mode(ThemeSetting::System), AppMode::AllowDark);
+    }
+
+    #[test]
+    fn the_app_mode_is_only_set_from_windows_10_1903() {
+        // Before build 18362, ordinal 135 is AllowDarkModeForApp(bool).
+        assert!(!sets_app_mode(17763));
+        assert!(sets_app_mode(18362));
+        assert!(sets_app_mode(26100));
     }
 }

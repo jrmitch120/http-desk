@@ -36,6 +36,8 @@ objc2 = "0.6.5"
 # version muda uses, so there's one copy.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_LibraryLoader"] }
+# The Windows build, read as tao reads it (the version tao uses).
+windows-version = "0.1.7"
 
 [dev-dependencies]
 glob = "0.3"

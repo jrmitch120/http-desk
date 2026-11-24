@@ -11,7 +11,7 @@ import { makeVarProvider } from "./vars";
 const api = vi.hoisted(() => ({
   readHttpFile: vi.fn(),
   saveHttpFile: vi.fn(),
-  setWindowTheme: vi.fn(async (_theme: "light" | "dark" | "system") => {}),
+  setWindowTheme: vi.fn(async (_theme: AppSettings["theme"]) => {}),
   createFile: vi.fn(),
   createDir: vi.fn(),
   renamePath: vi.fn(),

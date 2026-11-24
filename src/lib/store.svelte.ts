@@ -263,8 +263,8 @@ class AppStore {
   private webviewZoom: number | undefined = undefined;
   /** The theme in effect, with System resolved through the OS appearance. */
   effectiveTheme = $derived<"light" | "dark">(this.themeChoice === "system" ? (this.systemDark ? "dark" : "light") : this.themeChoice);
-  /** The native window theme last asked for (`null` = follow the OS), to skip repeat calls. */
-  private windowTheme: AppSettings["theme"] | undefined = undefined;
+  /** The Theme setting last sent to the shell for the native window, to skip repeat calls (`undefined`: none yet). */
+  private appliedTheme: AppSettings["theme"] | undefined = undefined;
   toasts = $state<Toast[]>([]);
   expanded = $state<Record<string, boolean>>({});
   /** The requests picked in the explorer with ⌘/Ctrl- or Shift-click, Space or
@@ -363,7 +363,7 @@ class AppStore {
       this.toast("error", errorMessage(e));
     }
     this.watchSystemTheme();
-    this.windowTheme = undefined;
+    this.appliedTheme = undefined;
     this.applyTheme();
     // The shell already applied the saved zoom before the first paint (theme.rs); this agrees with it.
     this.webviewZoom = undefined;
@@ -433,10 +433,10 @@ class AppStore {
     document.documentElement.dataset.theme = this.effectiveTheme;
     // The shell pins the window for a fixed theme; System lets it (and so prefers-color-scheme)
     // follow the OS, so an OS change while on System needs no call.
-    const windowTheme = this.themeChoice;
-    if (windowTheme === this.windowTheme) return;
-    this.windowTheme = windowTheme;
-    api.setWindowTheme(windowTheme).catch(() => {});
+    const theme = this.themeChoice;
+    if (theme === this.appliedTheme) return;
+    this.appliedTheme = theme;
+    api.setWindowTheme(theme).catch(() => {});
   }
 
   /** Applies the zoom to the whole webview: the sidebar, editors, previews and modals together. */

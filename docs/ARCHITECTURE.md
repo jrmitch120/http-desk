@@ -1431,9 +1431,11 @@ Decisions made during implementation, beyond the plan above:
   tao only sets to AllowDark (follow Windows). So menu_theme.rs forces it from the
   setting: ForceLight for Light, ForceDark for Dark, AllowDark for System (or an unknown
   value), through uxtheme's unnamed exports 135 and 136, looked up at runtime and
-  skipped if missing ([ADR-0011](adr/0011-windows-menu-theme-through-uxtheme-ordinals.md)).
-  tao resets the mode whenever the window theme is set, so it is applied after: when
-  theme.rs builds the main window and in `set_window_theme`. macOS and Linux menus
+  skipped if missing or before Windows 10 1903
+  ([ADR-0011](adr/0011-windows-menu-theme-through-uxtheme-ordinals.md)). tao sets the
+  mode when its event loop starts, so it is applied after the window theme, through one
+  helper (`theme::set_theme`): when theme.rs builds the main window and in
+  `set_window_theme`. macOS and Linux menus
   follow the window and OS as before.
 * **Zoom** (View → Zoom In / Zoom Out / Actual Size, #94) zooms the whole webview
   (`setZoom`), so everything scales together. The levels run from 50% to 150%
