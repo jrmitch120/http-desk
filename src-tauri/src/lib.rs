@@ -29,6 +29,7 @@ mod history;
 mod json_docs;
 mod layout;
 mod menu;
+mod menu_theme;
 mod opening;
 mod paths;
 mod quit;

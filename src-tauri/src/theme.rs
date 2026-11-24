@@ -31,6 +31,8 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         builder = builder.background_color(background(theme));
     }
     let window = builder.build()?;
+    // Windows: after the window theme, which resets the menu mode; before any menu opens.
+    crate::menu_theme::apply(&choice);
     // The webview keeps its zoom across page loads, and the window is still hidden.
     window.set_zoom(zoom)?;
     if fixed.is_none() {
@@ -43,7 +45,8 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
 
 /// Sets the native window theme for the Theme setting `theme` (light, dark or
 /// system): a fixed theme pins it, System (or anything unknown) lets it follow the
-/// OS. The page's `applyTheme()` calls this only when the window-level theme changes.
+/// OS. On Windows the menu dropdowns are then put in the same theme (menu_theme.rs).
+/// The page's `applyTheme()` calls this only when the window-level theme changes.
 #[tauri::command]
 pub fn set_window_theme<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
@@ -52,6 +55,8 @@ pub fn set_window_theme<R: tauri::Runtime>(
 ) -> Result<(), String> {
     let fixed = window_theme(&theme);
     window.set_theme(fixed).map_err(|e| e.to_string())?;
+    // Windows: setting the window theme resets the menu mode, so it goes after.
+    crate::menu_theme::apply(&theme);
     #[cfg(test)]
     state.window_themes.lock().unwrap().push(fixed);
     Ok(())
