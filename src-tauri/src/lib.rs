@@ -29,6 +29,7 @@ mod history;
 mod json_docs;
 mod layout;
 mod menu;
+mod menu_theme;
 mod opening;
 mod paths;
 mod quit;
@@ -315,6 +316,10 @@ struct AppState {
     /// writing outlast the watcher's debounce.
     #[cfg(test)]
     env_write_delay: Mutex<std::time::Duration>,
+    /// The window themes `set_window_theme` set, oldest first (`None`: follows the OS):
+    /// the mock runtime's window forgets its theme.
+    #[cfg(test)]
+    window_themes: Mutex<Vec<Option<tauri::Theme>>>,
 }
 
 impl AppState {
@@ -1667,6 +1672,7 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, after_setup: Aft
             trust_workspace,
             revoke_workspace_trust,
             set_unsaved,
+            theme::set_window_theme,
             app_info,
             openapi_load,
             openapi_generate,

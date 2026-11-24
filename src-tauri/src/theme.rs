@@ -8,8 +8,8 @@ use tauri::{Manager, Theme};
 /// Creates the app's only window, "main" from tauri.conf.json (which has
 /// `"create": false`), in the saved `theme` and `zoom` settings; runs at setup once
 /// settings are loaded (most IPC tests make their own window). The page's
-/// `applyTheme()` and `applyZoom()` take over once settings arrive over IPC,
-/// setting the same theme and zoom again.
+/// `applyTheme()` (through `set_window_theme`) and `applyZoom()` take over once
+/// settings arrive over IPC, setting the same theme and zoom again.
 ///
 /// The window is created hidden and shown once its saved size and place are
 /// restored (window_state.rs), so it never appears at the default size first.
@@ -20,7 +20,8 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         (settings.theme.clone(), settings.zoom)
     };
     let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or(tauri::Error::WindowNotFound)?;
-    let fixed = window_theme(&choice);
+    let setting = ThemeSetting::parse(&choice);
+    let fixed = setting.window_theme();
     let mut builder = tauri::WebviewWindowBuilder::from_config(app, config)?
         .theme(fixed)
         .visible(false)
@@ -31,6 +32,9 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
         builder = builder.background_color(background(theme));
     }
     let window = builder.build()?;
+    // The builder set the window theme for the first frame; setting it again changes
+    // nothing, but puts the Windows menus in it too, before any menu opens.
+    set_theme(&window, setting)?;
     // The webview keeps its zoom across page loads, and the window is still hidden.
     window.set_zoom(zoom)?;
     if fixed.is_none() {
@@ -41,21 +45,68 @@ pub fn create_main_window<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Resu
     crate::window_state::show_restored(&window)
 }
 
+/// Sets the native window theme for the Theme setting `theme` (light, dark or
+/// system): a fixed theme pins it, System (or anything unknown) lets it follow the
+/// OS. The page's `applyTheme()` calls this only when the Theme setting changes.
+///
+/// A sync command, so Tauri runs it on the main thread, where `set_theme`'s two
+/// steps take effect in order (menu_theme.rs).
+#[tauri::command]
+pub fn set_window_theme<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
+    #[cfg_attr(not(test), allow(unused_variables))] state: tauri::State<'_, crate::AppState>,
+    theme: String,
+) -> Result<(), String> {
+    let setting = ThemeSetting::parse(&theme);
+    set_theme(&window, setting).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    state.window_themes.lock().unwrap().push(setting.window_theme());
+    Ok(())
+}
+
+/// Sets the window theme for `setting`, then puts the Windows menus in it: the menu
+/// mode has to be applied after the window theme (ADR-0011), so all code that sets
+/// the window theme goes through here. Call it on the main thread, where the window
+/// theme is set before this returns.
+fn set_theme<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, setting: ThemeSetting) -> tauri::Result<()> {
+    window.set_theme(setting.window_theme())?;
+    crate::menu_theme::apply(setting);
+    Ok(())
+}
+
+/// The Theme setting. The settings file holds it as a string, which a hand edit
+/// can make anything; anything but light or dark means System.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeSetting {
+    Light,
+    Dark,
+    System,
+}
+
+impl ThemeSetting {
+    pub fn parse(setting: &str) -> Self {
+        match setting {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::System,
+        }
+    }
+
+    /// The native window theme: a fixed theme pins it, System follows the OS (`None`).
+    fn window_theme(self) -> Option<Theme> {
+        match self {
+            Self::Light => Some(Theme::Light),
+            Self::Dark => Some(Theme::Dark),
+            Self::System => None,
+        }
+    }
+}
+
 /// `--bg` in src/app.css for each theme (checked by a test).
 fn background(theme: Theme) -> Color {
     match theme {
         Theme::Light => Color(0xf3, 0xf4, 0xf6, 0xff),
         _ => Color(0x1c, 0x1d, 0x20, 0xff),
-    }
-}
-
-/// The native window theme for a theme setting: a fixed theme pins it, System
-/// (or anything unknown) follows the OS.
-fn window_theme(choice: &str) -> Option<Theme> {
-    match choice {
-        "light" => Some(Theme::Light),
-        "dark" => Some(Theme::Dark),
-        _ => None,
     }
 }
 
@@ -71,10 +122,15 @@ mod tests {
 
     #[test]
     fn a_fixed_theme_pins_the_window_and_system_follows_the_os() {
-        assert_eq!(window_theme("light"), Some(Theme::Light));
-        assert_eq!(window_theme("dark"), Some(Theme::Dark));
-        assert_eq!(window_theme("system"), None);
-        assert_eq!(window_theme("sepia"), None);
+        assert_eq!(ThemeSetting::parse("light").window_theme(), Some(Theme::Light));
+        assert_eq!(ThemeSetting::parse("dark").window_theme(), Some(Theme::Dark));
+        assert_eq!(ThemeSetting::parse("system").window_theme(), None);
+    }
+
+    #[test]
+    fn an_unknown_theme_setting_means_system() {
+        assert_eq!(ThemeSetting::parse("sepia"), ThemeSetting::System);
+        assert_eq!(ThemeSetting::parse(""), ThemeSetting::System);
     }
 
     // What the script does is checked in the browser (e2e/startup-theme.spec.ts).
