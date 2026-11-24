@@ -119,6 +119,13 @@ control or the popup layer.
       Browse… for a certificate path. The theme switch also changes the title bar.
 - [ ] Theme: with System chosen, switch the OS between light and dark; the app, the title
       bar and the scrollbars follow.
+- [ ] Windows menus (ADR-0011), in Light, Dark and System, with Windows itself set to the
+      other mode: open File, Edit, View, Request and Help, the Open Recent submenu, and
+      the Alt+Space system menu. Each dropdown, with its disabled items, checkmarks and
+      shortcut hints, is in the Theme, as the menu bar strip is. Switch the Theme in
+      Settings: the next menu opened follows, without a restart. On System, switch
+      Windows between light and dark: the menus follow. Quit on Dark (and on Light) and
+      start again: the first menu opened is already in the Theme.
 - [ ] Zoom: ⌘= / ⌘- / ⌘0 (Ctrl elsewhere), and ⌘+ (Shift+=) and the keypad's +, step
       the whole window (sidebar, editors, response preview, modals) one level at a time
       between 50% and 150%. View → Zoom In / Zoom Out / Actual Size show ⌘=, ⌘- and ⌘0 on

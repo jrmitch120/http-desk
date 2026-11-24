@@ -60,7 +60,8 @@ src-tauri/              thin Tauri shell: commands, app state
   copying.rs            Copy body: puts a kept body on the clipboard (text, or base64 for a binary kind)
   quit.rs               macOS ⌘Q / Dock Quit always go through the window-close flow
   menu.rs               native menu bar: builds the layout the page sends, reports clicks, greys out and ticks items (ADR-0005)
-  theme.rs              creates the main window in the saved theme and zoom (no dark flash or 100% jump at start-up)
+  menu_theme.rs         Windows: puts the menu dropdowns (and Alt+Space) in the Theme setting through uxtheme's preferred app mode; nothing elsewhere (ADR-0011)
+  theme.rs              creates the main window in the saved theme and zoom (no dark flash or 100% jump at start-up); set_window_theme
   theme-boot.js         the window's initialization script: sets data-theme before first paint
   window_state.rs       remembers the window's size, position, maximised and fullscreen state
   layout.rs             each workspace's Layout, one JSON file per workspace in `<config>/layouts/`
@@ -1420,6 +1421,22 @@ Decisions made during implementation, beyond the plan above:
   tauri.conf.json) after loading settings: with the window theme pinned for Light or
   Dark, a background colour matching `--bg`, and an init script that sets `data-theme`
   on `<html>` before the first paint (System resolved through `prefers-color-scheme`).
+  After that, the page's `applyTheme()` asks the shell to set the window theme through
+  the `set_window_theme` command (theme.rs), passing the setting: the shell pins the
+  window for Light and Dark and lets it follow the OS for System (or an unknown
+  value). The page calls it only when the window-level theme changes, not when the OS
+  appearance changes while on System.
+  On Windows, muda draws the menu bar strip in the window theme, but Windows draws the
+  dropdowns, submenus and the Alt+Space menu in the process's preferred app mode, which
+  tao only sets to AllowDark (follow Windows). So menu_theme.rs forces it from the
+  setting: ForceLight for Light, ForceDark for Dark, AllowDark for System (or an unknown
+  value), through uxtheme's unnamed exports 135 and 136, looked up at runtime and
+  skipped if missing or before Windows 10 1903
+  ([ADR-0011](adr/0011-windows-menu-theme-through-uxtheme-ordinals.md)). tao sets the
+  mode when its event loop starts, so it is applied after the window theme, through one
+  helper (`theme::set_theme`): when theme.rs builds the main window and in
+  `set_window_theme`. macOS and Linux menus
+  follow the window and OS as before.
 * **Zoom** (View → Zoom In / Zoom Out / Actual Size, #94) zooms the whole webview
   (`setZoom`), so everything scales together. The levels run from 50% to 150%
   (`ZOOM_LEVELS` in src/lib/zoom.ts): at the minimum window size (960×600) 175% already
