@@ -1,12 +1,12 @@
-// #211: pressed toggles in the topbar look quiet, not accent. Pressed (sidebar shown,
-// Problems panel open): the hover background and the text colour. Unpressed: no
+// #211: pressed toggles in the topbar look quiet, not accent. Pressed (sidebar shown):
+// the hover background and the text colour. Unpressed: no
 // background and a muted icon. Accent is kept for what needs attention, and active
-// icon buttons outside the topbar keep their accent look.
+// icon buttons outside the topbar keep their accent look. (Problems, now in the
+// window's status bar, follows the same rule: app-status-bar.spec.ts.)
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
 
 const sidebarToggle = (page: Page) => page.getByRole("button", { name: "Show sidebar", exact: true });
-const problemsToggle = (page: Page) => page.getByRole("button", { name: /^Show Problems/ });
 
 /** A theme token (`--text`) as a computed colour, comparable with an element's computed colour. */
 function token(page: Page, name: string): Promise<string> {
@@ -54,20 +54,6 @@ for (const theme of ["dark", "light"] as const) {
       await sidebarToggle(page).click();
       await page.mouse.move(0, 400);
       await expectPressed(page, sidebarToggle(page));
-    });
-
-    test("the Problems toggle follows the same rule while its panel is open or closed", async ({ page }) => {
-      await openApp(page, `?theme=${theme}`);
-      await expectUnpressed(page, problemsToggle(page));
-
-      await problemsToggle(page).click();
-      await page.mouse.move(0, 400);
-      await expect(page.getByRole("region", { name: "Problems" })).toBeVisible();
-      await expectPressed(page, problemsToggle(page));
-
-      await page.getByRole("button", { name: /^Hide panel/ }).click();
-      await page.mouse.move(0, 400);
-      await expectUnpressed(page, problemsToggle(page));
     });
 
     test("an active icon button outside the topbar still uses the accent colour", async ({ page }) => {

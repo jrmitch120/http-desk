@@ -398,12 +398,14 @@ Global classes in `src/app.css`, not components:
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
-  the top bar's Problems toggle, whose `aria-label` says the count too. With
+  the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too
+  and whose `aria-label` says the count when there is one. With
   `.attention` it's warning-toned while not pressed (there are problems to see), and
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the top bar's sidebar and Problems toggles (`e2e/topbar-toggles.spec.ts`) and the
+  the top bar's sidebar toggle (`e2e/topbar-toggles.spec.ts`), the window status bar's
+  Problems button (`e2e/app-status-bar.spec.ts`) and the
   response viewer's response-position toggle (a layout choice, not attention). Pressed
   icon buttons elsewhere (Wrap lines, the find bar's) keep the accent.
 - `.list-row`: a full-width row of a list that opens or shows what it names when

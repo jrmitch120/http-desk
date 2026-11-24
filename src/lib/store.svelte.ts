@@ -401,6 +401,8 @@ class AppStore {
       $effect(() => this.layout.track());
       // The Problems panel reads an open document again once its edits pause.
       $effect(() => this.problems.track());
+      // The Problems count follows the list once it stops changing.
+      $effect(() => this.problems.settle());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;

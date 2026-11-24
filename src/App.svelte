@@ -3,6 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
+  import AppStatusBar from "./components/AppStatusBar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TabBar from "./components/TabBar.svelte";
   import RequestView from "./components/RequestView.svelte";
@@ -147,6 +148,7 @@
         {/snippet}
       </SplitPane>
     </div>
+    <AppStatusBar />
   </div>
 {:else if !app.starting}
   <Welcome />
