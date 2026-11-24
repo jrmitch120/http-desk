@@ -48,7 +48,7 @@ control or the popup layer.
       Dark, with a check on the current one) and Settings → Theme switch it. No
       Problems button.
 - [ ] Window status bar: a thin strip along the bottom of the window, below the panel
-      area, in both themes and at 50% and 150% zoom. Problems at its left end shows
+      area, in both themes and at 50% and 150% zoom. Problems at its right end shows
       "0" muted, or the count in the warning colour (open a workspace with a broken
       `.http` file); clicking it opens and closes the Problems panel. Typing in a
       request doesn't make the count flicker; it follows a moment after you stop.

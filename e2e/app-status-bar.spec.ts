@@ -1,5 +1,5 @@
 // #217: a status bar along the bottom of the window, below the panel area, with
-// Problems at its left end. Problems shows its icon and count, "0" included: muted at
+// Problems at its right end, in a fixed-width button so a changing count moves nothing. Problems shows its icon and count, "0" included: muted at
 // zero, the count in the warning colour with problems. It opens and closes the
 // Problems panel, wherever focus is, with aria-pressed while the panel is open. The
 // count follows the problems once they've stopped changing for about 300 ms, so it
@@ -44,7 +44,7 @@ async function fixBrokenLine(page: Page) {
   await page.keyboard.type("GET {{baseUrl}}/search");
 }
 
-test("spans the bottom of the window, below the panel area, with Problems at its left end", async ({ page }) => {
+test("spans the bottom of the window, below the panel area, with Problems at its right end", async ({ page }) => {
   await openApp(page);
   await problemsButton(page).click();
   await expect(problemsPanel(page)).toBeVisible();
@@ -57,7 +57,7 @@ test("spans the bottom of the window, below the panel area, with Problems at its
   expect((await box(problemsPanel(page))).y + (await box(problemsPanel(page))).height).toBeLessThanOrEqual(bar.y);
 
   const problems = await box(problemsButton(page));
-  expect(problems.x - bar.x).toBeLessThan(16);
+  expect(bar.x + bar.width - (problems.x + problems.width)).toBeLessThan(16);
   // Nothing else is in it yet.
   await expect(statusBar(page).getByRole("button")).toHaveCount(1);
 });
@@ -140,7 +140,20 @@ test("a changing count moves nothing in the topbar or the status bar but its own
   const bar = await box(statusBar(page));
   expect(await places()).toEqual(before.topbar);
   expect(bar).toEqual(before.bar);
-  expect((await box(problemsButton(page))).x).toBe(before.problems.x);
+  const after = await box(problemsButton(page));
+  expect(after.x).toBe(before.problems.x);
+  expect(after.width).toBe(before.problems.width);
+});
+
+test("the Problems button is as wide with no problems as with some", async ({ page }) => {
+  await openApp(page);
+  await expect(problemsButton(page)).toHaveText("0");
+  const none = await box(problemsButton(page));
+  await openApp(page, "?problems=1");
+  await expect(problemsButton(page)).toHaveText("2");
+  const some = await box(problemsButton(page));
+  expect(some.width).toBe(none.width);
+  expect(some.x).toBe(none.x);
 });
 
 test("the count waits until the problems stop changing, while the panel's list follows at once", async ({ page }) => {

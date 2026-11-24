@@ -227,7 +227,7 @@ answer per path (`src/lib/problems.svelte.ts`). The check strip lists both as
 
 **The Problems panel** (`ProblemsPanel.svelte`, a panel of the panel area beside the
 Session and Runner panels; View → Show Problems (⇧⌘M / Ctrl+Shift+M), or the Problems
-button at the left end of the window status bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
+button at the right end of the window status bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
 differently in VS Code or Rider, grouped by file, each entry with its line in the file
 and its message; clicking one opens the file's file view at that line
 (`openFileView(path, { line })`). The shell reads them off the main thread:
@@ -1006,10 +1006,11 @@ Decisions made during implementation, beyond the plan above:
   area, App.svelte puts the **window status bar** (`AppStatusBar.svelte`, a `<footer>`
   named "Status bar"; not the response pane's status bar in ResponseViewer): a thin
   strip the full width of the window, always shown, in the theme's panel colours. Problems
-  is at its left end, its icon and count ("0" muted; otherwise the count warning-toned),
+  is at its right end, its icon and count ("0" muted; otherwise the count warning-toned;
+  above 99, "99+"), in a fixed-width button; later items go to its left. It is
   pressed (`aria-pressed`) while the Problems panel is open; clicking it opens the panel,
-  or closes it wherever focus is (#217). A count that grows from the left end pushes
-  nothing, as it did right-aligned in the top bar. The top bar keeps only the update
+  or closes it wherever focus is (#217). Being fixed-width, a changing count moves
+  nothing (in the top bar, a growing count pushed its neighbours). The top bar keeps only the update
   progress pill as its status. The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session

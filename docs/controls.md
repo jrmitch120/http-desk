@@ -398,8 +398,8 @@ Global classes in `src/app.css`, not components:
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
-  the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too
-  and whose `aria-label` says the count when there is one. With
+  the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too,
+  is given a fixed width there (room for "99+") so a changing count moves nothing, and whose `aria-label` says the count when there is one. With
   `.attention` it's warning-toned while not pressed (there are problems to see), and
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
