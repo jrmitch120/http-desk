@@ -12,9 +12,12 @@ import { ReferenceChecks, type OutsideScope, type PortabilitySettings } from "./
 import { problemCount, problemFiles, type ProblemFile, type ProblemFilesMemo } from "./problemsList";
 import type { EnvironmentSet, FileProblems, OpenText } from "./types";
 import { envVariables } from "./vars";
+import { Settled } from "./settled.svelte";
 
 /** How long edits to an open document pause before its problems are read again. */
 export const PROBLEMS_READ_DELAY_MS = 300;
+/** How long the problems stay unchanged before the count shown for them follows (#217). */
+export const PROBLEMS_COUNT_SETTLE_MS = 300;
 
 /** What the Problems panel needs from the rest of the store. */
 export interface ProblemsHost {
@@ -73,9 +76,21 @@ export class WorkspaceProblems {
   /** Each file's entry as last listed (`problemFiles`' memo): an edit to one open document lists only that one again. */
   private listed: ProblemFilesMemo = new WeakMap();
 
-  /** The count on the panel's toggle. */
+  /** The panel's files as they were when they last stopped changing for a moment: what the count is read from. */
+  private settled = new Settled(() => this.list, PROBLEMS_COUNT_SETTLE_MS);
+
+  /**
+   * The count on the status bar's Problems button and the panel's tab. It follows the
+   * list once it has stopped changing for PROBLEMS_COUNT_SETTLE_MS, so it doesn't
+   * flicker while you type; the panel's list stays live.
+   */
   get count(): number {
-    return problemCount(this.list);
+    return problemCount(this.settled.current);
+  }
+
+  /** Lets the count follow the list: call it from an effect, which reruns on each change to the list. */
+  settle() {
+    this.settled.track();
   }
 
   /** Per open document, what it was (`openVersion`) when last asked about. */

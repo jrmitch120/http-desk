@@ -43,10 +43,15 @@ control or the popup layer.
 - [ ] Welcome screen (no workspace open): recent workspaces list and buttons.
 - [ ] Top bar: environment Select (open it: themed list, check on the current one; ⌘⌥E /
       Ctrl+Alt+E opens it, also from inside an editor, and on a layout where AltGr+E types
-      € it still types €; the window title ends with the chosen environment), the
-      Problems button and the sidebar and Settings buttons. No theme button: View →
-      Theme (System / Light / Dark, with a check on the current one) and Settings →
-      Theme switch it.
+      € it still types €; the window title ends with the chosen environment), and
+      the sidebar and Settings buttons. No theme button: View → Theme (System / Light /
+      Dark, with a check on the current one) and Settings → Theme switch it. No
+      Problems button.
+- [ ] Window status bar: a thin strip along the bottom of the window, below the panel
+      area, in both themes and at 50% and 150% zoom. Problems at its left end shows
+      "0" muted, or the count in the warning colour (open a workspace with a broken
+      `.http` file); clicking it opens and closes the Problems panel. Typing in a
+      request doesn't make the count flicker; it follows a moment after you stop.
 - [ ] Sidebar: tree with method badges lined up, search box with its results list, and
       the context menu on a request (right-click, and Shift+F10).
 - [ ] Edit menu: right-click a text input, the URL bar, a value field and the response

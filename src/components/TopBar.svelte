@@ -37,15 +37,6 @@
       })),
     ];
   });
-  const problems = $derived(app.problems.count);
-
-  // A pressed toggle: clicking it while the panel is open closes the panel, wherever
-  // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
-  function toggleProblems() {
-    if (app.panel === "problems") app.hidePanel("problems");
-    else runCommand("toggle-problems");
-  }
-
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
   $effect(() => {
@@ -86,27 +77,13 @@
     </div>
   </div>
 
-  <div class="group">
-    {#if updates.progress !== null}
+  {#if updates.progress !== null}
+    <div class="group">
       <span class="update-pill" use:tooltip={"Downloading the update; HttpDesk restarts when it's done"}>
         <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
       </span>
-    {/if}
-    <!-- Problems: a status indicator, always shown. Muted at zero; with problems, the
-         count in the warning colour. It opens and closes the Problems panel. -->
-    <button
-      class="icon-btn quiet"
-      class:active={app.panel === "problems"}
-      class:counted={problems > 0}
-      class:attention={problems > 0}
-      aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
-      aria-pressed={app.panel === "problems"}
-      use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
-      onclick={toggleProblems}
-    >
-      <Icon name="alert" />{#if problems}<span class="count">{problems}</span>{/if}
-    </button>
-  </div>
+    </div>
+  {/if}
 
   <div class="group">
     <button
