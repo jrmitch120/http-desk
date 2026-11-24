@@ -215,6 +215,8 @@ if (new URLSearchParams(location.search).get("problems") === "1") {
     ],
   });
 }
+// `?empty=1`: the workspace has no files, so the Explorer shows its empty state.
+if (new URLSearchParams(location.search).get("empty") === "1") tree.children.length = 0;
 // Files a test rewrote "on disk" with `__mock.writeFile` (another editor's changes
 // while the app was closed) are still there after a reload.
 const SAVED_FILES = "httpdesk-mock-files";

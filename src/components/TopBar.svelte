@@ -3,7 +3,6 @@
   import { menu } from "../lib/menu.svelte";
   import { basename } from "../lib/http";
   import { folderLabel } from "../lib/envFolders";
-  import { THEMES, themeLabel } from "../lib/themes";
   import { envColorShade } from "../lib/envColors";
   import Icon from "./Icon.svelte";
   import Select, { type SelectOption } from "./Select.svelte";
@@ -40,6 +39,13 @@
   });
   const problems = $derived(app.problems.count);
 
+  // A pressed toggle: clicking it while the panel is open closes the panel, wherever
+  // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
+  function toggleProblems() {
+    if (app.panel === "problems") app.panel = null;
+    else runCommand("toggle-problems");
+  }
+
   // ⌘⌥E / Ctrl+Alt+E, and "Choose environment" on an Undefined-variable send error, open the picker.
   let envSelect: { openList: () => void } | undefined = $state();
   $effect(() => {
@@ -48,22 +54,6 @@
       app.envPickerWanted = false;
     }
   });
-
-  // The theme menu: System / Light / Dark, the current choice checked.
-  let themeButton: HTMLButtonElement | undefined = $state();
-  // "Theme: Light", or with System what it resolves to: "Theme: System (Dark)".
-  const themeTip = $derived(
-    `Theme: ${themeLabel(app.themeChoice)}${app.themeChoice === "system" ? ` (${themeLabel(app.effectiveTheme)})` : ""}`,
-  );
-
-  function themeMenu(e: MouseEvent) {
-    if (menu.isOpenFrom(themeButton)) return menu.close(false);
-    menu.show(
-      e,
-      THEMES.map((t) => ({ label: t.label, icon: t.icon, checked: app.themeChoice === t.value, action: () => app.updateSettings({ theme: t.value }) })),
-      { anchor: themeButton, align: "end", label: "Theme" },
-    );
-  }
 </script>
 
 <header class="topbar">
@@ -79,88 +69,61 @@
 
   <div class="spacer"></div>
 
-  <button class="btn small ghost" onclick={() => (app.modal = "openapi")} use:tooltip={"Generate .http files from an OpenAPI specification"}>
-    <Icon name="import" size={14} />Import OpenAPI
-  </button>
-
-  <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
-    <Icon name="globe" size={14} />
-    <Select
-      bind:this={envSelect}
-      class="env-select"
-      options={envOptions}
-      value={app.envName ?? ""}
-      onchange={(v) => app.selectEnvironment(v || null)}
-      label="Active environment"
-      tooltip={`Active environment (${shortcutHint("choose-environment")})`}
-    />
-    <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={`Manage environments (${shortcutHint("manage-environments")})`}><Icon name="layers" size={14} /></button>
+  <!-- Three groups, set apart by spacing: environment; status; view and app. -->
+  <div class="group">
+    <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
+      <Icon name="globe" size={14} />
+      <Select
+        bind:this={envSelect}
+        class="env-select"
+        options={envOptions}
+        value={app.envName ?? ""}
+        onchange={(v) => app.selectEnvironment(v || null)}
+        label="Active environment"
+        tooltip={`Active environment (${shortcutHint("choose-environment")})`}
+      />
+      <button class="icon-btn" onclick={() => (app.modal = "env")} aria-label="Manage environments" use:tooltip={`Manage environments (${shortcutHint("manage-environments")})`}><Icon name="layers" size={14} /></button>
+    </div>
   </div>
 
-  {#if updates.progress !== null}
-    <span class="update-pill" use:tooltip={"Downloading the update; HttpDesk restarts when it's done"}>
-      <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
-    </span>
-  {/if}
-  <!-- The Problems panel's toggle, with the workspace's problem count. -->
-  <button
-    class="icon-btn"
-    class:active={app.panel === "problems"}
-    class:counted={problems > 0}
-    class:attention={problems > 0}
-    aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
-    aria-pressed={app.panel === "problems"}
-    use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
-    onclick={() => runCommand("toggle-problems")}
-  >
-    <Icon name="alert" />{#if problems}<span class="count">{problems}</span>{/if}
-  </button>
-  <button
-    class="icon-btn"
-    class:active={app.sidebarShown}
-    aria-label="Show sidebar"
-    aria-pressed={app.sidebarShown}
-    use:tooltip={`Show sidebar (${shortcutHint("toggle-sidebar")})`}
-    onclick={() => runCommand("toggle-sidebar")}
-  >
-    <Icon name="sidebar" />
-  </button>
-  <button
-    class="icon-btn theme-btn"
-    bind:this={themeButton}
-    aria-label="Theme"
-    aria-haspopup="menu"
-    aria-expanded={menu.isOpenFrom(themeButton)}
-    use:tooltip={themeTip}
-    onclick={themeMenu}
-  >
-    <Icon name={app.effectiveTheme === "dark" ? "moon" : "sun"} />
-    {#if app.themeChoice === "system"}<span class="auto" aria-hidden="true">A</span>{/if}
-  </button>
-  <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  <div class="group">
+    {#if updates.progress !== null}
+      <span class="update-pill" use:tooltip={"Downloading the update; HttpDesk restarts when it's done"}>
+        <Icon name="download" size={13} />Updating… {Math.round(updates.progress * 100)}%
+      </span>
+    {/if}
+    <!-- Problems: a status indicator, always shown. Muted at zero; with problems, the
+         count in the warning colour. It opens and closes the Problems panel. -->
+    <button
+      class="icon-btn"
+      class:active={app.panel === "problems"}
+      class:counted={problems > 0}
+      class:attention={problems > 0}
+      aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
+      aria-pressed={app.panel === "problems"}
+      use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
+      onclick={toggleProblems}
+    >
+      <Icon name="alert" />{#if problems}<span class="count">{problems}</span>{/if}
+    </button>
+  </div>
+
+  <div class="group">
+    <button
+      class="icon-btn"
+      class:active={app.sidebarShown}
+      aria-label="Show sidebar"
+      aria-pressed={app.sidebarShown}
+      use:tooltip={`Show sidebar (${shortcutHint("toggle-sidebar")})`}
+      onclick={() => runCommand("toggle-sidebar")}
+    >
+      <Icon name="sidebar" />
+    </button>
+    <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+  </div>
 </header>
 
 <style>
-  .theme-btn {
-    position: relative;
-  }
-  /* "Automatic": System is chosen, so the icon follows the OS. */
-  .auto {
-    position: absolute;
-    right: 1px;
-    bottom: 1px;
-    min-width: 11px;
-    height: 11px;
-    padding: 0 2px;
-    border-radius: 6px;
-    font-size: 8px;
-    font-weight: 700;
-    line-height: 11px;
-    text-align: center;
-    color: var(--panel);
-    background: var(--muted);
-    pointer-events: none;
-  }
   .update-pill {
     display: inline-flex;
     align-items: center;
@@ -171,7 +134,6 @@
     font-size: 12px;
     color: var(--accent);
     background: var(--accent-soft);
-    margin-right: 6px;
   }
   .topbar {
     height: 42px;
@@ -183,12 +145,25 @@
     background: var(--panel);
     border-bottom: 1px solid var(--border);
   }
+  .group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* A little extra space between groups, no divider lines. */
+  .group + .group {
+    margin-left: var(--space-3);
+  }
   /* A pressed topbar toggle (sidebar shown, Problems open) looks quietly pressed, not
      accent: accent here is kept for what needs attention. Unpressed ones keep the
      shared look (no background, muted icon). Icon buttons elsewhere are unchanged. */
   .topbar .icon-btn.active {
     background: var(--hover);
     color: var(--text);
+  }
+  /* The Problems count stays warning-toned while its panel is open, too. */
+  .topbar .icon-btn.attention .count {
+    color: var(--warning);
   }
   .ws {
     display: flex;
@@ -215,7 +190,6 @@
     gap: 2px;
     height: 30px;
     padding-left: 9px;
-    margin: 0 6px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--panel-2);
