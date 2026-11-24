@@ -126,14 +126,6 @@
     <Icon name="sidebar" />
   </button>
   <button
-    class="icon-btn"
-    aria-label={app.responsePosition === "horizontal" ? "Show response below" : "Show response on the right"}
-    use:tooltip
-    onclick={() => app.updateSettings({ layout: app.responsePosition === "horizontal" ? "vertical" : "horizontal" })}
-  >
-    <Icon name={app.responsePosition === "horizontal" ? "rows" : "columns"} />
-  </button>
-  <button
     class="icon-btn theme-btn"
     bind:this={themeButton}
     aria-label="Theme"

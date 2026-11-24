@@ -52,6 +52,13 @@ describe("commandForKey", () => {
     expect(on("mac", press("u", { metaKey: true }))).toBeUndefined();
   });
 
+  it("toggles the Response position with ⌥⌘R on macOS and Ctrl+Alt+R elsewhere, not Ctrl+Alt+L (the GNOME screen lock)", () => {
+    expect(on("mac", press("®", { code: "KeyR", metaKey: true, altKey: true }))).toBe("toggle-response-position");
+    expect(on("windows", press("r", { ctrlKey: true, altKey: true }))).toBe("toggle-response-position");
+    expect(on("linux", press("r", { ctrlKey: true, altKey: true }))).toBe("toggle-response-position");
+    expect(on("linux", press("l", { ctrlKey: true, altKey: true }))).toBeUndefined();
+  });
+
   it("toggles the sidebar with ⌘B on macOS and Ctrl+B elsewhere", () => {
     expect(on("mac", press("b", { metaKey: true }))).toBe("toggle-sidebar");
     expect(on("windows", press("b", { ctrlKey: true }))).toBe("toggle-sidebar");

@@ -50,6 +50,7 @@ export type CommandId =
   | "search"
   | "choose-environment"
   | "manage-environments"
+  | "toggle-response-position"
   | "response-right"
   | "response-below"
   | "theme-system"
@@ -378,6 +379,14 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, key: "e" },
     enabled: inWorkspace,
     run: () => (app.modal = "env"),
+  },
+  {
+    id: "toggle-response-position",
+    label: "Toggle Response Position",
+    // Not Ctrl+Alt+L: that locks the screen on GNOME.
+    shortcut: { mod: true, alt: true, key: "r" },
+    enabled: withSettings,
+    run: () => void app.updateSettings({ layout: app.responsePosition === "horizontal" ? "vertical" : "horizontal" }),
   },
   responsePositionChoice("response-right", "Response on the Right", "horizontal"),
   responsePositionChoice("response-below", "Response Below", "vertical"),

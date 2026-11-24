@@ -89,7 +89,7 @@ test("the stacked layout has its own split ratio, moved with the up and down arr
   await page.keyboard.press("ArrowLeft"); // the other axis does nothing
   await expect(split).toHaveAttribute("aria-valuenow", "55");
 
-  await page.getByRole("button", { name: "Show response on the right" }).click();
+  await page.getByRole("button", { name: "Response below", pressed: true }).click();
   await expect(split).toHaveAttribute("aria-valuenow", "50");
   await expect(split).toHaveAttribute("aria-orientation", "vertical");
 });

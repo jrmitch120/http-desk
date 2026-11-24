@@ -31,7 +31,7 @@
   import RequestPanel from "./RequestPanel.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
-  import { shortcutHint } from "../lib/commands";
+  import { runCommand, shortcutHint } from "../lib/commands";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import RequestHistory from "./RequestHistory.svelte";
   import Self from "./ResponseViewer.svelte";
@@ -159,6 +159,23 @@
   <div class="pane-switch"><SegmentedControl label="Response pane" options={PANES} value={showingHistory ? "history" : "response"} onchange={(v) => app.history.show(t.id, v === "history")} /></div>
 {/snippet}
 
+<!-- The Response position toggle, at the status bar's right end: only a request tab's
+     pane has the split it moves. Its icon and tooltip show where the response is now. -->
+{#snippet positionToggle()}
+  {#if historyTab}
+    {@const below = app.responsePosition === "vertical"}
+    <button
+      class="icon-btn position-toggle"
+      aria-label="Response below"
+      aria-pressed={below}
+      use:tooltip={`${below ? "Response below. Click to move it to the right" : "Response on the right. Click to move it below"} (${shortcutHint("toggle-response-position")})`}
+      onclick={() => runCommand("toggle-response-position")}
+    >
+      <Icon name={below ? "rows" : "columns"} />
+    </button>
+  {/if}
+{/snippet}
+
 {#snippet fromHistory()}
   {#if run?.fromHistory}
     <span class="muted small" use:tooltip={"The last response recorded in History, not sent in this Session: Request variables reading it count it unsent"}>from History, {sentAt(run.fromHistory)}</span>
@@ -174,6 +191,7 @@
         <span class="muted small sent">Sent {sentAt(openedEntry.entry.time)} · read-only</span>
         <button class="btn small ghost" use:tooltip={"Edit the request as it was written when sent, unsaved"} onclick={() => app.restoreRequest(historyTab.path, historyTab.key, openedEntry.source)}>Restore request</button>
       {/if}
+      {@render positionToggle()}
     </div>
     {#if openedEntry}
       <section class="entry" aria-label="History entry">
@@ -186,6 +204,7 @@
     {#if historyTab}
       <div class="statusbar">
         {@render paneSwitch(historyTab)}
+        {@render positionToggle()}
       </div>
     {/if}
     <div class="empty-state">
@@ -217,16 +236,20 @@
         <span class="metric" use:tooltip={sizeTooltip}><span class="muted">Size</span> {formatBytes(res.bodySize + res.headersSize)}</span>
         {@render fromHistory()}
         <span class="spacer"></span>
-        {#if !noBody}
+        {#if !noBody || historyTab}
         <span class="body-actions">
-          <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
-          <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+          {#if !noBody}
+            <button class="icon-btn" aria-label="Copy body" use:tooltip={filtered ? "Copy the filter's matches" : isBinary ? "Copy body as base64" : "Copy body"} onclick={copyBody}><Icon name="copy" /></button>
+            <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
+          {/if}
+          {@render positionToggle()}
         </span>
         {/if}
       {:else if run.error}
         <Badge size="md" tone="danger">Error</Badge>
         {@render fromHistory()}
       {/if}
+      {#if !res || run.loading}{@render positionToggle()}{/if}
     </div>
 
     {#if run.cancelled && !res}
@@ -299,10 +322,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Copy and save stay together, on whichever row they land. */
+  /* Copy, save and the position toggle stay together, on whichever row they land. */
   .body-actions {
     display: flex;
     gap: 2px;
+    margin-left: auto;
+  }
+  /* Always last, at the right end of whichever row it lands on. */
+  .position-toggle {
     margin-left: auto;
   }
   /* Its options side by side, never squeezed onto two rows. */

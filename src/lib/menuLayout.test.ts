@@ -33,7 +33,7 @@ describe("the menu layout", () => {
       "HttpDesk: about, -, settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, reopen-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Window: (minimize), (zoom), -, (bringAllToFront)",
       "Help: documentation, release-notes, -, report-issue",
@@ -44,7 +44,7 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("windows"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
-      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
@@ -54,7 +54,7 @@ describe("the menu layout", () => {
     expect(outline(menuLayout("linux"))).toEqual([
       "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
       "Edit: undo, redo, -, cut, copy, paste, select-all",
-      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
+      "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
       "Help: documentation, release-notes, -, report-issue, -, check-updates, -, about",
     ]);
@@ -110,6 +110,7 @@ describe("the menu the shell builds", () => {
     expect(item(mac, "zoom-in")).toMatchObject({ label: "Zoom In", accelerator: "Cmd+=" });
     expect(item(mac, "zoom-out")).toMatchObject({ label: "Zoom Out", accelerator: "Cmd+-" });
     expect(item(mac, "zoom-reset")).toMatchObject({ label: "Actual Size", accelerator: "Cmd+0" });
+    expect(item(mac, "toggle-response-position")).toMatchObject({ label: "Toggle Response Position", accelerator: "Cmd+Alt+R" });
   });
 
   it("shows shortcuts in the label on Windows, binding nothing", () => {
@@ -123,6 +124,7 @@ describe("the menu the shell builds", () => {
     expect(item(win, "zoom-in")).toMatchObject({ label: "Zoom In\tCtrl+=", accelerator: null });
     expect(item(win, "zoom-out")).toMatchObject({ label: "Zoom Out\tCtrl+-", accelerator: null });
     expect(item(win, "zoom-reset")).toMatchObject({ label: "Actual Size\tCtrl+0", accelerator: null });
+    expect(item(win, "toggle-response-position")).toMatchObject({ label: "Toggle Response Position\tCtrl+Alt+R", accelerator: null });
   });
 
   it("shows no shortcuts for app commands on Linux", () => {

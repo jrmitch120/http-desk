@@ -79,13 +79,16 @@ test("Escape closes an open context menu without closing anything under it", asy
 
 test("clicking a button hides its tooltip until the pointer leaves", async ({ page }) => {
   await openApp(page);
-  const layout = page.getByRole("button", { name: "Show response below" });
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const layout = page.getByRole("button", { name: "Response below" });
   await layout.hover();
-  await expect(page.getByRole("tooltip")).toBeVisible();
+  await expect(page.getByRole("tooltip")).toHaveText(/^Response on the right/);
   await layout.click();
-  await expect(page.getByRole("tooltip")).toBeHidden();
+  // The click moves the response, and the toggle with it, out from under the
+  // pointer, so whatever lands there may show its own tooltip, but not this one.
+  await expect(page.getByRole("tooltip").filter({ hasText: /^Response/ })).toHaveCount(0);
   await page.waitForTimeout(600);
-  await expect(page.getByRole("tooltip")).toBeHidden();
+  await expect(page.getByRole("tooltip").filter({ hasText: /^Response/ })).toHaveCount(0);
 });
 
 test("a focused button whose tooltip is coming can be removed", async ({ page }) => {

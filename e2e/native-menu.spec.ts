@@ -107,6 +107,23 @@ test.describe("menu clicks run commands", () => {
     expect(await mockState(page, "settings")).toMatchObject({ layout: "horizontal" });
   });
 
+  test("View → Toggle Response Position sits by the Response Position submenu and moves the response", async ({ page }) => {
+    await openApp(page);
+    const view = (await mockState(page, "menu")).layout.find((m) => m.label === "View")!;
+    const at = view.items.findIndex((e) => e.kind === "item" && e.id === "toggle-response-position");
+    expect(view.items[at]).toMatchObject({ label: "Toggle Response Position", accelerator: "Cmd+Alt+R" });
+    expect(view.items[at + 1]).toMatchObject({ kind: "submenu", label: "Response Position" });
+
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    const split = page.getByRole("separator", { name: "Resize request and response" });
+    await menuClick(page, "toggle-response-position");
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect.poll(() => menuItem(page, "response-below")).toMatchObject({ checked: true });
+    await menuClick(page, "toggle-response-position");
+    await expect(split).toHaveAttribute("aria-orientation", "vertical");
+    await expect.poll(() => menuItem(page, "response-right")).toMatchObject({ checked: true });
+  });
+
   test("Request → Show .http Source shows the source and ticks the item", async ({ page }) => {
     await openApp(page);
     await openRequest(page, ["api", "pets.http"], "List pets");
