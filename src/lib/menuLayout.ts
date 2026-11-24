@@ -93,7 +93,7 @@ export function menuLayout(os: OS): TopMenu[] {
     cmd("zoom-out"),
     cmd("zoom-reset"),
     SEP,
-    { kind: "submenu", label: "Response Layout", items: [cmd("layout-right"), cmd("layout-below")] },
+    { kind: "submenu", label: "Response Position", items: [cmd("response-right"), cmd("response-below")] },
     { kind: "submenu", label: "Theme", items: [cmd("theme-system"), cmd("theme-light"), cmd("theme-dark")] },
   ];
   const help: MenuEntry[] = [cmd("documentation"), cmd("release-notes"), SEP, cmd("report-issue")];
