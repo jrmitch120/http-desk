@@ -1,7 +1,7 @@
 // The owned Checkbox (ADR 0002): key/value rows, "enable all", the file body's
 // "substitute variables" option and the OpenAPI importer's selections.
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, openRequest, sentRequests } from "./helpers";
+import { importOpenApiButton, openApp, openRequest, sentRequests } from "./helpers";
 
 // List pets has two headers: Accept (on) and X-Debug (off).
 async function openHeaders(page: Page): Promise<void> {
@@ -90,7 +90,7 @@ test("the file body's checkbox turns variable substitution on and off", async ({
 
 test("the OpenAPI importer's group checkbox shows the mixed state when part of the group is selected", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await importOpenApiButton(page).click();
   await page.getByPlaceholder("/path/to/openapi.yaml").fill("/demo/openapi.yaml");
   await page.keyboard.press("Enter");
 

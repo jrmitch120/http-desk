@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { dialog, openApp, openRequest, sentRequests } from "./helpers";
+import { dialog, importOpenApiButton, openApp, openRequest, sentRequests } from "./helpers";
 
 type Sent = { body: { mode: string }; headers: { items: { name: string; value: string }[] } };
 
@@ -111,7 +111,7 @@ test("the response view and Settings switches are the same radiogroup", async ({
   // Settings apply live, so compare looks before switching to the light theme.
   const theme = settings.getByRole("radiogroup", { name: "Theme" });
   expect(await pick(theme, "Dark")).toBe(look);
-  expect(await pick(settings.getByRole("radiogroup", { name: "Layout" }), "Response below")).toBe(look);
+  expect(await pick(settings.getByRole("radiogroup", { name: "Response position" }), "Response below")).toBe(look);
   await pick(theme, "Light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("separator", { name: "Resize request and response" })).toHaveAttribute(
@@ -126,7 +126,7 @@ test("the OpenAPI importer's switches are the same radiogroup", async ({ page })
   await page.getByRole("button", { name: "Body" }).click();
   const look = await pick(bodyModes(page), "JSON");
 
-  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await importOpenApiButton(page).click();
   const importer = dialog(page, "Import OpenAPI specification");
   const source = importer.getByRole("radiogroup", { name: "Specification source" });
   await pick(source, "URL");

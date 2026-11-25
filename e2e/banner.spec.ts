@@ -2,7 +2,7 @@
 // alerts, everything else as a status, and a severity looks the same wherever
 // the banner appears.
 import { expect, test, type Locator } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { importOpenApiButton, openApp, openRequest } from "./helpers";
 
 /** The colours a banner's severity is read from. */
 function tone(banner: Locator): Promise<{ color: string; background: string }> {
@@ -32,7 +32,7 @@ test("an error banner in the response viewer is exposed as an alert", async ({ p
 
 test("the OpenAPI importer's warnings banner is exposed as a status", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "Import OpenAPI" }).first().click();
+  await importOpenApiButton(page).click();
   await page.getByPlaceholder("/path/to/openapi.yaml").fill("/demo/openapi.yaml");
   await page.keyboard.press("Enter");
 

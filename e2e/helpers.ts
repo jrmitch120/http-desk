@@ -21,6 +21,11 @@ export async function openApp(page: Page, query = ""): Promise<void> {
   await expect(treeItem(page, "api")).toBeVisible();
 }
 
+/** The Explorer toolbar's Import OpenAPI button (the topbar has none). */
+export function importOpenApiButton(page: Page): Locator {
+  return page.locator("aside").getByRole("button", { name: "Import OpenAPI", exact: true });
+}
+
 /** A row in the sidebar tree (folder, file or request), by its visible label. */
 export function treeItem(page: Page, label: string): Locator {
   return page.getByRole("treeitem").filter({ has: page.locator(".label", { hasText: new RegExp(`^${escape(label)}$`) }) });
@@ -106,6 +111,8 @@ export interface MockState {
   /** The settings it last saved. */
   settings: {
     theme: string;
+    /** The Response position, under its pre-rename key. */
+    layout: "horizontal" | "vertical";
     zoom: number;
     recentWorkspaces: string[];
     exec: Record<string, unknown>;

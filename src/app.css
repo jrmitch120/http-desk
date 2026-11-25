@@ -319,6 +319,12 @@ textarea.input {
 .icon-btn.active[aria-disabled="true"] {
   color: var(--accent);
 }
+/* Quietly pressed, not accent, where accent is kept for what needs attention (the
+   topbar's toggles): pressed, the hover background and the text colour. */
+.icon-btn.quiet.active {
+  background: var(--hover);
+  color: var(--text);
+}
 /* A notch smaller, for a row of them that must fit a narrow pane (the Explorer's
    buttons beside the sidebar's view switch). */
 .icon-btn.small {
@@ -340,8 +346,10 @@ textarea.input {
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
-/* Something in it wants attention (problems to see): warning-toned until it's pressed. */
-.icon-btn.counted.attention:not(.active) {
+/* Something in it wants attention (problems to see): warning-toned until it's pressed;
+   pressed, its count stays warning-toned. */
+.icon-btn.counted.attention:not(.active),
+.icon-btn.counted.attention .count {
   color: var(--warning);
 }
 

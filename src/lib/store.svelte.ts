@@ -34,6 +34,7 @@ import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
+  ResponsePosition,
   EnvironmentSet,
   ExchangeShape,
   EnvironmentSettings,
@@ -246,6 +247,13 @@ class AppStore {
   themeChoice = $derived<AppSettings["theme"]>(
     this.settings?.theme === "light" || this.settings?.theme === "dark" ? this.settings.theme : "system",
   );
+  /** The Response position: the response on the right ("horizontal", also for a
+   *  missing or hand-edited value) or below ("vertical"). Stored under `layout`. */
+  responsePosition = $derived<ResponsePosition>(this.settings?.layout === "vertical" ? "vertical" : "horizontal");
+  /** Moves the response to `position` and keeps the choice in settings (under `layout`). */
+  setResponsePosition(position: ResponsePosition): Promise<boolean> {
+    return this.updateSettings({ layout: position });
+  }
   /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
    *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
   sidebarShown = $derived(this.settings?.sidebarHidden !== true);
@@ -393,6 +401,8 @@ class AppStore {
       $effect(() => this.layout.track());
       // The Problems panel reads an open document again once its edits pause.
       $effect(() => this.problems.track());
+      // The Problems count follows the list once it stops changing.
+      $effect(() => this.problems.settle());
       // A restored tab loads its last response from History the first time it shows.
       $effect(() => {
         const id = this.activeTabId;
@@ -1491,6 +1501,11 @@ class AppStore {
     }
     this.panel = panel;
     this.panelFocusWanted = true;
+  }
+
+  /** Hides `panel` if it's the one showing, wherever focus is (the topbar's pressed Problems button). */
+  hidePanel(panel: PanelId) {
+    if (this.panel === panel) this.panel = null;
   }
 
   /**

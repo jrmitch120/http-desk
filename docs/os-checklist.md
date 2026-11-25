@@ -43,9 +43,15 @@ control or the popup layer.
 - [ ] Welcome screen (no workspace open): recent workspaces list and buttons.
 - [ ] Top bar: environment Select (open it: themed list, check on the current one; ⌘⌥E /
       Ctrl+Alt+E opens it, also from inside an editor, and on a layout where AltGr+E types
-      € it still types €; the window title ends with the chosen environment) and
-      the theme menu button (System / Light / Dark with a check; the "A" badge on
-      System).
+      € it still types €; the window title ends with the chosen environment), and
+      the sidebar and Settings buttons. No theme button: View → Theme (System / Light /
+      Dark, with a check on the current one) and Settings → Theme switch it. No
+      Problems button.
+- [ ] Window status bar: a thin strip along the bottom of the window, below the panel
+      area, in both themes and at 50% and 150% zoom. Problems at its right end shows
+      "0" muted, or the count in the warning colour (open a workspace with a broken
+      `.http` file); clicking it opens and closes the Problems panel. Typing in a
+      request doesn't make the count flicker; it follows a moment after you stop.
 - [ ] Sidebar: tree with method badges lined up, search box with its results list, and
       the context menu on a request (right-click, and Shift+F10).
 - [ ] Edit menu: right-click a text input, the URL bar, a value field and the response
@@ -61,6 +67,12 @@ control or the popup layer.
       (pressing ⌘B toggles once, not twice), Ctrl+B in the label on Windows, and no
       shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
       with the search box focused.
+- [ ] Move the response with ⌥⌘R / Ctrl+Alt+R, View → Toggle Response Position and the
+      toggle at the right end of the response's status bar: the response moves between
+      the right and below, the View → Response Position tick follows, and the choice
+      stays after a restart. View → Toggle Response Position shows ⌥⌘R on macOS
+      (pressing ⌥⌘R moves it once, not twice), Ctrl+Alt+R in the label on Windows, and
+      no shortcut on Linux.
 - [ ] Focus Explorer (⇧⌘E / Ctrl+Shift+E) and Focus History (⇧⌘H / Ctrl+Shift+H), from
       the URL bar with the sidebar hidden: each shows it on its view with a row ringed,
       and the arrow keys move from there. Each runs once on macOS, not twice.
@@ -114,7 +126,7 @@ control or the popup layer.
 
 ## Modals
 
-- [ ] Settings: Theme and Layout segmented controls apply live; switches; the number
+- [ ] Settings: Theme and Response position segmented controls apply live; switches; the number
       fields with a unit (clear one to see the inline error); the TLS-off warning banner;
       Browse… for a certificate path. The theme switch also changes the title bar.
 - [ ] Theme: with System chosen, switch the OS between light and dark; the app, the title

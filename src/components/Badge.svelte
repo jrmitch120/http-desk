@@ -1,3 +1,7 @@
+<script module lang="ts">
+  export type BadgeTone = "neutral" | "success" | "danger";
+</script>
+
 <script lang="ts">
   // A small pill: HTTP methods, response statuses, "OFF", "Active", versions.
   // Every badge shares one type, corner radius and padding per size; only the
@@ -14,7 +18,7 @@
     method?: string;
     /** An HTTP status code (colour only; pass the text as `children`). */
     status?: number;
-    tone?: "neutral" | "success" | "danger";
+    tone?: BadgeTone;
     size?: "sm" | "md";
     class?: string;
     children?: Snippet;

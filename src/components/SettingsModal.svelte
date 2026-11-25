@@ -12,8 +12,9 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import Modal from "./Modal.svelte";
   import NumberField from "./NumberField.svelte";
-  import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import SegmentedControl from "./SegmentedControl.svelte";
   import { THEMES } from "../lib/themes";
+  import { RESPONSE_POSITIONS } from "../lib/responsePositions";
   import { EDITOR_NAMES, EDITORS, type EditorName } from "../lib/checks";
   import Toggle from "./Toggle.svelte";
 
@@ -22,11 +23,6 @@
   const settings = $derived(app.settings);
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-
-  const layouts: SegmentedOption<AppSettings["layout"]>[] = [
-    { value: "horizontal", label: "Response on the right", icon: "columns" },
-    { value: "vertical", label: "Response below", icon: "rows" },
-  ];
 
   // Opened from a fix-it button (a TLS send error): start at that section.
   let tlsSection: HTMLElement | undefined = $state();
@@ -108,8 +104,8 @@
           <SegmentedControl label="Theme" options={THEMES} value={app.themeChoice} onchange={(v) => set({ theme: v })} />
         </div>
         <div class="setting">
-          <div class="label"><span>Layout</span></div>
-          <SegmentedControl label="Layout" options={layouts} value={settings.layout} onchange={(v) => set({ layout: v })} />
+          <div class="label"><span>Response position</span></div>
+          <SegmentedControl label="Response position" options={RESPONSE_POSITIONS} value={app.responsePosition} onchange={(v) => void app.setResponsePosition(v)} />
         </div>
         <div class="setting">
           <div class="label"><span>Show parameter descriptions</span><small class="muted">Under each query param and header; click one to edit it</small></div>

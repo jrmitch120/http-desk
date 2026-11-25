@@ -681,6 +681,9 @@ export interface AppInfo {
   arch: string;
 }
 
+/** Where a request tab shows the response (GLOSSARY "Response position"): on the right or below. */
+export type ResponsePosition = "horizontal" | "vertical";
+
 export interface AppSettings {
   exec: ExecSettings;
   recentWorkspaces: string[];
@@ -690,7 +693,8 @@ export interface AppSettings {
   environmentSettings: Record<string, Record<string, EnvironmentSettings>>;
   /** "system" follows the OS appearance (prefers-color-scheme). */
   theme: "system" | "light" | "dark";
-  layout: "horizontal" | "vertical";
+  /** The Response position. Stored as `layout` since before the name, so no migration. */
+  layout: ResponsePosition;
   checkUpdates: boolean;
   showDescriptions: boolean;
   /** Sidebar width in px, kept while the sidebar is hidden. */
@@ -701,8 +705,8 @@ export interface AppSettings {
   panelHeight: number;
   /** The zoom of the whole interface, `1` being 100% (View → Zoom In / Zoom Out / Actual Size, ⌘= / ⌘- / ⌘0). */
   zoom: number;
-  /** Request pane's share (0..1) of the request/response split, per layout. */
-  splitRatio: Record<AppSettings["layout"], number>;
+  /** Request pane's share (0..1) of the request/response split, per Response position. */
+  splitRatio: Record<ResponsePosition, number>;
   /** Show the resolved preview under the URL bar. */
   showResolved: boolean;
   /** Show the request's `.http` source in place of its sections (the .http button, Request → Show .http Source). */

@@ -12,7 +12,8 @@ import { modalOpen } from "./modal.svelte";
 import { focusedEditActions, type EditActions } from "./editMenu";
 import { showFocusMarks } from "./focusMarks";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
-import type { AppSettings } from "./types";
+import type { AppSettings, ResponsePosition } from "./types";
+import { responsePosition } from "./responsePositions";
 import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
@@ -50,8 +51,9 @@ export type CommandId =
   | "search"
   | "choose-environment"
   | "manage-environments"
-  | "layout-right"
-  | "layout-below"
+  | "toggle-response-position"
+  | "response-right"
+  | "response-below"
   | "theme-system"
   | "theme-light"
   | "theme-dark"
@@ -102,14 +104,14 @@ async function openFolder() {
   if (typeof dir === "string") await app.openWorkspace(dir);
 }
 
-/** A View → Response Layout choice. */
-function layoutChoice(id: CommandId, label: string, layout: AppSettings["layout"]): Command {
+/** A View → Response Position choice. */
+function responsePositionChoice(id: CommandId, position: ResponsePosition): Command {
   return {
     id,
-    label,
+    label: responsePosition(position).menuLabel,
     enabled: withSettings,
-    checked: () => (app.settings?.layout ?? "horizontal") === layout,
-    run: () => void app.updateSettings({ layout }),
+    checked: () => app.responsePosition === position,
+    run: () => void app.setResponsePosition(position),
   };
 }
 
@@ -379,8 +381,16 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => (app.modal = "env"),
   },
-  layoutChoice("layout-right", "Response on the Right", "horizontal"),
-  layoutChoice("layout-below", "Response Below", "vertical"),
+  {
+    id: "toggle-response-position",
+    label: "Toggle Response Position",
+    // Not Ctrl+Alt+L: that locks the screen on GNOME.
+    shortcut: { mod: true, alt: true, key: "r" },
+    enabled: withSettings,
+    run: () => void app.setResponsePosition(app.responsePosition === "horizontal" ? "vertical" : "horizontal"),
+  },
+  responsePositionChoice("response-right", "horizontal"),
+  responsePositionChoice("response-below", "vertical"),
   themeChoice("theme-system", "System", "system"),
   themeChoice("theme-light", "Light", "light"),
   themeChoice("theme-dark", "Dark", "dark"),

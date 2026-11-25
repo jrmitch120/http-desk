@@ -89,6 +89,41 @@ test.describe("menu clicks run commands", () => {
     expect(await menuItem(page, "theme-system")).toMatchObject({ checked: false });
   });
 
+  test("View → Response Position ticks the saved choice and moves the response", async ({ page }) => {
+    // The settings key is still `layout`, as written before the rename.
+    await openApp(page, "?layout=vertical");
+    const view = (await mockState(page, "menu")).layout.find((m) => m.label === "View")!;
+    const submenu = view.items.find((e) => e.kind === "submenu" && e.label === "Response Position");
+    expect(submenu).toMatchObject({ items: [{ label: "Response on the Right" }, { label: "Response Below" }] });
+    await expect.poll(() => menuItem(page, "response-below")).toMatchObject({ checked: true });
+    expect(await menuItem(page, "response-right")).toMatchObject({ checked: false });
+
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    const split = page.getByRole("separator", { name: "Resize request and response" });
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await menuClick(page, "response-right");
+    await expect(split).toHaveAttribute("aria-orientation", "vertical");
+    await expect.poll(() => menuItem(page, "response-right")).toMatchObject({ checked: true });
+    expect(await mockState(page, "settings")).toMatchObject({ layout: "horizontal" });
+  });
+
+  test("View → Toggle Response Position sits by the Response Position submenu and moves the response", async ({ page }) => {
+    await openApp(page);
+    const view = (await mockState(page, "menu")).layout.find((m) => m.label === "View")!;
+    const at = view.items.findIndex((e) => e.kind === "item" && e.id === "toggle-response-position");
+    expect(view.items[at]).toMatchObject({ label: "Toggle Response Position", accelerator: "Cmd+Alt+R" });
+    expect(view.items[at + 1]).toMatchObject({ kind: "submenu", label: "Response Position" });
+
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    const split = page.getByRole("separator", { name: "Resize request and response" });
+    await menuClick(page, "toggle-response-position");
+    await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+    await expect.poll(() => menuItem(page, "response-below")).toMatchObject({ checked: true });
+    await menuClick(page, "toggle-response-position");
+    await expect(split).toHaveAttribute("aria-orientation", "vertical");
+    await expect.poll(() => menuItem(page, "response-right")).toMatchObject({ checked: true });
+  });
+
   test("Request → Show .http Source shows the source and ticks the item", async ({ page }) => {
     await openApp(page);
     await openRequest(page, ["api", "pets.http"], "List pets");
@@ -171,7 +206,7 @@ test.describe("greyed-out and ticked state follows the app", () => {
     await openRequest(page, ["api", "pets.http"], "List pets");
     await editUrl(page);
     await expect.poll(() => menuItem(page, "save")).toMatchObject({ enabled: true });
-    const appCommands = ["open-folder", "new-request", "save", "save-all", "close-tab", "close-window", "settings", "check-updates", "send", "show-source", "theme-dark", "layout-below"];
+    const appCommands = ["open-folder", "new-request", "save", "save-all", "close-tab", "close-window", "settings", "check-updates", "send", "show-source", "theme-dark", "response-below"];
 
     await activeTab(page).focus();
     await page.keyboard.press("Control+Comma");
