@@ -52,10 +52,10 @@
   .app-status-bar .icon-btn {
     height: 20px;
   }
-  /* At the right end, and a fixed width (icon plus "99+"), count left-aligned in it. */
+  /* At the right end, and a fixed width (icon plus "99+"), icon and count centred in
+     it: a longer count shifts them inside the button, never the button's neighbours. */
   .app-status-bar .problems {
     margin-left: auto;
     width: 52px;
-    justify-content: flex-start;
   }
 </style>
