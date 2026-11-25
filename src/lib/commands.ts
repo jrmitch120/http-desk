@@ -13,7 +13,7 @@ import { focusedEditActions, type EditActions } from "./editMenu";
 import { showFocusMarks } from "./focusMarks";
 import { currentOS, formatShortcut, matchesShortcut, type KeyPress, type OS, type Shortcut } from "./platform";
 import type { AppSettings, ResponsePosition } from "./types";
-import { responsePosition } from "./responsePositions";
+import { otherResponsePosition, responsePosition } from "./responsePositions";
 import { ACTUAL_SIZE, zoomIn, zoomOut } from "./zoom";
 
 export type CommandId =
@@ -387,7 +387,7 @@ const COMMANDS: Command[] = [
     // Not Ctrl+Alt+L: that locks the screen on GNOME.
     shortcut: { mod: true, alt: true, key: "r" },
     enabled: withSettings,
-    run: () => void app.setResponsePosition(app.responsePosition === "horizontal" ? "vertical" : "horizontal"),
+    run: () => void app.setResponsePosition(otherResponsePosition(app.responsePosition)),
   },
   responsePositionChoice("response-right", "horizontal"),
   responsePositionChoice("response-below", "vertical"),

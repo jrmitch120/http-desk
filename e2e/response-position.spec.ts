@@ -1,11 +1,12 @@
-// The Response position toggle (#213): it sits at the right end of a request tab's
-// response status bar, in every state of the pane, and nowhere else. Its icon and
-// tooltip show where the response is now; clicking it or ⌥⌘R / Ctrl+Alt+R moves
-// the response, and the choice is kept in settings.
+// The Response position button (#213): it sits at the right end of a request tab's
+// response status bar, in every state of the pane, and nowhere else. It is an action,
+// not a toggle: its name and icon say where a click moves the response, and its tooltip
+// where the response is now too; clicking it or ⌥⌘R / Ctrl+Alt+R moves the response,
+// and the choice is kept in settings.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { bodyEditor, openApp, openRequest, urlBar } from "./helpers";
 
-const toggle = (scope: Page | Locator) => scope.getByRole("button", { name: "Response below" });
+const moveButton = (scope: Page | Locator) => scope.getByRole("button", { name: /^Move response (below|to the right)$/ });
 const split = (page: Page) => page.getByRole("separator", { name: "Resize request and response" });
 /** The response pane's status bar: the one holding the Response/History switch. */
 const statusBar = (page: Page) => page.locator(".statusbar").filter({ has: page.getByRole("radiogroup", { name: "Response pane" }) });
@@ -13,24 +14,24 @@ const statusBar = (page: Page) => page.locator(".statusbar").filter({ has: page.
 /** Whether the response shows below the request (the split stacked), or on the right. */
 async function expectPosition(page: Page, position: "right" | "below") {
   await expect(split(page)).toHaveAttribute("aria-orientation", position === "below" ? "horizontal" : "vertical");
-  await expect(toggle(page)).toHaveAttribute("aria-pressed", position === "below" ? "true" : "false");
-  // A pressed toggle is marked .active too, as every owned toggle (docs/controls.md).
-  if (position === "below") await expect(toggle(page)).toHaveClass(/\bactive\b/);
-  else await expect(toggle(page)).not.toHaveClass(/\bactive\b/);
+  // It offers the other position, and is never shown pressed (docs/controls.md).
+  await expect(moveButton(page)).toHaveAccessibleName(position === "below" ? "Move response to the right" : "Move response below");
+  await expect(moveButton(page)).not.toHaveAttribute("aria-pressed");
+  await expect(moveButton(page)).not.toHaveClass(/\bactive\b/);
 }
 
-/** The toggle is the last thing in the status bar, at its right edge. */
+/** The move button is the last thing in the status bar, at its right edge. */
 async function expectAtRightEnd(page: Page) {
   const bar = statusBar(page);
-  await expect(bar.getByRole("button", { name: "Response below" })).toBeVisible();
+  await expect(moveButton(bar)).toBeVisible();
   const barBox = (await bar.boundingBox())!;
-  const box = (await toggle(page).boundingBox())!;
+  const box = (await moveButton(page).boundingBox())!;
   expect(barBox.x + barBox.width - (box.x + box.width)).toBeLessThanOrEqual(16);
   const last = await bar.evaluate((el) => {
     const buttons = [...el.querySelectorAll("button")].filter((b) => b.getBoundingClientRect().width > 0);
     return buttons.at(-1)?.getAttribute("aria-label");
   });
-  expect(last).toBe("Response below");
+  expect(last).toMatch(/^Move response /);
 }
 
 test("the topbar has no Response position button", async ({ page }) => {
@@ -41,7 +42,7 @@ test("the topbar has no Response position button", async ({ page }) => {
   await expect(topbar.getByRole("button", { name: /response/i })).toHaveCount(0);
 });
 
-test("a never-sent request with no History shows the status bar, titled Response, with the toggle", async ({ page }) => {
+test("a never-sent request with no History shows the status bar, titled Response, with the move button", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expect(page.getByText("Click Send to get a response")).toBeVisible();
@@ -49,7 +50,7 @@ test("a never-sent request with no History shows the status bar, titled Response
   await expectAtRightEnd(page);
 });
 
-test("the toggle stays at the status bar's right end while sending, with a response, and showing History", async ({ page }) => {
+test("the move button stays at the status bar's right end while sending, with a response, and showing History", async ({ page }) => {
   await openApp(page, "?download=slow");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -64,7 +65,7 @@ test("the toggle stays at the status bar's right end while sending, with a respo
   await expectAtRightEnd(page);
 });
 
-test("the toggle stays at the status bar's right end after a cancel", async ({ page }) => {
+test("the move button stays at the status bar's right end after a cancel", async ({ page }) => {
   await openApp(page, "?download=slow");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -73,7 +74,7 @@ test("the toggle stays at the status bar's right end after a cancel", async ({ p
   await expectAtRightEnd(page);
 });
 
-test("the toggle stays at the status bar's right end after a send error", async ({ page }) => {
+test("the move button stays at the status bar's right end after a send error", async ({ page }) => {
   await openApp(page, "?sendError=dns");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -81,7 +82,7 @@ test("the toggle stays at the status bar's right end after a send error", async 
   await expectAtRightEnd(page);
 });
 
-test("History entry views have no toggle", async ({ page }) => {
+test("History entry views have no move button", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -92,7 +93,7 @@ test("History entry views have no toggle", async ({ page }) => {
   await page.getByRole("list", { name: "History entries" }).getByRole("listitem").first().click();
   const inTab = page.getByRole("region", { name: "History entry" });
   await expect(inTab).toBeVisible();
-  await expect(toggle(inTab)).toHaveCount(0);
+  await expect(moveButton(inTab)).toHaveCount(0);
   await page.getByRole("button", { name: "Back to History" }).click();
 
   // An entry opened from the sidebar's History.
@@ -100,56 +101,65 @@ test("History entry views have no toggle", async ({ page }) => {
   await page.getByRole("region", { name: "Workspace History" }).getByRole("listitem").first().click();
   const fromSidebar = page.getByRole("dialog", { name: "History entry" });
   await expect(fromSidebar).toBeVisible();
-  await expect(toggle(fromSidebar)).toHaveCount(0);
+  await expect(moveButton(fromSidebar)).toHaveCount(0);
 });
 
-test("clicking the toggle moves the response, and the choice survives a reload", async ({ page }) => {
+test("clicking the move button moves the response, and the choice survives a reload", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expectPosition(page, "right");
 
-  await toggle(page).click();
+  await moveButton(page).click();
   await expectPosition(page, "below");
 
   await page.reload();
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expectPosition(page, "below");
 
-  await toggle(page).click();
+  await moveButton(page).click();
   await expectPosition(page, "right");
 });
 
-test("the icon and tooltip show where the response is now, what a click does and the shortcut", async ({ page }) => {
+test("the icon shows where a click moves the response; the tooltip, where it is now, that and the shortcut", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  const icon = () => toggle(page).locator("svg").innerHTML();
-  const onRight = await icon();
+  const icon = () => moveButton(page).locator("svg").innerHTML();
+  const offersBelow = await icon();
 
-  await toggle(page).hover();
-  await expect(page.getByRole("tooltip")).toHaveText("Response on the right. Click to move it below (⌥⌘R)");
+  await moveButton(page).hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Response on the right. Move it below (⌥⌘R)");
 
-  await toggle(page).click();
-  await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
-  const below = await icon();
-  expect(below).not.toBe(onRight);
+  await moveButton(page).click();
+  await expectPosition(page, "below");
+  const offersRight = await icon();
+  expect(offersRight).not.toBe(offersBelow);
   await page.mouse.move(0, 0);
-  await toggle(page).hover();
-  await expect(page.getByRole("tooltip")).toHaveText("Response below. Click to move it to the right (⌥⌘R)");
+  await moveButton(page).hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Response below. Move it to the right (⌥⌘R)");
 
-  await toggle(page).click();
-  await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");
-  expect(await icon()).toBe(onRight);
+  await moveButton(page).click();
+  await expectPosition(page, "right");
+  expect(await icon()).toBe(offersBelow);
 });
 
-test("screen readers get where the response is and what a click does, without hovering", async ({ page }) => {
+test("the icon is the Settings choice a click picks", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
-  await expect(toggle(page)).toHaveAccessibleName("Response below");
-  await expect(toggle(page)).toHaveAccessibleDescription("Response on the right. Click to move it below (⌥⌘R)");
+  const offersBelow = await moveButton(page).locator("svg").innerHTML();
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  const below = page.getByRole("radiogroup", { name: "Response position" }).getByRole("radio", { name: "Response below" });
+  expect(await below.locator("svg").innerHTML()).toBe(offersBelow);
+});
+
+test("screen readers hear what a click does as the name, and where the response is now as the description, without hovering", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await expect(moveButton(page)).toHaveAccessibleName("Move response below");
+  await expect(moveButton(page)).toHaveAccessibleDescription("Response on the right. Move it below (⌥⌘R)");
 
   await page.keyboard.press("Meta+Alt+KeyR");
-  await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
-  await expect(toggle(page)).toHaveAccessibleDescription("Response below. Click to move it to the right (⌥⌘R)");
+  await expect(moveButton(page)).toHaveAccessibleName("Move response to the right");
+  await expect(moveButton(page)).toHaveAccessibleDescription("Response below. Move it to the right (⌥⌘R)");
 });
 
 for (const { os, keys, hint } of [
@@ -160,7 +170,7 @@ for (const { os, keys, hint } of [
   test(`on ${os}, ${hint} moves the response from anywhere, the URL bar and body editor included`, async ({ page }) => {
     await openApp(page, `?platform=${os}`);
     await openRequest(page, ["api", "pets.http"], "Create pet");
-    await toggle(page).hover();
+    await moveButton(page).hover();
     await expect(page.getByRole("tooltip")).toContainText(`(${hint})`);
 
     await page.getByRole("tree", { name: "Explorer" }).focus();
