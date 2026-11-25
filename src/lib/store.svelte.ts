@@ -2170,7 +2170,8 @@ class AppStore {
     void this.updateSettings({ showSource: this.settings?.showSource !== true });
   }
 
-  /** Switches the tab's request editor to its Settings section (timeouts). */
+  /** Switches the tab's request editor to its Settings section, leaving the `.http` source
+   *  view if it's on: a timeout error's "Open request Settings", or a File variable's Edit or Add. */
   showRequestSettings(tabId: string) {
     this.requestSettingsFor = tabId;
   }

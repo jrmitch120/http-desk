@@ -154,18 +154,17 @@
 
   // The selected section lives with the tab, so it outlasts a tab switch and the Layout can save it.
   const section = $derived(tab.section);
+  /** The `.http` source shows in place of the sections; an app setting, so it lasts like Resolved. */
+  const showSource = $derived(app.settings?.showSource === true);
   // "Open request Settings" on a timeout error, or an Edit / Add of a File variable. The
-  // sections aren't shown in the .http view, so it leaves that view for them.
+  // sections aren't shown in the .http source view, so it leaves that view for them.
   $effect(() => {
     if (app.requestSettingsFor === tab.id) {
-      if (untrack(() => app.settings?.showSource === true)) void app.updateSettings({ showSource: false });
+      if (untrack(() => showSource)) void app.updateSettings({ showSource: false });
       app.showSection(tab.id, "settings");
       app.requestSettingsFor = null;
     }
   });
-
-  /** The `.http` source shows in place of the sections; an app setting, so it lasts like Resolved. */
-  const showSource = $derived(app.settings?.showSource === true);
   /** The resolved preview (ResolvedPreview) is shown under the URL bar; an app setting, so it lasts. */
   const resolved = $derived(app.settings?.showResolved === true);
   /**
