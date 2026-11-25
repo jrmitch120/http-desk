@@ -60,7 +60,8 @@
 
   <div class="spacer"></div>
 
-  <!-- Three groups, set apart by spacing: environment; status; view and app. -->
+  <!-- Three groups, set apart by spacing: environment; status; view and app (Settings).
+       The sidebar collapses from its own header (Sidebar.svelte). -->
   <div class="group">
     <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
       <Icon name="globe" size={14} />
@@ -86,16 +87,6 @@
   {/if}
 
   <div class="group">
-    <button
-      class="icon-btn quiet"
-      class:active={app.sidebarShown}
-      aria-label="Show sidebar"
-      aria-pressed={app.sidebarShown}
-      use:tooltip={`Show sidebar (${shortcutHint("toggle-sidebar")})`}
-      onclick={() => runCommand("toggle-sidebar")}
-    >
-      <Icon name="sidebar" />
-    </button>
     <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
   </div>
 </header>

@@ -1,12 +1,13 @@
-// #211: pressed toggles in the topbar look quiet, not accent. Pressed (sidebar shown):
-// the hover background and the text colour. Unpressed: no
-// background and a muted icon. Accent is kept for what needs attention, and active
-// icon buttons outside the topbar keep their accent look. (Problems, now in the
-// window's status bar, follows the same rule: app-status-bar.spec.ts.)
+// #211: pressed toggles look quiet, not accent: accent is kept for what needs
+// attention, and active icon buttons elsewhere keep their accent look. The topbar's
+// sidebar toggle is gone (#218): the sidebar collapses from its own header to a rail
+// (sidebar-rail.spec.ts), whose marked view follows the same rule: the text colour,
+// the other view muted. (Problems, in the window's status
+// bar, follows it too: app-status-bar.spec.ts.)
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
 
-const sidebarToggle = (page: Page) => page.getByRole("button", { name: "Show sidebar", exact: true });
+const railButton = (page: Page, name: string) => page.getByRole("navigation", { name: "Sidebar" }).getByRole("button", { name, exact: true });
 
 /** A theme token (`--text`) as a computed colour, comparable with an element's computed colour. */
 function token(page: Page, name: string): Promise<string> {
@@ -28,32 +29,19 @@ function look(button: Locator): Promise<{ color: string; background: string }> {
   });
 }
 
-async function expectPressed(page: Page, button: Locator) {
-  await expect(button).toHaveAttribute("aria-pressed", "true");
-  const [text, hover, accent] = [await token(page, "--text"), await token(page, "--hover"), await token(page, "--accent")];
-  await expect.poll(() => look(button)).toEqual({ color: text, background: hover });
-  expect(text).not.toBe(accent);
-}
-
-async function expectUnpressed(page: Page, button: Locator) {
-  await expect(button).toHaveAttribute("aria-pressed", "false");
-  await expect.poll(() => look(button)).toEqual({ color: await token(page, "--muted"), background: "rgba(0, 0, 0, 0)" });
-}
-
 for (const theme of ["dark", "light"] as const) {
   test.describe(`${theme} theme`, () => {
-    test("the sidebar toggle is quietly pressed while the sidebar is shown, and plain while it's hidden", async ({ page }) => {
+    test("the rail marks its last-used view quietly: the text colour, never accent", async ({ page }) => {
       await openApp(page, `?theme=${theme}`);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-      await expectPressed(page, sidebarToggle(page));
-
-      await sidebarToggle(page).click();
-      await page.mouse.move(0, 400);
-      await expectUnpressed(page, sidebarToggle(page));
-
-      await sidebarToggle(page).click();
-      await page.mouse.move(0, 400);
-      await expectPressed(page, sidebarToggle(page));
+      await page.keyboard.press("Meta+B");
+      await page.mouse.move(600, 400);
+      const [text, muted, accent] = [await token(page, "--text"), await token(page, "--muted"), await token(page, "--accent")];
+      const marked = railButton(page, "Explorer");
+      await expect(marked).toHaveAttribute("aria-current", "true");
+      await expect.poll(async () => (await look(marked)).color).toBe(text);
+      expect(text).not.toBe(accent);
+      await expect.poll(async () => (await look(railButton(page, "History"))).color).toBe(muted);
     });
 
     test("an active icon button outside the topbar still uses the accent colour", async ({ page }) => {

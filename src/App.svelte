@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { app } from "./lib/store.svelte";
   import TopBar from "./components/TopBar.svelte";
   import AppStatusBar from "./components/AppStatusBar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
+  import SidebarRail from "./components/SidebarRail.svelte";
   import TabBar from "./components/TabBar.svelte";
   import RequestView from "./components/RequestView.svelte";
   import FileView from "./components/FileView.svelte";
@@ -48,15 +49,21 @@
   let main: HTMLElement | undefined = $state();
   let work: HTMLElement | undefined = $state();
 
-  // Hiding the sidebar while it or its separator has focus hands focus to the
-  // work area before they go, never to <body>: the active tab, else the tab
-  // bar's New request button.
+  let rail: { focusMarked: () => void; holds: (el: Element | null) => boolean } | undefined = $state();
+
+  // Collapsing the sidebar while it or its separator has focus hands focus to the
+  // rail's marked button once it's there, never to <body>. Opening it while the rail
+  // has focus hands focus to the opened view.
   $effect.pre(() => {
-    if (app.sidebarShown) return;
+    const shown = app.sidebarShown;
     untrack(() => {
       const focused = document.activeElement;
       if (!main?.contains(focused) || work?.contains(focused)) return;
-      focusRequests();
+      if (!shown) {
+        if (!rail?.holds(focused)) void tick().then(() => rail?.focusMarked());
+      } else if (rail?.holds(focused)) {
+        app.focusSidebar(app.sidebarView);
+      }
     });
   });
 
@@ -96,12 +103,14 @@
   <div class="shell">
     <TopBar />
     <div class="main" bind:this={main}>
+      {#if !app.sidebarShown}<SidebarRail bind:this={rail} />{/if}
       <SplitPane
         collapsed={!app.sidebarShown}
         size={app.settings?.sidebarWidth ?? SIDEBAR.initial}
         limits={SIDEBAR}
         label="Resize sidebar"
         onresize={(sidebarWidth) => app.updateSettings({ sidebarWidth })}
+        oncollapse={() => app.updateSettings({ sidebarHidden: true })}
       >
         {#snippet first()}
           <aside><Sidebar /></aside>

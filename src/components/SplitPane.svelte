@@ -6,6 +6,9 @@
   // caller stores it and passes it back as `size`. `collapsed` hides the sized
   // pane and the separator, so the other takes the whole; the sized one stays
   // mounted, keeping its state for when it's shown again, at the same size.
+  // With `oncollapse`, dragging the separator well past the minimum (half the
+  // minimum again) calls it mid-drag, for the caller to collapse the pane; no size
+  // is reported, so it comes back at the one it had. The keyboard keeps the limits.
   import type { Snippet } from "svelte";
   import { clampPane, type PaneLimits } from "../lib/panes";
 
@@ -24,11 +27,13 @@
     label: string;
     /** Called with the new size after a drag, a key press or a double-click. */
     onresize: (size: number) => void;
+    /** Called when a pointer drag takes the sized pane well below its minimum (snaps it shut). */
+    oncollapse?: () => void;
     first: Snippet;
     second: Snippet;
   }
 
-  let { size, limits, ratio = false, stacked = false, end = false, collapsed = false, label, onresize, first, second }: Props = $props();
+  let { size, limits, ratio = false, stacked = false, end = false, collapsed = false, label, onresize, oncollapse, first, second }: Props = $props();
 
   const id = $props.id();
   let root: HTMLDivElement;
@@ -63,7 +68,14 @@
 
   function onpointermove(e: PointerEvent) {
     if (!grab || !grab.span) return;
-    dragging = roundAndClamp(grab.start + (pointerAt(e) - grab.pointer) / grab.span);
+    const wanted = grab.start + (pointerAt(e) - grab.pointer) / grab.span;
+    if (oncollapse && wanted < limits.min / 2) {
+      grab = null;
+      dragging = null;
+      oncollapse();
+      return;
+    }
+    dragging = roundAndClamp(wanted);
   }
 
   function onpointerup() {

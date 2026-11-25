@@ -33,6 +33,11 @@
     download: "M12 3v12M7 10l5 5 5-5M5 21h14",
     globe: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18",
     sidebar: "M3 5h18v14H3zM9 5v14",
+    // The sidebar going left (the sidebar header's Collapse sidebar).
+    "sidebar-collapse": "M3 5h18v14H3zM9 5v14M16 9l-3 3 3 3",
+    // The sidebar rail's views.
+    explorer: "M13 3H8a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V9zM13 3v6h6M6 7H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1",
+    history: "M3 12a9 9 0 1 0 2.6-6.4L3 8M3 3v5h5M12 7v5l3 2",
     columns: "M3 4h18v16H3zM12 4v16",
     rows: "M3 4h18v16H3zM3 12h18",
     sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",

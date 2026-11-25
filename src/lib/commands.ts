@@ -275,7 +275,8 @@ const COMMANDS: Command[] = [
     run: () => isRequestTab(app.activeTab) && void app.openFileView(app.activeTab.path, { key: app.activeTab.key }),
   },
   {
-    // Hiding never changes the stored width, so showing again restores it.
+    // Switches between open and the rail (on the view the rail marks). Collapsing never
+    // changes the stored width, so opening again restores it.
     id: "toggle-sidebar",
     label: "Show Sidebar",
     shortcut: { mod: true, key: "b" },
@@ -292,8 +293,7 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => {
       showFocusMarks();
-      app.showSidebar("explorer");
-      app.explorerFocusWanted = true;
+      app.focusSidebar("explorer");
     },
   },
   {
@@ -303,8 +303,7 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => {
       showFocusMarks();
-      app.showSidebar("history");
-      app.historyFocusWanted = true;
+      app.focusSidebar("history");
     },
   },
   {

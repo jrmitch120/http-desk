@@ -1,6 +1,7 @@
 // #214: the topbar holds only workspace-level controls, in groups set apart by
 // spacing: [workspace] ……… [environment, Manage environments] · [update progress,
-// while downloading] · [sidebar, Settings]. Import OpenAPI and the theme button aren't
+// while downloading] · [Settings]. The sidebar collapses from its own header (#218,
+// sidebar-rail.spec.ts), so no sidebar toggle. Import OpenAPI and the theme button aren't
 // there; both stay reachable elsewhere (Theme: theme.spec.ts). Problems isn't there
 // either: it's in the window's status bar (#217, app-status-bar.spec.ts).
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -16,9 +17,10 @@ function controls(page: Page): Promise<string[]> {
     .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? e.textContent!.trim()));
 }
 
-test("the topbar holds, in order, the workspace switcher, the environment picker, Manage environments, the sidebar toggle and Settings: nothing else", async ({ page }) => {
+test("the topbar holds, in order, the workspace switcher, the environment picker, Manage environments and Settings: nothing else", async ({ page }) => {
   await openApp(page, "?problems=1");
-  expect(await controls(page)).toEqual(["demo", "Active environment", "Manage environments", "Show sidebar", "Settings"]);
+  expect(await controls(page)).toEqual(["demo", "Active environment", "Manage environments", "Settings"]);
+  await expect(topbar(page).getByRole("button", { name: /sidebar/i })).toHaveCount(0);
   await expect(topbar(page).getByRole("button", { name: /Problems/ })).toHaveCount(0);
   await expect(topbar(page).getByRole("button", { name: /Import OpenAPI/ })).toHaveCount(0);
   await expect(topbar(page).getByRole("button", { name: /Theme/ })).toHaveCount(0);
@@ -29,7 +31,6 @@ test("every control keeps its tooltip with its shortcut hint", async ({ page }) 
   const tips: [Locator, string][] = [
     [topbar(page).getByRole("combobox", { name: "Active environment" }), "Active environment (⌥⌘E)"],
     [topbar(page).getByRole("button", { name: "Manage environments" }), "Manage environments"],
-    [topbar(page).getByRole("button", { name: "Show sidebar" }), "Show sidebar (⌘B)"],
     [topbar(page).getByRole("button", { name: "Settings" }), "Settings (⌘,)"],
   ];
   for (const [control, tip] of tips) {
@@ -43,11 +44,12 @@ test("the environment and view-and-app groups are set apart by more space than t
   await openApp(page);
   const box = async (l: Locator) => (await l.boundingBox())!;
   const env = await box(page.locator(".topbar .env"));
-  const sidebar = await box(topbar(page).getByRole("button", { name: "Show sidebar" }));
+  const manage = await box(topbar(page).getByRole("button", { name: "Manage environments" }));
+  const picker = await box(topbar(page).getByRole("combobox", { name: "Active environment" }));
   const settings = await box(topbar(page).getByRole("button", { name: "Settings" }));
 
-  const within = settings.x - (sidebar.x + sidebar.width);
-  expect(sidebar.x - (env.x + env.width), "environment · view and app").toBeGreaterThan(within);
+  const within = manage.x - (picker.x + picker.width);
+  expect(settings.x - (env.x + env.width), "environment · view and app").toBeGreaterThan(within);
 });
 
 test.describe("Import OpenAPI, outside the topbar", () => {

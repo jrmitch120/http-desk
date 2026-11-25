@@ -403,7 +403,11 @@ Global classes in `src/app.css`, not components:
   conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
   `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
-  `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px).
+  `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px),
+  alongside the Collapse sidebar button after a divider at the header's end. The sidebar
+  header tightens them (20 px wide there, and the view switch's padding) to make room;
+  narrower, the view's own controls wrap onto a second row, and Collapse sidebar stays
+  at the end of the first, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
   the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too,
   is given a fixed width there (room for "99+") so a changing count moves nothing, and whose `aria-label` says the count when there is one. With
@@ -411,9 +415,10 @@ Global classes in `src/app.css`, not components:
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the top bar's sidebar toggle (`e2e/topbar-toggles.spec.ts`) and the window status bar's
-  Problems button (`e2e/app-status-bar.spec.ts`). Pressed icon buttons elsewhere (Wrap
-  lines, the find bar's) keep the accent.
+  the window status bar's Problems button (`e2e/app-status-bar.spec.ts`). The sidebar
+  rail's marked view follows the same rule (the text colour, the other view muted;
+  `e2e/topbar-toggles.spec.ts`). Pressed icon buttons elsewhere (Wrap lines, the find
+  bar's) keep the accent.
 - `.list-row`: a full-width row of a list that opens or shows what it names when
   clicked: the file view's outline (each scrolling to its request), History, the
   Session panel's rows, the Problems panel's entries (each opening the file view at its
@@ -581,13 +586,19 @@ request/response split.
 - Props: `size`, `limits` (`PaneLimits` from `src/lib/panes.ts`: `min`, `max`, `initial`,
   `step`), `ratio?` (size is a 0–1 share instead of px), `stacked?` (one pane above the
   other), `collapsed?` (hides the first pane and the separator), `label` (the
-  separator's accessible name), `onresize(size)`, and `first` / `second` snippets.
-- `collapsed` is how the sidebar hides (View → Show Sidebar, `⌘/Ctrl B`, the top bar's
-  sidebar button). The second pane takes the whole width, and neither the first pane nor
-  the separator can take focus. The first pane stays mounted, so the sidebar keeps its
-  search text and tree, and `size` is untouched, so it comes back at the same width.
-  Whoever hides it moves focus out first if it's inside (App.svelte hands focus in the
-  sidebar or on its separator to the active tab, else the tab bar's New request button).
+  separator's accessible name), `onresize(size)`, `oncollapse?()`, and `first` /
+  `second` snippets.
+- `collapsed` is how the sidebar collapses to its rail (the header's Collapse sidebar
+  button, View → Show Sidebar, `⌘/Ctrl B`, or a drag). The second pane takes the rest of
+  the width, and neither the first pane nor the separator can take focus. The first pane
+  stays mounted, so the sidebar keeps its search text and tree, and `size` is untouched,
+  so it comes back at the same width. Whoever hides it moves focus out first if it's
+  inside (App.svelte hands focus in the sidebar or on its separator to the rail's marked
+  button).
+- With `oncollapse`, a pointer drag that takes the sized pane below half its minimum
+  calls it mid-drag (the sidebar snaps to the rail). It reports no size, so the pane
+  comes back at the last saved one. The keyboard keeps the limits: Home stops at the
+  minimum.
 - Drag it, or focus it and use the arrow keys (Home/End go to the limits).
   Double-clicking resets it to `initial`.
 - Controlled: store the size (both splits keep theirs in AppSettings) and pass it back.
