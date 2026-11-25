@@ -43,7 +43,6 @@
   // remembers the viewer's choices and keeps the body's documents.
   let { tab, result }: { tab: RequestTab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
   const viewId = untrack(() => tab?.id ?? result!.id);
-  const uid = $props.id();
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
@@ -155,11 +154,9 @@
   });
   /** Copy and Save: a response with a body kept, once its send is done. */
   const bodyActions = $derived(!!res && !run?.loading && !noBody);
-  const below = $derived(app.responsePosition === "vertical");
-  /** Where the response is now, what a click does, and the shortcut. */
-  const positionTip = $derived(
-    `${below ? `${responsePosition("vertical").label}. Click to move it to the right` : `${responsePosition("horizontal").label}. Click to move it below`} (${shortcutHint("toggle-response-position")})`,
-  );
+  /** Where a click moves the response: the other position. The pane's place shows where it is now. */
+  const moveTo = $derived(responsePosition(app.responsePosition === "vertical" ? "horizontal" : "vertical"));
+  const moveLabel = $derived(moveTo.value === "vertical" ? "Move response below" : "Move response to the right");
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
@@ -214,21 +211,17 @@
             <button class="icon-btn" aria-label="Save body to file" use:tooltip={filtered ? "Save the full body to a file" : "Save body to file"} onclick={saveBody}><Icon name="download" /></button>
           {/if}
           {#if historyTab}
-            <!-- Only a request tab's pane has the split it moves. Its icon and description
-                 show where the response is now and what a click does. -->
+            <!-- Only a request tab's pane has the split it moves. An action, not a toggle:
+                 neither position is "on", so it has no pressed state, and its icon and name
+                 are where a click moves the response (the Settings choice of the same icon). -->
             <button
-              class="icon-btn quiet"
-              class:active={below}
-              aria-label={responsePosition("vertical").label}
-              aria-pressed={below}
-              aria-describedby="{uid}-position"
-              use:tooltip={positionTip}
+              class="icon-btn"
+              aria-label={moveLabel}
+              use:tooltip={`${moveLabel} (${shortcutHint("toggle-response-position")})`}
               onclick={() => runCommand("toggle-response-position")}
             >
-              <Icon name={responsePosition(app.responsePosition).icon!} />
+              <Icon name={moveTo.icon!} />
             </button>
-            <!-- The tooltip's text, for screen readers without hovering (a hidden node still describes). -->
-            <span id="{uid}-position" hidden>{positionTip}</span>
           {/if}
         </span>
       {/if}

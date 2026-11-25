@@ -405,9 +405,13 @@ Global classes in `src/app.css`, not components:
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
   the top bar's sidebar toggle (`e2e/topbar-toggles.spec.ts`), the window status bar's
-  Problems button (`e2e/app-status-bar.spec.ts`) and the
-  response viewer's response-position toggle (a layout choice, not attention). Pressed
-  icon buttons elsewhere (Wrap lines, the find bar's) keep the accent.
+  Problems button (`e2e/app-status-bar.spec.ts`). Pressed icon buttons elsewhere (Wrap
+  lines, the find bar's) keep the accent.
+  Only an on/off choice is a toggle. A switch between two equal choices, neither of
+  which is "on", is a plain action button with no pressed state, whose icon and
+  `aria-label` name where a click goes: the response viewer's Move response below / to
+  the right, showing the icon of the Settings choice it picks
+  (`e2e/response-position.spec.ts`).
 - `.list-row`: a full-width row of a list that opens or shows what it names when
   clicked: the file view's outline (each scrolling to its request), History, the
   Session panel's rows, the Problems panel's entries (each opening the file view at its
