@@ -1,12 +1,14 @@
-// Hiding and showing the sidebar (#95): ⌘B / Ctrl+B, View → Show Sidebar and the
-// TopBar button. Hiding keeps its width for when it's shown again, the choice
-// survives a reload, and Search Requests and Find usages show it first.
+// Collapsing and opening the sidebar (#95, #218): ⌘B / Ctrl+B and View → Show Sidebar
+// switch it between open and the rail (the header's Collapse sidebar button and the
+// rail itself: sidebar-rail.spec.ts). Collapsing keeps its width for when it opens
+// again, the choice survives a reload, and Search Requests and Find usages open it first.
 import { expect, test, type Page } from "@playwright/test";
 import { menuClick, menuItem, openApp, openRequest, searchBox, treeItem } from "./helpers";
 
 const aside = (page: Page) => page.locator("aside");
 const separator = (page: Page) => page.getByRole("separator", { name: "Resize sidebar" });
-const toggleButton = (page: Page) => page.getByRole("button", { name: "Show sidebar", exact: true });
+const rail = (page: Page) => page.getByRole("navigation", { name: "Sidebar" });
+const railButton = (page: Page, name: string) => rail(page).getByRole("button", { name, exact: true });
 
 async function width(page: Page, selector: string): Promise<number> {
   return Math.round((await page.locator(selector).boundingBox())!.width);
@@ -15,19 +17,19 @@ async function width(page: Page, selector: string): Promise<number> {
 async function expectHidden(page: Page) {
   await expect(aside(page)).toBeHidden();
   await expect(separator(page)).toHaveCount(0);
-  await expect(toggleButton(page)).toHaveAttribute("aria-pressed", "false");
-  // The work area takes the whole width.
-  expect(await width(page, ".work")).toBe(await width(page, ".main"));
+  await expect(rail(page)).toBeVisible();
+  // The work area takes the whole width beside the rail.
+  expect(await width(page, ".work")).toBe((await width(page, ".main")) - (await width(page, "nav.rail")));
 }
 
 async function expectShown(page: Page, px = 280) {
   await expect(aside(page)).toBeVisible();
   await expect(separator(page)).toHaveAttribute("aria-valuenow", String(px));
-  await expect(toggleButton(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(rail(page)).toHaveCount(0);
   expect(await width(page, "aside")).toBe(px);
 }
 
-test("⌘B hides the sidebar and shows it again at the width it had", async ({ page }) => {
+test("⌘B collapses the sidebar to the rail and opens it again at the width it had", async ({ page }) => {
   await openApp(page);
   await separator(page).focus();
   await page.keyboard.press("ArrowRight");
@@ -53,20 +55,6 @@ test("Ctrl+B toggles it on Windows and Linux", async ({ page }) => {
   await expectShown(page);
 });
 
-test("the TopBar button toggles it, shows it pressed while shown, and its tooltip shows the shortcut", async ({ page }) => {
-  await openApp(page);
-  await toggleButton(page).hover();
-  await expect(page.getByRole("tooltip")).toHaveText("Show sidebar (⌘B)");
-  await expect(toggleButton(page)).toHaveClass(/\bactive\b/);
-
-  await toggleButton(page).click();
-  await expectHidden(page);
-  await expect(toggleButton(page)).not.toHaveClass(/\bactive\b/);
-
-  await toggleButton(page).click();
-  await expectShown(page);
-});
-
 test("View → Show Sidebar toggles it", async ({ page }) => {
   await openApp(page);
   await menuClick(page, "toggle-sidebar");
@@ -75,7 +63,7 @@ test("View → Show Sidebar toggles it", async ({ page }) => {
   await expectShown(page);
 });
 
-test("a hidden sidebar stays hidden after a reload, and comes back at its width", async ({ page }) => {
+test("a collapsed sidebar stays collapsed after a reload, and comes back at its width", async ({ page }) => {
   await openApp(page);
   await separator(page).focus();
   await page.keyboard.press("ArrowLeft");
@@ -84,13 +72,13 @@ test("a hidden sidebar stays hidden after a reload, and comes back at its width"
   await expectHidden(page);
 
   await page.reload();
-  await expect(toggleButton(page)).toBeVisible();
+  await expect(rail(page)).toBeVisible();
   await expectHidden(page);
   await page.keyboard.press("Meta+B");
   await expectShown(page, 264);
 });
 
-test("⌘P shows a hidden sidebar and focuses its search box", async ({ page }) => {
+test("⌘P opens a collapsed sidebar and focuses its search box", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+B");
   await expectHidden(page);
@@ -100,7 +88,7 @@ test("⌘P shows a hidden sidebar and focuses its search box", async ({ page }) 
   await expect(searchBox(page)).toBeFocused();
 });
 
-test("Find usages shows a hidden sidebar with its results", async ({ page }) => {
+test("Find usages opens a collapsed sidebar with its results", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+B");
@@ -112,28 +100,36 @@ test("Find usages shows a hidden sidebar with its results", async ({ page }) => 
   await expect(page.getByRole("region", { name: /^Usages of / })).toContainText("Usages of {{baseUrl}}");
 });
 
-test("hiding it while it has focus moves focus to the work area, not the page", async ({ page }) => {
+test("collapsing it while it has focus moves focus to the rail's marked button, not the page", async ({ page }) => {
   await openApp(page);
-  const newRequest = page.getByRole("button", { name: "New request", exact: true });
   await treeItem(page, "api").focus();
   await page.keyboard.press("Meta+B");
   await expectHidden(page);
-  await expect(newRequest).toBeFocused();
+  await expect(railButton(page, "Explorer")).toBeFocused();
 
   // From its separator too.
   await page.keyboard.press("Meta+B");
   await separator(page).focus();
   await page.keyboard.press("Meta+B");
   await expectHidden(page);
-  await expect(newRequest).toBeFocused();
+  await expect(railButton(page, "Explorer")).toBeFocused();
 
-  // With a request open, its tab takes focus.
-  await page.keyboard.press("Meta+B");
-  await openRequest(page, ["api", "pets.http"], "List pets");
-  await treeItem(page, "List pets").focus();
+  // From the History view, to History's button.
+  await page.keyboard.press("Meta+Shift+H");
+  await expect(aside(page)).toBeVisible();
   await page.keyboard.press("Meta+B");
   await expectHidden(page);
-  await expect(page.getByRole("tab", { selected: true })).toBeFocused();
+  await expect(railButton(page, "History")).toBeFocused();
+});
+
+test("collapsing it with focus in the work area leaves focus there", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  const tab = page.getByRole("tab", { selected: true });
+  await tab.focus();
+  await page.keyboard.press("Meta+B");
+  await expectHidden(page);
+  await expect(tab).toBeFocused();
 });
 
 test("⌘B does nothing while a modal is open", async ({ page }) => {

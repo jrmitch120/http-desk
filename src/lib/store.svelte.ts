@@ -254,8 +254,9 @@ class AppStore {
   setResponsePosition(position: ResponsePosition): Promise<boolean> {
     return this.updateSettings({ layout: position });
   }
-  /** Whether the sidebar is on screen. Only a saved `sidebarHidden: true` hides
-   *  it; anything else in a hand-edited settings file shows it (as lib.rs reads it). */
+  /** Whether the sidebar is open (else collapsed to its rail, SidebarRail.svelte). Only a
+   *  saved `sidebarHidden: true` collapses it; anything else in a hand-edited settings
+   *  file opens it (as lib.rs reads it). */
   sidebarShown = $derived(this.settings?.sidebarHidden !== true);
   /** The zoom of the whole interface. A missing, non-numeric or out-of-range
    *  `zoom` in a hand-edited settings file is 100% (as lib.rs reads it). */
@@ -285,7 +286,8 @@ class AppStore {
   panel = $state<PanelId | null>(null);
   /** Set to ask the panel area to put focus in the shown panel's list; it clears this. */
   panelFocusWanted = $state(false);
-  /** What the sidebar shows. Not part of the Layout: each start shows the Explorer. */
+  /** What the sidebar shows, and while collapsed the view its rail marks (what ⌘B
+   *  reopens). Not part of the Layout: each start shows the Explorer. */
   sidebarView = $state<SidebarView>("explorer");
   dialog =$state<DialogState | null>(null);
   private extractForm = new PendingForm<Extraction, ExtractChoice>();
@@ -458,8 +460,9 @@ class AppStore {
       .catch(() => {});
   }
 
-  /** Shows the sidebar if it's hidden, on `view`, for what puts its results or focus there
-   *  (Search Requests and Find usages, in the Explorer; Focus Explorer and Focus History). */
+  /** Opens the sidebar if it's collapsed, on `view`, for what puts its results or focus
+   *  there (Search Requests and Find usages, in the Explorer; Focus Explorer, Focus History
+   *  and the rail's buttons). */
   showSidebar(view: SidebarView = "explorer") {
     this.sidebarView = view;
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });

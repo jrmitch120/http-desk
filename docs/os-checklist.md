@@ -44,7 +44,8 @@ control or the popup layer.
 - [ ] Top bar: environment Select (open it: themed list, check on the current one; ⌘⌥E /
       Ctrl+Alt+E opens it, also from inside an editor, and on a layout where AltGr+E types
       € it still types €; the window title ends with the chosen environment), and
-      the sidebar and Settings buttons. No theme button: View → Theme (System / Light /
+      the Settings button. No sidebar button (the sidebar collapses from its own
+      header). No theme button: View → Theme (System / Light /
       Dark, with a check on the current one) and Settings → Theme switch it. No
       Problems button.
 - [ ] Window status bar: a thin strip along the bottom of the window, below the panel
@@ -61,12 +62,22 @@ control or the popup layer.
 - [ ] Tab bar: method badges, the unsaved dot, overflow when many tabs are open.
 - [ ] Sidebar separator and request/response separator: drag, arrow keys,
       double-click to reset. Same hover highlight on both. Check the vertical layout too.
-- [ ] Hide and show the sidebar with ⌘B / Ctrl+B, View → Show Sidebar and the top bar's
-      sidebar button: the request area takes the full width, the sidebar comes back at its
-      width, and the menu item's tick follows. View → Show Sidebar shows ⌘B on macOS
-      (pressing ⌘B toggles once, not twice), Ctrl+B in the label on Windows, and no
-      shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
-      with the search box focused.
+- [ ] Collapse and open the sidebar with ⌘B / Ctrl+B, View → Show Sidebar and the
+      Collapse sidebar button at the end of its header (after a divider; its tooltip
+      shows ⌘B / Ctrl+B): collapsed, a thin rail with Explorer and History icons in the
+      sidebar's colours, in both themes, with a marker bar beside the view it was last on.
+      The sidebar comes back at its width, and the menu item's tick follows ("open").
+      View → Show Sidebar shows ⌘B on macOS (pressing ⌘B toggles once, not twice), Ctrl+B
+      in the label on Windows, and no shortcut on Linux. Collapsed, it stays collapsed
+      after a restart; ⌘P / Ctrl+P opens it with the search box focused.
+- [ ] Sidebar rail: clicking Explorer or History opens the sidebar on that view; ⌘B /
+      Ctrl+B opens it on the marked one. Tab reaches both rail buttons, and VoiceOver /
+      Narrator / Orca reads the rail as "Sidebar" navigation with the marked one current.
+      Collapsing with focus in the sidebar leaves focus ringed on the marked rail button.
+- [ ] Drag the sidebar's separator past its minimum width: it stops at the minimum, then
+      snaps to the rail about halfway further, and stays on release. Drag the rail's
+      edge outward: the sidebar opens at its last width. At the minimum width the
+      header's Collapse sidebar button is still at the end of its first row.
 - [ ] Move the response with ⌥⌘R / Ctrl+Alt+R, View → Toggle Response Position and the
       move button at the right end of the response's status bar: the response moves between
       the right and below, the View → Response Position tick follows, and the choice
@@ -75,7 +86,7 @@ control or the popup layer.
       Position shows ⌥⌘R on macOS (pressing ⌥⌘R moves it once, not twice), Ctrl+Alt+R
       in the label on Windows, and no shortcut on Linux.
 - [ ] Focus Explorer (⇧⌘E / Ctrl+Shift+E) and Focus History (⇧⌘H / Ctrl+Shift+H), from
-      the URL bar with the sidebar hidden: each shows it on its view with a row ringed,
+      the URL bar with the sidebar collapsed: each opens it on its view with a row ringed,
       and the arrow keys move from there. Each runs once on macOS, not twice.
 
 ## Request editor

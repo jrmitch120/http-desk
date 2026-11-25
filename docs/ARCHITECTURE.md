@@ -995,6 +995,23 @@ Decisions made during implementation, beyond the plan above:
   lists its cookies (`list`, by domain, path and name, each with the Cookies tab's
   attributes and an absolute expiry) and deletes one (by domain, path and name) or
   all, for the Session panel.
+* **The sidebar and its rail** (#218). The sidebar (`Sidebar.svelte`) is the first pane
+  of App.svelte's outer `SplitPane`, its width kept in settings as `sidebarWidth`. It is
+  open or collapsed (`sidebarHidden`, `app.sidebarShown`); collapsed, the pane is hidden
+  but stays mounted, and App.svelte shows the **rail** in its place (`SidebarRail.svelte`,
+  a 40 px `nav` named "Sidebar" in the sidebar's colours) with a button per view,
+  Explorer and History. The view the sidebar was last on (`app.sidebarView`, not saved:
+  each start is on the Explorer) is marked there (`aria-current`, a bar in the text
+  colour), and is what ⌘B / Ctrl+B reopens. The sidebar collapses by the Collapse sidebar
+  button at the end of its header, by `toggle-sidebar` (⌘B / Ctrl+B, View → Show
+  Sidebar, a checked item for "open"), or by dragging its separator well past the
+  minimum width (below half of it: `SplitPane`'s `oncollapse`), which saves no width, so
+  it reopens at the last saved one. It opens by a rail button (on that view, with focus
+  in it), `toggle-sidebar`, dragging the rail's edge outward, or a command that puts
+  focus or results there (Focus Explorer, Focus History, Search Requests, Find usages).
+  Focus follows (App.svelte): collapsing with focus in the sidebar or on its separator
+  moves it to the rail's marked button, and opening with focus on the rail moves it into
+  the opened view. The top bar has no sidebar toggle.
 * **The Session panel** shows what the workspace's Session holds. It lives in the
   panel area below the tabs and requests (`PanelArea.svelte`, docked by App.svelte in a
   stacked `SplitPane` whose sized pane is the second (`end`), its height kept in
@@ -1453,7 +1470,7 @@ Decisions made during implementation, beyond the plan above:
 * **Zoom** (View → Zoom In / Zoom Out / Actual Size, #94) zooms the whole webview
   (`setZoom`), so everything scales together. The levels run from 50% to 150%
   (`ZOOM_LEVELS` in src/lib/zoom.ts): at the minimum window size (960×600) 175% already
-  pushes the TopBar's sidebar and settings buttons out of the window, so 175% and 200%
+  pushed the TopBar's sidebar and settings buttons out of the window, so 175% and 200%
   were left out rather than reworking the layout for them. The setting is `zoom`
   (`1` = 100%); anything that isn't a number in that range is 100%, and a value between
   two levels applies as written. theme.rs applies it to the main window while it's

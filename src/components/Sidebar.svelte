@@ -8,7 +8,7 @@
   import { untrack } from "svelte";
   import { app } from "../lib/store.svelte";
   import { usageRows } from "../lib/usages";
-  import { shortcutHint } from "../lib/commands";
+  import { runCommand, shortcutHint } from "../lib/commands";
   import { plainEnter } from "../lib/platform";
   import { errorMessage } from "../lib/api";
   import { basename, joinPath } from "../lib/http";
@@ -197,17 +197,30 @@
 
 <div class="sidebar">
   <div class="head">
-    <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
-    {#if app.sidebarView === "explorer"}
-      <!-- Beside the switch (small icon buttons): they fit there at the default width (280 px) and wider. -->
-      <div class="actions">
-        <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
-        <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
-        <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
-        <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
-        <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
-      </div>
-    {/if}
+    <!-- The view's own controls wrap onto a second row before the Collapse sidebar
+         button moves: it stays at the end of the first, down to the minimum width. -->
+    <div class="own">
+      <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
+      {#if app.sidebarView === "explorer"}
+        <!-- Beside the switch (small icon buttons): they fit there at the default width (280 px) and wider. -->
+        <div class="actions">
+          <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
+          <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
+          <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
+          <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
+          <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
+        </div>
+      {/if}
+    </div>
+    <div class="end">
+      <span class="divider" aria-hidden="true"></span>
+      <button
+        class="icon-btn small"
+        aria-label="Collapse sidebar"
+        use:tooltip={`Collapse sidebar (${shortcutHint("toggle-sidebar")})`}
+        onclick={() => runCommand("toggle-sidebar")}><Icon name="sidebar-collapse" /></button
+      >
+    </div>
   </div>
 
   {#if app.sidebarView === "history"}
@@ -332,12 +345,40 @@
     display: flex;
     flex-direction: column;
   }
+  /* At the default width (280 px) the switch, the Explorer's buttons and Collapse
+     sidebar share one row, so each is a little tighter here than elsewhere. */
   .head {
+    display: flex;
+    align-items: flex-start;
+    gap: 3px;
+    padding: 8px 4px 4px 8px;
+  }
+  .own {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 6px;
-    padding: 8px 6px 4px 8px;
+    gap: 4px;
+  }
+  .views :global(.segmented button) {
+    padding: 0 var(--space-2);
+  }
+  .actions .icon-btn {
+    width: 20px;
+  }
+  /* As tall as the view switch, so the divider and button centre on its row. */
+  .end {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 28px;
+  }
+  .divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
   }
   .views {
     flex: none;
