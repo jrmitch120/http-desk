@@ -16,17 +16,17 @@
   /** How far (px) the edge is dragged outward before the sidebar opens. */
   const OPEN_DRAG = 8;
 
-  const buttons: Partial<Record<SidebarView, HTMLButtonElement>> = $state({});
+  let nav: HTMLElement;
+  const buttons: Partial<Record<SidebarView, HTMLButtonElement>> = {};
 
   /** Focuses the marked view's button (collapsing with focus in the sidebar lands here). */
   export function focusMarked() {
     buttons[app.sidebarView]?.focus();
   }
 
-  function open(view: SidebarView) {
-    if (view === "explorer") app.explorerFocusWanted = true;
-    else app.historyFocusWanted = true;
-    app.showSidebar(view);
+  /** Whether `el` is in the rail. */
+  export function holds(el: Element | null): boolean {
+    return !!el && nav.contains(el);
   }
 
   let grab: number | null = null;
@@ -45,7 +45,7 @@
   }
 </script>
 
-<nav class="rail" aria-label="Sidebar">
+<nav class="rail" aria-label="Sidebar" bind:this={nav}>
   {#each VIEWS as v (v.value)}
     {@const marked = v.value === app.sidebarView}
     <button
@@ -55,7 +55,7 @@
       aria-current={marked ? "true" : undefined}
       bind:this={buttons[v.value]}
       use:tooltip={marked ? `${v.label} (${shortcutHint("toggle-sidebar")})` : v.label}
-      onclick={() => open(v.value)}
+      onclick={() => app.focusSidebar(v.value)}
     >
       <Icon name={v.icon} size={18} />
     </button>
@@ -68,12 +68,13 @@
   .rail {
     position: relative;
     flex: none;
+    /* As wide as a rail button and a marker's room either side. */
     width: 40px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
-    padding-top: 8px;
+    gap: var(--space-1);
+    padding-top: var(--space-2);
     background: var(--panel);
     border-right: 1px solid var(--border);
   }

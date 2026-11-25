@@ -468,6 +468,14 @@ class AppStore {
     if (!this.sidebarShown) void this.updateSettings({ sidebarHidden: false });
   }
 
+  /** Opens the sidebar on `view` and asks that view's list to take focus (Focus Explorer,
+   *  Focus History, the rail's buttons). */
+  focusSidebar(view: SidebarView) {
+    this.showSidebar(view);
+    if (view === "explorer") this.explorerFocusWanted = true;
+    else this.historyFocusWanted = true;
+  }
+
   /** Applies and saves settings; a failed save shows an error toast and returns false. */
   async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
     if (!this.settings) return false;

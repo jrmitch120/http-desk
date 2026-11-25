@@ -78,7 +78,7 @@ struct AppSettings {
     show_descriptions: bool,
     /// Sidebar width in px. A float, so no value the frontend writes fails to load.
     sidebar_width: f64,
-    /// The sidebar is hidden (View → Show Sidebar). Its width is kept meanwhile.
+    /// The sidebar is collapsed to its rail (View → Show Sidebar). Its width is kept meanwhile.
     #[serde(deserialize_with = "or_default")]
     sidebar_hidden: bool,
     /// The zoom of the whole interface, `1.0` being 100% (View → Zoom In / Zoom Out / Actual Size).

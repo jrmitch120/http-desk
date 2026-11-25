@@ -49,7 +49,7 @@
   let main: HTMLElement | undefined = $state();
   let work: HTMLElement | undefined = $state();
 
-  let rail: { focusMarked: () => void } | undefined = $state();
+  let rail: { focusMarked: () => void; holds: (el: Element | null) => boolean } | undefined = $state();
 
   // Collapsing the sidebar while it or its separator has focus hands focus to the
   // rail's marked button once it's there, never to <body>. Opening it while the rail
@@ -60,10 +60,9 @@
       const focused = document.activeElement;
       if (!main?.contains(focused) || work?.contains(focused)) return;
       if (!shown) {
-        if (!focused?.closest("nav.rail")) void tick().then(() => rail?.focusMarked());
-      } else if (focused?.closest("nav.rail")) {
-        if (app.sidebarView === "explorer") app.explorerFocusWanted = true;
-        else app.historyFocusWanted = true;
+        if (!rail?.holds(focused)) void tick().then(() => rail?.focusMarked());
+      } else if (rail?.holds(focused)) {
+        app.focusSidebar(app.sidebarView);
       }
     });
   });

@@ -293,8 +293,7 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => {
       showFocusMarks();
-      app.showSidebar("explorer");
-      app.explorerFocusWanted = true;
+      app.focusSidebar("explorer");
     },
   },
   {
@@ -304,8 +303,7 @@ const COMMANDS: Command[] = [
     enabled: inWorkspace,
     run: () => {
       showFocusMarks();
-      app.showSidebar("history");
-      app.historyFocusWanted = true;
+      app.focusSidebar("history");
     },
   },
   {

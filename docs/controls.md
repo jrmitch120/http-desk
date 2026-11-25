@@ -404,7 +404,7 @@ Global classes in `src/app.css`, not components:
   `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px),
-  with the Collapse sidebar button after a divider at the header's end. The sidebar
+  alongside the Collapse sidebar button after a divider at the header's end. The sidebar
   header tightens them (20 px wide there, and the view switch's padding) to make room;
   narrower, the view's own controls wrap onto a second row, and Collapse sidebar stays
   at the end of the first, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
