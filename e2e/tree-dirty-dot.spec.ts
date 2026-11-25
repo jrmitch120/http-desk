@@ -4,7 +4,7 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { openApp, openRequest, treeItem, urlBar } from "./helpers";
 
-const right = async (el: Locator) => {
+const rightEdge = async (el: Locator) => {
   const box = (await el.boundingBox())!;
   return Math.round(box.x + box.width);
 };
@@ -21,7 +21,7 @@ test("a file's unsaved dot lines up with its requests' dots, and hovering swaps 
   const reqDot = treeItem(page, "List pets").locator(".dot");
   await expect(fileDot).toBeVisible();
   await expect(reqDot).toBeVisible();
-  expect(await right(fileDot)).toBe(await right(reqDot));
+  expect(await rightEdge(fileDot)).toBe(await rightEdge(reqDot));
 
   const add = file.getByRole("button", { name: "New request in this file" });
   await expect(add).toBeHidden();

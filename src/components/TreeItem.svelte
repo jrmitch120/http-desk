@@ -132,10 +132,11 @@
   <span class="ico" class:file={!isDir}><Icon name={isDir ? (open ? "folder-open" : "folder") : "file"} size={14} /></span>
   <span class="label ellipsis">{node.name}</span>
   {#if !isDir}
-    <!-- The dot and the + share one slot, the dot at its right edge (in line with
-         the request rows' dots); hovering the row swaps the dot for the +. -->
-    <span class="slot">
-      {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes" use:tooltip></span>{/if}
+    <!-- The dot and the + share one slot, as a tab's dot and close button do (TabBar),
+         the dot at its right edge (in line with the request rows' dots); hovering the
+         row swaps the dot for the +, so the dot has no tooltip: it could never show. -->
+    <span class="end">
+      {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes"></span>{/if}
       <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
         <Icon name="plus" size={13} />
       </button>
@@ -252,7 +253,7 @@
     background: var(--accent);
     flex: none;
   }
-  .slot {
+  .end {
     position: relative;
     display: inline-flex;
     align-items: center;
@@ -271,7 +272,7 @@
   .row-item:hover .add {
     visibility: visible;
   }
-  .row-item:hover .slot .dot {
-    visibility: hidden;
+  .row-item:hover .end .dot {
+    display: none;
   }
 </style>
