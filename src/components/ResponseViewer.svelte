@@ -35,7 +35,7 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import RequestHistory from "./RequestHistory.svelte";
   import Self from "./ResponseViewer.svelte";
-  import { responsePosition } from "../lib/responsePositions";
+  import { otherResponsePosition, responsePosition } from "../lib/responsePositions";
   import { HISTORY_BODY_CAP_TEXT, sentAt, TRUNCATED_AT_CAP } from "../lib/history.svelte";
 
   // A tab's response (its latest send), or a run's `result` (the Runner panel), which
@@ -43,6 +43,7 @@
   // remembers the viewer's choices and keeps the body's documents.
   let { tab, result }: { tab: RequestTab; result?: never } | { tab?: never; result: { id: string; run: RunState } } = $props();
   const viewId = untrack(() => tab?.id ?? result!.id);
+  const uid = $props.id();
 
   const run = $derived(tab ? app.runs[tab.id] : result?.run);
   const res = $derived(run?.response);
@@ -154,9 +155,10 @@
   });
   /** Copy and Save: a response with a body kept, once its send is done. */
   const bodyActions = $derived(!!res && !run?.loading && !noBody);
-  /** Where a click moves the response: the other position. The pane's place shows where it is now. */
-  const moveTo = $derived(responsePosition(app.responsePosition === "vertical" ? "horizontal" : "vertical"));
-  const moveLabel = $derived(moveTo.value === "vertical" ? "Move response below" : "Move response to the right");
+  /** Where a click moves the response: the other position. */
+  const moveTo = $derived(responsePosition(otherResponsePosition(app.responsePosition)));
+  /** Where the response is now, what a click does, and the shortcut. */
+  const moveTip = $derived(`${responsePosition(app.responsePosition).label}. Move it ${moveTo.to} (${shortcutHint("toggle-response-position")})`);
   const timeTooltip = $derived(res ? `Time to first byte ${formatDuration(res.ttfbMs)} · Download ${formatDuration(res.timeMs - res.ttfbMs)}` : "");
 </script>
 
@@ -173,7 +175,7 @@
 
 <div class="viewer">
   <!-- The status bar: a request tab's always (its Response/History switch), else a
-       result's once it has a run. Body actions and the Response position toggle sit
+       result's once it has a run. Body actions and the Response position button sit
        together at its right end. -->
   {#if historyTab || run}
     <div class="statusbar">
@@ -216,12 +218,15 @@
                  are where a click moves the response (the Settings choice of the same icon). -->
             <button
               class="icon-btn"
-              aria-label={moveLabel}
-              use:tooltip={`${moveLabel} (${shortcutHint("toggle-response-position")})`}
+              aria-label="Move response {moveTo.to}"
+              aria-describedby="{uid}-position"
+              use:tooltip={moveTip}
               onclick={() => runCommand("toggle-response-position")}
             >
               <Icon name={moveTo.icon!} />
             </button>
+            <!-- The tooltip's text, for screen readers before it shows (a hidden node still describes). -->
+            <span id="{uid}-position" hidden>{moveTip}</span>
           {/if}
         </span>
       {/if}

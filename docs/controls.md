@@ -388,6 +388,13 @@ Global classes in `src/app.css`, not components:
   behaviour is a [Toggle](#toggle).
 - `.icon-btn`: an icon-only button. It needs an `aria-label` and gets its tooltip from it
   (`use:tooltip`). `.active` marks a pressed state; pair it with `aria-pressed`.
+  Only an on/off choice is pressed. A switch between two equal choices, neither of
+  which is "on", is a plain action button with no pressed state: its icon and
+  `aria-label` name where a click goes, and its tooltip says where things are now. So
+  screen readers hear that before the tooltip shows, a hidden node holding the same text
+  is its `aria-describedby`. The response pane's Move response below /
+  to the right shows the icon of the Settings choice it picks
+  (`e2e/response-position.spec.ts`).
   One that's unavailable for a reason (Fold all on a body too large, Wrap lines on one
   with lines too long) takes `aria-disabled="true"` rather than `disabled`, with the
   reason as its tooltip, and its click does nothing: it stays focusable, so the reason
@@ -404,14 +411,9 @@ Global classes in `src/app.css`, not components:
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the top bar's sidebar toggle (`e2e/topbar-toggles.spec.ts`), the window status bar's
+  the top bar's sidebar toggle (`e2e/topbar-toggles.spec.ts`) and the window status bar's
   Problems button (`e2e/app-status-bar.spec.ts`). Pressed icon buttons elsewhere (Wrap
   lines, the find bar's) keep the accent.
-  Only an on/off choice is a toggle. A switch between two equal choices, neither of
-  which is "on", is a plain action button with no pressed state, whose icon and
-  `aria-label` name where a click goes: the response viewer's Move response below / to
-  the right, showing the icon of the Settings choice it picks
-  (`e2e/response-position.spec.ts`).
 - `.list-row`: a full-width row of a list that opens or shows what it names when
   clicked: the file view's outline (each scrolling to its request), History, the
   Session panel's rows, the Problems panel's entries (each opening the file view at its

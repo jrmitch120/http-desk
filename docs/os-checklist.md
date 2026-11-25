@@ -68,11 +68,12 @@ control or the popup layer.
       shortcut on Linux. Hidden, it stays hidden after a restart; ⌘P / Ctrl+P shows it
       with the search box focused.
 - [ ] Move the response with ⌥⌘R / Ctrl+Alt+R, View → Toggle Response Position and the
-      toggle at the right end of the response's status bar: the response moves between
+      move button at the right end of the response's status bar: the response moves between
       the right and below, the View → Response Position tick follows, and the choice
-      stays after a restart. View → Toggle Response Position shows ⌥⌘R on macOS
-      (pressing ⌥⌘R moves it once, not twice), Ctrl+Alt+R in the label on Windows, and
-      no shortcut on Linux.
+      stays after a restart. The button's icon shows where a click moves the response,
+      and it has a background only on hover, in either position. View → Toggle Response
+      Position shows ⌥⌘R on macOS (pressing ⌥⌘R moves it once, not twice), Ctrl+Alt+R
+      in the label on Windows, and no shortcut on Linux.
 - [ ] Focus Explorer (⇧⌘E / Ctrl+Shift+E) and Focus History (⇧⌘H / Ctrl+Shift+H), from
       the URL bar with the sidebar hidden: each shows it on its view with a row ringed,
       and the arrow keys move from there. Each runs once on macOS, not twice.
