@@ -189,3 +189,13 @@ test("the file view marks the lines that behave differently too, each with what 
   await hoverMarkerOf(page, "X-Server: {{$exampleServer}}", fileView);
   await expect(page.getByRole("tooltip")).toHaveText("VS Code doesn't know this variable and sends it as written");
 });
+
+test("Settings → Portability is a section of its own, holding the editor switches", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  // A named region, so a link can open Settings at it (#226; the bottom bar's Portability item, #230).
+  const section = dialog(page, "Settings").getByRole("region", { name: "Portability" });
+  await expect(section.getByRole("switch", { name: "VS Code" })).toBeVisible();
+  await expect(section.getByRole("switch", { name: "Rider" })).toBeVisible();
+  await expect(section.getByRole("switch", { name: "Show portability notes as warnings" })).toBeVisible();
+});

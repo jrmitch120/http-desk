@@ -9,6 +9,7 @@
   import { HISTORY_BODY_CAP_TEXT } from "../lib/history.svelte";
   import NumberField from "./NumberField.svelte";
   import Toggle from "./Toggle.svelte";
+  import { settingsSection } from "../lib/settingsSection.svelte";
 
   const retention = $derived(app.history.retention);
 
@@ -17,18 +18,9 @@
     .historyLocation()
     .then((l) => (location = l))
     .catch(() => {});
-
-  // Opened from "History is off": start at this section.
-  let section: HTMLElement | undefined = $state();
-  $effect(() => {
-    if (app.settingsSection === "history" && section) {
-      section.scrollIntoView({ block: "start" });
-      app.settingsSection = null;
-    }
-  });
 </script>
 
-<section aria-labelledby="settings-history" bind:this={section}>
+<section aria-labelledby="settings-history" use:settingsSection={"history"}>
   <h3 id="settings-history">History</h3>
   <div class="setting">
     <div class="label">

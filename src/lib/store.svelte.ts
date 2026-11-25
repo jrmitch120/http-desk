@@ -176,8 +176,8 @@ export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
-/** A section of the Settings modal that can be opened scrolled into view. */
-export type SettingsSection = "tls" | "history";
+/** A section of the Settings modal that can be opened scrolled into view (`settingsSection.svelte.ts`). */
+export type SettingsSection = "tls" | "history" | "portability";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);

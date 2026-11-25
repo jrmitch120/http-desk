@@ -17,21 +17,13 @@
   import { RESPONSE_POSITIONS } from "../lib/responsePositions";
   import { EDITOR_NAMES, EDITORS, type EditorName } from "../lib/checks";
   import Toggle from "./Toggle.svelte";
+  import { settingsSection } from "../lib/settingsSection.svelte";
 
   // Edits apply straight to the live settings, through the same save path as the
   // top bar: switches on click, text and number fields on blur or Enter.
   const settings = $derived(app.settings);
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-
-  // Opened from a fix-it button (a TLS send error): start at that section.
-  let tlsSection: HTMLElement | undefined = $state();
-  $effect(() => {
-    if (app.settingsSection === "tls" && tlsSection) {
-      tlsSection.scrollIntoView({ block: "start" });
-      app.settingsSection = null;
-    }
-  });
 
   type PathKey = "caCertPath" | "clientCertPath" | "clientKeyPath";
 
@@ -113,8 +105,8 @@
         </div>
       </section>
 
-      <section>
-        <h3>Portability</h3>
+      <section aria-labelledby="settings-portability" use:settingsSection={"portability"}>
+        <h3 id="settings-portability">Portability</h3>
         {#each EDITORS as editor (editor)}
           <div class="setting">
             <div class="label">
@@ -174,7 +166,7 @@
         <p class="note muted">Per-request <span class="mono"># @timeout</span>, <span class="mono"># @connection-timeout</span> and <span class="mono"># @no-redirect</span> directives override these defaults.</p>
       </section>
 
-      <section aria-labelledby="settings-tls" bind:this={tlsSection}>
+      <section aria-labelledby="settings-tls" use:settingsSection={"tls"}>
         <h3 id="settings-tls">TLS</h3>
         <div class="setting">
           <div class="label"><span>Verify server certificates</span></div>
