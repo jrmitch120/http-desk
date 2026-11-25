@@ -136,6 +136,18 @@ test("Add as File variable adds an `@name =` row in Settings and focuses its val
   await expect(grid.locator(".kv-row:not(.ghost) .c-value").nth(1)).toHaveText("k-123");
 });
 
+test("Add as File variable from the .http source leaves it for Settings, on the new row (#216)", async ({ page }) => {
+  await headerValue(page, "{{apiKey}}");
+  await page.locator(".btn", { hasText: ".http" }).click();
+  await expect(page.locator(".under-source")).toBeVisible();
+  await strip(page).getByRole("button", { name: "Add as File variable" }).click();
+
+  await expect(page.locator(".source")).toBeHidden();
+  await expect(subtab(page, "Settings")).toHaveClass(/active/);
+  await expect.poll(() => names(page.getByRole("group", { name: "File variables" }))).toEqual(["petId", "apiKey"]);
+  await expect.poll(() => focusedRow(page)).toEqual({ name: "apiKey", inValue: true });
+});
+
 test("Select environment switches to one that defines it, and the strip updates", async ({ page }) => {
   await headerValue(page, "{{token}}");
   await expect(strip(page)).toHaveCount(0);
