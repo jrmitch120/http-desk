@@ -2,7 +2,7 @@
 // attention, and active icon buttons elsewhere keep their accent look. The topbar's
 // sidebar toggle is gone (#218): the sidebar collapses from its own header to a rail
 // (sidebar-rail.spec.ts), whose marked view follows the same rule: the text colour,
-// with a marker bar in it, the other view muted. (Problems, in the window's status
+// the other view muted. (Problems, in the window's status
 // bar, follows it too: app-status-bar.spec.ts.)
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
@@ -31,7 +31,7 @@ function look(button: Locator): Promise<{ color: string; background: string }> {
 
 for (const theme of ["dark", "light"] as const) {
   test.describe(`${theme} theme`, () => {
-    test("the rail marks its last-used view quietly: the text colour and a marker in it, never accent", async ({ page }) => {
+    test("the rail marks its last-used view quietly: the text colour, never accent", async ({ page }) => {
       await openApp(page, `?theme=${theme}`);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await page.keyboard.press("Meta+B");
@@ -40,7 +40,6 @@ for (const theme of ["dark", "light"] as const) {
       const marked = railButton(page, "Explorer");
       await expect(marked).toHaveAttribute("aria-current", "true");
       await expect.poll(async () => (await look(marked)).color).toBe(text);
-      expect(await marked.evaluate((el) => getComputedStyle(el, "::before").backgroundColor)).toBe(text);
       expect(text).not.toBe(accent);
       await expect.poll(async () => (await look(railButton(page, "History"))).color).toBe(muted);
     });

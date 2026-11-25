@@ -65,7 +65,8 @@ control or the popup layer.
 - [ ] Collapse and open the sidebar with ⌘B / Ctrl+B, View → Show Sidebar and the
       Collapse sidebar button at the end of its header (after a divider; its tooltip
       shows ⌘B / Ctrl+B): collapsed, a thin rail with Explorer and History icons in the
-      sidebar's colours, in both themes, with a marker bar beside the view it was last on.
+      sidebar's colours, in both themes, the view it was last on in the text colour and
+      the other muted (no bar beside it).
       The sidebar comes back at its width, and the menu item's tick follows ("open").
       View → Show Sidebar shows ⌘B on macOS (pressing ⌘B toggles once, not twice), Ctrl+B
       in the label on Windows, and no shortcut on Linux. Collapsed, it stays collapsed

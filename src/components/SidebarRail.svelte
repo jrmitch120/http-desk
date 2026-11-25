@@ -68,7 +68,6 @@
   .rail {
     position: relative;
     flex: none;
-    /* As wide as a rail button and a marker's room either side. */
     width: 40px;
     display: flex;
     flex-direction: column;
@@ -79,25 +78,13 @@
     border-right: 1px solid var(--border);
   }
   .rail-btn {
-    position: relative;
     width: 32px;
     height: 32px;
   }
+  /* The last-used view: the text colour, the other muted. Quiet, not accent: accent
+     is kept for what needs attention (as the status bar's pressed Problems toggle). */
   .rail-btn.marked {
     color: var(--text);
-  }
-  /* The marker: a short bar on the rail's left edge, beside the last-used view. Quiet,
-     in the text colour: accent is kept for what needs attention (as the status bar's
-     pressed Problems toggle). */
-  .rail-btn.marked::before {
-    content: "";
-    position: absolute;
-    left: -4px;
-    top: 7px;
-    bottom: 7px;
-    width: 2px;
-    border-radius: 1px;
-    background: var(--text);
   }
   /* A grab area over the rail's right border, like the sidebar's separator. */
   .edge {

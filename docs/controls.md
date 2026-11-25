@@ -416,7 +416,7 @@ Global classes in `src/app.css`, not components:
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
   the window status bar's Problems button (`e2e/app-status-bar.spec.ts`). The sidebar
-  rail's marked view follows the same rule (the text colour, its marker bar in it;
+  rail's marked view follows the same rule (the text colour, the other view muted;
   `e2e/topbar-toggles.spec.ts`). Pressed icon buttons elsewhere (Wrap lines, the find
   bar's) keep the accent.
 - `.list-row`: a full-width row of a list that opens or shows what it names when

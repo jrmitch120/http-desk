@@ -76,7 +76,7 @@ for (const view of ["Explorer", "History"] as const) {
   });
 }
 
-test("a rail button opens the sidebar on its view with focus in it, and the marker follows the last-used view", async ({ page }) => {
+test("a rail button opens the sidebar on its view with focus in it, and the mark follows the last-used view", async ({ page }) => {
   await openApp(page);
   await collapseButton(page).click();
   await expect(railButton(page, "Explorer")).toHaveAttribute("aria-current", "true");
@@ -140,9 +140,10 @@ for (const theme of ["dark", "light"] as const) {
     const sidebarBg = await aside(page).evaluate((el) => getComputedStyle(el).backgroundColor);
     await page.keyboard.press("Meta+B");
     expect(await rail(page).evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(sidebarBg);
-    const marker = await railButton(page, "Explorer").evaluate((el) => getComputedStyle(el, "::before").backgroundColor);
-    expect(marker).not.toBe("rgba(0, 0, 0, 0)");
-    expect(await railButton(page, "History").evaluate((el) => getComputedStyle(el, "::before").content)).toBe("none");
+    // No bar beside the marked view: its colour marks it (topbar-toggles.spec.ts).
+    for (const name of ["Explorer", "History"] as const) {
+      expect(await railButton(page, name).evaluate((el) => getComputedStyle(el, "::before").content)).toBe("none");
+    }
   });
 }
 

@@ -1001,8 +1001,8 @@ Decisions made during implementation, beyond the plan above:
   but stays mounted, and App.svelte shows the **rail** in its place (`SidebarRail.svelte`,
   a 40 px `nav` named "Sidebar" in the sidebar's colours) with a button per view,
   Explorer and History. The view the sidebar was last on (`app.sidebarView`, not saved:
-  each start is on the Explorer) is marked there (`aria-current`, a bar in the text
-  colour), and is what ⌘B / Ctrl+B reopens. The sidebar collapses by the Collapse sidebar
+  each start is on the Explorer) is marked there (`aria-current`, and the text colour
+  where the other view is muted), and is what ⌘B / Ctrl+B reopens. The sidebar collapses by the Collapse sidebar
   button at the end of its header, by `toggle-sidebar` (⌘B / Ctrl+B, View → Show
   Sidebar, a checked item for "open"), or by dragging its separator well past the
   minimum width (below half of it: `SplitPane`'s `oncollapse`), which saves no width, so
