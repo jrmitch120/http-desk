@@ -122,6 +122,19 @@ test("Edit on a File variable opens the request's Settings with its row focused"
   await expect.poll(() => focusedRow(page)).toEqual({ name: "petId", value: "7" });
 });
 
+test("Edit on a File variable from the .http source leaves it for the request's Settings with its row focused (#216)", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "Get pet image");
+  await page.locator(".btn", { hasText: ".http" }).click();
+
+  await page.locator(".source-code .cm-var", { hasText: "{{petId}}" }).hover();
+  await expect(card(page)).toContainText("from this file");
+  await card(page).getByRole("button", { name: "Edit" }).click();
+  await expect.poll(async () => (await mockState(page, "settings")).showSource).toBe(false);
+  await expect(page.locator(".subtab.active")).toContainText("Settings");
+  await expect.poll(() => focusedRow(page)).toEqual({ name: "petId", value: "1" });
+});
+
 test("Edit on a File variable declared in a request shows its line in that request's .http source", async ({ page }) => {
   await openApp(page, "?requestVars=1");
   await openRequest(page, ["api", "pets.http"], "List pets");

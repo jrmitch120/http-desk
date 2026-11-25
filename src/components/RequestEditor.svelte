@@ -154,9 +154,11 @@
 
   // The selected section lives with the tab, so it outlasts a tab switch and the Layout can save it.
   const section = $derived(tab.section);
-  // "Open request Settings" on a timeout error.
+  // "Open request Settings" on a timeout error, or an Edit / Add of a File variable. The
+  // sections aren't shown in the .http view, so it leaves that view for them.
   $effect(() => {
     if (app.requestSettingsFor === tab.id) {
+      if (untrack(() => app.settings?.showSource === true)) void app.updateSettings({ showSource: false });
       app.showSection(tab.id, "settings");
       app.requestSettingsFor = null;
     }
