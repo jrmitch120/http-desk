@@ -8,7 +8,7 @@ import { bodyEditor, openApp, openRequest, urlBar } from "./helpers";
 
 const moveButton = (scope: Page | Locator) => scope.getByRole("button", { name: /^Move response (below|to the right)$/ });
 const split = (page: Page) => page.getByRole("separator", { name: "Resize request and response" });
-/** The response pane's status bar: the one holding the Response/History switch. */
+/** The response status bar: the one holding the Response/History switch. */
 const statusBar = (page: Page) => page.locator(".statusbar").filter({ has: page.getByRole("radiogroup", { name: "Response pane" }) });
 
 /** Whether the response shows below the request (the split stacked), or on the right. */
@@ -20,7 +20,7 @@ async function expectPosition(page: Page, position: "right" | "below") {
   await expect(moveButton(page)).not.toHaveClass(/\bactive\b/);
 }
 
-/** The move button is the last thing in the status bar, at its right edge. */
+/** The move button is the last thing in the response status bar, at its right edge. */
 async function expectAtRightEnd(page: Page) {
   const bar = statusBar(page);
   await expect(moveButton(bar)).toBeVisible();
@@ -42,7 +42,7 @@ test("the topbar has no Response position button", async ({ page }) => {
   await expect(topbar.getByRole("button", { name: /response/i })).toHaveCount(0);
 });
 
-test("a never-sent request with no History shows the status bar, titled Response, with the move button", async ({ page }) => {
+test("a never-sent request with no History shows the response status bar, titled Response, with the move button", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await expect(page.getByText("Click Send to get a response")).toBeVisible();
@@ -50,7 +50,7 @@ test("a never-sent request with no History shows the status bar, titled Response
   await expectAtRightEnd(page);
 });
 
-test("the move button stays at the status bar's right end while sending, with a response, and showing History", async ({ page }) => {
+test("the move button stays at the response status bar's right end while sending, with a response, and showing History", async ({ page }) => {
   await openApp(page, "?download=slow");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -65,7 +65,7 @@ test("the move button stays at the status bar's right end while sending, with a 
   await expectAtRightEnd(page);
 });
 
-test("the move button stays at the status bar's right end after a cancel", async ({ page }) => {
+test("the move button stays at the response status bar's right end after a cancel", async ({ page }) => {
   await openApp(page, "?download=slow");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");
@@ -74,7 +74,7 @@ test("the move button stays at the status bar's right end after a cancel", async
   await expectAtRightEnd(page);
 });
 
-test("the move button stays at the status bar's right end after a send error", async ({ page }) => {
+test("the move button stays at the response status bar's right end after a send error", async ({ page }) => {
   await openApp(page, "?sendError=dns");
   await openRequest(page, ["api", "pets.http"], "List pets");
   await page.keyboard.press("Meta+Enter");

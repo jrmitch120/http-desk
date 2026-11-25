@@ -2,7 +2,7 @@
 // editor document built for it (raw, Pretty JSON/XML, the Hex dump), the
 // JSONPath filter and its matches, and the shape summary key completion uses.
 // The response viewer owns one per mounted viewer, so the filter's matches
-// outlive a switch to another viewer tab (the status bar's Copy copies them);
+// outlive a switch to another viewer tab (the response status bar's Copy copies them);
 // the documents are kept per editor tab (responseDocs), so nothing is fetched
 // or built twice for the same response.
 

@@ -409,13 +409,13 @@ Global classes in `src/app.css`, not components:
   narrower, the view's own controls wrap onto a second row, and Collapse sidebar stays
   at the end of the first, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
-  the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too,
+  the bottom bar's Problems button (`BottomBar.svelte`), which shows "0" too,
   is given a fixed width there (room for "99+") so a changing count moves nothing, and whose `aria-label` says the count when there is one. With
   `.attention` it's warning-toned while not pressed (there are problems to see), and
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the window status bar's Problems button (`e2e/app-status-bar.spec.ts`). The sidebar
+  the bottom bar's Problems button (`e2e/bottom-bar.spec.ts`). The sidebar
   rail's marked view follows the same rule (the text colour, the other view muted;
   `e2e/topbar-toggles.spec.ts`). Pressed icon buttons elsewhere (Wrap lines, the find
   bar's) keep the accent.
@@ -661,6 +661,34 @@ private env file isn't git-ignored, TLS checks are off, a send failed.
 - Errors are `role="alert"`; warnings and info are `role="status"`.
 - For the outcome of an action ("Saved", "Could not save settings"), use a toast
   instead.
+
+### Bottom bar
+
+`BottomBar.svelte`. The strip along the bottom of the window (a `<footer>`, role
+contentinfo, named "Bottom bar"), always shown. Not the **response status bar**, the
+strip at the top of the response pane (ResponseViewer's status, time, size, Copy and
+Save); "status bar" alone names neither.
+
+- **The rule: items show state only; a click opens the place where the user acts on
+  it** (a panel, a Settings section via `app.openSettings(section)`, a prompt). No item
+  toggles a setting or changes anything by itself, so clicking around the bar never
+  surprises.
+- Two groups. Left: the active tab's file (display only). Right: workspace-wide state,
+  growing leftward from Problems. Its places, reading leftward from the right end:
+  Problems, Runner, Scripts skipped, History off, Portability. Each item goes in its own
+  place in the markup (left to right, the reverse of that list), so adding one touches
+  no other.
+- Problems stays at the right end, in a fixed width: items appearing or a changing
+  count never move it.
+- A clickable item is an owned `.icon-btn.quiet` button, 20 px high in the 24 px bar,
+  with `use:tooltip` naming the state and what clicking opens. A panel's item is a
+  pressed toggle like Problems (`aria-pressed`, `.active`; clicking it while its panel is
+  open closes the panel wherever focus is).
+- A display-only item (the file's facts) is text, not a button, with a tooltip
+  explaining it; give it `tabindex="0"` so keyboard users can reach its tooltip
+  ([Tooltip](#tooltip)).
+- Tones: muted for a quiet fact, warning-toned for something that changes what a send
+  does; accent is not used.
 
 ### CheckStrip
 

@@ -1,15 +1,16 @@
-// #217: a status bar along the bottom of the window, below the panel area, with
-// Problems at its right end, in a fixed-width button so a changing count moves nothing. Problems shows its icon and count, "0" included: muted at
+// #217, #226: the bottom bar along the bottom of the window, below the panel area, with
+// Problems at its right end, in a fixed-width button so a changing count moves nothing.
+// Problems shows its icon and count, "0" included: muted at
 // zero, the count in the warning colour with problems. It opens and closes the
 // Problems panel, wherever focus is, with aria-pressed while the panel is open. The
 // count follows the problems once they've stopped changing for about 300 ms, so it
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
-// nothing in the topbar or the status bar but its own digits.
+// nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest, urlBar } from "./helpers";
 
-const statusBar = (page: Page) => page.getByRole("contentinfo", { name: "Status bar" });
-const problemsButton = (page: Page) => statusBar(page).getByRole("button", { name: /^Show Problems/ });
+const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
+const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
 const problemsPanel = (page: Page) => page.getByRole("region", { name: "Problems" });
 const group = (page: Page, file: string) => problemsPanel(page).getByRole("group", { name: file });
 const fileView = (page: Page) => page.locator(".file-view .file-code");
@@ -50,7 +51,7 @@ test("spans the bottom of the window, below the panel area, with Problems at its
   await expect(problemsPanel(page)).toBeVisible();
 
   const viewport = page.viewportSize()!;
-  const bar = await box(statusBar(page));
+  const bar = await box(bottomBar(page));
   expect(bar.x).toBe(0);
   expect(bar.width).toBe(viewport.width);
   expect(bar.y + bar.height).toBe(viewport.height);
@@ -59,7 +60,7 @@ test("spans the bottom of the window, below the panel area, with Problems at its
   const problems = await box(problemsButton(page));
   expect(bar.x + bar.width - (problems.x + problems.width)).toBeLessThan(16);
   // Nothing else is in it yet.
-  await expect(statusBar(page).getByRole("button")).toHaveCount(1);
+  await expect(bottomBar(page).getByRole("button")).toHaveCount(1);
 });
 
 test("with no problems it shows a muted 0", async ({ page }) => {
@@ -126,18 +127,18 @@ for (const theme of ["dark", "light"] as const) {
   });
 }
 
-test("a changing count moves nothing in the topbar or the status bar but its own digits", async ({ page }) => {
+test("a changing count moves nothing in the topbar or the bottom bar but its own digits", async ({ page }) => {
   await openApp(page, "?problems=1");
   await expect(problemsButton(page)).toHaveText("2");
   const topbarControls = page.getByRole("banner").locator("button, [role=combobox]");
   const places = () => topbarControls.evaluateAll((els) => els.map((e) => JSON.stringify(e.getBoundingClientRect())));
-  const before = { topbar: await places(), bar: await box(statusBar(page)), problems: await box(problemsButton(page)) };
+  const before = { topbar: await places(), bar: await box(bottomBar(page)), problems: await box(problemsButton(page)) };
 
   await problemsButton(page).click();
   await fixBrokenLine(page);
   await expect(problemsButton(page)).toHaveText("1");
   // The panel is open now, so only compare positions that don't depend on it.
-  const bar = await box(statusBar(page));
+  const bar = await box(bottomBar(page));
   expect(await places()).toEqual(before.topbar);
   expect(bar).toEqual(before.bar);
   const after = await box(problemsButton(page));

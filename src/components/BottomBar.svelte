@@ -1,11 +1,21 @@
 <!--
-  The window's status bar: a thin strip along the bottom of the window, below the
-  panel area, always shown. (Not the response pane's status bar, in ResponseViewer.)
-  Problems sits at its right end: its icon and count, "0" included, muted at zero and
+  The bottom bar: a thin strip along the bottom of the window, below the panel area,
+  always shown. (Not the response pane's response status bar, in ResponseViewer.)
+
+  Its rule: items show state only; clicking one opens the place where the user acts on
+  it (a panel, a Settings section, a prompt). No item changes anything by itself.
+
+  Two groups:
+  - Left: the active tab's file (empty for now).
+  - Right: workspace-wide, growing leftward from Problems. Its places, reading leftward
+    from the right end: Problems, Runner, Scripts skipped, History off, Portability. In
+    the markup (left to right) that's the reverse; each item goes in its own place, so
+    adding one touches no other.
+
+  Problems sits at the right end: its icon and count, "0" included, muted at zero and
   warning-toned with problems. The count is the settled one (`app.problems.count`),
   so it doesn't flicker while you type. Its button has a fixed width, room for "99+"
   (counts above 99 show as that), so a changing count moves nothing else in the bar.
-  Later items go to its left.
 -->
 <script lang="ts">
   import { app } from "../lib/store.svelte";
@@ -25,37 +35,59 @@
   }
 </script>
 
-<footer class="app-status-bar" aria-label="Status bar">
-  <button
-    class="icon-btn quiet counted problems"
-    class:active={app.panel === "problems"}
-    class:attention={problems > 0}
-    aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
-    aria-pressed={app.panel === "problems"}
-    use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
-    onclick={toggleProblems}
-  >
-    <Icon name="alert" size={13} /><span class="count">{shownCount}</span>
-  </button>
+<footer class="bottom-bar" aria-label="Bottom bar">
+  <div class="group file">
+    <!-- The active tab's file: line endings, encoding, and in a File view the caret. -->
+  </div>
+  <div class="group workspace">
+    <!-- 5. Portability -->
+    <!-- 4. History off -->
+    <!-- 3. Scripts skipped -->
+    <!-- 2. Runner -->
+    <!-- 1. Problems: the right end. -->
+    <button
+      class="icon-btn quiet counted problems"
+      class:active={app.panel === "problems"}
+      class:attention={problems > 0}
+      aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
+      aria-pressed={app.panel === "problems"}
+      use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
+      onclick={toggleProblems}
+    >
+      <Icon name="alert" size={13} /><span class="count">{shownCount}</span>
+    </button>
+  </div>
 </footer>
 
 <style>
-  .app-status-bar {
+  .bottom-bar {
     height: 24px;
     flex: none;
     display: flex;
     align-items: center;
+    gap: var(--space-2);
     padding: 0 var(--space-1);
     background: var(--panel);
     border-top: 1px solid var(--border);
   }
-  .app-status-bar .icon-btn {
+  .group {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  /* The right group takes the slack, its items packed to the right end. */
+  .group.workspace {
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .bottom-bar .icon-btn {
     height: 20px;
   }
-  /* At the right end, and a fixed width (icon plus "99+"), icon and count centred in
-     it: a longer count shifts them inside the button, never the button's neighbours. */
-  .app-status-bar .problems {
-    margin-left: auto;
+  /* A fixed width (icon plus "99+"), icon and count centred in it: a longer count
+     shifts them inside the button, never the button's neighbours. */
+  .bottom-bar .problems {
+    flex: none;
     width: 52px;
   }
 </style>

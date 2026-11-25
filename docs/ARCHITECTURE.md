@@ -227,7 +227,7 @@ answer per path (`src/lib/problems.svelte.ts`). The check strip lists both as
 
 **The Problems panel** (`ProblemsPanel.svelte`, a panel of the panel area beside the
 Session and Runner panels; View → Show Problems (⇧⌘M / Ctrl+Shift+M), or the Problems
-button at the right end of the window status bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
+button at the right end of the bottom bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
 differently in VS Code or Rider, grouped by file, each entry with its line in the file
 and its message; clicking one opens the file's file view at that line
 (`openFileView(path, { line })`). The shell reads them off the main thread:
@@ -250,7 +250,7 @@ reads the whole workspace when it opens and when the watcher reports a folder, o
 when the watcher reports it, and an open document 300 ms after its edits pause (`track`,
 from an effect, comparing each document's kept JSON strings, `openVersion`, rather than
 stringifying it). It owns the panel's list and the count (`list`, `count`, which
-the window status bar and the panel area's Problems tab read). The list is live; the
+the bottom bar and the panel area's Problems tab read). The list is live; the
 count follows it once it has stopped changing for 300 ms (`PROBLEMS_COUNT_SETTLE_MS`,
 a `Settled` value from `src/lib/settled.svelte.ts` that the store tracks from an effect,
 `settle`), so it doesn't flicker as you type (#217): `src/lib/problemsList.ts` turns each file into its
@@ -1020,15 +1020,25 @@ Decisions made during implementation, beyond the plan above:
   (`app.togglePanel` asks with `panelFocusWanted`, and `PanelArea` focuses the list with
   `focusList`, else the panel itself); with the panel showing and focus elsewhere it only
   focuses the list, and from inside the panel it hides it (#195). Below the panel
-  area, App.svelte puts the **window status bar** (`AppStatusBar.svelte`, a `<footer>`
-  named "Status bar"; not the response pane's status bar in ResponseViewer): a thin
-  strip the full width of the window, always shown, in the theme's panel colours. Problems
-  is at its right end, its icon and count ("0" muted; otherwise the count warning-toned;
-  above 99, "99+"), in a fixed-width button; later items go to its left. It is
-  pressed (`aria-pressed`) while the Problems panel is open; clicking it opens the panel,
-  or closes it wherever focus is (#217). Being fixed-width, a changing count moves
-  nothing (in the top bar, a growing count pushed its neighbours). The top bar keeps only the update
-  progress pill as its status. The
+  area, App.svelte puts the **bottom bar** (`BottomBar.svelte`, a `<footer>`, role
+  contentinfo, named "Bottom bar"; it pairs with the top bar). It is not the **response
+  status bar**, the strip at the top of the response pane in ResponseViewer (status, time,
+  size, Copy and Save); "status bar" alone names neither. The bottom bar is a thin strip
+  the full width of the window, always shown (no setting hides it), in the theme's panel
+  colours. **Its rule: items show state only, and clicking one opens the place where the
+  user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
+  prompt); no item changes a setting or anything else by itself. It has two groups: on
+  the left, the active tab's file (its line endings and encoding, and the caret in a File
+  view); on the right, workspace-wide state, growing leftward from Problems. The right
+  group's places, reading leftward from the right end: **Problems, Runner, Scripts
+  skipped, History off, Portability** (in the markup, left to right, the reverse), each
+  in its own place, so adding one touches no other. Problems is at the right end, its
+  icon and count ("0" muted; otherwise the count warning-toned; above 99, "99+"),
+  centred in a fixed-width button. It is pressed (`aria-pressed`) while the Problems
+  panel is open; clicking it opens the panel, or closes it wherever focus is (#217).
+  Being fixed-width, a changing count moves nothing (in the top bar, a growing count
+  pushed its neighbours), and items appearing to its left never move it. The top bar
+  keeps only the update progress pill as its status. The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
   (`SessionNamedExchanges.svelte`, `SessionGlobals.svelte` and `SessionCookies.svelte`, in that order), each a component that reads its part through
@@ -1119,7 +1129,10 @@ Decisions made during implementation, beyond the plan above:
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
-  turns verification off), the timeouts open the request's Settings, and
+  turns verification off; any Settings section can be opened scrolled into view the same
+  way: `app.openSettings(section)`, with `SettingsSection` naming TLS, History and
+  Portability, and that `<section>` taking `use:settingsSection` from
+  `src/lib/settingsSection.svelte.ts`, which scrolls it in and clears the request), the timeouts open the request's Settings, and
   `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
   `unsentRequest` offers "Send `x` first" for the first request named. They ask through one-shot store
   fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the

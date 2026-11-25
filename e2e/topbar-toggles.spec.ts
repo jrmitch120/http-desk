@@ -2,8 +2,8 @@
 // attention, and active icon buttons elsewhere keep their accent look. The topbar's
 // sidebar toggle is gone (#218): the sidebar collapses from its own header to a rail
 // (sidebar-rail.spec.ts), whose marked view follows the same rule: the text colour,
-// the other view muted. (Problems, in the window's status
-// bar, follows it too: app-status-bar.spec.ts.)
+// the other view muted. (Problems, in the bottom bar, follows it too:
+// bottom-bar.spec.ts.)
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openApp, openRequest } from "./helpers";
 

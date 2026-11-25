@@ -48,7 +48,7 @@ control or the popup layer.
       header). No theme button: View → Theme (System / Light /
       Dark, with a check on the current one) and Settings → Theme switch it. No
       Problems button.
-- [ ] Window status bar: a thin strip along the bottom of the window, below the panel
+- [ ] Bottom bar: a thin strip along the bottom of the window, below the panel
       area, in both themes and at 50% and 150% zoom. Problems at its right end shows
       "0" muted, or the count in the warning colour (open a workspace with a broken
       `.http` file); clicking it opens and closes the Problems panel. Typing in a
@@ -80,7 +80,7 @@ control or the popup layer.
       edge outward: the sidebar opens at its last width. At the minimum width the
       header's Collapse sidebar button is still at the end of its first row.
 - [ ] Move the response with ⌥⌘R / Ctrl+Alt+R, View → Toggle Response Position and the
-      move button at the right end of the response's status bar: the response moves between
+      move button at the right end of the response status bar: the response moves between
       the right and below, the View → Response Position tick follows, and the choice
       stays after a restart. The button's icon shows where a click moves the response,
       and it has a background only on hover, in either position. View → Toggle Response
