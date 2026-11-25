@@ -131,11 +131,15 @@
   <span class="chev"><Icon name={open ? "chevron-down" : "chevron-right"} size={12} /></span>
   <span class="ico" class:file={!isDir}><Icon name={isDir ? (open ? "folder-open" : "folder") : "file"} size={14} /></span>
   <span class="label ellipsis">{node.name}</span>
-  {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes" use:tooltip></span>{/if}
   {#if !isDir}
-    <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
-      <Icon name="plus" size={13} />
-    </button>
+    <!-- The dot and the + share one slot, the dot at its right edge (in line with
+         the request rows' dots); hovering the row swaps the dot for the +. -->
+    <span class="slot">
+      {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes" use:tooltip></span>{/if}
+      <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
+        <Icon name="plus" size={13} />
+      </button>
+    </span>
   {/if}
 </div>
 
@@ -248,12 +252,26 @@
     background: var(--accent);
     flex: none;
   }
+  .slot {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
   .add {
+    position: absolute;
+    inset: 0;
     width: 20px;
     height: 20px;
     visibility: hidden;
   }
   .row-item:hover .add {
     visibility: visible;
+  }
+  .row-item:hover .slot .dot {
+    visibility: hidden;
   }
 </style>
