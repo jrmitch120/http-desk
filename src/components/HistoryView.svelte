@@ -165,7 +165,7 @@
     <div class="text">
       <FilterField label="Filter History" placeholder={workspace ? "Filter by URL, file…" : "Filter by URL, method, file or name"} value={typed} oninput={onTextInput} />
       {#if workspace}
-        <button class="icon-btn" aria-label="Clear workspace history" use:tooltip={"Clear workspace history: delete every entry of this workspace"} disabled={entries?.length === 0 && !filtered} onclick={() => app.history.clearWorkspace()}><Icon name="trash" /></button>
+        <button class="icon-btn small" aria-label="Clear workspace history" use:tooltip={"Clear workspace history: delete every entry of this workspace"} disabled={entries?.length === 0 && !filtered} onclick={() => app.history.clearWorkspace()}><Icon name="trash" /></button>
       {/if}
     </div>
   </div>
@@ -204,10 +204,13 @@
     padding: 6px 16px 2px;
     flex: none;
   }
+  /* In the sidebar, the same side padding as its header (Sidebar.svelte `.head`), and
+     Clear as small as Collapse sidebar: the status dropdown sits under the view switch,
+     Clear under Collapse sidebar, and the filter takes the room between. */
   .narrow .filters {
     flex-wrap: nowrap;
     gap: 6px;
-    padding: 2px 10px 6px;
+    padding: 2px 4px 6px 8px;
   }
   .text {
     display: flex;

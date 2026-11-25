@@ -230,3 +230,29 @@ test.describe("drag to snap", () => {
     await expect(rail(page)).toHaveCount(0);
   });
 });
+
+for (const px of [280, 200]) {
+  test(`on the History view at ${px} px, the filter row lines up with the header: Clear under Collapse sidebar, the status dropdown under the view switch`, async ({ page }) => {
+    await openApp(page);
+    await aside(page).getByRole("radio", { name: "History" }).click();
+    // 280 px is the default; Home takes it to the 200 px minimum.
+    if (px === 200) {
+      await separator(page).focus();
+      await page.keyboard.press("Home");
+    }
+    await expect(separator(page)).toHaveAttribute("aria-valuenow", String(px));
+
+    const box = async (name: string, role: "button" | "combobox" | "radiogroup" = "button") => (await aside(page).getByRole(role, { name, exact: true }).boundingBox())!;
+    const collapse = await box("Collapse sidebar");
+    const clear = await box("Clear workspace history");
+    expect(clear.x).toBeCloseTo(collapse.x, 0);
+    expect(clear.width).toBeCloseTo(collapse.width, 0);
+    const views = await box("Sidebar", "radiogroup");
+    const status = await box("Status class", "combobox");
+    expect(status.x).toBeCloseTo(views.x, 0);
+    // The filter takes the room between them.
+    const filter = (await aside(page).getByRole("textbox", { name: "Filter History" }).boundingBox())!;
+    expect(filter.x).toBeGreaterThan(status.x + status.width);
+    expect(filter.x + filter.width).toBeLessThan(clear.x);
+  });
+}
