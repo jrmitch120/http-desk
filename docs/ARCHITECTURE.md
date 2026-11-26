@@ -1407,7 +1407,7 @@ Decisions made during implementation, beyond the plan above:
   another workspace opens. The bottom bar's **Runner item** (#227, left of Problems)
   follows the same run without the panel: hidden until the workspace has had a run;
   while running, a 48×4 px progress bar (passed, then failed in the warning colour, then
-  the request being sent pulsing slowly, still under reduced motion) and "Run 4/12",
+  the request being sent pulsing slowly, not under reduced motion) and "Run 4/12",
   plus "· 1 failed" warning-toned; once ended, "Run: 11 passed · 1 failed" or "Run
   stopped: 4/12" (Stop, or Stop on first failure). Once an ended run's panel has been
   shown (or was open as it ended) the item is muted until the next run (in memory, in
