@@ -399,15 +399,19 @@ Global classes in `src/app.css`, not components:
   with lines too long) takes `aria-disabled="true"` rather than `disabled`, with the
   reason as its tooltip, and its click does nothing: it stays focusable, so the reason
   is reachable from the keyboard and read out as its description. It shows dimmed.
+  Its size and its icon's are even (the `Icon` default, 16 px, or 12 / 14): centred, an
+  even icon in an even button sits a whole pixel in from each edge. An odd one sits half
+  a pixel in, and is drawn a pixel off, so the hover background is wider on one side.
+  `e2e/icon-centring.spec.ts` checks every icon button on the main screens.
   `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
   conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
   `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must
   fit a narrow pane: the Explorer's buttons beside the sidebar's view switch, which
   `e2e/sidebar-history.spec.ts` checks still fit there at the default width (280 px),
   alongside the Collapse sidebar button after a divider at the header's end. The sidebar
-  header tightens them (20 px wide there, and the view switch's padding) to make room;
-  narrower, the view's own controls wrap onto a second row, and Collapse sidebar stays
-  at the end of the first, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
+  header tightens them (20 px squares there, and the view switch's padding) to make room;
+  narrower, the view's own controls wrap onto a second row with Collapse sidebar and its
+  divider still at their end, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
   the bottom bar's Problems button (`BottomBar.svelte`), which shows "0" too,
   is given a fixed width there (room for "99+") so a changing count moves nothing, and whose `aria-label` says the count when there is one. With

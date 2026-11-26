@@ -41,7 +41,7 @@
       <Icon name={t.kind === "error" ? "alert" : "check"} />
       <span class="selectable">{t.message}</span>
       <button class="icon-btn" aria-label="Dismiss" use:tooltip onclick={() => (app.toasts = app.toasts.filter((x) => x.id !== t.id))}>
-        <Icon name="x" size={13} />
+        <Icon name="x" size={14} />
       </button>
     </div>
   {/each}
@@ -76,9 +76,10 @@
     padding-top: 1px;
   }
   .toast.error { border-left: 3px solid var(--danger); }
-  .toast.error :global(svg) { color: var(--danger); flex: none; margin-top: 2px; }
+  /* The leading icon only (a child of the toast), not Dismiss's. */
+  .toast.error > :global(svg) { color: var(--danger); flex: none; margin-top: 2px; }
   .toast.success { border-left: 3px solid var(--success); }
-  .toast.success :global(svg), .toast.info :global(svg) { color: var(--success); flex: none; margin-top: 2px; }
+  .toast.success > :global(svg), .toast.info > :global(svg) { color: var(--success); flex: none; margin-top: 2px; }
   .toast.info { border-left: 3px solid var(--info); }
   @keyframes slide {
     from { transform: translateY(8px); opacity: 0; }

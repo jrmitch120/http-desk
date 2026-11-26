@@ -38,10 +38,10 @@
               <td class="nowrap">{receivedAt(e.received)}</td>
               <td class="actions">
                 <button class="icon-btn" tabindex="-1" aria-label="Open {e.name}" use:tooltip={"Show this exchange's response"} onclick={() => app.openExchange(e)}>
-                  <Icon name="reveal" size={13} />
+                  <Icon name="reveal" size={14} />
                 </button>
                 <button class="icon-btn" tabindex="-1" aria-label="Forget {e.name}" use:tooltip={"Forget this exchange: its Request variables read as not sent"} onclick={() => app.removeNamedExchange(e)}>
-                  <Icon name="trash" size={13} />
+                  <Icon name="trash" size={14} />
                 </button>
               </td>
             </tr>

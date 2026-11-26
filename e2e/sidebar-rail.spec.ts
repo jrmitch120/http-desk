@@ -55,8 +55,10 @@ test("the collapse button's tooltip shows Ctrl+B on Windows and Linux", async ({
   await expect(page.getByRole("tooltip")).toHaveText("Collapse sidebar (Ctrl+B)");
 });
 
+// Too narrow for one row, the Explorer's actions wrap onto a second row and Collapse
+// sidebar (after its divider) goes with them; History has no actions, so it stays.
 for (const view of ["Explorer", "History"] as const) {
-  test(`the header fits at the minimum width on the ${view} view, the collapse button on its first row`, async ({ page }) => {
+  test(`the header fits at the minimum width on the ${view} view, the collapse button ${view === "Explorer" ? "wrapped with the actions" : "on its first row"}`, async ({ page }) => {
     await openApp(page);
     if (view === "History") await aside(page).getByRole("radio", { name: "History" }).click();
     await separator(page).focus();
@@ -66,9 +68,17 @@ for (const view of ["Explorer", "History"] as const) {
     const sidebar = (await aside(page).boundingBox())!;
     const collapse = (await collapseButton(page).boundingBox())!;
     const views = (await aside(page).getByRole("radiogroup", { name: "Sidebar" }).boundingBox())!;
+    const middle = (b: { y: number; height: number }) => b.y + b.height / 2;
+    // At the end of its row.
     expect(collapse.x + collapse.width).toBeLessThanOrEqual(sidebar.x + sidebar.width);
-    // On the view switch's row.
-    expect(Math.abs(collapse.y + collapse.height / 2 - (views.y + views.height / 2))).toBeLessThanOrEqual(2);
+    expect(collapse.x + collapse.width).toBeGreaterThan(sidebar.x + sidebar.width - 10);
+    if (view === "History") {
+      expect(Math.abs(middle(collapse) - middle(views))).toBeLessThanOrEqual(2);
+    } else {
+      expect(collapse.y).toBeGreaterThan(views.y + views.height);
+      const add = (await aside(page).getByRole("button", { name: "New .http file" }).boundingBox())!;
+      expect(Math.abs(middle(collapse) - middle(add))).toBeLessThanOrEqual(2);
+    }
     // Every header control inside the sidebar.
     for (const box of await aside(page).locator(".head button").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()))) {
       expect(box.right).toBeLessThanOrEqual(sidebar.x + sidebar.width);

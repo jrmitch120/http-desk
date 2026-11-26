@@ -60,7 +60,10 @@
     unfold: "M7 15l5 5 5-5M7 9l5-5 5 5",
     reveal: "M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
   };
-  let { name, size = 15, stroke = 1.8 }: { name: string; size?: number; stroke?: number } = $props();
+  // Even sizes only: centred in an icon button (all even-sized), an even icon sits a
+  // whole pixel in from each edge; an odd one sits half a pixel in and is drawn a
+  // pixel off-centre (docs/controls.md, `.icon-btn`).
+  let { name, size = 16, stroke = 1.8 }: { name: string; size?: number; stroke?: number } = $props();
 </script>
 
 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={stroke} stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
