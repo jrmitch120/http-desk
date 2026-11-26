@@ -11,6 +11,7 @@
   import { menu } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { rovingList } from "../lib/rovingList";
+  import { runSummary } from "../lib/runSummary";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import NumberField from "./NumberField.svelte";
@@ -42,13 +43,11 @@
     return out;
   });
 
-  const count = (state: RunItem["state"]) => runner?.items.filter((i) => i.state === state).length ?? 0;
+  // As the bottom bar's Runner item says it (runSummary), so the two never disagree.
   const summary = $derived.by(() => {
     if (!runner) return "";
-    const parts = [`${count("passed")} passed`, `${count("failed")} failed`];
-    const stopped = count("cancelled") + count("notRun");
-    if (stopped) parts.push(`${stopped} didn't run`);
-    return parts.join(" · ");
+    const { label, failed } = runSummary(runner.items, runner.running);
+    return failed ? `${label} ${failed}` : label;
   });
 
   const STATE_LABEL: Record<RunItem["state"], string> = {
@@ -86,7 +85,7 @@
   <div class="toolbar">
     {#if runner}
       <span class="title selectable">{runner.title}</span>
-      <span class="muted" aria-live="polite">{runner.running ? "Running…" : summary}</span>
+      <span class="muted" aria-live="polite">{summary}</span>
     {:else}
       <span class="muted">Run a file or folder from its menu in the explorer, or select requests there and run the selection from their menu.</span>
     {/if}
