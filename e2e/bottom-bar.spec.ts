@@ -7,7 +7,7 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { activeTab, dialog, hasRing, menuClick, mockState, openApp, openRequest, seedHistory, sentRequests, tab, tabTo, treeMenu, urlBar, writeFileText } from "./helpers";
+import { activeTab, dialog, hasRing, menuClick, mockState, openApp, openRequest, seedHistory, sentRequests, tab, tabTo, treeItem, treeMenu, urlBar, writeFileText } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
@@ -216,7 +216,8 @@ test.describe("the active file's facts", () => {
 
       await treeMenu(page, "pets.http", "View file as text");
       await expect(activeTab(page)).toContainText("pets.http");
-      await expect(fileFacts(page)).toHaveText(facts);
+      // A File view adds the caret (#232).
+      await expect(fileFacts(page)).toHaveText([...facts, "Ln 1, Col 1"]);
     });
   }
 
@@ -284,6 +285,102 @@ test.describe("the active file's facts", () => {
     await page.keyboard.press("Tab");
     await expect(encoding).toBeFocused();
     await expect(page.getByRole("tooltip")).toHaveText("Encoding: UTF-8, starting with a byte order mark (BOM). HttpDesk keeps the BOM on save.");
+  });
+});
+
+// #232: in a File view, the left group also shows the caret's "Ln l, Col c" (1-based,
+// columns counting characters), after the line endings and encoding.
+test.describe("the File view's caret", () => {
+  const PETS = "/demo/api/pets.http";
+  const caret = (page: Page) => fileFacts(page).nth(2);
+  /** The File view's editor line that reads `text`. */
+  const line = (page: Page, text: string) => fileView(page).locator(".cm-line").filter({ hasText: text });
+  /** Opens api/pets.http's File view from the explorer. */
+  async function viewPets(page: Page) {
+    if ((await treeItem(page, "api").getAttribute("aria-expanded")) !== "true") await treeItem(page, "api").click();
+    await treeMenu(page, "pets.http", "View file as text");
+    await expect(activeTab(page)).toContainText("pets.http");
+  }
+
+  test("follows the caret as it moves and as the user types", async ({ page }) => {
+    await openApp(page);
+    await writeFileText(page, PETS, ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join("\n"));
+    await page.reload();
+    await viewPets(page);
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8", "Ln 1, Col 1"]);
+
+    await line(page, "GET {{baseUrl}}/pets").first().click();
+    await page.keyboard.press("End");
+    await expect(caret(page)).toHaveText("Ln 2, Col 21");
+    await page.keyboard.type("/1");
+    await expect(caret(page)).toHaveText("Ln 2, Col 23");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+    await expect(caret(page)).toHaveText("Ln 1, Col 1");
+  });
+
+  test("shows the line a Problems entry jumps to", async ({ page }) => {
+    await openApp(page, "?problems=1");
+    await problemsButton(page).click();
+    await group(page, "problems/upload.http").getByRole("listitem").filter({ hasText: "Line 5" }).click();
+    await expect(activeTab(page)).toContainText("upload.http");
+    await expect(caret(page)).toHaveText("Ln 5, Col 1");
+
+    await group(page, "problems/broken.http").getByRole("listitem").filter({ hasText: "Line 2" }).click();
+    await expect(activeTab(page)).toContainText("broken.http");
+    await expect(caret(page)).toHaveText("Ln 2, Col 1");
+  });
+
+  test("counts columns by characters, not UTF-16 units", async ({ page }) => {
+    await openApp(page);
+    // "😀" is two UTF-16 units: one character.
+    await writeFileText(page, PETS, "### Smile 😀 é\nGET https://api.test/pets\n");
+    await page.reload();
+    await viewPets(page);
+    await line(page, "### Smile").click();
+    await page.keyboard.press("End");
+    await expect(caret(page)).toHaveText("Ln 1, Col 14");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(caret(page)).toHaveText("Ln 1, Col 11");
+  });
+
+  test("a request tab shows no caret: switching from the File view to one removes it", async ({ page }) => {
+    await openApp(page);
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+    await viewPets(page);
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8", "Ln 1, Col 1"]);
+    await tab(page, "List pets").click();
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+  });
+
+  test("a changing position doesn't move the line endings and encoding", async ({ page }) => {
+    await openApp(page);
+    await viewPets(page);
+    await expect(caret(page)).toHaveText("Ln 1, Col 1");
+    const endings = fileGroup(page).getByText("LF", { exact: true });
+    const encoding = fileGroup(page).getByText("UTF-8", { exact: true });
+    const before = [await box(endings), await box(encoding)];
+
+    await line(page, "POST {{baseUrl}}/pets").first().click();
+    await page.keyboard.press("End");
+    await page.keyboard.type("/many/more/characters");
+    await expect(caret(page)).toHaveText(/^Ln \d\d, Col 43$/);
+    expect([await box(endings), await box(encoding)]).toEqual(before);
+  });
+
+  test("its tooltip is reachable from the keyboard", async ({ page }) => {
+    await openApp(page);
+    await viewPets(page);
+    await expect(caret(page)).toHaveText("Ln 1, Col 1");
+    // The editor keeps Tab for itself until Escape.
+    await fileView(page).locator(".cm-content").focus();
+    await page.keyboard.press("Escape");
+    await tabTo(page, caret(page), 20);
+    expect(await hasRing(caret(page))).toBe(true);
+    await expect(page.getByRole("tooltip")).toHaveText("The caret: line 1, column 1. Columns count characters.");
   });
 });
 

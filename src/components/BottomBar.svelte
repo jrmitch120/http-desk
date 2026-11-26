@@ -7,7 +7,8 @@
 
   Two groups:
   - Left: the active tab's file, for a request tab or a File view: its line endings and
-    encoding (`fileFacts`), display only. Empty with no tab open, or while something not
+    encoding (`fileFacts`), and in a File view the caret's "Ln l, Col c" after them
+    (`caretFact`, published by the view's editor), display only. Empty with no tab open, or while something not
     backed by a file covers the tabs (a History entry, a named exchange, the environment
     editor).
   - Right: workspace-wide, growing leftward from Problems. Its places, reading leftward
@@ -40,6 +41,8 @@
   const fileTab = $derived(app.modal === "env" || app.history.openedIn(WORKSPACE_HISTORY) || app.shownExchange ? null : app.activeTab);
   const file = $derived(fileTab ? app.docs[fileTab.path]?.file : undefined);
   const facts = $derived(file && fileFacts(file));
+  // In a File view, the caret's "Ln l, Col c" (#232). Last, so its changing width moves nothing else.
+  const caret = $derived(fileTab?.kind === "file" ? app.fileCaret(fileTab.id) : undefined);
 
   // A pressed toggle: clicking it while the panel is open closes the panel, wherever
   // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
@@ -55,6 +58,7 @@
     {#if facts}
       {@render shownFact(facts.endings)}
       {@render shownFact(facts.encoding)}
+      {#if caret}{@render shownFact(caret)}{/if}
     {/if}
   </div>
   {#snippet shownFact(fact: FileFact)}

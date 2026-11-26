@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileFacts } from "./fileFacts";
+import { caretFact, fileFacts } from "./fileFacts";
 
 describe("fileFacts", () => {
   it("names an LF file's endings, kept as the file has them", () => {
@@ -36,5 +36,22 @@ describe("fileFacts", () => {
       encoding: bom,
     });
     expect(fileFacts({ lineEnding: "crlf", mixedEndings: true, bom: true }).encoding).toEqual(bom);
+  });
+});
+
+describe("caretFact", () => {
+  it("reads the caret's line and column, 1-based, as Ln l, Col c", () => {
+    expect(caretFact({ number: 1, text: "GET https://api.test" }, 0)).toEqual({
+      label: "Ln 1, Col 1",
+      tooltip: "The caret: line 1, column 1. Columns count characters.",
+    });
+    expect(caretFact({ number: 12, text: "GET https://api.test" }, 3).label).toBe("Ln 12, Col 4");
+    expect(caretFact({ number: 3, text: "abc" }, 3).label).toBe("Ln 3, Col 4");
+  });
+  it("counts columns by characters, not UTF-16 units", () => {
+    // "😀" is two UTF-16 units, one character; "é" and "日" one each.
+    const line = { number: 2, text: "# 😀 é 日 x" };
+    expect(caretFact(line, line.text.indexOf("x")).label).toBe("Ln 2, Col 9");
+    expect(caretFact(line, line.text.indexOf("é")).label).toBe("Ln 2, Col 5");
   });
 });

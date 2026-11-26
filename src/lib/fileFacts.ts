@@ -23,3 +23,14 @@ export function fileFacts(file: Pick<HttpFile, "lineEnding" | "mixedEndings" | "
     : { label: "UTF-8", tooltip: "Encoding: UTF-8, without a byte order mark (BOM). HttpDesk saves it without one." };
   return { endings, encoding };
 }
+
+/**
+ * Where the caret is in a File view, as "Ln l, Col c" (1-based): `line` is the caret's
+ * line (its number and text), `offset` the caret's place in it in UTF-16 units, as the
+ * editor counts. The column counts characters, so a line with an emoji reads as other
+ * editors read it.
+ */
+export function caretFact(line: { number: number; text: string }, offset: number): FileFact {
+  const column = [...line.text.slice(0, offset)].length + 1;
+  return { label: `Ln ${line.number}, Col ${column}`, tooltip: `The caret: line ${line.number}, column ${column}. Columns count characters.` };
+}

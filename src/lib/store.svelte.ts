@@ -31,6 +31,7 @@ import { docSnapshot, fileShot, kept, restShot, snapshot } from "./snapshots.sve
 import { forgetEditors } from "./editorMemory";
 import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
+import type { FileFact } from "./fileFacts";
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
@@ -1040,6 +1041,7 @@ class AppStore {
     forgetEditors(id);
     this.unshown.delete(id);
     delete this.fileCursors[id];
+    delete this.fileCarets[id];
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
@@ -1267,6 +1269,19 @@ class AppStore {
    */
   setFileCursor(tabId: string, index: number | null) {
     this.fileCursors[tabId] = index;
+  }
+
+  /** Where each file view's caret is (by tab id), as the bottom bar shows it: "Ln l, Col c". */
+  private fileCarets = $state<Record<string, FileFact>>({});
+
+  /** File view `tabId`'s caret is now at `caret` (`caretFact`). */
+  setFileCaret(tabId: string, caret: FileFact) {
+    if (this.fileCarets[tabId]?.label !== caret.label) this.fileCarets[tabId] = caret;
+  }
+
+  /** Where file view `tabId`'s caret is, once its editor has shown its text. */
+  fileCaret(tabId: string): FileFact | undefined {
+    return this.fileCarets[tabId];
   }
 
   /**

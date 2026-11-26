@@ -1034,7 +1034,12 @@ Decisions made during implementation, beyond the plan above:
   "LF" / "CRLF" / "Mixed", "UTF-8" / "UTF-8 BOM"; the tooltips say HttpDesk keeps them as
   the file has them). They follow the active tab and the document as reloaded from disk;
   the group is empty with no tab open or while a History entry, a named exchange or the
-  environment editor covers the tabs (#231). On the right, workspace-wide state, growing leftward from Problems. The right
+  environment editor covers the tabs (#231). In a File view the caret's "Ln l, Col c"
+  follows them, last so its changing width moves neither: 1-based, the column counting
+  characters (code points), not the editor's UTF-16 units (`caretFact`). The view's
+  editor publishes its main selection head (`app.setFileCaret`, by tab id) from the
+  start and on every selection or text change, so a jump from the Problems panel shows
+  too; a request tab shows none (#232). On the right, workspace-wide state, growing leftward from Problems. The right
   group's places, reading leftward from the right end: **Problems, Runner, Scripts
   skipped, History off, Portability** (in the markup, left to right, the reverse), each
   in its own place, so adding one touches no other. Problems is at the right end, its
