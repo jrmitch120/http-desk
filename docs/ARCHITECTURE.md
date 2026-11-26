@@ -1027,33 +1027,42 @@ Decisions made during implementation, beyond the plan above:
   the full width of the window, always shown (no setting hides it), in the theme's panel
   colours. **Its rule: items show state only, and clicking one opens the place where the
   user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
-  prompt); no item changes a setting or anything else by itself. It has two groups: on
-  the left, the active tab's file (its line endings and encoding, and the caret in a File
+  prompt); no item changes a setting or anything else by itself. **Nothing in it moves**
+  (#235): every workspace item has a permanent slot of fixed width, sized for its widest
+  text, and a condition changes only what's inside it (text and tone, muted in the
+  normal state), never whether it's there or how wide. It has three columns (a grid whose
+  side columns share what's left equally): on the left, the active tab's file (its line endings and encoding, and the caret in a File
   view), for a request tab or a File view, from its document's `lineEnding`,
   `mixedEndings` and `bom` (labels and tooltips from `fileFacts`, src/lib/fileFacts.ts:
   "LF" / "CRLF" / "Mixed", "UTF-8" / "UTF-8 BOM"; the tooltips say HttpDesk keeps them as
   the file has them). They follow the active tab and the document as reloaded from disk;
   the group is empty with no tab open or while a History entry, a named exchange or the
   environment editor covers the tabs (#231). In a File view the caret's "Ln l, Col c"
-  follows them, last so its changing width moves neither: 1-based, the column counting
+  follows them, last and at least as wide as "Ln 9999, Col 999" in tabular numerals, so
+  its changing width moves neither: 1-based, the column counting
   characters (code points), not the editor's UTF-16 units (`caretFact`). The view's
   editor publishes its main selection head (`app.setFileCaret`, by tab id) from the
   start and on every selection or text change, so a jump from the Problems panel shows
-  too; a request tab shows none (#232). On the right, workspace-wide state, growing leftward from Problems. The right
-  group's places, reading leftward from the right end: **Problems, Runner, Scripts
-  skipped, History off, Portability** (in the markup, left to right, the reverse), each
-  in its own place, so adding one touches no other. Problems is at the right end, its
+  too; a request tab shows none (#232). The left group comes and goes, but nothing
+  follows it. In the true centre of the window, the **Runner** (below). On the right,
+  workspace-wide state, left to right: **Portability, History, Scripts, Problems**.
+  Problems is at the right end, its
   icon and count ("0" muted; otherwise the count warning-toned; above 99, "99+"),
   centred in a fixed-width button. It is pressed (`aria-pressed`) while the Problems
   panel is open; clicking it opens the panel, or closes it wherever focus is (#217).
   Being fixed-width, a changing count moves nothing (in the top bar, a growing count
-  pushed its neighbours), and items appearing to its left never move it. **History off**
-  shows, muted (a deliberate choice, not a warning), only while the History switch is
-  off (`app.history.enabled`); clicking it opens Settings at History (#229).
-  **Portability**, the inner end, is always shown: the editors turned on in Settings →
-  Portability ("VS Code", "Rider", "VS Code · Rider"), or "HttpDesk only" with both off,
-  when no Portability notes show (`portabilityLabel`); it opens Settings at Portability
-  (#230). The top bar
+  pushed its neighbours). **History** reads a muted "History" while the History switch
+  is on and "History off" in the text colour (a deliberate choice, not a warning) while
+  it's off (`app.history.enabled`); clicking it opens Settings at History (#229).
+  **Scripts** reads a muted "Scripts" while the workspace is trusted or hasn't been
+  asked, and "Scripts skipped", warning-toned, while "Send without scripts" is in force
+  (`app.trust.skipped`). Skipped, clicking it asks again (`app.trust.askAgain`, #228);
+  otherwise it opens Settings at Trusted workspaces, where trust is kept and revoked
+  (the open workspace is listed there once trusted; the section says HttpDesk asks the
+  first time a send would run a script). **Portability**, at the left end, sized for
+  "VS Code · Rider": the editors turned on in Settings → Portability ("VS Code",
+  "Rider", "VS Code · Rider"), or "HttpDesk only" with both off, when no Portability
+  notes show (`portabilityLabel`); it opens Settings at Portability (#230). The top bar
   keeps only the update progress pill as its status. The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
@@ -1404,14 +1413,17 @@ Decisions made during implementation, beyond the plan above:
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts or
-  another workspace opens. The bottom bar's **Runner item** (#227, left of Problems)
-  follows the same run without the panel: hidden until the workspace has had a run;
-  while running, a 48×4 px progress bar (passed, then failed in the warning colour, then
-  the request being sent pulsing slowly, not under reduced motion) and "Run 4/12",
-  plus "· 1 failed" warning-toned; once ended, "Run: 11 passed · 1 failed" or "Run
-  stopped: 4/12" (Stop, or Stop on first failure). Once an ended run's panel has been
-  shown (or was open as it ended) the item is muted until the next run (in memory, in
-  `BottomBar.svelte`). It toggles the Runner panel like Problems. Its text and the
+  another workspace opens. The bottom bar's **Runner item** (#227, #235, in the centre
+  of the bar) follows the same run without the panel. It is always there: a 160×4 px
+  progress bar and its text, in a fixed width sized for "Run stopped: 99/99 · 99
+  failed" with tabular numerals (longer text is cut off with an ellipsis; the tooltip
+  has the whole). Before the workspace's first run it reads a muted "Runner", the bar
+  empty; while running, the bar shows passed, then failed in the warning colour, then
+  the request being sent pulsing slowly (not under reduced motion), and the text "Run
+  4/12", plus "· 1 failed" warning-toned; once ended, the bar keeps what finished and
+  the text reads "Run: 11 passed · 1 failed" or "Run stopped: 4/12" (Stop, or Stop on
+  first failure). Once an ended run's panel has been shown (or was open as it ended)
+  the item is muted until the next run (in memory, in `BottomBar.svelte`). It toggles the Runner panel like Problems. Its text and the
   panel's summary both come from `runSummary` (`src/lib/runSummary.ts`), so they
   never disagree.
 * **Run folder and Run selection** (#144) use the same list-building and runner. Run

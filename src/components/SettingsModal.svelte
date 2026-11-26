@@ -198,7 +198,7 @@
 
       <HistorySettings />
 
-      <section aria-labelledby="settings-trust">
+      <section aria-labelledby="settings-trust" use:settingsSection={"trust"}>
         <h3 id="settings-trust">Trusted workspaces</h3>
         {#each settings.trustedWorkspaces ?? [] as path (path)}
           <div class="setting" data-testid="trusted-workspace">

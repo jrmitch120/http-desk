@@ -51,6 +51,8 @@ const PETS = "/demo/api/pets.http";
 const pets = (ending: string) => ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join(ending);
 
 const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
+/** The History slot, always shown: "History" while the switch is on, "History off" while it's off. */
+const historyItem = (page: Page) => bottomBar(page).getByRole("button", { name: /^History/ });
 const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
 const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
 
@@ -74,6 +76,8 @@ async function runFile(page: Page, ...path: string[]) {
 }
 
 const scriptsSkipped = (page: Page) => bottomBar(page).getByRole("button", { name: "Scripts skipped" });
+/** The Scripts slot, always shown: "Scripts", or "Scripts skipped" while the skip is in force. */
+const scriptsItem = (page: Page) => bottomBar(page).getByRole("button", { name: /^Scripts/ });
 const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
 const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
 const openHandler = (page: Page) => openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
@@ -106,8 +110,8 @@ test("spans the bottom of the window, below the panel area, with Problems at its
 
   const problems = await box(problemsButton(page));
   expect(bar.x + bar.width - (problems.x + problems.width)).toBeLessThan(16);
-  // By default only Problems and Portability (#230), which is always shown.
-  await expect(bottomBar(page).getByRole("button")).toHaveCount(2);
+  // Every slot is always there (#235): Runner, Portability, History, Scripts, Problems.
+  await expect(bottomBar(page).getByRole("button")).toHaveCount(5);
 });
 
 test("with no problems it shows a muted 0", async ({ page }) => {
@@ -215,7 +219,7 @@ test("the count waits until the problems stop changing, while the panel's list f
   await page.evaluate(() => {
     const w = window as unknown as { changed: { list: number[]; count: { at: number; text: string }[] } };
     w.changed = { list: [], count: [] };
-    const button = document.querySelector("footer button[aria-pressed]")!;
+    const button = document.querySelector("footer button[aria-label^='Show Problems']")!;
     new MutationObserver(() => w.changed.count.push({ at: performance.now(), text: button.textContent!.trim() })).observe(button, { subtree: true, characterData: true, childList: true });
     const panel = document.querySelector("section[aria-label=Problems]")!;
     new MutationObserver(() => w.changed.list.push(performance.now())).observe(panel, { subtree: true, childList: true });
@@ -432,22 +436,21 @@ interface DiskMock {
   changeFile: (path: string, file: unknown) => Promise<void>;
 }
 
-// #227: the Runner item, left of Problems: the current Run's progress and result.
+// #227, #235: the Runner item, in the centre: the current Run's progress and result, or a
+// muted "Runner" before any Run.
 // `?download=slow` makes each send take 2 s; with `?trusted=1&status=404`,
 // samples/jetbrains.http's second request ("Post with JSON body") fails its test.
 test.describe("Runner item", () => {
   const stop = (page: Page) => runnerPanel(page).getByRole("button", { name: "Stop", exact: true }).click();
 
-  test("isn't there before any Run; appears left of Problems, which doesn't move", async ({ page }) => {
+  test("reads Runner before any Run, then the Run, in the same place", async ({ page }) => {
     await openApp(page);
-    await expect(runnerButton(page)).toHaveCount(0);
-    const before = await box(problemsButton(page));
+    await expect(runnerButton(page)).toHaveText("Runner");
+    const before = await box(runnerButton(page));
 
     await runFile(page, "api", "pets.http");
     await expect(runnerButton(page)).toHaveText("Run: 3 passed");
-    const [runner, after] = [await box(runnerButton(page)), await box(problemsButton(page))];
-    expect(after).toEqual(before);
-    expect(runner.x + runner.width).toBeLessThanOrEqual(after.x);
+    expect(await box(runnerButton(page))).toEqual(before);
   });
 
   test("mid-run it shows the progress bar and Run n/m, the request being sent pulsing", async ({ page }) => {
@@ -458,8 +461,8 @@ test.describe("Runner item", () => {
     await expect(fill(page, "sending")).toBeVisible();
     expect(await fill(page, "sending").evaluate((e) => getComputedStyle(e).animationName)).not.toBe("none");
     await expect(runnerButton(page)).toHaveText("Run 1/3", { timeout: 5000 });
-    expect((await box(progress(page))).width).toBe(48);
-    expect((await box(fill(page, "passed"))).width).toBeCloseTo(16, 0);
+    expect((await box(progress(page))).width).toBe(160);
+    expect((await box(fill(page, "passed"))).width).toBeCloseTo(160 / 3, 0);
     await expect(runnerPanel(page)).toContainText("Run 1/3");
   });
 
@@ -479,12 +482,13 @@ test.describe("Runner item", () => {
     const warning = await token(page, "--warning");
     expect(await colour(runnerButton(page).getByText("· 1 failed"))).toBe(warning);
     expect(await fill(page, "failed").evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(warning);
-    expect((await box(fill(page, "failed"))).width).toBeCloseTo(48 / 5, 0);
+    expect((await box(fill(page, "failed"))).width).toBeCloseTo(160 / 5, 0);
     await expect(runnerPanel(page)).toContainText("Run 2/5 · 1 failed");
 
     await stop(page);
     await expect(runnerButton(page)).toHaveText("Run stopped: 2/5 · 1 failed");
-    await expect(progress(page)).toHaveCount(0);
+    // Ended, the bar stays, still: what finished, nothing pulsing.
+    await expect(fill(page, "sending")).toHaveCSS("width", "0px");
     await expect(runnerPanel(page)).toContainText("Run stopped: 2/5 · 1 failed");
   });
 
@@ -493,7 +497,8 @@ test.describe("Runner item", () => {
     await runFile(page, "samples", "jetbrains.http");
 
     await expect(runnerButton(page)).toHaveText("Run: 4 passed · 1 failed");
-    await expect(progress(page)).toHaveCount(0);
+    expect((await box(fill(page, "passed"))).width).toBeCloseTo((160 * 4) / 5, 0);
+    expect((await box(fill(page, "failed"))).width).toBeCloseTo(160 / 5, 0);
     await expect(runnerPanel(page)).toContainText("Run: 4 passed · 1 failed");
   });
 
@@ -564,22 +569,25 @@ test.describe("Runner item", () => {
 
     // The mock opens the demo workspace again for any recent path it doesn't know.
     await menuClick(page, "open-recent:/work/api");
-    await expect(runnerButton(page)).toHaveCount(0);
+    await expect(runnerButton(page)).toHaveText("Runner");
   });
 });
 
-// #228: "Scripts skipped", warning-toned, while the user's "Send without scripts" is in
-// force for the open, untrusted workspace. Clicking it asks again: "Trust this
-// workspace" (stored like "Trust and run") clears it; "Keep skipping" or Cancel leave
-// it. Reopening the workspace ends the skip, and the item with it.
+// #228, #235: the Scripts slot, always shown: a muted "Scripts", and "Scripts skipped",
+// warning-toned, while the user's "Send without scripts" is in force for the open,
+// untrusted workspace. Clicking it then asks again: "Trust this workspace" (stored like
+// "Trust and run") clears it; "Keep skipping" or Cancel leave it. Reopening the
+// workspace ends the skip. Otherwise (trusted, or not asked yet) it opens Settings at
+// Trusted workspaces.
 test.describe("Scripts skipped", () => {
+  const trustSection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Trusted workspaces" });
   const askAgain = (page: Page) => dialog(page, "Trust this workspace?");
 
-  test("not shown before the user is asked, then shown warning-toned after Send without scripts", async ({ page }) => {
+  test("a muted Scripts before the user is asked, then Scripts skipped warning-toned after Send without scripts", async ({ page }) => {
     await openApp(page);
     await openHandler(page);
-    await expect(problemsButton(page)).toBeVisible();
-    await expect(scriptsSkipped(page)).toHaveCount(0);
+    await expect(scriptsItem(page)).toHaveText("Scripts");
+    await expect.poll(() => colour(scriptsItem(page))).toBe(await token(page, "--muted"));
 
     await send(page);
     await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
@@ -591,27 +599,37 @@ test.describe("Scripts skipped", () => {
     await expect(page.getByRole("tooltip")).toContainText("trust");
   });
 
-  test("appears left of Problems, in the right group, and Problems' box doesn't move", async ({ page }) => {
+  test("sits left of Problems, in the right group", async ({ page }) => {
     await openApp(page);
-    await openHandler(page);
-    const before = await box(problemsButton(page));
-    await send(page);
-    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
-    await expect(scriptsSkipped(page)).toBeVisible();
-
-    expect(await box(problemsButton(page))).toEqual(before);
-    const item = await box(scriptsSkipped(page));
-    expect(item.x + item.width).toBeLessThanOrEqual(before.x);
+    const [item, problems] = [await box(scriptsItem(page)), await box(problemsButton(page))];
+    expect(item.x + item.width).toBeLessThanOrEqual(problems.x);
     expect(item.x).toBeGreaterThan((await box(bottomBar(page))).width / 2);
   });
 
-  test("not shown in a trusted workspace", async ({ page }) => {
+  test("a muted Scripts in a trusted workspace", async ({ page }) => {
     await openApp(page, "?trusted=1");
     await openHandler(page);
     await send(page);
     await expect.poll(() => mockState(page, "sentSkipScripts")).toEqual([false]);
-    await expect(scriptsSkipped(page)).toHaveCount(0);
+    await expect(scriptsItem(page)).toHaveText("Scripts");
+    await expect.poll(() => colour(scriptsItem(page))).toBe(await token(page, "--muted"));
   });
+
+  for (const [state, query] of [
+    ["trusted", "?trusted=1"],
+    ["not asked yet", ""],
+  ] as const) {
+    test(`${state}, clicking it opens Settings with Trusted workspaces in view`, async ({ page }) => {
+      await page.setViewportSize({ width: 1000, height: 400 });
+      await openApp(page, query);
+      await scriptsItem(page).hover();
+      await expect(page.getByRole("tooltip")).toContainText("Trusted workspaces");
+      await scriptsItem(page).click();
+      await expect(trustSection(page)).toBeInViewport();
+      if (query) await expect(trustSection(page).getByTestId("trusted-workspace")).toContainText("/demo");
+      else await expect(trustSection(page)).toContainText("No workspace is trusted yet.");
+    });
+  }
 
   test("clicking it asks again; Keep skipping and Cancel leave it", async ({ page }) => {
     await openApp(page);
@@ -643,6 +661,7 @@ test.describe("Scripts skipped", () => {
     await askAgain(page).getByRole("button", { name: "Trust this workspace" }).click();
     await expect(askAgain(page)).toBeHidden();
     await expect(scriptsSkipped(page)).toHaveCount(0);
+    await expect(scriptsItem(page)).toHaveText("Scripts");
     expect((await mockState(page, "settings")).trustedWorkspaces).toEqual(["/demo"]);
 
     await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
@@ -662,11 +681,12 @@ test.describe("Scripts skipped", () => {
     // The mock opens the demo workspace again for any recent path it doesn't know.
     await menuClick(page, "open-recent:/work/api");
     await expect(scriptsSkipped(page)).toHaveCount(0);
+    await expect(scriptsItem(page)).toHaveText("Scripts");
     expect(await sentRequests(page)).toHaveLength(1);
   });
 });
 
-// #230: Portability, always shown at the inner end of the right group, names the editors
+// #230: Portability, always shown at the left end of the right group, names the editors
 // turned on in Settings → Portability, or "HttpDesk only" with both off. It opens Settings there.
 const portabilityButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Portability/ });
 const portabilitySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Portability" });
@@ -723,7 +743,7 @@ test.describe("Portability", () => {
     await expect(page.getByRole("tooltip")).toContainText("Portability notes are off");
   });
 
-  test("sits left of Problems, and a longer label doesn't move Problems", async ({ page }) => {
+  test("sits left of Problems, and a longer label doesn't move or resize it", async ({ page }) => {
     await openApp(page);
     const problems = await box(problemsButton(page));
     const portability = await box(portabilityButton(page));
@@ -734,30 +754,44 @@ test.describe("Portability", () => {
     await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
     await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
     expect(await box(problemsButton(page))).toEqual(problems);
+    expect(await box(portabilityButton(page))).toEqual(portability);
   });
 
-  test("stays the inner end, left of History off", async ({ page }) => {
+  test("stays the left end of the right group, left of History", async ({ page }) => {
     await openApp(page);
-    await flipHistory(page);
-    const off = await box(historyOff(page));
+    const history = await box(historyItem(page));
     const portability = await box(portabilityButton(page));
-    expect(portability.x + portability.width).toBeLessThanOrEqual(off.x);
+    expect(portability.x + portability.width).toBeLessThanOrEqual(history.x);
   });
 });
 
-// #229: History off. Shown only while the History switch is off, muted (a deliberate
-// choice, not a warning). It opens Settings at the History section.
+// #229, #235: the History slot, always shown: a muted "History" while the History switch
+// is on, "History off" in the text colour (a deliberate choice, not a warning) while
+// it's off. It opens Settings at the History section.
 test.describe("History off", () => {
-  test("shows, muted, only while the History switch is off", async ({ page }) => {
+  test("reads a muted History while the switch is on, History off while it's off", async ({ page }) => {
     await openApp(page);
+    const [text, muted] = [await token(page, "--text"), await token(page, "--muted")];
+    await expect(historyItem(page)).toHaveText("History");
     await expect(historyOff(page)).toHaveCount(0);
+    await expect.poll(() => colour(historyItem(page))).toBe(muted);
 
     await flipHistory(page);
     await expect(historyOff(page)).toHaveText("History off");
-    await expect.poll(() => colour(historyOff(page))).toBe(await token(page, "--muted"));
+    await page.mouse.move(0, 300);
+    await expect.poll(() => colour(historyOff(page))).toBe(text);
 
     await flipHistory(page);
+    await expect(historyItem(page)).toHaveText("History");
     await expect(historyOff(page)).toHaveCount(0);
+  });
+
+  test("with the switch on, clicking it opens Settings with the History section in view", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openApp(page);
+    await historyItem(page).click();
+    await expect(historySwitch(page)).toBeInViewport();
+    await expect(historySwitch(page)).toHaveAttribute("aria-checked", "true");
   });
 
   test("clicking it opens Settings with the History section in view", async ({ page }) => {
@@ -782,21 +816,20 @@ test.describe("History off", () => {
     await expect(historySwitch(page)).toBeInViewport();
   });
 
-  test("sits left of Problems, whose box doesn't move when it appears", async ({ page }) => {
+  test("sits left of Problems, and neither moves when the switch goes off", async ({ page }) => {
     await openApp(page);
-    const before = await box(problemsButton(page));
+    const before = { history: await box(historyItem(page)), problems: await box(problemsButton(page)) };
+    expect(before.history.x + before.history.width).toBeLessThanOrEqual(before.problems.x);
 
     await flipHistory(page);
-    const off = await box(historyOff(page));
-    expect(await box(problemsButton(page))).toEqual(before);
-    expect(off.x + off.width).toBeLessThanOrEqual(before.x);
+    expect(await box(historyOff(page))).toEqual(before.history);
+    expect(await box(problemsButton(page))).toEqual(before.problems);
   });
 });
 
-// #225: with every item showing, the right group reads, left to right, Portability,
-// History off, Scripts skipped, Runner, Problems; Problems' box doesn't move as the
-// others appear.
-test("with every item showing, they sit in the agreed order and Problems doesn't move", async ({ page }) => {
+// #225, #235: the right group reads, left to right, Portability, History, Scripts,
+// Problems, with the Runner in the centre, left of them all.
+test("the items sit in the agreed order", async ({ page }) => {
   await openApp(page);
   const before = await box(problemsButton(page));
 
@@ -805,8 +838,100 @@ test("with every item showing, they sit in the agreed order and Problems doesn't
   await runFile(page, "api", "pets.http");
   await expect(runnerButton(page)).toHaveText("Run: 3 passed");
 
-  const items = [portabilityButton(page), historyOff(page), scriptsSkipped(page), runnerButton(page), problemsButton(page)];
+  const items = [runnerButton(page), portabilityButton(page), historyOff(page), scriptsSkipped(page), problemsButton(page)];
   const boxes = await Promise.all(items.map(box));
   for (let i = 1; i < boxes.length; i++) expect(boxes[i - 1].x + boxes[i - 1].width).toBeLessThanOrEqual(boxes[i].x);
   expect(boxes.at(-1)).toEqual(before);
+});
+
+// #235: every item has a permanent slot of fixed width, and a condition changes only
+// what's inside it. The Runner sits in the true centre; the right group holds
+// Portability, History, Scripts and Problems. Nothing in either moves or resizes.
+test("no item moves or resizes as the Run, History, Scripts and Portability change", async ({ page }) => {
+  await openApp(page, "?status=404&download=slow");
+  const slots = [portabilityButton(page), historyItem(page), scriptsItem(page), problemsButton(page), runnerButton(page)];
+  const boxes = () => Promise.all(slots.map(box));
+  await expect(runnerButton(page)).toHaveText("Runner");
+  const before = await boxes();
+  const unmoved = async (when: string) => expect(await boxes(), when).toEqual(before);
+
+  await flipHistory(page);
+  await expect(historyItem(page)).toHaveText("History off");
+  await unmoved("History off");
+  await flipHistory(page);
+  await expect(historyItem(page)).toHaveText("History");
+  await unmoved("History on");
+
+  await skipScripts(page);
+  await expect(scriptsItem(page)).toHaveText("Scripts skipped");
+  await unmoved("Scripts skipped");
+  await scriptsItem(page).click();
+  await dialog(page, "Trust this workspace?").getByRole("button", { name: "Trust this workspace" }).click();
+  await expect(scriptsItem(page)).toHaveText("Scripts");
+  await unmoved("Scripts trusted");
+
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code");
+  await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+  await unmoved("Portability VS Code · Rider");
+
+  await runFile(page, "api", "pets.http");
+  await expect(runnerButton(page)).toHaveText("Run 0/3");
+  await unmoved("running");
+  await expect(runnerButton(page)).toHaveText("Run: 3 passed", { timeout: 10000 });
+  await unmoved("ended");
+
+  await runFile(page, "samples", "jetbrains.http");
+  await expect(runnerButton(page)).toHaveText("Run 2/5 · 1 failed", { timeout: 8000 });
+  await runnerPanel(page).getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(runnerButton(page)).toHaveText("Run stopped: 2/5 · 1 failed");
+  await unmoved("stopped with failures");
+});
+
+test("the Runner sits in the centre of the window, whatever the left group holds", async ({ page }) => {
+  await openApp(page);
+  const width = page.viewportSize()!.width;
+  const centre = async () => {
+    const b = await box(runnerButton(page));
+    return b.x + b.width / 2;
+  };
+  await expect(fileFacts(page)).toHaveCount(0);
+  expect(Math.abs((await centre()) - width / 2)).toBeLessThanOrEqual(1);
+  await treeItem(page, "api").click();
+  await treeMenu(page, "pets.http", "View file as text");
+  await expect(fileFacts(page)).toHaveText(["LF", "UTF-8", "Ln 1, Col 1"]);
+  expect(Math.abs((await centre()) - width / 2)).toBeLessThanOrEqual(1);
+});
+
+test("before any Run, a muted Runner opens the Runner panel", async ({ page }) => {
+  await openApp(page);
+  await expect(runnerButton(page)).toHaveText("Runner");
+  await expect(runnerButton(page)).toHaveAccessibleName("Show Runner");
+  await expect.poll(() => colour(runnerButton(page))).toBe(await token(page, "--muted"));
+  await runnerButton(page).click();
+  await expect(runnerPanel(page)).toBeVisible();
+  await expect(runnerButton(page)).toHaveAttribute("aria-pressed", "true");
+});
+
+test("the Runner's text has a fixed width with tabular numerals, and its progress bar is 160 px", async ({ page }) => {
+  await openApp(page);
+  const text = runnerButton(page).locator(".run-text");
+  expect(await text.evaluate((e) => getComputedStyle(e).fontVariantNumeric)).toBe("tabular-nums");
+  const width = (await box(text)).width;
+  // Sized for the longest text it shows.
+  const longest = await text.evaluate((e) => {
+    const probe = document.createElement("span");
+    probe.textContent = "Run stopped: 99/99 · 99 failed";
+    probe.style.whiteSpace = "nowrap";
+    probe.style.fontVariantNumeric = "tabular-nums";
+    e.after(probe);
+    const w = probe.getBoundingClientRect().width;
+    probe.remove();
+    return w;
+  });
+  expect(Math.abs(width - longest)).toBeLessThanOrEqual(1);
+  expect((await box(progress(page))).width).toBe(160);
 });

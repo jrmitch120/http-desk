@@ -3,23 +3,26 @@
   always shown. (Not the response pane's response status bar, in ResponseViewer.)
 
   Its rule: items show state only; clicking one opens the place where the user acts on
-  it (a panel, a Settings section, a prompt). No item changes anything by itself.
+  it (a panel, a Settings section, a prompt). No item changes anything by itself. And
+  nothing moves (#235): every workspace item has a permanent slot of fixed width, and a
+  condition changes only what's inside its slot, never whether it's there or how wide.
 
-  Two groups:
+  Three columns:
   - Left: the active tab's file, for a request tab or a File view: its line endings and
     encoding (`fileFacts`), and in a File view the caret's "Ln l, Col c" after them
     (`caretFact`, published by the view's editor), display only. Empty with no tab open,
     or while something not backed by a file covers the tabs (a History entry, a named
-    exchange, the environment editor).
-  - Right: workspace-wide, growing leftward from Problems. Its places, reading leftward
-    from the right end: Problems, Runner, Scripts skipped, History off, Portability. In
-    the markup (left to right) that's the reverse; each item goes in its own place, so
-    adding one touches no other.
+    exchange, the environment editor). It comes and goes, but nothing follows it.
+  - Centre: the Runner, in the true centre of the window whatever the sides hold.
+  - Right: workspace-wide, left to right: Portability, History, Scripts, Problems.
 
   Problems sits at the right end: its icon and count, "0" included, muted at zero and
   warning-toned with problems. The count is the settled one (`app.problems.count`),
   so it doesn't flicker while you type. Its button has a fixed width, room for "99+"
-  (counts above 99 show as that), so a changing count moves nothing else in the bar.
+  (counts above 99 show as that).
+
+  A slot's fixed width comes from its widest text (`data-widest`, laid out invisibly
+  under the shown text), so it follows the font rather than a guessed pixel width.
 -->
 <script lang="ts">
   import { app } from "../lib/store.svelte";
@@ -42,7 +45,7 @@
   const fileTab = $derived(app.modal === "env" || app.history.openedIn(WORKSPACE_HISTORY) || app.shownExchange ? null : app.activeTab);
   const file = $derived(fileTab ? app.docs[fileTab.path]?.file : undefined);
   const facts = $derived(file && fileFacts(file));
-  // In a File view, the caret's "Ln l, Col c" (#232). Last, so its changing width moves nothing else.
+  // In a File view, the caret's "Ln l, Col c" (#232). Last, with a minimum width, so a changing position moves nothing.
   const caret = $derived(fileTab?.kind === "file" ? app.fileCaret(fileTab.id) : undefined);
 
   // A panel item is a pressed toggle: clicking it while its panel is open closes the
@@ -53,7 +56,8 @@
     else runCommand(`toggle-${panel}`);
   }
 
-  // The Runner item: the current Run (until the next, or the workspace closes).
+  // The Runner slot: the current Run (until the next, or the workspace closes), or a
+  // muted "Runner" before any.
   const run = $derived(app.runner);
   const summary = $derived(run && runSummary(run.items, run.running));
   // Once an ended Run's results have been seen in the Runner panel (shown after it
@@ -62,6 +66,27 @@
   $effect(() => {
     if (run && !run.running && app.panel === "runner") seenRun = run.runId;
   });
+  const runnerMuted = $derived(!run || !summary || (!run.running && seenRun === run.runId));
+
+  // The Scripts slot. Skipped: clicking asks again to trust the workspace. Otherwise
+  // (trusted, or not asked yet) it opens Settings at Trusted workspaces, where the trust
+  // is kept and revoked: the open workspace is listed there once trusted, and the
+  // section says HttpDesk asks the first time a send would run a script.
+  const skipped = $derived(app.trust.skipped);
+  const trusted = $derived(app.trust.trusted);
+  const scriptsTooltip = $derived(
+    skipped
+      ? "Scripts skipped: sends in this workspace skip their scripts. Click to trust it, or keep skipping."
+      : trusted
+        ? "Scripts run: this workspace is trusted. Click to see it in Settings → Trusted workspaces."
+        : "Scripts: this workspace isn't trusted yet; HttpDesk asks the first time a send would run a script. Click to open Settings → Trusted workspaces.",
+  );
+  function openScripts() {
+    if (skipped) app.trust.askAgain();
+    else app.openSettings("trust");
+  }
+
+  const historyOn = $derived(app.history.enabled);
 </script>
 
 <footer class="bottom-bar" aria-label="Bottom bar">
@@ -70,15 +95,38 @@
     {#if facts}
       {@render shownFact(facts.endings)}
       {@render shownFact(facts.encoding)}
-      {#if caret}{@render shownFact(caret)}{/if}
+      {#if caret}{@render shownFact(caret, "Ln 9999, Col 999")}{/if}
     {/if}
   </div>
-  {#snippet shownFact(fact: FileFact)}
+  {#snippet shownFact(fact: FileFact, atLeast?: string)}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex: focusable so keyboard users reach its tooltip (controls.md, Bottom bar) -->
-    <span class="fact" tabindex="0" use:tooltip={fact.tooltip}>{fact.label}</span>
+    <span class="fact" class:at-least={atLeast} data-widest={atLeast} tabindex="0" use:tooltip={fact.tooltip}>{#if atLeast}<span class="shown">{fact.label}</span>{:else}{fact.label}{/if}</span>
   {/snippet}
+  <div class="group run">
+    <!-- The Runner, in the centre: a progress bar and its text, both always there. -->
+    <button
+      class="icon-btn quiet runner"
+      class:active={app.panel === "runner"}
+      class:muted={runnerMuted}
+      aria-label={summary ? `Show Runner: ${summary.text}` : "Show Runner"}
+      aria-pressed={app.panel === "runner"}
+      use:tooltip={summary ? `${summary.text}. Opens the Runner panel` : "Runner: no Run yet. Opens the Runner panel"}
+      onclick={() => togglePanelItem("runner")}
+    >
+      <span class="run-progress" aria-hidden="true">
+        {#if summary}
+          <span class="passed" style:width="{summary.passedShare * 100}%"></span>
+          <span class="failed" style:width="{summary.failedShare * 100}%"></span>
+          <span class="sending" style:width="{summary.sendingShare * 100}%"></span>
+        {/if}
+      </span>
+      <span class="slot run-text" data-widest="Run stopped: 99/99 · 99 failed">
+        <span class="shown">{#if summary}{summary.label}{#if summary.failed}{" "}<span class="failed-count">{summary.failed}</span>{/if}{:else}Runner{/if}</span>
+      </span>
+    </button>
+  </div>
   <div class="group workspace">
-    <!-- 5. Portability: always shown, the editors whose Portability notes show (Settings → Portability). -->
+    <!-- Portability: the editors whose Portability notes show (Settings → Portability). -->
     <button
       class="icon-btn quiet label-item portability"
       aria-label={`Portability: ${portability}`}
@@ -87,50 +135,31 @@
         : `Portability notes show for ${portability}. Change the editors in Settings`}
       onclick={() => app.openSettings("portability")}
     >
-      {portability}
+      <span class="slot" data-widest="VS Code · Rider"><span class="shown">{portability}</span></span>
     </button>
-    <!-- 4. History off: only while the History switch is off; muted, a deliberate choice. -->
-    {#if !app.history.enabled}
-      <button
-        class="icon-btn quiet label-item history-off"
-        use:tooltip={"History is off: sends aren't recorded in History. Click to open the setting."}
-        onclick={() => app.openSettings("history")}
-      >
-        History off
-      </button>
-    {/if}
-    <!-- 3. Scripts skipped -->
-    {#if app.trust.skipped}
-      <button
-        class="icon-btn quiet label-item scripts-skipped"
-        use:tooltip={"Scripts skipped: sends in this workspace skip their scripts. Click to trust it, or keep skipping."}
-        onclick={() => app.trust.askAgain()}
-      >
-        Scripts skipped
-      </button>
-    {/if}
-    <!-- 2. Runner -->
-    {#if run && summary}
-      <button
-        class="icon-btn quiet counted runner"
-        class:active={app.panel === "runner"}
-        class:seen={!run.running && seenRun === run.runId}
-        aria-label={`Show Runner: ${summary.text}`}
-        aria-pressed={app.panel === "runner"}
-        use:tooltip={`${summary.text}. Opens the Runner panel`}
-        onclick={() => togglePanelItem("runner")}
-      >
-        {#if run.running}
-          <span class="run-progress" aria-hidden="true">
-            <span class="passed" style:width="{summary.passedShare * 100}%"></span>
-            <span class="failed" style:width="{summary.failedShare * 100}%"></span>
-            <span class="sending" style:width="{summary.sendingShare * 100}%"></span>
-          </span>
-        {/if}
-        <span class="count">{summary.label}{#if summary.failed}{" "}<span class="failed-count">{summary.failed}</span>{/if}</span>
-      </button>
-    {/if}
-    <!-- 1. Problems: the right end. -->
+    <!-- History: muted "History" while the switch is on, "History off" while it's off. -->
+    <button
+      class="icon-btn quiet label-item history"
+      class:off={!historyOn}
+      aria-label={historyOn ? "History: on" : "History off"}
+      use:tooltip={historyOn
+        ? "History is on: sends are recorded in History. Click to open the setting."
+        : "History is off: sends aren't recorded in History. Click to open the setting."}
+      onclick={() => app.openSettings("history")}
+    >
+      <span class="slot" data-widest="History off"><span class="shown">{historyOn ? "History" : "History off"}</span></span>
+    </button>
+    <!-- Scripts: muted "Scripts", or "Scripts skipped" warning-toned while the skip is in force. -->
+    <button
+      class="icon-btn quiet label-item scripts"
+      class:skipped
+      aria-label={skipped ? "Scripts skipped" : trusted ? "Scripts: trusted" : "Scripts: not trusted yet"}
+      use:tooltip={scriptsTooltip}
+      onclick={openScripts}
+    >
+      <span class="slot" data-widest="Scripts skipped"><span class="shown">{skipped ? "Scripts skipped" : "Scripts"}</span></span>
+    </button>
+    <!-- Problems: the right end. -->
     <button
       class="icon-btn quiet counted problems"
       class:active={app.panel === "problems"}
@@ -146,12 +175,14 @@
 </footer>
 
 <style>
+  /* Three columns: the sides share what's left equally, so the Runner is centred. */
   .bottom-bar {
     height: 24px;
     flex: none;
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-3);
     padding: 0 var(--space-1);
     background: var(--panel);
     border-top: 1px solid var(--border);
@@ -159,16 +190,18 @@
   .group {
     display: flex;
     align-items: center;
-    gap: var(--space-1);
+    gap: var(--space-3);
     min-width: 0;
   }
-  /* The right group takes the slack, its items packed to the right end. */
+  .group.file {
+    overflow: hidden;
+  }
   .group.workspace {
-    flex: 1;
     justify-content: flex-end;
   }
   /* A display-only fact: muted text, a focus ring for keyboard users reaching its tooltip. */
   .fact {
+    flex: none;
     padding: 0 var(--space-1);
     border-radius: var(--radius-sm);
     color: var(--muted);
@@ -180,10 +213,23 @@
     outline: var(--focus-ring);
     outline-offset: var(--focus-ring-offset);
   }
+  /* At least as wide as its widest text (the caret: "Ln 9999, Col 999"), with tabular numerals. */
+  .fact.at-least {
+    display: inline-grid;
+    font-variant-numeric: tabular-nums;
+  }
+  .fact.at-least::before,
+  .fact.at-least > .shown {
+    grid-area: 1 / 1;
+  }
+  .fact.at-least::before {
+    content: attr(data-widest);
+    visibility: hidden;
+  }
   .bottom-bar .icon-btn {
     height: 20px;
   }
-  /* Text labels, not icons: as wide as their text. */
+  /* Text labels, not icons. */
   .bottom-bar .label-item {
     flex: none;
     width: auto;
@@ -191,34 +237,60 @@
     font-size: 11.5px;
     white-space: nowrap;
   }
-  /* Scripts skipped is warning-toned. */
-  .bottom-bar .scripts-skipped {
+  /* A fixed-width slot: exactly as wide as its widest text, laid out invisibly; the
+     shown text sits over it, cut off with an ellipsis if it's ever longer. */
+  .slot {
+    position: relative;
+    display: inline-block;
+    white-space: nowrap;
+  }
+  .slot::before {
+    content: attr(data-widest);
+    visibility: hidden;
+  }
+  .slot > .shown {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+  }
+  .bottom-bar .history.off {
+    color: var(--text);
+  }
+  .bottom-bar .scripts.skipped {
     color: var(--warning);
   }
-  /* A fixed width (icon plus "99+"), icon and count centred in it: a longer count
-     shifts them inside the button, never the button's neighbours. */
+  /* A fixed width (icon plus "99+"), icon and count centred in it. */
   .bottom-bar .problems {
     flex: none;
     width: 52px;
   }
-  /* The Runner item: in the text colour while its Run wants a look, muted once an
-     ended Run's results have been seen; failures warning-toned. */
+  /* The Runner: in the text colour while its Run wants a look; muted with no Run yet,
+     or once an ended Run's results have been seen. Failures warning-toned. */
   .bottom-bar .runner {
     flex: none;
+    width: auto;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+    font-size: 11.5px;
     color: var(--text);
   }
-  .bottom-bar .runner.seen:not(.active):not(:hover) {
+  .bottom-bar .runner.muted:not(.active):not(:hover) {
     color: var(--muted);
+  }
+  .run-text {
+    font-variant-numeric: tabular-nums;
   }
   .runner .failed-count {
     color: var(--warning);
   }
-  /* A small determinate progress bar: finished requests (passed, then failed in the
-     warning colour) out of all, then the request being sent, pulsing slowly. Nothing
-     else in the bar animates, and nothing does under reduced motion. */
+  /* A determinate progress bar: finished requests (passed, then failed in the warning
+     colour) out of all, then the request being sent, pulsing slowly. Nothing else in
+     the bar animates, and nothing does under reduced motion. */
   .run-progress {
     display: flex;
-    width: 48px;
+    width: 160px;
     height: 4px;
     flex: none;
     border-radius: 2px;
