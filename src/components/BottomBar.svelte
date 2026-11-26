@@ -103,7 +103,7 @@
     <span class="fact" class:at-least={atLeast} data-widest={atLeast} tabindex="0" use:tooltip={fact.tooltip}>{#if atLeast}<span class="shown">{fact.label}</span>{:else}{fact.label}{/if}</span>
   {/snippet}
   <div class="group run">
-    <!-- The Runner, in the centre: a progress bar and its text, both always there. -->
+    <!-- The Runner, in the centre: one fixed-width button, compact text over a progress line along its bottom edge. -->
     <button
       class="icon-btn quiet runner"
       class:active={app.panel === "runner"}
@@ -113,16 +113,14 @@
       use:tooltip={summary ? `${summary.text}. Opens the Runner panel` : "Runner: no Run yet. Opens the Runner panel"}
       onclick={() => togglePanelItem("runner")}
     >
-      <span class="run-progress" aria-hidden="true">
-        {#if summary}
+      <span class="shown">{#if summary}{summary.compact.label}{#if summary.compact.failed}{" "}<span class="failed-count">{summary.compact.failed}</span>{/if}{:else}Runner{/if}</span>
+      {#if summary}
+        <span class="run-line" aria-hidden="true">
           <span class="passed" style:width="{summary.passedShare * 100}%"></span>
           <span class="failed" style:width="{summary.failedShare * 100}%"></span>
           <span class="sending" style:width="{summary.sendingShare * 100}%"></span>
-        {/if}
-      </span>
-      <span class="slot run-text" data-widest="Run stopped: 99/99 · 99 failed">
-        <span class="shown">{#if summary}{summary.label}{#if summary.failed}{" "}<span class="failed-count">{summary.failed}</span>{/if}{:else}Runner{/if}</span>
-      </span>
+        </span>
+      {/if}
     </button>
   </div>
   <div class="group workspace">
@@ -266,45 +264,55 @@
     flex: none;
     width: 52px;
   }
-  /* The Runner: in the text colour while its Run wants a look; muted with no Run yet,
-     or once an ended Run's results have been seen. Failures warning-toned. */
+  /* The Runner: one fixed-width button (its hover box), compact text centred in it with
+     tabular numerals, so no state moves or resizes it. In the text colour while its Run
+     wants a look; muted with no Run yet, or once an ended Run's results have been seen.
+     The failed count ("✕ k") warning-toned. */
   .bottom-bar .runner {
+    position: relative;
+    overflow: hidden;
     flex: none;
-    width: auto;
-    gap: var(--space-2);
+    width: 120px;
     padding: 0 var(--space-1);
     font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: var(--text);
+  }
+  .runner > .shown {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .bottom-bar .runner.muted:not(.active):not(:hover) {
     color: var(--muted);
   }
-  .run-text {
-    font-variant-numeric: tabular-nums;
-  }
   .runner .failed-count {
     color: var(--warning);
   }
-  /* A determinate progress bar: finished requests (passed, then failed in the warning
-     colour) out of all, then the request being sent, pulsing slowly. Nothing else in
-     the bar animates, and nothing does under reduced motion. */
-  .run-progress {
+  /* A determinate progress line, 2 px along the button's bottom edge and as wide as it:
+     finished requests (passed in the success colour, then failed in the warning colour)
+     out of all, then the request being sent, pulsing slowly. Dimmed with the item once
+     its Run has been seen. Nothing else in the bar animates, and nothing does under
+     reduced motion. Not there before any Run. */
+  .run-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
     display: flex;
-    width: 160px;
-    height: 4px;
-    flex: none;
-    border-radius: 2px;
-    overflow: hidden;
-    background: var(--border);
   }
-  .run-progress .passed {
-    background: var(--accent);
+  .runner.muted .run-line {
+    opacity: 0.45;
   }
-  .run-progress .failed {
+  .run-line .passed {
+    background: var(--success);
+  }
+  .run-line .failed {
     background: var(--warning);
   }
-  .run-progress .sending {
-    background: var(--accent);
+  .run-line .sending {
+    background: var(--text);
     opacity: 0.35;
     animation: run-pulse 1.6s ease-in-out infinite alternate;
   }
@@ -317,7 +325,7 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .run-progress .sending {
+    .run-line .sending {
       animation: none;
     }
   }

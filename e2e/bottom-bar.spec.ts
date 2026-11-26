@@ -19,8 +19,8 @@ const fileGroup = (page: Page) => bottomBar(page).getByRole("group", { name: "Ac
 const fileFacts = (page: Page) => fileGroup(page).locator(":scope > *");
 const runnerButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Runner/ });
 const runnerPanel = (page: Page) => page.getByRole("region", { name: "Runner" });
-/** The Runner item's progress bar (decorative: its text says the same), and its fills. */
-const progress = (page: Page) => runnerButton(page).locator(".run-progress");
+/** The Runner item's progress line along its bottom edge (decorative: its text says the same), and its fills. */
+const progress = (page: Page) => runnerButton(page).locator(".run-line");
 const fill = (page: Page, kind: "passed" | "failed" | "sending") => progress(page).locator(`.${kind}`);
 
 /** A theme token (`--warning`) as a computed colour, comparable with an element's computed colour. */
@@ -436,33 +436,47 @@ interface DiskMock {
   changeFile: (path: string, file: unknown) => Promise<void>;
 }
 
-// #227, #235: the Runner item, in the centre: the current Run's progress and result, or a
-// muted "Runner" before any Run.
+// #227, #235: the Runner item, in the centre: one fixed-width button with the current
+// Run's result in compact text ("▶ 3/10", "✓ 10", "✓ 8 ✕ 2", "■ 2/5 ✕ 1") over a 2 px
+// progress line along its bottom edge, or a muted "Runner" and no line before any Run.
+// Its tooltip and accessible name keep the full sentence ("Run: 8 passed · 2 failed").
 // `?download=slow` makes each send take 2 s; with `?trusted=1&status=404`,
 // samples/jetbrains.http's second request ("Post with JSON body") fails its test.
 test.describe("Runner item", () => {
   const stop = (page: Page) => runnerPanel(page).getByRole("button", { name: "Stop", exact: true }).click();
+  const width = async (l: Locator) => (await box(l)).width;
+  const background = (l: Locator) => l.evaluate((e) => getComputedStyle(e).backgroundColor);
 
-  test("reads Runner before any Run, then the Run, in the same place", async ({ page }) => {
+  test("reads Runner before any Run, with no line, then the Run, in the same place", async ({ page }) => {
     await openApp(page);
     await expect(runnerButton(page)).toHaveText("Runner");
+    await expect(progress(page)).toHaveCount(0);
     const before = await box(runnerButton(page));
 
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+    await expect(runnerButton(page)).toHaveText("✓ 3");
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run: 3 passed");
     expect(await box(runnerButton(page))).toEqual(before);
   });
 
-  test("mid-run it shows the progress bar and Run n/m, the request being sent pulsing", async ({ page }) => {
+  test("mid-run it reads ▶ n/m over a progress line along its bottom edge, the request being sent pulsing", async ({ page }) => {
     await openApp(page, "?download=slow");
     await runFile(page, "api", "pets.http");
 
-    await expect(runnerButton(page)).toHaveText("Run 0/3");
+    await expect(runnerButton(page)).toHaveText("▶ 0/3");
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run 0/3");
     await expect(fill(page, "sending")).toBeVisible();
     expect(await fill(page, "sending").evaluate((e) => getComputedStyle(e).animationName)).not.toBe("none");
-    await expect(runnerButton(page)).toHaveText("Run 1/3", { timeout: 5000 });
-    expect((await box(progress(page))).width).toBe(160);
-    expect((await box(fill(page, "passed"))).width).toBeCloseTo(160 / 3, 0);
+    await expect(runnerButton(page)).toHaveText("▶ 1/3", { timeout: 5000 });
+
+    // The line spans the button's width, 2 px tall, flush with its bottom edge.
+    const [button, line] = [await box(runnerButton(page)), await box(progress(page))];
+    expect(line.width).toBe(button.width);
+    expect(line.x).toBe(button.x);
+    expect(line.height).toBe(2);
+    expect(line.y + line.height).toBeCloseTo(button.y + button.height, 1);
+    expect(await width(fill(page, "passed"))).toBeCloseTo(button.width / 3, 0);
+    expect(await background(fill(page, "passed"))).toBe(await token(page, "--success"));
     await expect(runnerPanel(page)).toContainText("Run 1/3");
   });
 
@@ -474,40 +488,47 @@ test.describe("Runner item", () => {
     expect(await fill(page, "sending").evaluate((e) => getComputedStyle(e).animationName)).toBe("none");
   });
 
-  test("a failure mid-run shows · 1 failed and the failed share in the warning colour; stopped, it reads Run stopped: n/m", async ({ page }) => {
+  test("a failure mid-run shows as the failed share of the line in the warning colour; stopped, it reads ■ n/m ✕ k", async ({ page }) => {
     await openApp(page, "?trusted=1&status=404&download=slow");
     await runFile(page, "samples", "jetbrains.http");
 
-    await expect(runnerButton(page)).toHaveText("Run 2/5 · 1 failed", { timeout: 8000 });
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run 2/5 · 1 failed", { timeout: 8000 });
+    await expect(runnerButton(page)).toHaveText("▶ 2/5");
     const warning = await token(page, "--warning");
-    expect(await colour(runnerButton(page).getByText("· 1 failed"))).toBe(warning);
-    expect(await fill(page, "failed").evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(warning);
-    expect((await box(fill(page, "failed"))).width).toBeCloseTo(160 / 5, 0);
+    expect(await background(fill(page, "failed"))).toBe(warning);
+    expect(await width(fill(page, "failed"))).toBeCloseTo((await width(runnerButton(page))) / 5, 0);
     await expect(runnerPanel(page)).toContainText("Run 2/5 · 1 failed");
 
     await stop(page);
-    await expect(runnerButton(page)).toHaveText("Run stopped: 2/5 · 1 failed");
-    // Ended, the bar stays, still: what finished, nothing pulsing.
+    await expect(runnerButton(page)).toHaveText("■ 2/5 ✕ 1");
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run stopped: 2/5 · 1 failed");
+    expect(await colour(runnerButton(page).getByText("✕ 1"))).toBe(warning);
+    // Ended, the line stays, still: what finished, nothing pulsing.
     await expect(fill(page, "sending")).toHaveCSS("width", "0px");
     await expect(runnerPanel(page)).toContainText("Run stopped: 2/5 · 1 failed");
   });
 
-  test("a finished Run reads its passed and failed counts, as the Runner panel does", async ({ page }) => {
+  test("a finished Run reads ✓ passed ✕ failed, the ✕ part warning-toned; the panel keeps its sentence", async ({ page }) => {
     await openApp(page, "?trusted=1&status=404");
     await runFile(page, "samples", "jetbrains.http");
 
-    await expect(runnerButton(page)).toHaveText("Run: 4 passed · 1 failed");
-    expect((await box(fill(page, "passed"))).width).toBeCloseTo((160 * 4) / 5, 0);
-    expect((await box(fill(page, "failed"))).width).toBeCloseTo(160 / 5, 0);
+    await expect(runnerButton(page)).toHaveText("✓ 4 ✕ 1");
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run: 4 passed · 1 failed");
+    expect(await colour(runnerButton(page).getByText("✕ 1"))).toBe(await token(page, "--warning"));
+    expect(await colour(runnerButton(page).getByText("✓ 4"))).not.toBe(await token(page, "--warning"));
+    const w = await width(runnerButton(page));
+    expect(await width(fill(page, "passed"))).toBeCloseTo((w * 4) / 5, 0);
+    expect(await width(fill(page, "failed"))).toBeCloseTo(w / 5, 0);
     await expect(runnerPanel(page)).toContainText("Run: 4 passed · 1 failed");
   });
 
-  test("a Run stopped before any request finished reads Run stopped: 0/m", async ({ page }) => {
+  test("a Run stopped before any request finished reads ■ 0/m", async ({ page }) => {
     await openApp(page, "?download=slow");
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run 0/3");
+    await expect(runnerButton(page)).toHaveText("▶ 0/3");
     await stop(page);
-    await expect(runnerButton(page)).toHaveText("Run stopped: 0/3");
+    await expect(runnerButton(page)).toHaveText("■ 0/3");
+    await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run stopped: 0/3");
     await expect(runnerPanel(page)).toContainText("Run stopped: 0/3");
   });
 
@@ -515,7 +536,7 @@ test.describe("Runner item", () => {
     await openApp(page);
     await openRequest(page, ["api", "pets.http"], "List pets");
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+    await expect(runnerButton(page)).toHaveText("✓ 3");
     await expect(runnerButton(page)).toHaveAttribute("aria-pressed", "true");
 
     await urlBar(page).click();
@@ -531,41 +552,45 @@ test.describe("Runner item", () => {
   test("its tooltip says what the Run is and what clicking opens", async ({ page }) => {
     await openApp(page);
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+    await expect(runnerButton(page)).toHaveText("✓ 3");
     await runnerButton(page).hover();
     await expect(page.getByRole("tooltip")).toHaveText("Run: 3 passed. Opens the Runner panel");
   });
 
-  test("an ended Run turns muted once the Runner panel has been shown, until the next Run", async ({ page }) => {
+  test("an ended Run turns muted, its line dimmed, once the Runner panel has been shown, until the next Run", async ({ page }) => {
     await openApp(page, "?download=slow");
     const [text, muted] = [await token(page, "--text"), await token(page, "--muted")];
+    const lineOpacity = () => progress(page).evaluate((e) => Number(getComputedStyle(e).opacity));
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run 0/3");
+    await expect(runnerButton(page)).toHaveText("▶ 0/3");
     // Closed before it ends: its results haven't been seen.
     await runnerButton(page).click();
     await expect(runnerPanel(page)).toHaveCount(0);
     await page.mouse.move(0, 300);
-    await expect(runnerButton(page)).toHaveText("Run: 3 passed", { timeout: 10000 });
+    await expect(runnerButton(page)).toHaveText("✓ 3", { timeout: 10000 });
     expect(await colour(runnerButton(page))).toBe(text);
+    expect(await lineOpacity()).toBe(1);
 
     await runnerButton(page).click();
     await expect(runnerPanel(page)).toBeVisible();
     await runnerButton(page).click();
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(muted);
+    expect(await lineOpacity()).toBeLessThan(1);
 
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run 0/3");
+    await expect(runnerButton(page)).toHaveText("▶ 0/3");
     await runnerButton(page).click();
     await expect(runnerPanel(page)).toHaveCount(0);
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(text);
+    expect(await lineOpacity()).toBe(1);
   });
 
   test("lasts until another workspace opens", async ({ page }) => {
     await openApp(page, "?recent=/work/api");
     await runFile(page, "api", "pets.http");
-    await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+    await expect(runnerButton(page)).toHaveText("✓ 3");
 
     // The mock opens the demo workspace again for any recent path it doesn't know.
     await menuClick(page, "open-recent:/work/api");
@@ -836,7 +861,7 @@ test("the items sit in the agreed order", async ({ page }) => {
   await flipHistory(page);
   await skipScripts(page);
   await runFile(page, "api", "pets.http");
-  await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+  await expect(runnerButton(page)).toHaveText("✓ 3");
 
   const items = [runnerButton(page), portabilityButton(page), historyOff(page), scriptsSkipped(page), problemsButton(page)];
   const boxes = await Promise.all(items.map(box));
@@ -879,15 +904,15 @@ test("no item moves or resizes as the Run, History, Scripts and Portability chan
   await unmoved("Portability VS Code · Rider");
 
   await runFile(page, "api", "pets.http");
-  await expect(runnerButton(page)).toHaveText("Run 0/3");
+  await expect(runnerButton(page)).toHaveText("▶ 0/3");
   await unmoved("running");
-  await expect(runnerButton(page)).toHaveText("Run: 3 passed", { timeout: 10000 });
+  await expect(runnerButton(page)).toHaveText("✓ 3", { timeout: 10000 });
   await unmoved("ended");
 
   await runFile(page, "samples", "jetbrains.http");
-  await expect(runnerButton(page)).toHaveText("Run 2/5 · 1 failed", { timeout: 8000 });
+  await expect(runnerButton(page)).toHaveAccessibleName("Show Runner: Run 2/5 · 1 failed", { timeout: 8000 });
   await runnerPanel(page).getByRole("button", { name: "Stop", exact: true }).click();
-  await expect(runnerButton(page)).toHaveText("Run stopped: 2/5 · 1 failed");
+  await expect(runnerButton(page)).toHaveText("■ 2/5 ✕ 1");
   await unmoved("stopped with failures");
 });
 
@@ -916,24 +941,22 @@ test("before any Run, a muted Runner opens the Runner panel", async ({ page }) =
   await expect(runnerButton(page)).toHaveAttribute("aria-pressed", "true");
 });
 
-test("the Runner's text has a fixed width with tabular numerals, and its progress bar is 160 px", async ({ page }) => {
+test("the Runner is one 120 px button with tabular numerals, room for its longest compact text", async ({ page }) => {
   await openApp(page);
-  const text = runnerButton(page).locator(".run-text");
-  expect(await text.evaluate((e) => getComputedStyle(e).fontVariantNumeric)).toBe("tabular-nums");
-  const width = (await box(text)).width;
-  // Sized for the longest text it shows.
-  const longest = await text.evaluate((e) => {
+  const button = runnerButton(page);
+  expect((await box(button)).width).toBe(120);
+  expect(await button.evaluate((e) => getComputedStyle(e).fontVariantNumeric)).toBe("tabular-nums");
+  // The longest text it shows fits inside, with room to spare on both sides.
+  const longest = await button.evaluate((e) => {
     const probe = document.createElement("span");
-    probe.textContent = "Run stopped: 99/99 · 99 failed";
+    probe.textContent = "■ 99/99 ✕ 99";
     probe.style.whiteSpace = "nowrap";
-    probe.style.fontVariantNumeric = "tabular-nums";
-    e.after(probe);
+    e.append(probe);
     const w = probe.getBoundingClientRect().width;
     probe.remove();
     return w;
   });
-  expect(Math.abs(width - longest)).toBeLessThanOrEqual(1);
-  expect((await box(progress(page))).width).toBe(160);
+  expect(longest).toBeLessThan(120 - 16);
 });
 
 // Each text item's label sits centred in its button, so its hover box is even on both sides.
@@ -943,7 +966,7 @@ test("every text item's label is centred in its button", async ({ page }) => {
     bottomBar(page).getByRole("button", { name: /^Portability/ }),
     historyItem(page),
     scriptsItem(page),
-    runnerButton(page).locator(".run-text"),
+    runnerButton(page),
   ];
   for (const item of items) {
     const [text, outer] = await item.evaluate((el) => {

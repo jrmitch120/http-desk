@@ -15,6 +15,14 @@ export interface RunSummary {
   passedShare: number;
   failedShare: number;
   sendingShare: number;
+  /**
+   * The compact form the bottom bar's Runner item shows (its tooltip and accessible
+   * name use `text`). `label`: "▶ 3/10" while running, "✓ 8" once finished (the passed
+   * count), "■ 2/5" once stopped. `failed`: "✕ 2" once an ended run has any failure,
+   * else "" (mid-run, failures show only in the progress line); shown after the label,
+   * warning-toned.
+   */
+  compact: { label: string; failed: string };
 }
 
 /**
@@ -38,5 +46,9 @@ export function runSummary(items: readonly { state: RunItemState }[], running: b
     passedShare: share(passed),
     failedShare: share(failed),
     sendingShare: running ? share(sending) : 0,
+    compact: {
+      label: running ? `▶ ${finished}` : stopped ? `■ ${finished}` : `✓ ${passed}`,
+      failed: !running && failed ? `✕ ${failed}` : "",
+    },
   };
 }

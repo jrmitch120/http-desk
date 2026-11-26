@@ -683,7 +683,10 @@ Save); "status bar" alone names neither.
   "Scripts"); the other states are toned. A slot's width comes from its widest text
   (`data-widest` on a `.slot`, laid out invisibly under the shown text, so it follows
   the font), and text that could still be longer is cut off with an ellipsis, the whole
-  in the tooltip. Changing numbers use tabular numerals.
+  in the tooltip. Changing numbers use tabular numerals. The Runner is the exception
+  to `.slot`: one button of a fixed 120 px, its compact text ("▶ 3/10", "✓ 8 ✕ 2",
+  "■ 2/5") centred in it, the full sentence in its tooltip and accessible name, and its
+  progress as a 2 px line along the button's bottom edge, not a separate bar.
 - Three columns. Left: the active tab's file (display only); it comes and goes, but
   nothing follows it, and its changing caret has a minimum width ("Ln 9999, Col 999").
   Centre: the Runner, in the true centre of the window (the side columns share what's
@@ -697,7 +700,8 @@ Save); "status bar" alone names neither.
   explaining it; give it `tabindex="0"` so keyboard users can reach its tooltip
   ([Tooltip](#tooltip)).
 - Tones: muted for a quiet fact, warning-toned for something that changes what a send
-  does; accent is not used.
+  does (and a Run's failures); accent is not used. The Runner's progress line alone
+  uses the success colour, for the passed share.
 
 ### CheckStrip
 

@@ -1414,18 +1414,23 @@ Decisions made during implementation, beyond the plan above:
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts or
   another workspace opens. The bottom bar's **Runner item** (#227, #235, in the centre
-  of the bar) follows the same run without the panel. It is always there: a 160×4 px
-  progress bar and its text, in a fixed width sized for "Run stopped: 99/99 · 99
-  failed" with tabular numerals (longer text is cut off with an ellipsis; the tooltip
-  has the whole). Before the workspace's first run it reads a muted "Runner", the bar
-  empty; while running, the bar shows passed, then failed in the warning colour, then
-  the request being sent pulsing slowly (not under reduced motion), and the text "Run
-  4/12", plus "· 1 failed" warning-toned; once ended, the bar keeps what finished and
-  the text reads "Run: 11 passed · 1 failed" or "Run stopped: 4/12" (Stop, or Stop on
-  first failure). Once an ended run's panel has been shown (or was open as it ended)
-  the item is muted until the next run (in memory, in `BottomBar.svelte`). It toggles the Runner panel like Problems. Its text and the
-  panel's summary both come from `runSummary` (`src/lib/runSummary.ts`), so they
-  never disagree.
+  of the bar) follows the same run without the panel. It is always there: one button
+  120 px wide (its hover box), whose box never moves or resizes, with compact text
+  centred in it in tabular numerals (longer text is cut off with an ellipsis) and a
+  2 px progress line along its bottom edge, as wide as the button. Before the
+  workspace's first run it reads a muted "Runner", with no line. While running it reads
+  "▶ 4/12" (finished out of all) and the line shows passed in the success colour, then
+  failed in the warning colour, then the request being sent pulsing slowly (not under
+  reduced motion); a failure mid-run shows only in the line. Once ended, the line keeps
+  what finished and the text reads "✓ 12" (all passed), "✓ 11 ✕ 1" (with failures) or
+  "■ 4/12" (Stop, or Stop on first failure), followed by " ✕ 1" if any failed; the
+  "✕ k" part is warning-toned. The tooltip and accessible name ("Show Runner: …") keep
+  the full sentence ("Run: 11 passed · 1 failed", "Run stopped: 4/12 · 1 failed").
+  Once an ended run's panel has been shown (or was open as it ended) the item is muted,
+  its line dimmed, until the next run (in memory, in `BottomBar.svelte`). It toggles
+  the Runner panel like Problems. Its compact text (`compact`), its sentence (`text`)
+  and the panel's summary (`text`) all come from `runSummary`
+  (`src/lib/runSummary.ts`), so they never disagree.
 * **Run folder and Run selection** (#144) use the same list-building and runner. Run
   folder (the tree's folder menu) runs every `.http` file under the folder, subfolders
   included, in the order the tree shows them (folders first, then by name), each file's

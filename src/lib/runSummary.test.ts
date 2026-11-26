@@ -13,6 +13,7 @@ describe("runSummary", () => {
       passedShare: 0.5,
       failedShare: 0,
       sendingShare: 0.25,
+      compact: { label: "▶ 2/4", failed: "" },
     });
   });
 
@@ -46,11 +47,39 @@ describe("runSummary", () => {
   });
 
   it("a single request, sending then passed", () => {
-    expect(runSummary(items("sending"), true)).toEqual({ label: "Run 0/1", failed: "", text: "Run 0/1", passedShare: 0, failedShare: 0, sendingShare: 1 });
+    expect(runSummary(items("sending"), true)).toEqual({ label: "Run 0/1", failed: "", text: "Run 0/1", passedShare: 0, failedShare: 0, sendingShare: 1, compact: { label: "▶ 0/1", failed: "" } });
     expect(runSummary(items("passed"), false)).toMatchObject({ label: "Run: 1 passed", failed: "" });
   });
 
   it("an empty run has no shares", () => {
-    expect(runSummary([], false)).toEqual({ label: "Run: 0 passed", failed: "", text: "Run: 0 passed", passedShare: 0, failedShare: 0, sendingShare: 0 });
+    expect(runSummary([], false)).toMatchObject({ label: "Run: 0 passed", failed: "", text: "Run: 0 passed", passedShare: 0, failedShare: 0, sendingShare: 0 });
+  });
+
+  // The bottom bar's Runner item shows a compact form (#235): a glyph and the counts,
+  // with the failed part ("✕ k") apart so it can be warning-toned.
+  describe("compact", () => {
+    const queued = (n: number) => Array<RunItemState>(n).fill("queued");
+
+    it("running reads ▶ finished/all", () => {
+      expect(runSummary(items("passed", "passed", "passed", "sending", ...queued(6)), true).compact).toEqual({ label: "▶ 3/10", failed: "" });
+      // A failure mid-run shows in the progress line, not the text, until the Run ends.
+      expect(runSummary(items("passed", "failed", "sending", "queued"), true).compact).toEqual({ label: "▶ 2/4", failed: "" });
+    });
+
+    it("all passed reads ✓ and the count", () => {
+      expect(runSummary(items(...Array<RunItemState>(10).fill("passed")), false).compact).toEqual({ label: "✓ 10", failed: "" });
+    });
+
+    it("ended with failures reads ✓ passed then ✕ failed", () => {
+      const ended = items(...Array<RunItemState>(8).fill("passed"), "failed", "failed");
+      expect(runSummary(ended, false).compact).toEqual({ label: "✓ 8", failed: "✕ 2" });
+      expect(runSummary(items("failed", "failed"), false).compact).toEqual({ label: "✓ 0", failed: "✕ 2" });
+    });
+
+    it("stopped reads ■ finished/all, then ✕ failed if any failed", () => {
+      expect(runSummary(items("passed", "passed", "cancelled", "notRun", "notRun"), false).compact).toEqual({ label: "■ 2/5", failed: "" });
+      expect(runSummary(items("passed", "failed", "cancelled", "notRun", "notRun"), false).compact).toEqual({ label: "■ 2/5", failed: "✕ 1" });
+      expect(runSummary(items("cancelled", "notRun", "notRun"), false).compact).toEqual({ label: "■ 0/3", failed: "" });
+    });
   });
 });
