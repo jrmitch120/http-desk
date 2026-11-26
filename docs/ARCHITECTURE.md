@@ -1404,7 +1404,16 @@ Decisions made during implementation, beyond the plan above:
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts or
-  another workspace opens.
+  another workspace opens. The bottom bar's **Runner item** (#227, left of Problems)
+  follows the same run without the panel: hidden until the workspace has had a run;
+  while running, a 48×4 px progress bar (passed, then failed in the warning colour, then
+  the request being sent pulsing slowly, still under reduced motion) and "Run 4/12",
+  plus "· 1 failed" warning-toned; once ended, "Run: 11 passed · 1 failed" or "Run
+  stopped: 4/12" (Stop, or Stop on first failure). Once an ended run's panel has been
+  shown (or was open as it ended) the item is muted until the next run (in memory, in
+  `BottomBar.svelte`). It toggles the Runner panel like Problems. Its text and the
+  panel's summary both come from `runSummary` (`src/lib/runSummary.ts`), so they
+  never disagree.
 * **Run folder and Run selection** (#144) use the same list-building and runner. Run
   folder (the tree's folder menu) runs every `.http` file under the folder, subfolders
   included, in the order the tree shows them (folders first, then by name), each file's
