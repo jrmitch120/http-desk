@@ -935,3 +935,25 @@ test("the Runner's text has a fixed width with tabular numerals, and its progres
   expect(Math.abs(width - longest)).toBeLessThanOrEqual(1);
   expect((await box(progress(page))).width).toBe(160);
 });
+
+// Each text item's label sits centred in its button, so its hover box is even on both sides.
+test("every text item's label is centred in its button", async ({ page }) => {
+  await openApp(page);
+  const items = [
+    bottomBar(page).getByRole("button", { name: /^Portability/ }),
+    historyItem(page),
+    scriptsItem(page),
+    runnerButton(page).locator(".run-text"),
+  ];
+  for (const item of items) {
+    const [text, outer] = await item.evaluate((el) => {
+      const shown = el.querySelector(".shown")!;
+      const range = document.createRange();
+      range.selectNodeContents(shown);
+      const t = range.getBoundingClientRect();
+      const o = el.querySelector(".slot")?.getBoundingClientRect() ?? el.getBoundingClientRect();
+      return [t.left + t.width / 2, o.left + o.width / 2];
+    });
+    expect(Math.abs(text - outer)).toBeLessThanOrEqual(1);
+  }
+});

@@ -238,7 +238,7 @@
     white-space: nowrap;
   }
   /* A fixed-width slot: exactly as wide as its widest text, laid out invisibly; the
-     shown text sits over it, cut off with an ellipsis if it's ever longer. */
+     shown text sits centred over it, cut off with an ellipsis if it's ever longer. */
   .slot {
     position: relative;
     display: inline-block;
@@ -253,7 +253,7 @@
     inset: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-align: left;
+    text-align: center;
   }
   .bottom-bar .history.off {
     color: var(--text);
