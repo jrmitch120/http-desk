@@ -12,7 +12,7 @@ import type { SessionStore } from "./session.svelte";
 import { toSendError } from "./sendError";
 import type { Doc, RequestRef, Tab } from "./store.svelte";
 import { findNode, treeFiles } from "./tree";
-import type { Trust } from "./trust";
+import type { Trust } from "./trust.svelte";
 import type { AppSettings, HttpResponse, Request, RunnerOptions, RunProgress, RunRequestReport, SendError, TreeNode } from "./types";
 
 /**
