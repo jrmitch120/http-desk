@@ -22,11 +22,14 @@
   import { runCommand } from "../lib/commands";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shownProblemCount } from "../lib/problemCount";
+  import { portabilityLabel } from "../lib/portabilityLabel";
   import { runSummary } from "../lib/runSummary";
   import Icon from "./Icon.svelte";
 
   const problems = $derived(app.problems.count);
   const shownCount = $derived(shownProblemCount(problems));
+  const portability = $derived(portabilityLabel(app.portability.editors));
+  const portabilityOff = $derived(!Object.values(app.portability.editors).some(Boolean));
 
   // A pressed toggle: clicking it while the panel is open closes the panel, wherever
   // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
@@ -57,9 +60,37 @@
     <!-- The active tab's file: line endings, encoding, and in a File view the caret. -->
   </div>
   <div class="group workspace">
-    <!-- 5. Portability -->
-    <!-- 4. History off -->
+    <!-- 5. Portability: always shown, the editors whose Portability notes show (Settings → Portability). -->
+    <button
+      class="icon-btn quiet portability"
+      aria-label={`Portability: ${portability}`}
+      use:tooltip={portabilityOff
+        ? "Portability notes are off: turn on the editors you share .http files with in Settings"
+        : `Portability notes show for ${portability}. Change the editors in Settings`}
+      onclick={() => app.openSettings("portability")}
+    >
+      {portability}
+    </button>
+    <!-- 4. History off: only while the History switch is off; muted, a deliberate choice. -->
+    {#if !app.history.enabled}
+      <button
+        class="icon-btn quiet history-off"
+        use:tooltip={"History is off: sends aren't recorded in History. Click to open the setting."}
+        onclick={() => app.openSettings("history")}
+      >
+        History off
+      </button>
+    {/if}
     <!-- 3. Scripts skipped -->
+    {#if app.trust.skipped}
+      <button
+        class="icon-btn quiet scripts-skipped"
+        use:tooltip={"Scripts skipped: sends in this workspace skip their scripts. Click to trust it, or keep skipping."}
+        onclick={() => app.trust.askAgain()}
+      >
+        Scripts skipped
+      </button>
+    {/if}
     <!-- 2. Runner -->
     {#if run && summary}
       <button
@@ -121,6 +152,19 @@
   .bottom-bar .icon-btn {
     height: 20px;
   }
+  /* Text labels, not icons. */
+  .bottom-bar .portability,
+  .bottom-bar .scripts-skipped {
+    flex: none;
+    width: auto;
+    padding: 0 var(--space-1);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  /* Scripts skipped is warning-toned. */
+  .bottom-bar .scripts-skipped {
+    color: var(--warning);
+  }
   /* A fixed width (icon plus "99+"), icon and count centred in it: a longer count
      shifts them inside the button, never the button's neighbours. */
   .bottom-bar .problems {
@@ -174,5 +218,12 @@
     .run-progress .sending {
       animation: none;
     }
+  }
+  /* A text label, not an icon: as wide as its text. */
+  .bottom-bar .history-off {
+    width: auto;
+    padding: 0 var(--space-1);
+    font-size: 11.5px;
+    white-space: nowrap;
   }
 </style>

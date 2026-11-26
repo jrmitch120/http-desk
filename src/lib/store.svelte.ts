@@ -22,7 +22,7 @@ import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
 import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
 import { HistoryStore, historyLink, historyLinkKey, type HistoryHost } from "./history.svelte";
-import { Trust, type TrustHost } from "./trust";
+import { Trust, type TrustHost } from "./trust.svelte";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
@@ -1762,7 +1762,7 @@ class AppStore {
 
   /** The workspace's Session as the page sees it: its version, exchange shapes, test markers (session.svelte.ts). */
   readonly session: SessionStore = new SessionStore(this.sessionHost());
-  /** Whether the workspace's scripts may run (trust.ts). */
+  /** Whether the workspace's scripts may run (trust.svelte.ts). */
   readonly trust: Trust = new Trust(this.trustHost());
   /** Runs and the Runner panel (runner.svelte.ts). */
   readonly runnerStore: RunnerStore = new RunnerStore(this.runnerHost());

@@ -7,7 +7,7 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, treeItem, treeMenu, urlBar } from "./helpers";
+import { dialog, hasRing, menuClick, mockState, openApp, openRequest, sentRequests, tabTo, treeItem, treeMenu, urlBar } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
@@ -64,8 +64,8 @@ test("spans the bottom of the window, below the panel area, with Problems at its
 
   const problems = await box(problemsButton(page));
   expect(bar.x + bar.width - (problems.x + problems.width)).toBeLessThan(16);
-  // Nothing else is in it yet.
-  await expect(bottomBar(page).getByRole("button")).toHaveCount(1);
+  // By default only Problems and Portability (#230), which is always shown.
+  await expect(bottomBar(page).getByRole("button")).toHaveCount(2);
 });
 
 test("with no problems it shows a muted 0", async ({ page }) => {
@@ -322,5 +322,256 @@ test.describe("Runner item", () => {
     await expect(runnerPanel(page)).toHaveCount(0);
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(text);
+  });
+});
+
+// #228: "Scripts skipped", warning-toned, while the user's "Send without scripts" is in
+// force for the open, untrusted workspace. Clicking it asks again: "Trust this
+// workspace" (stored like "Trust and run") clears it; "Keep skipping" or Cancel leave
+// it. Reopening the workspace ends the skip, and the item with it.
+test.describe("Scripts skipped", () => {
+  const scriptsSkipped = (page: Page) => bottomBar(page).getByRole("button", { name: "Scripts skipped" });
+  const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
+  const askAgain = (page: Page) => dialog(page, "Trust this workspace?");
+  const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
+  const openHandler = (page: Page) => openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+
+  async function skipScripts(page: Page) {
+    await openHandler(page);
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(page.getByText("Sent without scripts: the response handler didn't run.")).toBeVisible();
+  }
+
+  test("not shown before the user is asked, then shown warning-toned after Send without scripts", async ({ page }) => {
+    await openApp(page);
+    await openHandler(page);
+    await expect(problemsButton(page)).toBeVisible();
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(scriptsSkipped(page)).toHaveText("Scripts skipped");
+    await expect.poll(() => colour(scriptsSkipped(page))).toBe(await token(page, "--warning"));
+
+    await scriptsSkipped(page).hover();
+    await expect(page.getByRole("tooltip")).toContainText("sends in this workspace skip their scripts");
+    await expect(page.getByRole("tooltip")).toContainText("trust");
+  });
+
+  test("appears left of Problems, in the right group, and Problems' box doesn't move", async ({ page }) => {
+    await openApp(page);
+    await openHandler(page);
+    const before = await box(problemsButton(page));
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    expect(await box(problemsButton(page))).toEqual(before);
+    const item = await box(scriptsSkipped(page));
+    expect(item.x + item.width).toBeLessThanOrEqual(before.x);
+    expect(item.x).toBeGreaterThan((await box(bottomBar(page))).width / 2);
+  });
+
+  test("not shown in a trusted workspace", async ({ page }) => {
+    await openApp(page, "?trusted=1");
+    await openHandler(page);
+    await send(page);
+    await expect.poll(() => mockState(page, "sentSkipScripts")).toEqual([false]);
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+  });
+
+  test("clicking it asks again; Keep skipping and Cancel leave it", async ({ page }) => {
+    await openApp(page);
+    await skipScripts(page);
+
+    await scriptsSkipped(page).click();
+    const prompt = askAgain(page);
+    await expect(prompt).toContainText("/demo");
+    for (const name of ["Cancel", "Keep skipping", "Trust this workspace"]) {
+      await expect(prompt.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(prompt.getByRole("button", { name: "Keep skipping" })).toBeFocused();
+    await prompt.getByRole("button", { name: "Keep skipping" }).click();
+    await expect(prompt).toBeHidden();
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    await scriptsSkipped(page).click();
+    await askAgain(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(askAgain(page)).toBeHidden();
+    await expect(scriptsSkipped(page)).toBeVisible();
+    expect((await mockState(page, "settings")).trustedWorkspaces).toEqual([]);
+  });
+
+  test("Trust this workspace removes it, lists the workspace in Settings, and the next send runs its script", async ({ page }) => {
+    await openApp(page);
+    await skipScripts(page);
+
+    await scriptsSkipped(page).click();
+    await askAgain(page).getByRole("button", { name: "Trust this workspace" }).click();
+    await expect(askAgain(page)).toBeHidden();
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+    expect((await mockState(page, "settings")).trustedWorkspaces).toEqual(["/demo"]);
+
+    await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+    await expect(dialog(page, "Settings").getByTestId("trusted-workspace")).toContainText("/demo");
+    await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+
+    await send(page);
+    await expect.poll(() => mockState(page, "sentSkipScripts")).toEqual([true, false]);
+    await expect(trustPrompt(page)).toBeHidden();
+  });
+
+  test("reopening the workspace clears it", async ({ page }) => {
+    await openApp(page, "?recent=/work/api");
+    await skipScripts(page);
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    // The mock opens the demo workspace again for any recent path it doesn't know.
+    await menuClick(page, "open-recent:/work/api");
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+    expect(await sentRequests(page)).toHaveLength(1);
+  });
+});
+
+// #230: Portability, always shown at the inner end of the right group, names the editors
+// turned on in Settings → Portability, or "HttpDesk only" with both off. It opens Settings there.
+const portabilityButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Portability/ });
+const portabilitySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Portability" });
+
+for (const [query, label] of [
+  ["", "HttpDesk only"],
+  ["?portability=vscode", "VS Code"],
+  ["?portability=rider", "Rider"],
+  ["?portability=vscode,rider", "VS Code · Rider"],
+] as const) {
+  test(`Portability reads "${label}" for those editors`, async ({ page }) => {
+    await openApp(page, query);
+    await expect(portabilityButton(page)).toHaveText(label);
+  });
+}
+
+test("Portability follows Settings at once", async ({ page }) => {
+  await openApp(page);
+  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
+  await page.keyboard.press("Meta+Comma");
+  const settings = dialog(page, "Settings");
+  await settings.getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("Rider");
+  await settings.getByRole("switch", { name: "VS Code" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+  await settings.getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code");
+  await settings.getByRole("switch", { name: "VS Code" }).click();
+  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
+});
+
+test("clicking Portability opens Settings with the Portability section in view", async ({ page }) => {
+  // Short enough that Settings must scroll to show the whole section, down to its last switch.
+  await page.setViewportSize({ width: 1000, height: 360 });
+  await openApp(page);
+  await portabilityButton(page).click();
+  await expect(portabilitySection(page)).toBeInViewport();
+  await expect(portabilitySection(page).getByRole("switch", { name: "Show portability notes as warnings" })).toBeInViewport({ ratio: 1 });
+});
+
+test("Portability is reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
+  await openApp(page, "?portability=vscode");
+  await tabTo(page, portabilityButton(page), 80);
+  expect(await hasRing(portabilityButton(page))).toBe(true);
+  await expect(page.getByRole("tooltip")).toContainText("Portability notes show for VS Code");
+  await page.keyboard.press("Enter");
+  await expect(portabilitySection(page)).toBeInViewport();
+});
+
+test("with both editors off, the tooltip says Portability notes are off", async ({ page }) => {
+  await openApp(page);
+  await portabilityButton(page).hover();
+  await expect(page.getByRole("tooltip")).toContainText("Portability notes are off");
+});
+
+test("Portability sits left of Problems, and a longer label doesn't move Problems", async ({ page }) => {
+  await openApp(page);
+  const problems = await box(problemsButton(page));
+  const portability = await box(portabilityButton(page));
+  expect(portability.x + portability.width).toBeLessThanOrEqual(problems.x);
+
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
+  await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+  expect(await box(problemsButton(page))).toEqual(problems);
+});
+
+test("Portability stays the inner end, left of History off", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page, "Settings").getByRole("switch", { name: "Record History" }).click();
+  await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+  const historyOff = await box(bottomBar(page).getByRole("button", { name: /History off/ }));
+  const portability = await box(portabilityButton(page));
+  expect(portability.x + portability.width).toBeLessThanOrEqual(historyOff.x);
+});
+
+// #229: History off. Shown only while the History switch is off, muted (a deliberate
+// choice, not a warning). It opens Settings at the History section.
+test.describe("History off", () => {
+  const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
+  const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
+  const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
+
+  /** Flips the History switch in Settings (keeping what's stored when turning it off), then closes Settings. */
+  async function flipHistory(page: Page) {
+    await page.keyboard.press("Meta+Comma");
+    const wasOn = (await historySwitch(page).getAttribute("aria-checked")) === "true";
+    await historySwitch(page).click();
+    if (wasOn) await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+    await expect(historySwitch(page)).toHaveAttribute("aria-checked", wasOn ? "false" : "true");
+    await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+  }
+
+  test("shows, muted, only while the History switch is off", async ({ page }) => {
+    await openApp(page);
+    await expect(historyOff(page)).toHaveCount(0);
+
+    await flipHistory(page);
+    await expect(historyOff(page)).toHaveText("History off");
+    await expect.poll(() => colour(historyOff(page))).toBe(await token(page, "--muted"));
+
+    await flipHistory(page);
+    await expect(historyOff(page)).toHaveCount(0);
+  });
+
+  test("clicking it opens Settings with the History section in view", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openApp(page);
+    await flipHistory(page);
+
+    await historyOff(page).click();
+    await expect(historySwitch(page)).toBeInViewport();
+    await expect(historySwitch(page)).toHaveAttribute("aria-checked", "false");
+  });
+
+  test("keyboard: reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
+    await openApp(page);
+    await flipHistory(page);
+
+    await tabTo(page, historyOff(page), 80);
+    expect(await hasRing(historyOff(page))).toBe(true);
+    await expect(page.getByRole("tooltip")).toContainText("sends aren't recorded in History");
+    await expect(page.getByRole("tooltip")).toContainText("open the setting");
+    await page.keyboard.press("Enter");
+    await expect(historySwitch(page)).toBeInViewport();
+  });
+
+  test("sits left of Problems, whose box doesn't move when it appears", async ({ page }) => {
+    await openApp(page);
+    const before = await box(problemsButton(page));
+
+    await flipHistory(page);
+    const off = await box(historyOff(page));
+    expect(await box(problemsButton(page))).toEqual(before);
+    expect(off.x + off.width).toBeLessThanOrEqual(before.x);
   });
 });
