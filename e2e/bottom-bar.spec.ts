@@ -46,6 +46,45 @@ const look = (button: Locator) =>
   });
 
 /** Fixes problems/broken.http's request line in its file view, from the Problems panel: 2 problems become 1. */
+/** api/pets.http in the mock workspace, and its text with every line ending `ending`. */
+const PETS = "/demo/api/pets.http";
+const pets = (ending: string) => ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join(ending);
+
+const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
+const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
+const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
+
+/** Flips the History switch in Settings (keeping what's stored when turning it off), then closes Settings. */
+async function flipHistory(page: Page) {
+  await page.keyboard.press("Meta+Comma");
+  const wasOn = (await historySwitch(page).getAttribute("aria-checked")) === "true";
+  await historySwitch(page).click();
+  if (wasOn) await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+  await expect(historySwitch(page)).toHaveAttribute("aria-checked", wasOn ? "false" : "true");
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+}
+
+/** Expands the folders of `path`, then picks Run file on its file. */
+async function runFile(page: Page, ...path: string[]) {
+  for (const folder of path.slice(0, -1)) {
+    const row = treeItem(page, folder);
+    if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  }
+  await treeMenu(page, path.at(-1)!, "Run file");
+}
+
+const scriptsSkipped = (page: Page) => bottomBar(page).getByRole("button", { name: "Scripts skipped" });
+const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
+const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
+const openHandler = (page: Page) => openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+
+async function skipScripts(page: Page) {
+  await openHandler(page);
+  await send(page);
+  await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+  await expect(page.getByText("Sent without scripts: the response handler didn't run.")).toBeVisible();
+}
+
 async function fixBrokenLine(page: Page) {
   await group(page, "problems/broken.http").getByRole("listitem").filter({ hasText: "Line 2" }).click();
   await expect(fileView(page).locator(".cm-activeLine")).toContainText("search for pets");
@@ -197,8 +236,6 @@ test("the count waits until the problems stop changing, while the panel's list f
 // #231: the left group shows the active tab's file's line endings and encoding, for a
 // request tab or a File view; nothing for anything not backed by a file.
 test.describe("the active file's facts", () => {
-  const PETS = "/demo/api/pets.http";
-  const pets = (ending: string) => ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join(ending);
 
   test("a request in an LF file shows LF and UTF-8", async ({ page }) => {
     await openApp(page);
@@ -296,7 +333,6 @@ test.describe("the active file's facts", () => {
 // #232: in a File view, the left group also shows the caret's "Ln l, Col c" (1-based,
 // columns counting characters), after the line endings and encoding.
 test.describe("the File view's caret", () => {
-  const PETS = "/demo/api/pets.http";
   const caret = (page: Page) => fileFacts(page).nth(2);
   /** The File view's editor line that reads `text`. */
   const line = (page: Page, text: string) => fileView(page).locator(".cm-line").filter({ hasText: text });
@@ -309,7 +345,7 @@ test.describe("the File view's caret", () => {
 
   test("follows the caret as it moves and as the user types", async ({ page }) => {
     await openApp(page);
-    await writeFileText(page, PETS, ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join("\n"));
+    await writeFileText(page, PETS, pets("\n"));
     await page.reload();
     await viewPets(page);
     await expect(fileFacts(page)).toHaveText(["LF", "UTF-8", "Ln 1, Col 1"]);
@@ -400,14 +436,6 @@ interface DiskMock {
 // `?download=slow` makes each send take 2 s; with `?trusted=1&status=404`,
 // samples/jetbrains.http's second request ("Post with JSON body") fails its test.
 test.describe("Runner item", () => {
-  /** Expands the folders of `path`, then picks Run file on its file. */
-  async function runFile(page: Page, ...path: string[]) {
-    for (const folder of path.slice(0, -1)) {
-      const row = treeItem(page, folder);
-      if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
-    }
-    await treeMenu(page, path.at(-1)!, "Run file");
-  }
   const stop = (page: Page) => runnerPanel(page).getByRole("button", { name: "Stop", exact: true }).click();
 
   test("isn't there before any Run; appears left of Problems, which doesn't move", async ({ page }) => {
@@ -535,18 +563,7 @@ test.describe("Runner item", () => {
 // workspace" (stored like "Trust and run") clears it; "Keep skipping" or Cancel leave
 // it. Reopening the workspace ends the skip, and the item with it.
 test.describe("Scripts skipped", () => {
-  const scriptsSkipped = (page: Page) => bottomBar(page).getByRole("button", { name: "Scripts skipped" });
-  const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
   const askAgain = (page: Page) => dialog(page, "Trust this workspace?");
-  const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
-  const openHandler = (page: Page) => openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
-
-  async function skipScripts(page: Page) {
-    await openHandler(page);
-    await send(page);
-    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
-    await expect(page.getByText("Sent without scripts: the response handler didn't run.")).toBeVisible();
-  }
 
   test("not shown before the user is asked, then shown warning-toned after Send without scripts", async ({ page }) => {
     await openApp(page);
@@ -644,98 +661,83 @@ test.describe("Scripts skipped", () => {
 const portabilityButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Portability/ });
 const portabilitySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Portability" });
 
-for (const [query, label] of [
-  ["", "HttpDesk only"],
-  ["?portability=vscode", "VS Code"],
-  ["?portability=rider", "Rider"],
-  ["?portability=vscode,rider", "VS Code · Rider"],
-] as const) {
-  test(`Portability reads "${label}" for those editors`, async ({ page }) => {
-    await openApp(page, query);
-    await expect(portabilityButton(page)).toHaveText(label);
+test.describe("Portability", () => {
+  for (const [query, label] of [
+    ["", "HttpDesk only"],
+    ["?portability=vscode", "VS Code"],
+    ["?portability=rider", "Rider"],
+    ["?portability=vscode,rider", "VS Code · Rider"],
+  ] as const) {
+    test(`reads "${label}" for those editors`, async ({ page }) => {
+      await openApp(page, query);
+      await expect(portabilityButton(page)).toHaveText(label);
+    });
+  }
+
+  test("follows Settings at once", async ({ page }) => {
+    await openApp(page);
+    await expect(portabilityButton(page)).toHaveText("HttpDesk only");
+    await page.keyboard.press("Meta+Comma");
+    const settings = dialog(page, "Settings");
+    await settings.getByRole("switch", { name: "Rider" }).click();
+    await expect(portabilityButton(page)).toHaveText("Rider");
+    await settings.getByRole("switch", { name: "VS Code" }).click();
+    await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+    await settings.getByRole("switch", { name: "Rider" }).click();
+    await expect(portabilityButton(page)).toHaveText("VS Code");
+    await settings.getByRole("switch", { name: "VS Code" }).click();
+    await expect(portabilityButton(page)).toHaveText("HttpDesk only");
   });
-}
 
-test("Portability follows Settings at once", async ({ page }) => {
-  await openApp(page);
-  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
-  await page.keyboard.press("Meta+Comma");
-  const settings = dialog(page, "Settings");
-  await settings.getByRole("switch", { name: "Rider" }).click();
-  await expect(portabilityButton(page)).toHaveText("Rider");
-  await settings.getByRole("switch", { name: "VS Code" }).click();
-  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
-  await settings.getByRole("switch", { name: "Rider" }).click();
-  await expect(portabilityButton(page)).toHaveText("VS Code");
-  await settings.getByRole("switch", { name: "VS Code" }).click();
-  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
-});
+  test("clicking it opens Settings with the Portability section in view", async ({ page }) => {
+    // Short enough that Settings must scroll to show the whole section, down to its last switch.
+    await page.setViewportSize({ width: 1000, height: 360 });
+    await openApp(page);
+    await portabilityButton(page).click();
+    await expect(portabilitySection(page)).toBeInViewport();
+    await expect(portabilitySection(page).getByRole("switch", { name: "Show portability notes as warnings" })).toBeInViewport({ ratio: 1 });
+  });
 
-test("clicking Portability opens Settings with the Portability section in view", async ({ page }) => {
-  // Short enough that Settings must scroll to show the whole section, down to its last switch.
-  await page.setViewportSize({ width: 1000, height: 360 });
-  await openApp(page);
-  await portabilityButton(page).click();
-  await expect(portabilitySection(page)).toBeInViewport();
-  await expect(portabilitySection(page).getByRole("switch", { name: "Show portability notes as warnings" })).toBeInViewport({ ratio: 1 });
-});
+  test("is reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
+    await openApp(page, "?portability=vscode");
+    await tabTo(page, portabilityButton(page), 80);
+    expect(await hasRing(portabilityButton(page))).toBe(true);
+    await expect(page.getByRole("tooltip")).toContainText("Portability notes show for VS Code");
+    await page.keyboard.press("Enter");
+    await expect(portabilitySection(page)).toBeInViewport();
+  });
 
-test("Portability is reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
-  await openApp(page, "?portability=vscode");
-  await tabTo(page, portabilityButton(page), 80);
-  expect(await hasRing(portabilityButton(page))).toBe(true);
-  await expect(page.getByRole("tooltip")).toContainText("Portability notes show for VS Code");
-  await page.keyboard.press("Enter");
-  await expect(portabilitySection(page)).toBeInViewport();
-});
+  test("with both editors off, the tooltip says Portability notes are off", async ({ page }) => {
+    await openApp(page);
+    await portabilityButton(page).hover();
+    await expect(page.getByRole("tooltip")).toContainText("Portability notes are off");
+  });
 
-test("with both editors off, the tooltip says Portability notes are off", async ({ page }) => {
-  await openApp(page);
-  await portabilityButton(page).hover();
-  await expect(page.getByRole("tooltip")).toContainText("Portability notes are off");
-});
+  test("sits left of Problems, and a longer label doesn't move Problems", async ({ page }) => {
+    await openApp(page);
+    const problems = await box(problemsButton(page));
+    const portability = await box(portabilityButton(page));
+    expect(portability.x + portability.width).toBeLessThanOrEqual(problems.x);
 
-test("Portability sits left of Problems, and a longer label doesn't move Problems", async ({ page }) => {
-  await openApp(page);
-  const problems = await box(problemsButton(page));
-  const portability = await box(portabilityButton(page));
-  expect(portability.x + portability.width).toBeLessThanOrEqual(problems.x);
+    await page.keyboard.press("Meta+Comma");
+    await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
+    await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
+    await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+    expect(await box(problemsButton(page))).toEqual(problems);
+  });
 
-  await page.keyboard.press("Meta+Comma");
-  await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
-  await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
-  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
-  expect(await box(problemsButton(page))).toEqual(problems);
-});
-
-test("Portability stays the inner end, left of History off", async ({ page }) => {
-  await openApp(page);
-  await page.keyboard.press("Meta+Comma");
-  await dialog(page, "Settings").getByRole("switch", { name: "Record History" }).click();
-  await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
-  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
-  const historyOff = await box(bottomBar(page).getByRole("button", { name: /History off/ }));
-  const portability = await box(portabilityButton(page));
-  expect(portability.x + portability.width).toBeLessThanOrEqual(historyOff.x);
+  test("stays the inner end, left of History off", async ({ page }) => {
+    await openApp(page);
+    await flipHistory(page);
+    const off = await box(historyOff(page));
+    const portability = await box(portabilityButton(page));
+    expect(portability.x + portability.width).toBeLessThanOrEqual(off.x);
+  });
 });
 
 // #229: History off. Shown only while the History switch is off, muted (a deliberate
 // choice, not a warning). It opens Settings at the History section.
 test.describe("History off", () => {
-  const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
-  const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
-  const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
-
-  /** Flips the History switch in Settings (keeping what's stored when turning it off), then closes Settings. */
-  async function flipHistory(page: Page) {
-    await page.keyboard.press("Meta+Comma");
-    const wasOn = (await historySwitch(page).getAttribute("aria-checked")) === "true";
-    await historySwitch(page).click();
-    if (wasOn) await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
-    await expect(historySwitch(page)).toHaveAttribute("aria-checked", wasOn ? "false" : "true");
-    await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
-  }
-
   test("shows, muted, only while the History switch is off", async ({ page }) => {
     await openApp(page);
     await expect(historyOff(page)).toHaveCount(0);
