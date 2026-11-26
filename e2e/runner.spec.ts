@@ -30,7 +30,7 @@ test("Run file sends every request in order and the panel shows each result, whi
 
   await expect(state(page, "Get pet image", "Passed")).toBeVisible();
   expect((await sentRequests(page)).map((r) => r.method)).toEqual(["GET", "POST", "GET"]);
-  await expect(runner(page)).toContainText("3 passed · 0 failed");
+  await expect(runner(page)).toContainText("Run: 3 passed");
   await expect(row(page, "Create pet")).toContainText("201");
 
   await row(page, "Create pet").click();
@@ -52,7 +52,7 @@ test("a failing client.test fails its request, and an error status alone doesn't
   await expect(row(page, "Post with JSON body")).toContainText("0 passed · 1 failed");
   await expect(state(page, "Get request with a header", "Passed")).toBeVisible();
   await expect(row(page, "Get request with a header")).toContainText("404");
-  await expect(runner(page)).toContainText("4 passed · 1 failed");
+  await expect(runner(page)).toContainText("Run: 4 passed · 1 failed");
 });
 
 test("an open tab's unsaved edits are sent and marked; other requests come from the file", async ({ page }) => {
@@ -119,7 +119,7 @@ test("Stop cancels the request in flight, and the panel shows which requests did
   await expect(state(page, "List pets", "Stopped")).toBeVisible();
   await expect(state(page, "Create pet", "Didn't run")).toBeVisible();
   await expect(state(page, "Get pet image", "Didn't run")).toBeVisible();
-  await expect(runner(page)).toContainText("3 didn't run");
+  await expect(runner(page)).toContainText("Run stopped: 0/3");
   await expect(runner(page).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   expect(await sentRequests(page)).toHaveLength(1);
 });
@@ -139,7 +139,7 @@ test("with Stop on first failure, a run ends at the first failing request and th
   for (const name of ["Multi-line query", "Basic auth", "Send a form with the text and file fields"]) {
     await expect(state(page, name, "Didn't run")).toBeVisible();
   }
-  await expect(runner(page)).toContainText("1 passed · 1 failed · 3 didn't run");
+  await expect(runner(page)).toContainText("Run stopped: 2/5 · 1 failed");
   expect(await sentRequests(page)).toHaveLength(2);
   expect(await mockState(page, "runOptions")).toEqual([{ skipScripts: false, delayMs: 150, stopOnFailure: true }]);
 
@@ -153,7 +153,7 @@ test("with Stop on first failure, a run ends at the first failing request and th
 test("after fixing a failing request, Re-run failed runs only the failed ones, as the tab now shows them, and they pass", async ({ page }) => {
   await openApp(page, "?trusted=1");
   await runFile(page, "samples", "jetbrains.http");
-  await expect(runner(page)).toContainText("4 passed · 1 failed");
+  await expect(runner(page)).toContainText("Run: 4 passed · 1 failed");
   const rerun = runner(page).getByRole("button", { name: "Re-run failed" });
 
   // The fix: its test expects the 201 the mock answers a POST with. Left unsaved.
@@ -169,7 +169,7 @@ test("after fixing a failing request, Re-run failed runs only the failed ones, a
   await expect(state(page, "Post with JSON body", "Passed")).toBeVisible();
   await expect(runner(page).getByRole("listitem")).toHaveCount(1);
   await expect(row(page, "Post with JSON body")).toContainText("unsaved");
-  await expect(runner(page)).toContainText("1 passed · 0 failed");
+  await expect(runner(page)).toContainText("Run: 1 passed");
   const sent = await sentRequests(page);
   expect(sent).toHaveLength(6);
   expect(sent[5].method).toBe("POST");
@@ -203,7 +203,7 @@ test("Run folder runs every file under it, subfolders first as the tree shows th
     "{{baseUrl}}/pets",
     "{{baseUrl}}/png/{{petId}}",
   ]);
-  await expect(runner(page)).toContainText("5 passed · 0 failed");
+  await expect(runner(page)).toContainText("Run: 5 passed");
   await expect(group(page, "api/v2/orders.http").getByRole("listitem")).toHaveText([/List orders/, /Create order/]);
   await expect(group(page, "api/pets.http").getByRole("listitem")).toHaveText([/List pets/, /Create pet/, /Get pet image/]);
 });
@@ -281,7 +281,7 @@ test("a finished run exports as JUnit XML or JSON to the file picked", async ({ 
   await openApp(page, "?trusted=1&status=404");
 
   await runFile(page, "samples", "jetbrains.http");
-  await expect(runner(page)).toContainText("4 passed · 1 failed");
+  await expect(runner(page)).toContainText("Run: 4 passed · 1 failed");
   await runner(page).getByRole("button", { name: "Export" }).click();
   await page.getByRole("menuitem", { name: "JUnit XML…" }).click();
 
@@ -316,7 +316,7 @@ test("the options' labels sit clear of their controls", async ({ page }) => {
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await runFile(page, "api", "pets.http");
-  await expect(runner(page)).toContainText("3 passed · 0 failed");
+  await expect(runner(page)).toContainText("Run: 3 passed");
 
   const options = runner(page).getByRole("group", { name: "Runner options" });
   const label = await options.getByText("Delay", { exact: true }).boundingBox();
@@ -332,7 +332,7 @@ test("each result's status and time line up with the other rows', whatever the t
   await openApp(page);
   await openRequest(page, ["api", "pets.http"], "List pets");
   await runFile(page, "api", "pets.http");
-  await expect(runner(page)).toContainText("3 passed · 0 failed");
+  await expect(runner(page)).toContainText("Run: 3 passed");
 
   // The mock answers every request in 38 ms: give the rows times of different widths.
   const rows = runner(page).getByRole("listitem");
