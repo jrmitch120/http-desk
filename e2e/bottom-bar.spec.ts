@@ -7,7 +7,7 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, urlBar } from "./helpers";
+import { dialog, hasRing, openApp, openRequest, tabTo, urlBar } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
@@ -59,8 +59,8 @@ test("spans the bottom of the window, below the panel area, with Problems at its
 
   const problems = await box(problemsButton(page));
   expect(bar.x + bar.width - (problems.x + problems.width)).toBeLessThan(16);
-  // Nothing else is in it yet.
-  await expect(bottomBar(page).getByRole("button")).toHaveCount(1);
+  // By default only Problems and Portability (#230), which is always shown.
+  await expect(bottomBar(page).getByRole("button")).toHaveCount(2);
 });
 
 test("with no problems it shows a muted 0", async ({ page }) => {
@@ -184,4 +184,73 @@ test("the count waits until the problems stop changing, while the panel's list f
   expect(changed.list.length).toBeGreaterThan(0);
   const lastListChange = Math.max(...changed.list);
   expect(changed.count[0].at - lastListChange).toBeGreaterThanOrEqual(250);
+});
+
+// #230: Portability, always shown at the inner end of the right group, names the editors
+// turned on in Settings → Portability, or "HttpDesk only" with both off. It opens Settings there.
+const portabilityButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Portability/ });
+const portabilitySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Portability" });
+
+for (const [query, label] of [
+  ["", "HttpDesk only"],
+  ["?portability=vscode", "VS Code"],
+  ["?portability=rider", "Rider"],
+  ["?portability=vscode,rider", "VS Code · Rider"],
+] as const) {
+  test(`Portability reads "${label}" for those editors`, async ({ page }) => {
+    await openApp(page, query);
+    await expect(portabilityButton(page)).toHaveText(label);
+  });
+}
+
+test("Portability follows Settings at once", async ({ page }) => {
+  await openApp(page);
+  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
+  await page.keyboard.press("Meta+Comma");
+  const settings = dialog(page, "Settings");
+  await settings.getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("Rider");
+  await settings.getByRole("switch", { name: "VS Code" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+  await settings.getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code");
+  await settings.getByRole("switch", { name: "VS Code" }).click();
+  await expect(portabilityButton(page)).toHaveText("HttpDesk only");
+});
+
+test("clicking Portability opens Settings with the Portability section in view", async ({ page }) => {
+  // Short enough that Settings must scroll to show the whole section, down to its last switch.
+  await page.setViewportSize({ width: 1000, height: 360 });
+  await openApp(page);
+  await portabilityButton(page).click();
+  await expect(portabilitySection(page)).toBeInViewport();
+  await expect(portabilitySection(page).getByRole("switch", { name: "Show portability notes as warnings" })).toBeInViewport({ ratio: 1 });
+});
+
+test("Portability is reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
+  await openApp(page, "?portability=vscode");
+  await tabTo(page, portabilityButton(page), 80);
+  expect(await hasRing(portabilityButton(page))).toBe(true);
+  await expect(page.getByRole("tooltip")).toContainText("Portability notes show for VS Code");
+  await page.keyboard.press("Enter");
+  await expect(portabilitySection(page)).toBeInViewport();
+});
+
+test("with both editors off, the tooltip says Portability notes are off", async ({ page }) => {
+  await openApp(page);
+  await portabilityButton(page).hover();
+  await expect(page.getByRole("tooltip")).toContainText("Portability notes are off");
+});
+
+test("Portability sits left of Problems, and a longer label doesn't move Problems", async ({ page }) => {
+  await openApp(page);
+  const problems = await box(problemsButton(page));
+  const portability = await box(portabilityButton(page));
+  expect(portability.x + portability.width).toBeLessThanOrEqual(problems.x);
+
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
+  await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
+  await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
+  expect(await box(problemsButton(page))).toEqual(problems);
 });
