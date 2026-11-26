@@ -88,7 +88,7 @@
       <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" onblur={(e) => setPath(f.key, e.currentTarget.value)} onkeydown={(e) => onPathKeydown(e, f.key)} />
       <button class="btn small" onclick={() => browse(f.key)}>Browse…</button>
       {#if exec[f.key]}
-        <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={13} /></button>
+        <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={14} /></button>
       {/if}
     </div>
   </div>

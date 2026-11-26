@@ -35,7 +35,7 @@
     use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
     onclick={toggleProblems}
   >
-    <Icon name="alert" size={13} /><span class="count">{shownCount}</span>
+    <Icon name="alert" size={14} /><span class="count">{shownCount}</span>
   </button>
 </footer>
 

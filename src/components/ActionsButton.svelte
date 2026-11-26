@@ -35,7 +35,7 @@
   use:tooltip={tip}
   onclick={toggle}
 >
-  <Icon name="more" size={13} />
+  <Icon name="more" size={14} />
 </button>
 
 <style>

@@ -248,7 +248,7 @@
               <div class="group">
                 <div class="group-head">
                   <button class="icon-btn" onclick={() => (collapsed[g.name] = !collapsed[g.name])} aria-label={collapsed[g.name] ? "Expand" : "Collapse"} use:tooltip>
-                    <Icon name={collapsed[g.name] ? "chevron-right" : "chevron-down"} size={13} />
+                    <Icon name={collapsed[g.name] ? "chevron-right" : "chevron-down"} size={14} />
                   </button>
                   <Checkbox
                     checked={count === g.ops.length}

@@ -204,11 +204,11 @@
       {#if app.sidebarView === "explorer"}
         <!-- Beside the switch (small icon buttons): they fit there at the default width (280 px) and wider. -->
         <div class="actions">
-          <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" size={16} /></button>
-          <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" size={16} /></button>
-          <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" size={16} /></button>
-          <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" size={16} /></button>
-          <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" size={16} /></button>
+          <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
+          <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
+          <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
+          <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
+          <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
         </div>
       {/if}
       <span class="divider" aria-hidden="true"></span>
@@ -216,7 +216,7 @@
         class="icon-btn small"
         aria-label="Collapse sidebar"
         use:tooltip={`Collapse sidebar (${shortcutHint("toggle-sidebar")})`}
-        onclick={() => runCommand("toggle-sidebar")}><Icon name="sidebar-collapse" size={16} /></button
+        onclick={() => runCommand("toggle-sidebar")}><Icon name="sidebar-collapse" /></button
       >
     </div>
   </div>
@@ -372,9 +372,7 @@
   }
   /* A notch under .small, so the five fit beside the switch at 280 px; square, so a
      hover's background sits evenly around the icon. (Collapse sidebar stays .small:
-     History's Clear button lines up under it.) The header's icons are 16 px: even, as
-     these buttons are, so an icon sits a whole pixel in from each edge. Off a whole
-     pixel (an odd icon in an even button), it's drawn a pixel off-centre. */
+     History's Clear button lines up under it.) */
   .actions .icon-btn {
     width: 20px;
     height: 20px;

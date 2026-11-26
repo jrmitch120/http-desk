@@ -417,7 +417,7 @@
           {:else if t.id === "delete"}
             <span class="c-del">
               {#if !isGhost}
-                <button class="icon-btn" aria-label="Delete" use:tooltip onclick={() => remove(i)}><Icon name="trash" size={13} /></button>
+                <button class="icon-btn" aria-label="Delete" use:tooltip onclick={() => remove(i)}><Icon name="trash" size={14} /></button>
               {/if}
             </span>
           {/if}

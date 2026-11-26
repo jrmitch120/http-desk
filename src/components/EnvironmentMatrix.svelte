@@ -241,7 +241,7 @@
     {#if variable?.secret}
       {@const k = key(column, row.name)}
       <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(k) : revealed.add(k))}>
-        <Icon name={shown ? "eye-off" : "eye"} size={13} />
+        <Icon name={shown ? "eye-off" : "eye"} size={14} />
       </button>
     {/if}
     {#if variable}
@@ -251,7 +251,7 @@
         use:tooltip={`Unset in ${label}: remove it from ${column === SHARED ? "the shared variables" : "this environment"}`}
         onclick={(e) => unset(column, row.name, e.currentTarget.closest<HTMLElement>(".m-cell")!)}
       >
-        <Icon name="x" size={13} />
+        <Icon name="x" size={14} />
       </button>
     {/if}
     <button
@@ -264,7 +264,7 @@
         : `Shareable in ${label}: saved in http-client.env.json. Click to make it a Secret.`}
       onclick={() => setCell(set, column, row.name, { secret: !variable?.secret })}
     >
-      <Icon name={variable?.secret ? "lock" : "unlock"} size={13} />
+      <Icon name={variable?.secret ? "lock" : "unlock"} size={14} />
     </button>
   </div>
 {/snippet}
