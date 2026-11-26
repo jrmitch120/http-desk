@@ -7,13 +7,16 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, urlBar } from "./helpers";
+import { activeTab, dialog, hasRing, openApp, openRequest, seedHistory, tab, tabTo, treeMenu, urlBar, writeFileText } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
 const problemsPanel = (page: Page) => page.getByRole("region", { name: "Problems" });
 const group = (page: Page, file: string) => problemsPanel(page).getByRole("group", { name: file });
 const fileView = (page: Page) => page.locator(".file-view .file-code");
+/** The left group: the active tab's file's facts, each a focusable text with a tooltip. */
+const fileGroup = (page: Page) => bottomBar(page).getByRole("group", { name: "Active file" });
+const fileFacts = (page: Page) => fileGroup(page).locator(":scope > *");
 
 /** A theme token (`--warning`) as a computed colour, comparable with an element's computed colour. */
 function token(page: Page, name: string): Promise<string> {
@@ -185,3 +188,108 @@ test("the count waits until the problems stop changing, while the panel's list f
   const lastListChange = Math.max(...changed.list);
   expect(changed.count[0].at - lastListChange).toBeGreaterThanOrEqual(250);
 });
+
+// #231: the left group shows the active tab's file's line endings and encoding, for a
+// request tab or a File view; nothing for anything not backed by a file.
+test.describe("the active file's facts", () => {
+  const PETS = "/demo/api/pets.http";
+  const pets = (ending: string) => ["### List pets", "GET {{baseUrl}}/pets", "", "### Create pet", "POST {{baseUrl}}/pets", ""].join(ending);
+
+  test("a request in an LF file shows LF and UTF-8", async ({ page }) => {
+    await openApp(page);
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+  });
+
+  for (const { name, text, facts } of [
+    { name: "a CRLF file", text: pets("\r\n"), facts: ["CRLF", "UTF-8"] },
+    // Mostly CRLF; List pets' request line ends in LF.
+    { name: "a file with mixed endings", text: pets("\r\n").replace("pets\r\n", "pets\n"), facts: ["Mixed", "UTF-8"] },
+    { name: "a file that starts with a BOM", text: `﻿${pets("\n")}`, facts: ["LF", "UTF-8 BOM"] },
+  ]) {
+    test(`a request in ${name} shows ${facts.join(" and ")}, and so does the file's File view`, async ({ page }) => {
+      await openApp(page);
+      await writeFileText(page, PETS, text);
+      await page.reload();
+      await openRequest(page, ["api", "pets.http"], "List pets");
+      await expect(fileFacts(page)).toHaveText(facts);
+
+      await treeMenu(page, "pets.http", "View file as text");
+      await expect(activeTab(page)).toContainText("pets.http");
+      await expect(fileFacts(page)).toHaveText(facts);
+    });
+  }
+
+  test("they follow the active tab, and the left group is empty on a History entry or with no tab open", async ({ page }) => {
+    await seedHistory(page, [{ url: "https://api.test/pets/1", time: new Date(Date.UTC(2026, 10, 16, 8, 1)).toISOString() }]);
+    await openApp(page);
+    await writeFileText(page, "/demo/samples/jetbrains.http", "### Plain\r\nGET https://api.test/plain\r\n");
+    await page.reload();
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+    await openRequest(page, ["samples", "jetbrains.http"], "Plain");
+    await expect(fileFacts(page)).toHaveText(["CRLF", "UTF-8"]);
+    await tab(page, "List pets").click();
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+
+    // A History entry isn't backed by a file.
+    await page.getByRole("radiogroup", { name: "Sidebar" }).getByRole("radio", { name: "History" }).click();
+    await page.getByRole("region", { name: "Workspace History" }).getByRole("listitem").first().click();
+    await expect(dialog(page, "History entry")).toBeVisible();
+    await expect(fileFacts(page)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog(page, "History entry")).toHaveCount(0);
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8"]);
+
+    // No tab open.
+    await activeTab(page).click();
+    await page.keyboard.press("Meta+W");
+    await page.keyboard.press("Meta+W");
+    await expect(page.getByRole("tablist", { name: "Open requests" }).getByRole("tab")).toHaveCount(0);
+    await expect(fileFacts(page)).toHaveCount(0);
+  });
+
+  test("a change on disk updates them", async ({ page }) => {
+    await openApp(page);
+    await writeFileText(page, PETS, pets("\r\n"));
+    await page.reload();
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    await expect(fileFacts(page)).toHaveText(["CRLF", "UTF-8"]);
+
+    // Another editor saves it with LF endings and a BOM.
+    await page.evaluate(
+      async ([path, text]) => {
+        const mock = (window as unknown as { __mock: DiskMock }).__mock;
+        mock.writeText(path, text);
+        await mock.changeFile(path, mock.files[path]);
+      },
+      [PETS, `﻿${pets("\n")}`],
+    );
+    await expect(fileFacts(page)).toHaveText(["LF", "UTF-8 BOM"]);
+  });
+
+  test("each fact's tooltip is reachable from the keyboard and says what HttpDesk keeps", async ({ page }) => {
+    await openApp(page);
+    await writeFileText(page, PETS, `﻿${pets("\r\n").replace("pets\r\n", "pets\n")}`);
+    await page.reload();
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    const endings = fileGroup(page).getByText("Mixed", { exact: true });
+    const encoding = fileGroup(page).getByText("UTF-8 BOM", { exact: true });
+
+    await tabTo(page, endings, 80);
+    expect(await hasRing(endings)).toBe(true);
+    await expect(page.getByRole("tooltip")).toHaveText(
+      "Line endings: mixed CRLF and LF. HttpDesk keeps each line's own ending; a new line gets CRLF, the file's most common.",
+    );
+    await page.keyboard.press("Tab");
+    await expect(encoding).toBeFocused();
+    await expect(page.getByRole("tooltip")).toHaveText("Encoding: UTF-8, starting with a byte order mark (BOM). HttpDesk keeps the BOM on save.");
+  });
+});
+
+/** The mock's files "on disk", and its way of changing one while the app runs (src/dev/mock.ts). */
+interface DiskMock {
+  files: Record<string, unknown>;
+  writeText: (path: string, text: string) => void;
+  changeFile: (path: string, file: unknown) => Promise<void>;
+}

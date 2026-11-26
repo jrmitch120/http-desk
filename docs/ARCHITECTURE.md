@@ -1029,7 +1029,12 @@ Decisions made during implementation, beyond the plan above:
   user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
   prompt); no item changes a setting or anything else by itself. It has two groups: on
   the left, the active tab's file (its line endings and encoding, and the caret in a File
-  view); on the right, workspace-wide state, growing leftward from Problems. The right
+  view), for a request tab or a File view, from its document's `lineEnding`,
+  `mixedEndings` and `bom` (labels and tooltips from `fileFacts`, src/lib/fileFacts.ts:
+  "LF" / "CRLF" / "Mixed", "UTF-8" / "UTF-8 BOM"; the tooltips say HttpDesk keeps them as
+  the file has them). They follow the active tab and the document as reloaded from disk;
+  the group is empty with no tab open or while a History entry, a named exchange or the
+  environment editor covers the tabs (#231). On the right, workspace-wide state, growing leftward from Problems. The right
   group's places, reading leftward from the right end: **Problems, Runner, Scripts
   skipped, History off, Portability** (in the markup, left to right, the reverse), each
   in its own place, so adding one touches no other. Problems is at the right end, its
