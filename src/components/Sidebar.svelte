@@ -197,28 +197,26 @@
 
 <div class="sidebar">
   <div class="head">
-    <!-- The view's own controls wrap onto a second row before the Collapse sidebar
-         button moves: it stays at the end of the first, down to the minimum width. -->
-    <div class="own">
-      <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
+    <!-- The view's own controls and Collapse sidebar (after a divider) are one group
+         that wraps onto a second row together when the pane is too narrow. -->
+    <div class="views"><SegmentedControl label="Sidebar" options={VIEWS} value={app.sidebarView} onchange={(v) => (app.sidebarView = v)} /></div>
+    <div class="tools">
       {#if app.sidebarView === "explorer"}
         <!-- Beside the switch (small icon buttons): they fit there at the default width (280 px) and wider. -->
         <div class="actions">
-          <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" /></button>
-          <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" /></button>
-          <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" /></button>
-          <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" /></button>
-          <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" /></button>
+          <button class="icon-btn small" aria-label="New .http file" use:tooltip onclick={() => app.createFile(app.root!)}><Icon name="plus" size={16} /></button>
+          <button class="icon-btn small" aria-label="New folder" use:tooltip onclick={() => app.createFolder(app.root!)}><Icon name="folder" size={16} /></button>
+          <button class="icon-btn small" aria-label="Import OpenAPI" use:tooltip onclick={() => (app.modal = "openapi")}><Icon name="import" size={16} /></button>
+          <button class="icon-btn small" aria-label="Refresh" use:tooltip onclick={() => app.refreshTree()}><Icon name="refresh" size={16} /></button>
+          <button class="icon-btn small" aria-label="Collapse all" use:tooltip onclick={collapseAll}><Icon name="fold" size={16} /></button>
         </div>
       {/if}
-    </div>
-    <div class="end">
       <span class="divider" aria-hidden="true"></span>
       <button
         class="icon-btn small"
         aria-label="Collapse sidebar"
         use:tooltip={`Collapse sidebar (${shortcutHint("toggle-sidebar")})`}
-        onclick={() => runCommand("toggle-sidebar")}><Icon name="sidebar-collapse" /></button
+        onclick={() => runCommand("toggle-sidebar")}><Icon name="sidebar-collapse" size={16} /></button
       >
     </div>
   </div>
@@ -349,43 +347,42 @@
      sidebar share one row, so each is a little tighter here than elsewhere. */
   .head {
     display: flex;
-    align-items: flex-start;
-    gap: 3px;
-    padding: 8px 4px 4px 8px;
-  }
-  .own {
-    flex: 1;
-    min-width: 0;
-    display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
+    padding: 8px 4px 4px 8px;
+  }
+  .views {
+    flex: none;
   }
   .views :global(.segmented button) {
     padding: 0 var(--space-2);
   }
-  .actions .icon-btn {
-    width: 20px;
-  }
-  /* As tall as the view switch, so the divider and button centre on its row. */
-  .end {
-    flex: none;
+  /* At the row's end, or wrapped whole onto the next row, still at the end. As tall
+     as the view switch, so it centres on the switch's row. */
+  .tools {
     display: flex;
     align-items: center;
     gap: 3px;
     height: 28px;
+    margin-left: auto;
+  }
+  .actions {
+    display: flex;
+  }
+  /* A notch under .small, so the five fit beside the switch at 280 px; square, so a
+     hover's background sits evenly around the icon. (Collapse sidebar stays .small:
+     History's Clear button lines up under it.) The header's icons are 16 px: even, as
+     these buttons are, so an icon sits a whole pixel in from each edge. Off a whole
+     pixel (an odd icon in an even button), it's drawn a pixel off-centre. */
+  .actions .icon-btn {
+    width: 20px;
+    height: 20px;
   }
   .divider {
     width: 1px;
     height: 16px;
     background: var(--border);
-  }
-  .views {
-    flex: none;
-  }
-  .actions {
-    display: flex;
-    margin-left: auto;
   }
   .search {
     margin: 4px 10px 8px;
