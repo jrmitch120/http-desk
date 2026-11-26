@@ -43,6 +43,15 @@
     <!-- 5. Portability -->
     <!-- 4. History off -->
     <!-- 3. Scripts skipped -->
+    {#if app.trust.skipped}
+      <button
+        class="icon-btn quiet scripts-skipped"
+        use:tooltip={"Scripts skipped: sends in this workspace skip their scripts. Click to trust it, or keep skipping."}
+        onclick={() => app.trust.askAgain()}
+      >
+        Scripts skipped
+      </button>
+    {/if}
     <!-- 2. Runner -->
     <!-- 1. Problems: the right end. -->
     <button
@@ -83,6 +92,14 @@
   }
   .bottom-bar .icon-btn {
     height: 20px;
+  }
+  /* Scripts skipped: warning-toned, a label rather than an icon. */
+  .bottom-bar .scripts-skipped {
+    flex: none;
+    width: auto;
+    padding: 0 var(--space-2);
+    font-size: 11.5px;
+    color: var(--warning);
   }
   /* A fixed width (icon plus "99+"), icon and count centred in it: a longer count
      shifts them inside the button, never the button's neighbours. */

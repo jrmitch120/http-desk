@@ -7,7 +7,7 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, openRequest, urlBar } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, sentRequests, urlBar } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
@@ -184,4 +184,113 @@ test("the count waits until the problems stop changing, while the panel's list f
   expect(changed.list.length).toBeGreaterThan(0);
   const lastListChange = Math.max(...changed.list);
   expect(changed.count[0].at - lastListChange).toBeGreaterThanOrEqual(250);
+});
+
+// #228: "Scripts skipped", warning-toned, while the user's "Send without scripts" is in
+// force for the open, untrusted workspace. Clicking it asks again: "Trust this
+// workspace" (stored like "Trust and run") clears it; "Keep skipping" or Cancel leave
+// it. Reopening the workspace ends the skip, and the item with it.
+test.describe("Scripts skipped", () => {
+  const scriptsSkipped = (page: Page) => bottomBar(page).getByRole("button", { name: "Scripts skipped" });
+  const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
+  const askAgain = (page: Page) => dialog(page, "Trust this workspace?");
+  const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
+  const openHandler = (page: Page) => openRequest(page, ["samples", "jetbrains.http"], "Post with JSON body");
+
+  async function skipScripts(page: Page) {
+    await openHandler(page);
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(page.getByText("Sent without scripts: the response handler didn't run.")).toBeVisible();
+  }
+
+  test("not shown before the user is asked, then shown warning-toned after Send without scripts", async ({ page }) => {
+    await openApp(page);
+    await openHandler(page);
+    await expect(problemsButton(page)).toBeVisible();
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(scriptsSkipped(page)).toHaveText("Scripts skipped");
+    await expect.poll(() => colour(scriptsSkipped(page))).toBe(await token(page, "--warning"));
+
+    await scriptsSkipped(page).hover();
+    await expect(page.getByRole("tooltip")).toContainText("sends in this workspace skip their scripts");
+    await expect(page.getByRole("tooltip")).toContainText("trust");
+  });
+
+  test("appears left of Problems, in the right group, and Problems' box doesn't move", async ({ page }) => {
+    await openApp(page);
+    await openHandler(page);
+    const before = await box(problemsButton(page));
+    await send(page);
+    await trustPrompt(page).getByRole("button", { name: "Send without scripts" }).click();
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    expect(await box(problemsButton(page))).toEqual(before);
+    const item = await box(scriptsSkipped(page));
+    expect(item.x + item.width).toBeLessThanOrEqual(before.x);
+    expect(item.x).toBeGreaterThan((await box(bottomBar(page))).width / 2);
+  });
+
+  test("not shown in a trusted workspace", async ({ page }) => {
+    await openApp(page, "?trusted=1");
+    await openHandler(page);
+    await send(page);
+    await expect.poll(() => mockState(page, "sentSkipScripts")).toEqual([false]);
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+  });
+
+  test("clicking it asks again; Keep skipping and Cancel leave it", async ({ page }) => {
+    await openApp(page);
+    await skipScripts(page);
+
+    await scriptsSkipped(page).click();
+    const prompt = askAgain(page);
+    await expect(prompt).toContainText("/demo");
+    for (const name of ["Cancel", "Keep skipping", "Trust this workspace"]) {
+      await expect(prompt.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(prompt.getByRole("button", { name: "Keep skipping" })).toBeFocused();
+    await prompt.getByRole("button", { name: "Keep skipping" }).click();
+    await expect(prompt).toBeHidden();
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    await scriptsSkipped(page).click();
+    await askAgain(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(askAgain(page)).toBeHidden();
+    await expect(scriptsSkipped(page)).toBeVisible();
+    expect((await mockState(page, "settings")).trustedWorkspaces).toEqual([]);
+  });
+
+  test("Trust this workspace removes it, lists the workspace in Settings, and the next send runs its script", async ({ page }) => {
+    await openApp(page);
+    await skipScripts(page);
+
+    await scriptsSkipped(page).click();
+    await askAgain(page).getByRole("button", { name: "Trust this workspace" }).click();
+    await expect(askAgain(page)).toBeHidden();
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+    expect((await mockState(page, "settings")).trustedWorkspaces).toEqual(["/demo"]);
+
+    await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+    await expect(dialog(page, "Settings").getByTestId("trusted-workspace")).toContainText("/demo");
+    await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+
+    await send(page);
+    await expect.poll(() => mockState(page, "sentSkipScripts")).toEqual([true, false]);
+    await expect(trustPrompt(page)).toBeHidden();
+  });
+
+  test("reopening the workspace clears it", async ({ page }) => {
+    await openApp(page, "?recent=/work/api");
+    await skipScripts(page);
+    await expect(scriptsSkipped(page)).toBeVisible();
+
+    // The mock opens the demo workspace again for any recent path it doesn't know.
+    await menuClick(page, "open-recent:/work/api");
+    await expect(scriptsSkipped(page)).toHaveCount(0);
+    expect(await sentRequests(page)).toHaveLength(1);
+  });
 });
