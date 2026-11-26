@@ -302,7 +302,7 @@
     height: 2px;
     display: flex;
   }
-  .runner.muted .run-line {
+  .bottom-bar .runner.muted:not(.active):not(:hover) .run-line {
     opacity: 0.45;
   }
   .run-line .passed {

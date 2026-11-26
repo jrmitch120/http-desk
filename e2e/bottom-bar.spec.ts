@@ -573,6 +573,10 @@ test.describe("Runner item", () => {
 
     await runnerButton(page).click();
     await expect(runnerPanel(page)).toBeVisible();
+    // Pressed, it isn't muted, and neither is its line.
+    await page.mouse.move(0, 300);
+    await expect.poll(() => colour(runnerButton(page))).toBe(text);
+    expect(await lineOpacity()).toBe(1);
     await runnerButton(page).click();
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(muted);
