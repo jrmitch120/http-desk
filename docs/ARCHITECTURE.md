@@ -1037,8 +1037,10 @@ Decisions made during implementation, beyond the plan above:
   centred in a fixed-width button. It is pressed (`aria-pressed`) while the Problems
   panel is open; clicking it opens the panel, or closes it wherever focus is (#217).
   Being fixed-width, a changing count moves nothing (in the top bar, a growing count
-  pushed its neighbours), and items appearing to its left never move it.
-  Portability, the inner end, is always shown: the editors turned on in Settings →
+  pushed its neighbours), and items appearing to its left never move it. **History off**
+  shows, muted (a deliberate choice, not a warning), only while the History switch is
+  off (`app.history.enabled`); clicking it opens Settings at History (#229).
+  **Portability**, the inner end, is always shown: the editors turned on in Settings →
   Portability ("VS Code", "Rider", "VS Code · Rider"), or "HttpDesk only" with both off,
   when no Portability notes show (`portabilityLabel`); it opens Settings at Portability
   (#230). The top bar

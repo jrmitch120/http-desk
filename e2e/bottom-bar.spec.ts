@@ -254,3 +254,76 @@ test("Portability sits left of Problems, and a longer label doesn't move Problem
   await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
   expect(await box(problemsButton(page))).toEqual(problems);
 });
+
+test("Portability stays the inner end, left of History off", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page, "Settings").getByRole("switch", { name: "Record History" }).click();
+  await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+  await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+  const historyOff = await box(bottomBar(page).getByRole("button", { name: /History off/ }));
+  const portability = await box(portabilityButton(page));
+  expect(portability.x + portability.width).toBeLessThanOrEqual(historyOff.x);
+});
+
+// #229: History off. Shown only while the History switch is off, muted (a deliberate
+// choice, not a warning). It opens Settings at the History section.
+test.describe("History off", () => {
+  const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
+  const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
+  const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
+
+  /** Flips the History switch in Settings (keeping what's stored when turning it off), then closes Settings. */
+  async function flipHistory(page: Page) {
+    await page.keyboard.press("Meta+Comma");
+    const wasOn = (await historySwitch(page).getAttribute("aria-checked")) === "true";
+    await historySwitch(page).click();
+    if (wasOn) await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+    await expect(historySwitch(page)).toHaveAttribute("aria-checked", wasOn ? "false" : "true");
+    await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
+  }
+
+  test("shows, muted, only while the History switch is off", async ({ page }) => {
+    await openApp(page);
+    await expect(historyOff(page)).toHaveCount(0);
+
+    await flipHistory(page);
+    await expect(historyOff(page)).toHaveText("History off");
+    await expect.poll(() => colour(historyOff(page))).toBe(await token(page, "--muted"));
+
+    await flipHistory(page);
+    await expect(historyOff(page)).toHaveCount(0);
+  });
+
+  test("clicking it opens Settings with the History section in view", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openApp(page);
+    await flipHistory(page);
+
+    await historyOff(page).click();
+    await expect(historySwitch(page)).toBeInViewport();
+    await expect(historySwitch(page)).toHaveAttribute("aria-checked", "false");
+  });
+
+  test("keyboard: reachable by Tab, with a focus ring and its tooltip", async ({ page }) => {
+    await openApp(page);
+    await flipHistory(page);
+
+    await tabTo(page, historyOff(page), 80);
+    expect(await hasRing(historyOff(page))).toBe(true);
+    await expect(page.getByRole("tooltip")).toContainText("sends aren't recorded in History");
+    await expect(page.getByRole("tooltip")).toContainText("open the setting");
+    await page.keyboard.press("Enter");
+    await expect(historySwitch(page)).toBeInViewport();
+  });
+
+  test("sits left of Problems, whose box doesn't move when it appears", async ({ page }) => {
+    await openApp(page);
+    const before = await box(problemsButton(page));
+
+    await flipHistory(page);
+    const off = await box(historyOff(page));
+    expect(await box(problemsButton(page))).toEqual(before);
+    expect(off.x + off.width).toBeLessThanOrEqual(before.x);
+  });
+});

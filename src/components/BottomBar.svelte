@@ -54,7 +54,16 @@
     >
       {portability}
     </button>
-    <!-- 4. History off -->
+    <!-- 4. History off: only while the History switch is off; muted, a deliberate choice. -->
+    {#if !app.history.enabled}
+      <button
+        class="icon-btn quiet history-off"
+        use:tooltip={"History is off: sends aren't recorded in History. Click to open the setting."}
+        onclick={() => app.openSettings("history")}
+      >
+        History off
+      </button>
+    {/if}
     <!-- 3. Scripts skipped -->
     <!-- 2. Runner -->
     <!-- 1. Problems: the right end. -->
@@ -110,5 +119,12 @@
   .bottom-bar .problems {
     flex: none;
     width: 52px;
+  }
+  /* A text label, not an icon: as wide as its text. */
+  .bottom-bar .history-off {
+    width: auto;
+    padding: 0 var(--space-1);
+    font-size: 11.5px;
+    white-space: nowrap;
   }
 </style>
