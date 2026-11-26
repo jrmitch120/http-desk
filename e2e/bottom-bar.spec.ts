@@ -556,6 +556,16 @@ test.describe("Runner item", () => {
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(text);
   });
+
+  test("lasts until another workspace opens", async ({ page }) => {
+    await openApp(page, "?recent=/work/api");
+    await runFile(page, "api", "pets.http");
+    await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+
+    // The mock opens the demo workspace again for any recent path it doesn't know.
+    await menuClick(page, "open-recent:/work/api");
+    await expect(runnerButton(page)).toHaveCount(0);
+  });
 });
 
 // #228: "Scripts skipped", warning-toned, while the user's "Send without scripts" is in
@@ -781,4 +791,22 @@ test.describe("History off", () => {
     expect(await box(problemsButton(page))).toEqual(before);
     expect(off.x + off.width).toBeLessThanOrEqual(before.x);
   });
+});
+
+// #225: with every item showing, the right group reads, left to right, Portability,
+// History off, Scripts skipped, Runner, Problems; Problems' box doesn't move as the
+// others appear.
+test("with every item showing, they sit in the agreed order and Problems doesn't move", async ({ page }) => {
+  await openApp(page);
+  const before = await box(problemsButton(page));
+
+  await flipHistory(page);
+  await skipScripts(page);
+  await runFile(page, "api", "pets.http");
+  await expect(runnerButton(page)).toHaveText("Run: 3 passed");
+
+  const items = [portabilityButton(page), historyOff(page), scriptsSkipped(page), runnerButton(page), problemsButton(page)];
+  const boxes = await Promise.all(items.map(box));
+  for (let i = 1; i < boxes.length; i++) expect(boxes[i - 1].x + boxes[i - 1].width).toBeLessThanOrEqual(boxes[i].x);
+  expect(boxes.at(-1)).toEqual(before);
 });
