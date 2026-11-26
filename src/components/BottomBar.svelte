@@ -56,7 +56,6 @@
   // The Runner item: the current Run (until the next, or the workspace closes).
   const run = $derived(app.runner);
   const summary = $derived(run && runSummary(run.items, run.running));
-  const runText = $derived(summary ? [summary.label, summary.failed].filter(Boolean).join(" ") : "");
   // Once an ended Run's results have been seen in the Runner panel (shown after it
   // ended, or open as it ended), the item is muted until the next Run. In memory.
   let seenRun = $state("");
@@ -116,9 +115,9 @@
         class="icon-btn quiet counted runner"
         class:active={app.panel === "runner"}
         class:seen={!run.running && seenRun === run.runId}
-        aria-label={`Show Runner: ${runText}`}
+        aria-label={`Show Runner: ${summary.text}`}
         aria-pressed={app.panel === "runner"}
-        use:tooltip={`${runText}. Opens the Runner panel`}
+        use:tooltip={`${summary.text}. Opens the Runner panel`}
         onclick={() => togglePanelItem("runner")}
       >
         {#if run.running}

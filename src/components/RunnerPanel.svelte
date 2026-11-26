@@ -44,11 +44,7 @@
   });
 
   // As the bottom bar's Runner item says it (runSummary), so the two never disagree.
-  const summary = $derived.by(() => {
-    if (!runner) return "";
-    const { label, failed } = runSummary(runner.items, runner.running);
-    return failed ? `${label} ${failed}` : label;
-  });
+  const summary = $derived(runner ? runSummary(runner.items, runner.running).text : "");
 
   const STATE_LABEL: Record<RunItem["state"], string> = {
     queued: "Waiting",

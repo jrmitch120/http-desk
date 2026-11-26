@@ -9,6 +9,8 @@ export interface RunSummary {
   label: string;
   /** "· 1 failed" once any request has failed, else "": shown after the label, warning-toned. */
   failed: string;
+  /** The label and the failed count as one line ("Run: 11 passed · 1 failed"), for text and accessible names. */
+  text: string;
   /** The shares of all the run's requests (0 to 1) that passed, failed, and are being sent: the progress bar's fill. */
   passedShare: number;
   failedShare: number;
@@ -27,9 +29,12 @@ export function runSummary(items: readonly { state: RunItemState }[], running: b
   const finished = `${passed + failed}/${total}`;
   const stopped = !running && items.some((i) => i.state === "cancelled" || i.state === "notRun");
   const share = (n: number) => (total ? n / total : 0);
+  const label = running ? `Run ${finished}` : stopped ? `Run stopped: ${finished}` : `Run: ${passed} passed`;
+  const failedText = failed ? `· ${failed} failed` : "";
   return {
-    label: running ? `Run ${finished}` : stopped ? `Run stopped: ${finished}` : `Run: ${passed} passed`,
-    failed: failed ? `· ${failed} failed` : "",
+    label,
+    failed: failedText,
+    text: failedText ? `${label} ${failedText}` : label,
     passedShare: share(passed),
     failedShare: share(failed),
     sendingShare: running ? share(sending) : 0,
