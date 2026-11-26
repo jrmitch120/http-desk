@@ -8,9 +8,9 @@
   Two groups:
   - Left: the active tab's file, for a request tab or a File view: its line endings and
     encoding (`fileFacts`), and in a File view the caret's "Ln l, Col c" after them
-    (`caretFact`, published by the view's editor), display only. Empty with no tab open, or while something not
-    backed by a file covers the tabs (a History entry, a named exchange, the environment
-    editor).
+    (`caretFact`, published by the view's editor), display only. Empty with no tab open,
+    or while something not backed by a file covers the tabs (a History entry, a named
+    exchange, the environment editor).
   - Right: workspace-wide, growing leftward from Problems. Its places, reading leftward
     from the right end: Problems, Runner, Scripts skipped, History off, Portability. In
     the markup (left to right) that's the reverse; each item goes in its own place, so
@@ -45,11 +45,12 @@
   // In a File view, the caret's "Ln l, Col c" (#232). Last, so its changing width moves nothing else.
   const caret = $derived(fileTab?.kind === "file" ? app.fileCaret(fileTab.id) : undefined);
 
-  // A pressed toggle: clicking it while the panel is open closes the panel, wherever
-  // focus is. (The command, ⌘⇧M, closes it only with focus in it, else focuses it.)
-  function toggleProblems() {
-    if (app.panel === "problems") app.hidePanel("problems");
-    else runCommand("toggle-problems");
+  // A panel item is a pressed toggle: clicking it while its panel is open closes the
+  // panel, wherever focus is. (Its command, e.g. ⌘⇧M, closes it only with focus in it,
+  // else focuses it.)
+  function togglePanelItem(panel: "problems" | "runner") {
+    if (app.panel === panel) app.hidePanel(panel);
+    else runCommand(`toggle-${panel}`);
   }
 
   // The Runner item: the current Run (until the next, or the workspace closes).
@@ -62,11 +63,6 @@
   $effect(() => {
     if (run && !run.running && app.panel === "runner") seenRun = run.runId;
   });
-  // A pressed toggle, like Problems.
-  function toggleRunner() {
-    if (app.panel === "runner") app.hidePanel("runner");
-    else runCommand("toggle-runner");
-  }
 </script>
 
 <footer class="bottom-bar" aria-label="Bottom bar">
@@ -85,7 +81,7 @@
   <div class="group workspace">
     <!-- 5. Portability: always shown, the editors whose Portability notes show (Settings → Portability). -->
     <button
-      class="icon-btn quiet portability"
+      class="icon-btn quiet label-item portability"
       aria-label={`Portability: ${portability}`}
       use:tooltip={portabilityOff
         ? "Portability notes are off: turn on the editors you share .http files with in Settings"
@@ -97,7 +93,7 @@
     <!-- 4. History off: only while the History switch is off; muted, a deliberate choice. -->
     {#if !app.history.enabled}
       <button
-        class="icon-btn quiet history-off"
+        class="icon-btn quiet label-item history-off"
         use:tooltip={"History is off: sends aren't recorded in History. Click to open the setting."}
         onclick={() => app.openSettings("history")}
       >
@@ -107,7 +103,7 @@
     <!-- 3. Scripts skipped -->
     {#if app.trust.skipped}
       <button
-        class="icon-btn quiet scripts-skipped"
+        class="icon-btn quiet label-item scripts-skipped"
         use:tooltip={"Scripts skipped: sends in this workspace skip their scripts. Click to trust it, or keep skipping."}
         onclick={() => app.trust.askAgain()}
       >
@@ -123,7 +119,7 @@
         aria-label={`Show Runner: ${runText}`}
         aria-pressed={app.panel === "runner"}
         use:tooltip={`${runText}. Opens the Runner panel`}
-        onclick={toggleRunner}
+        onclick={() => togglePanelItem("runner")}
       >
         {#if run.running}
           <span class="run-progress" aria-hidden="true">
@@ -143,7 +139,7 @@
       aria-label={problems ? `Show Problems (${problems})` : "Show Problems"}
       aria-pressed={app.panel === "problems"}
       use:tooltip={problems ? `Problems: ${problems} in the workspace's .http files` : "Problems: none in the workspace's .http files"}
-      onclick={toggleProblems}
+      onclick={() => togglePanelItem("problems")}
     >
       <Icon name="alert" size={13} /><span class="count">{shownCount}</span>
     </button>
@@ -188,9 +184,8 @@
   .bottom-bar .icon-btn {
     height: 20px;
   }
-  /* Text labels, not icons. */
-  .bottom-bar .portability,
-  .bottom-bar .scripts-skipped {
+  /* Text labels, not icons: as wide as their text. */
+  .bottom-bar .label-item {
     flex: none;
     width: auto;
     padding: 0 var(--space-1);
@@ -254,12 +249,5 @@
     .run-progress .sending {
       animation: none;
     }
-  }
-  /* A text label, not an icon: as wide as its text. */
-  .bottom-bar .history-off {
-    width: auto;
-    padding: 0 var(--space-1);
-    font-size: 11.5px;
-    white-space: nowrap;
   }
 </style>
