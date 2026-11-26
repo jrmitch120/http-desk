@@ -26,7 +26,7 @@
   import { runCommand } from "../lib/commands";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shownProblemCount } from "../lib/problemCount";
-  import { portabilityLabel } from "../lib/portabilityLabel";
+  import { portabilityLabel, portabilityOff } from "../lib/portabilityLabel";
   import { fileFacts, type FileFact } from "../lib/fileFacts";
   import { WORKSPACE_HISTORY } from "../lib/history.svelte";
   import { runSummary } from "../lib/runSummary";
@@ -35,7 +35,7 @@
   const problems = $derived(app.problems.count);
   const shownCount = $derived(shownProblemCount(problems));
   const portability = $derived(portabilityLabel(app.portability.editors));
-  const portabilityOff = $derived(!Object.values(app.portability.editors).some(Boolean));
+  const noEditors = $derived(portabilityOff(app.portability.editors));
 
   // The tab whose file the left group describes: the active one, unless a view not
   // backed by a file covers it.
@@ -83,7 +83,7 @@
     <button
       class="icon-btn quiet label-item portability"
       aria-label={`Portability: ${portability}`}
-      use:tooltip={portabilityOff
+      use:tooltip={noEditors
         ? "Portability notes are off: turn on the editors you share .http files with in Settings"
         : `Portability notes show for ${portability}. Change the editors in Settings`}
       onclick={() => app.openSettings("portability")}

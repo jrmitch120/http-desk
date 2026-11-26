@@ -6,3 +6,8 @@ export function portabilityLabel(editors: Record<EditorName, boolean>): string {
   const on = EDITORS.filter((e) => editors[e]).map((e) => EDITOR_NAMES[e]);
   return on.length ? on.join(" · ") : "HttpDesk only";
 }
+
+/** Whether Portability notes are off: no editor turned on (the label reads "HttpDesk only"). */
+export function portabilityOff(editors: Record<EditorName, boolean>): boolean {
+  return !EDITORS.some((e) => editors[e]);
+}
