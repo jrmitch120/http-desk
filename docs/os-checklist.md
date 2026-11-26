@@ -78,7 +78,7 @@ control or the popup layer.
 - [ ] Drag the sidebar's separator past its minimum width: it stops at the minimum, then
       snaps to the rail about halfway further, and stays on release. Drag the rail's
       edge outward: the sidebar opens at its last width. At the minimum width the
-      header's Collapse sidebar button is still at the end of its first row.
+      Explorer's buttons wrap onto a second row, Collapse sidebar at its end.
 - [ ] Move the response with ⌥⌘R / Ctrl+Alt+R, View → Toggle Response Position and the
       move button at the right end of the response's status bar: the response moves between
       the right and below, the View → Response Position tick follows, and the choice

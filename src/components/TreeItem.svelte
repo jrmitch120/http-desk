@@ -138,7 +138,7 @@
     <span class="end">
       {#if dirty}<span class="dot" role="img" aria-label="Unsaved changes"></span>{/if}
       <button class="icon-btn add" aria-label="New request in this file" use:tooltip onclick={(e) => (e.stopPropagation(), app.addRequest(node.path))}>
-        <Icon name="plus" size={13} />
+        <Icon name="plus" size={14} />
       </button>
     </span>
   {/if}
@@ -246,9 +246,11 @@
     flex: 1;
     min-width: 0;
   }
+  /* 8 px, as a tab's dot (TabBar): even, so its centre is on a whole pixel and the
+     file row's + can centre on it exactly. */
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--accent);
     flex: none;
@@ -262,9 +264,13 @@
     height: 20px;
     flex: none;
   }
+  /* Centred on the dot (4 px in from the slot's right edge), not on the slot: it
+     reaches 6 px into the row's right padding. Its 14 px icon sits a whole 3 px in,
+     so it's drawn centred (an odd icon in it would be drawn a pixel off). */
   .add {
     position: absolute;
-    inset: 0;
+    top: 0;
+    right: -6px;
     width: 20px;
     height: 20px;
     visibility: hidden;
