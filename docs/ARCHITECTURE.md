@@ -1039,7 +1039,11 @@ Decisions made during implementation, beyond the plan above:
   Being fixed-width, a changing count moves nothing (in the top bar, a growing count
   pushed its neighbours), and items appearing to its left never move it. **History off**
   shows, muted (a deliberate choice, not a warning), only while the History switch is
-  off (`app.history.enabled`); clicking it opens Settings at History (#229). The top bar
+  off (`app.history.enabled`); clicking it opens Settings at History (#229).
+  **Portability**, the inner end, is always shown: the editors turned on in Settings →
+  Portability ("VS Code", "Rider", "VS Code · Rider"), or "HttpDesk only" with both off,
+  when no Portability notes show (`portabilityLabel`); it opens Settings at Portability
+  (#230). The top bar
   keeps only the update progress pill as its status. The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
