@@ -50,7 +50,7 @@
     />
     {#if matches !== null}<span class="count muted" aria-live="polite">{matches} {matches === 1 ? "match" : "matches"}</span>{/if}
     {#if value}
-      <button class="icon-btn" aria-label="Clear filter" use:tooltip={"Clear filter (Esc)"} onclick={() => onchange("")}><Icon name="x" size={13} /></button>
+      <button class="icon-btn" aria-label="Clear filter" use:tooltip={"Clear filter (Esc)"} onclick={() => onchange("")}><Icon name="x" size={14} /></button>
     {/if}
   </div>
   {#if error}<div class="error selectable" id="{id}-error" role="alert">{error}</div>{/if}

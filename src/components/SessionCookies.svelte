@@ -28,7 +28,7 @@
 
 {#snippet remove(i: number)}
   <button class="icon-btn" tabindex="-1" aria-label="Delete cookie {list[i].name}" use:tooltip onclick={() => app.deleteCookie(list[i])}>
-    <Icon name="trash" size={13} />
+    <Icon name="trash" size={14} />
   </button>
 {/snippet}
 

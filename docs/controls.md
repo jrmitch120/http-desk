@@ -399,6 +399,10 @@ Global classes in `src/app.css`, not components:
   with lines too long) takes `aria-disabled="true"` rather than `disabled`, with the
   reason as its tooltip, and its click does nothing: it stays focusable, so the reason
   is reachable from the keyboard and read out as its description. It shows dimmed.
+  Its size and its icon's are even (the `Icon` default, 16 px, or 12 / 14): centred, an
+  even icon in an even button sits a whole pixel in from each edge. An odd one sits half
+  a pixel in, and is drawn a pixel off, so the hover background is wider on one side.
+  `e2e/icon-centring.spec.ts` checks every icon button on the main screens.
   `.glyph` shows a short monospace text glyph in place of the icon, for toggles that are
   conventionally text (the find bar's `Aa`, `.*`, `ab`); the `aria-label` still names it.
   `.small` (`--control-h-icon-sm`, 22px) is a notch smaller, for a row of them that must

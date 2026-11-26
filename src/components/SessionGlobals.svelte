@@ -38,7 +38,7 @@
               <td class="value">{g.value}</td>
               <td class="actions">
                 <button class="icon-btn" tabindex="-1" aria-label="Delete Global variable {g.name}" use:tooltip onclick={() => app.deleteGlobal(g.name)}>
-                  <Icon name="trash" size={13} />
+                  <Icon name="trash" size={14} />
                 </button>
               </td>
             </tr>

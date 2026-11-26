@@ -398,7 +398,7 @@
   <VarField class="cell" value={row.value} placeholder="Value" label="Value" masked={!shown} {variables} onchange={(value) => setRow({ value })} />
   {#if row.secret && !ghost}
     <button class="icon-btn reveal" aria-label={shown ? "Hide value" : "Show value"} use:tooltip onclick={() => (shown ? revealed.delete(row) : revealed.add(row))}>
-      <Icon name={shown ? "eye-off" : "eye"} size={13} />
+      <Icon name={shown ? "eye-off" : "eye"} size={14} />
     </button>
   {/if}
 {/snippet}
@@ -415,7 +415,7 @@
         : "Shareable: saved in http-client.env.json. Click to make it a Secret."}
       onclick={() => setRow({ secret: !row.secret })}
     >
-      <Icon name={row.secret ? "lock" : "unlock"} size={13} />
+      <Icon name={row.secret ? "lock" : "unlock"} size={14} />
     </button>
   {/if}
 {/snippet}
