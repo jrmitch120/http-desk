@@ -41,7 +41,16 @@
   </div>
   <div class="group workspace">
     <!-- 5. Portability -->
-    <!-- 4. History off -->
+    <!-- 4. History off: only while the History switch is off; muted, a deliberate choice. -->
+    {#if !app.history.enabled}
+      <button
+        class="icon-btn quiet history-off"
+        use:tooltip={"History is off: sends aren't recorded in History. Click to open the setting."}
+        onclick={() => app.openSettings("history")}
+      >
+        History off
+      </button>
+    {/if}
     <!-- 3. Scripts skipped -->
     {#if app.trust.skipped}
       <button
@@ -97,8 +106,9 @@
   .bottom-bar .scripts-skipped {
     flex: none;
     width: auto;
-    padding: 0 var(--space-2);
+    padding: 0 var(--space-1);
     font-size: 11.5px;
+    white-space: nowrap;
     color: var(--warning);
   }
   /* A fixed width (icon plus "99+"), icon and count centred in it: a longer count
@@ -106,5 +116,12 @@
   .bottom-bar .problems {
     flex: none;
     width: 52px;
+  }
+  /* A text label, not an icon: as wide as its text. */
+  .bottom-bar .history-off {
+    width: auto;
+    padding: 0 var(--space-1);
+    font-size: 11.5px;
+    white-space: nowrap;
   }
 </style>
