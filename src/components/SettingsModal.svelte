@@ -36,8 +36,8 @@
   /**
    * The rail's keys, on a focused tab, without ⌘/Ctrl/Alt (app shortcuts, ADR-0005):
    * Up/Down move to the previous or next category, stopping at the ends, and Home/End
-   * to the first and last. Selection
-   * follows focus, so the page changes as the user arrows through.
+   * to the first and last. Selection follows focus, so the page changes as the user
+   * arrows through.
    */
   function onRailKeydown(e: KeyboardEvent) {
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -53,6 +53,9 @@
     app.settingsCategory = id;
     rail?.querySelector<HTMLElement>(`#settings-tab-${id}`)?.focus();
   }
+
+  /** The rail's only status mark: TLS while certificate verification is off. */
+  const tlsWarning = $derived(app.settings?.exec.verifyTls === false);
 
   // Edits apply straight to the live settings, through the same save path as the
   // top bar: switches on click, text and number fields on blur or Enter.
@@ -134,12 +137,16 @@
             aria-selected={c.id === selected.id}
             tabindex={c.id === selected.id ? 0 : -1}
             aria-controls="settings-page"
+            aria-describedby={c.id === "tls" && tlsWarning ? "settings-tls-warning" : undefined}
             onclick={() => (app.settingsCategory = c.id)}
           >
             <Icon name={c.icon} size={16} />
             <span>{c.name}</span>
+            {#if c.id === "tls" && tlsWarning}<span class="warning-mark" data-testid="warning-mark" aria-hidden="true"></span>{/if}
           </button>
         {/each}
+        <!-- The mark's words, outside the tab so they describe it without joining its name. -->
+        <span id="settings-tls-warning" hidden>Certificate verification is off</span>
       </div>
 
       <div class="page" role="tabpanel" id="settings-page" aria-labelledby="settings-tab-{selected.id}">
@@ -279,6 +286,17 @@
   }
   .rail .list-row :global(svg) {
     flex: none;
+  }
+  /* The warning colour, edged in a deeper tone of it so it holds up on the light
+     theme's pale rail as well as the dark one. */
+  .warning-mark {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-left: auto;
+    border-radius: 50%;
+    background: var(--warning);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 55%, var(--text));
   }
   .page {
     flex: 1;
