@@ -10,7 +10,7 @@
 // clipboard refuses everything: Cut and Copy must write through the clipboard
 // plugin (the mock's `clipboard`).
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { bodyEditor, clipboard, menuClick, menuItem, openApp, openRequest, searchBox, setClipboard, setClipboardFails, urlBar } from "./helpers";
+import { bodyEditor, clipboard, menuClick, menuItem, openApp, openRequest, searchBox, setClipboard, setClipboardFails, showSettingsPage, urlBar } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -173,7 +173,7 @@ test("the Edit items are greyed out as the context menu's are: read-only text ca
 test("the Edit items stay available under a modal, for its text fields", async ({ page }) => {
   await openApp(page, "?platform=linux");
   await page.keyboard.press("Control+Comma");
-  const field = page.getByRole("dialog").getByRole("textbox").first();
+  const field = (await showSettingsPage(page, "Requests")).getByRole("textbox").first();
   await field.click();
   await expect.poll(() => menuItem(page, "paste")).toMatchObject({ enabled: true });
   expect(await menuItem(page, "settings")).toMatchObject({ enabled: false });
