@@ -307,7 +307,9 @@ class AppStore {
    *  Each clears its own once it has, which may be only once it has loaded. */
   explorerFocusWanted = $state(false);
   historyFocusWanted = $state(false);
-  /** The category the Settings modal shows (`openSettings` selects it). */
+  /** The category the Settings modal shows (`openSettings` selects it). It outlives
+   *  the modal, so Settings reopens where it was left, but only for this run: it is
+   *  never saved in app settings or on disk. */
   settingsCategory = $state<SettingsSection>("general");
   /** Fix-it requests from the error panel, each cleared by the component that
    *  acts on it: the tab whose request editor should show its Settings, and the
@@ -2160,9 +2162,10 @@ class AppStore {
     return this.updateSettings({ environmentSettings: all });
   }
 
-  /** Opens the Settings modal on `section`, else on General. */
+  /** Opens the Settings modal on `section`, which becomes the remembered category;
+   *  without one, on the category last shown during this run (General at first). */
   openSettings(section: SettingsSection | null = null) {
-    this.settingsCategory = section ?? "general";
+    if (section) this.settingsCategory = section;
     this.modal = "settings";
   }
 

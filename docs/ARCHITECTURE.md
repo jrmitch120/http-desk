@@ -1158,7 +1158,8 @@ Decisions made during implementation, beyond the plan above:
   turns verification off; any Settings category can be opened the same way:
   `app.openSettings(category)`, with `SettingsSection` naming the six categories of the
   Settings modal's rail, sets `app.settingsCategory`, which selects that category's tab and page;
-  without one Settings opens on General), the timeouts open the request's Settings, and
+  without one Settings opens on the category last shown during this run, General at
+  first; that memory lives only in the store, never in app settings), the timeouts open the request's Settings, and
   `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
   `unsentRequest` offers "Send `x` first" for the first request named. The request's Settings and the environment picker are asked
   for through one-shot store fields (`requestSettingsFor`, `envPickerWanted`) that the
