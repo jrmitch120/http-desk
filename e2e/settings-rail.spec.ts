@@ -188,6 +188,52 @@ test("End and Home select the last and first categories", async ({ page }) => {
   await expect(panel(page, "General")).toBeVisible();
 });
 
+// #239: Settings reopens on the category last selected during this run, General after
+// a reload, and a deep link selects (and is then remembered as) its own category.
+test.describe("Settings reopens on the last-visited category", () => {
+  const gear = (page: Page) => page.getByRole("banner").getByRole("button", { name: "Settings" });
+  const done = (page: Page) => settings(page).getByRole("button", { name: "Done" });
+  const selected = (page: Page) => rail(page).getByRole("tab", { selected: true });
+
+  test("selecting Requests, closing and reopening from the gear shows Requests", async ({ page }) => {
+    await openApp(page);
+    await gear(page).click();
+    await categoryTab(page, "Requests").click();
+    await done(page).click();
+    await gear(page).click();
+    await expect(selected(page)).toHaveText("Requests");
+    await expect(panel(page, "Requests")).toBeVisible();
+    // ⌘, opens there too.
+    await done(page).click();
+    await page.keyboard.press("Meta+Comma");
+    await expect(selected(page)).toHaveText("Requests");
+  });
+
+  test("after a reload, Settings opens on General again", async ({ page }) => {
+    await openApp(page);
+    await gear(page).click();
+    await categoryTab(page, "TLS").click();
+    await done(page).click();
+    await openApp(page);
+    await gear(page).click();
+    await expect(selected(page)).toHaveText("General");
+    await expect(panel(page, "General")).toBeVisible();
+  });
+
+  test("a deep link selects its own category, which the gear then reopens on", async ({ page }) => {
+    await openApp(page);
+    await gear(page).click();
+    await categoryTab(page, "Requests").click();
+    await done(page).click();
+    await page.getByRole("contentinfo", { name: "Bottom bar" }).getByRole("button", { name: /^History/ }).click();
+    await expect(selected(page)).toHaveText("History");
+    await done(page).click();
+    await gear(page).click();
+    await expect(selected(page)).toHaveText("History");
+    await expect(panel(page, "History")).toBeVisible();
+  });
+});
+
 // #241: while Verify server certificates is off, the TLS tab carries a warning mark,
 // described in words as well as colour. No other category shows a mark.
 const warningMark = (page: Page, name: string) => categoryTab(page, name).getByTestId("warning-mark");
