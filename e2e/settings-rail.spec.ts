@@ -1,7 +1,7 @@
 // #238: Settings is a fixed-size modal with a rail of six categories down its left
 // side (a vertical tablist) and the selected category's page (its tabpanel) on the right.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, hasRing, openApp } from "./helpers";
+import { dialog, hasRing, openApp, openRequest } from "./helpers";
 
 const CATEGORIES = ["General", "Requests", "TLS", "Portability", "History", "Trusted workspaces"];
 
@@ -229,6 +229,34 @@ test.describe("Settings reopens on the last-visited category", () => {
     await expect(selected(page)).toHaveText("History");
     await done(page).click();
     await gear(page).click();
+    await expect(selected(page)).toHaveText("History");
+    await expect(panel(page, "History")).toBeVisible();
+  });
+
+  // The bottom bar's items are covered above; these are #237's other deep links.
+  test("a send's TLS error opens Settings on TLS, whichever category was last visited", async ({ page }) => {
+    await openApp(page, "?sendError=tls");
+    await gear(page).click();
+    await categoryTab(page, "Requests").click();
+    await done(page).click();
+    await openRequest(page, ["api", "pets.http"], "List pets");
+    await page.keyboard.press("Meta+Enter");
+    await page.getByRole("alert").getByRole("button", { name: "Open Settings → TLS" }).click();
+    await expect(selected(page)).toHaveText("TLS");
+    await expect(panel(page, "TLS")).toBeVisible();
+  });
+
+  test("History is off's link opens Settings on History, whichever category was last visited", async ({ page }) => {
+    await openApp(page);
+    await gear(page).click();
+    await categoryTab(page, "History").click();
+    await panel(page, "History").getByRole("switch", { name: "Record History" }).click();
+    await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
+    await categoryTab(page, "Requests").click();
+    await done(page).click();
+    await page.getByRole("radiogroup", { name: "Sidebar" }).getByRole("radio", { name: "History" }).click();
+    const sidebar = page.getByRole("region", { name: "Workspace History" });
+    await sidebar.getByRole("button", { name: "Turn it on in Settings" }).click();
     await expect(selected(page)).toHaveText("History");
     await expect(panel(page, "History")).toBeVisible();
   });
