@@ -227,6 +227,21 @@
   .bottom-bar .icon-btn {
     height: 20px;
   }
+  /* Pressed toggles (Problems, Runner) look like any button: the hover background only
+     under the pointer, their colours as when not pressed. aria-pressed says they're on. */
+  .bottom-bar .icon-btn.quiet.active {
+    background: transparent;
+  }
+  .bottom-bar .icon-btn.quiet.active:hover {
+    background: var(--hover);
+  }
+  .bottom-bar .problems.active:not(.attention):not(:hover) {
+    color: var(--muted);
+  }
+  /* With problems, the icon and count stay warning-toned: pressed, hovered or not. */
+  .bottom-bar .problems.attention {
+    color: var(--warning);
+  }
   /* Text labels, not icons. */
   .bottom-bar .label-item {
     flex: none;
@@ -283,7 +298,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .bottom-bar .runner.muted:not(.active):not(:hover) {
+  .bottom-bar .runner.muted:not(:hover) {
     color: var(--muted);
   }
   .runner .failed-count {
@@ -302,7 +317,7 @@
     height: 2px;
     display: flex;
   }
-  .bottom-bar .runner.muted:not(.active):not(:hover) .run-line {
+  .bottom-bar .runner.muted:not(:hover) .run-line {
     opacity: 0.45;
   }
   .run-line .passed {

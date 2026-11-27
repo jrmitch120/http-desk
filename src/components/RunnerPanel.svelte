@@ -102,6 +102,9 @@
           onclick={exportMenu}><Icon name="download" />Export</button
         >
       {/if}
+      {#if runner}
+        <button class="btn small ghost" use:tooltip={"Clear the results: the Runner goes back to how it is before any Run"} onclick={() => app.clearRun()}>Clear</button>
+      {/if}
     {/if}
     <div class="options" role="group" aria-label="Runner options">
       <span class="option">

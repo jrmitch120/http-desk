@@ -1412,8 +1412,9 @@ Decisions made during implementation, beyond the plan above:
   the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner shows and focuses it, or hides it from inside),
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
-  result, no tab). The last run's bodies are released when the next run starts or
-  another workspace opens. The bottom bar's **Runner item** (#227, #235, in the centre
+  result, no tab). The last run's bodies are released when the next run starts,
+  another workspace opens, or Clear in the panel (shown once a run has ended) lets go
+  of it: the panel and the Runner item then read as before any run (`app.clearRun`). The bottom bar's **Runner item** (#227, #235, in the centre
   of the bar) follows the same run without the panel. It is always there: one button
   120 px wide (its hover box), whose box never moves or resizes, with compact text
   centred in it in tabular numerals (longer text is cut off with an ellipsis) and a

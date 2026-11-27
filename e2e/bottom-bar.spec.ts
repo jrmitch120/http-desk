@@ -166,17 +166,32 @@ test("clicking it closes the open panel even with focus elsewhere", async ({ pag
 });
 
 for (const theme of ["dark", "light"] as const) {
-  test(`${theme} theme: pressed while the panel is open, it looks quiet, not accent`, async ({ page }) => {
+  test(`${theme} theme: pressed while the panel is open, it looks like any button: no background off hover, the hover background under the pointer`, async ({ page }) => {
     await openApp(page, `?theme=${theme}`);
-    await expect.poll(() => look(problemsButton(page))).toEqual({ color: await token(page, "--muted"), background: "rgba(0, 0, 0, 0)" });
+    const unpressed = { color: await token(page, "--muted"), background: "rgba(0, 0, 0, 0)" };
+    await expect.poll(() => look(problemsButton(page))).toEqual(unpressed);
 
     await problemsButton(page).click();
+    await expect(problemsButton(page)).toHaveAttribute("aria-pressed", "true");
     await page.mouse.move(0, 300);
-    const [text, hover, accent] = [await token(page, "--text"), await token(page, "--hover"), await token(page, "--accent")];
-    await expect.poll(() => look(problemsButton(page))).toEqual({ color: text, background: hover });
-    expect(text).not.toBe(accent);
+    await expect.poll(() => look(problemsButton(page))).toEqual(unpressed);
+
+    await problemsButton(page).hover();
+    await expect.poll(() => look(problemsButton(page))).toEqual({ color: await token(page, "--text"), background: await token(page, "--hover") });
   });
 }
+
+test("with problems, its icon stays in the warning colour while the panel is open, hovered or not", async ({ page }) => {
+  await openApp(page, "?problems=1");
+  const warning = await token(page, "--warning");
+  await expect.poll(() => look(problemsButton(page))).toMatchObject({ color: warning });
+  await problemsButton(page).click();
+  await expect(problemsPanel(page)).toBeVisible();
+  await page.mouse.move(0, 300);
+  await expect.poll(() => look(problemsButton(page))).toEqual({ color: warning, background: "rgba(0, 0, 0, 0)" });
+  await problemsButton(page).hover();
+  await expect.poll(() => look(problemsButton(page))).toMatchObject({ color: warning });
+});
 
 test("a changing count moves nothing in the topbar or the bottom bar but its own digits", async ({ page }) => {
   await openApp(page, "?problems=1");
@@ -573,10 +588,12 @@ test.describe("Runner item", () => {
 
     await runnerButton(page).click();
     await expect(runnerPanel(page)).toBeVisible();
-    // Pressed, it isn't muted, and neither is its line.
+    // Pressed, it looks like any button: muted now its results are seen, its line
+    // dimmed, and no background off hover. Closing the panel changes nothing.
     await page.mouse.move(0, 300);
-    await expect.poll(() => colour(runnerButton(page))).toBe(text);
-    expect(await lineOpacity()).toBe(1);
+    await expect.poll(() => colour(runnerButton(page))).toBe(muted);
+    expect(await lineOpacity()).toBeLessThan(1);
+    expect(await background(runnerButton(page))).toBe("rgba(0, 0, 0, 0)");
     await runnerButton(page).click();
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(muted);
@@ -589,6 +606,30 @@ test.describe("Runner item", () => {
     await page.mouse.move(0, 300);
     await expect.poll(() => colour(runnerButton(page))).toBe(text);
     expect(await lineOpacity()).toBe(1);
+  });
+
+  test("Clear in the Runner panel lets go of the ended Run: the item reads Runner again, with no line, in the same place", async ({ page }) => {
+    await openApp(page);
+    const before = await box(runnerButton(page));
+    await runFile(page, "api", "pets.http");
+    await expect(runnerButton(page)).toHaveText("✓ 3");
+    // A Run opens the Runner panel.
+    await runnerPanel(page).getByRole("button", { name: "Clear", exact: true }).click();
+
+    await expect(runnerButton(page)).toHaveText("Runner");
+    await expect(runnerButton(page)).toHaveAccessibleName(/^Show Runner/);
+    await expect(progress(page)).toHaveCount(0);
+    await expect(runnerPanel(page)).toContainText("Run a file or folder");
+    await expect(runnerPanel(page).getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
+    expect(await box(runnerButton(page))).toEqual(before);
+  });
+
+  test("there's no Clear while a Run is going: Stop first", async ({ page }) => {
+    await openApp(page, "?download=slow");
+    await runFile(page, "api", "pets.http");
+    await expect(runnerButton(page)).toHaveText("▶ 0/3");
+    await expect(runnerPanel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(runnerPanel(page).getByRole("button", { name: "Clear", exact: true })).toHaveCount(0);
   });
 
   test("lasts until another workspace opens", async ({ page }) => {

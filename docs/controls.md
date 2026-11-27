@@ -419,7 +419,8 @@ Global classes in `src/app.css`, not components:
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the bottom bar's Problems button (`e2e/bottom-bar.spec.ts`). The sidebar
+  the topbar's toggles. (The bottom bar's toggles override it to look like any
+  button, see [Bottom bar](#bottom-bar).) The sidebar
   rail's marked view follows the same rule (the text colour, the other view muted;
   `e2e/topbar-toggles.spec.ts`). Pressed icon buttons elsewhere (Wrap lines, the find
   bar's) keep the accent.
@@ -695,7 +696,9 @@ Save); "status bar" alone names neither.
 - A clickable item is an owned `.icon-btn.quiet` button, 20 px high in the 24 px bar,
   with `use:tooltip` naming the state and what clicking opens. A panel's item is a
   pressed toggle like Problems (`aria-pressed`, `.active`; clicking it while its panel is
-  open closes the panel wherever focus is).
+  open closes the panel wherever focus is). Pressed, it still looks like any button: no
+  background off hover and its colours as when not pressed (Problems stays
+  warning-toned with problems), so opening a panel changes nothing in the bar.
 - A display-only item (the file's facts) is text, not a button, with a tooltip
   explaining it; give it `tabindex="0"` so keyboard users can reach its tooltip
   ([Tooltip](#tooltip)).

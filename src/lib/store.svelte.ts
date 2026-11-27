@@ -2051,6 +2051,11 @@ class AppStore {
   stopRun(): Promise<void> {
     return this.runnerStore.stop();
   }
+  /** Lets go of the ended Run: the Runner panel and the bottom bar's Runner item go back
+   *  to how they are before any Run. Nothing to clear while a Run is going. */
+  clearRun(): void {
+    if (!this.runnerStore.running) this.runnerStore.reset();
+  }
   get runnerOptions(): RunnerOptions {
     return this.runnerStore.options;
   }
