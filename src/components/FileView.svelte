@@ -15,9 +15,10 @@
   import { checkUnderlines, fileUnderlines } from "../lib/codemirror/underlines";
   import { inDocument } from "../lib/codemirror/lineEndings";
   import { requestAt, requestBlocks, type OutlineEntry, type RequestBlock } from "../lib/codemirror/outline";
-  import { EditorView } from "@codemirror/view";
+  import { EditorView, ViewPlugin } from "@codemirror/view";
   import { syntaxTree } from "@codemirror/language";
-  import type { Text } from "@codemirror/state";
+  import type { EditorState, Text } from "@codemirror/state";
+  import { caretFact } from "../lib/fileFacts";
   import type { Tree } from "@lezer/common";
   import Badge from "./Badge.svelte";
   import Editor from "../lib/codemirror/Editor.svelte";
@@ -171,6 +172,21 @@
     settling = setTimeout(() => (outlineOf = latest), outlineOf ? VIEW_REFRESH_DELAY_MS : 0);
   });
   onDestroy(() => clearTimeout(settling));
+  // The caret's line and column, for the bottom bar (#232): from the start, and as the
+  // main selection's head moves (keys, clicks, typing, a jump from the Problems panel).
+  const publishCaret = (state: EditorState) => {
+    const head = state.selection.main.head;
+    const line = state.doc.lineAt(head);
+    app.setFileCaret(tab.id, caretFact(line, head - line.from));
+  };
+  const trackCaret = ViewPlugin.define((view) => {
+    publishCaret(view.state);
+    return {
+      update(u) {
+        if (u.selectionSet || u.docChanged) publishCaret(u.state);
+      },
+    };
+  });
   const current = $derived(outlineOf ? requestAt(blocks, outlineOf.cursor) : null);
   const currentIndex = $derived(current?.index ?? null);
   const currentEntry = $derived(currentIndex === null ? null : entries[currentIndex]);
@@ -333,7 +349,7 @@
             {lineBreak}
             bind:folding
             bind:canFoldAll
-            extensions={followCursor}
+            extensions={[followCursor, trackCaret]}
             memory={editorMemoryKey(tab.id, "file")}
             label={`${basename(tab.path)} as text`}
           />

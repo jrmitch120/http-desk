@@ -3,7 +3,7 @@
 // while downloading] · [Settings]. The sidebar collapses from its own header (#218,
 // sidebar-rail.spec.ts), so no sidebar toggle. Import OpenAPI and the theme button aren't
 // there; both stay reachable elsewhere (Theme: theme.spec.ts). Problems isn't there
-// either: it's in the window's status bar (#217, app-status-bar.spec.ts).
+// either: it's in the bottom bar (#217, bottom-bar.spec.ts).
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { dialog, importOpenApiButton, menuClick, openApp } from "./helpers";
 

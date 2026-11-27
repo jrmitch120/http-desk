@@ -22,7 +22,7 @@ import { wording } from "./platform";
 import { CANCEL, type DialogAnswer, type DialogButton, type DialogState } from "./dialog";
 import { SessionStore, type SessionHost, type TestMark } from "./session.svelte";
 import { HistoryStore, historyLink, historyLinkKey, type HistoryHost } from "./history.svelte";
-import { Trust, type TrustHost } from "./trust";
+import { Trust, type TrustHost } from "./trust.svelte";
 import { RunnerStore, type Runner, type RunnerHost } from "./runner.svelte";
 import { treeFiles } from "./tree";
 import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
@@ -31,6 +31,7 @@ import { docSnapshot, fileShot, kept, restShot, snapshot } from "./snapshots.sve
 import { forgetEditors } from "./editorMemory";
 import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
+import type { FileFact } from "./fileFacts";
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
 import type {
   AppSettings,
@@ -176,8 +177,8 @@ export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
-/** A section of the Settings modal that can be opened scrolled into view. */
-export type SettingsSection = "tls" | "history";
+/** A section of the Settings modal that can be opened scrolled into view (`settingsSection.svelte.ts`). */
+export type SettingsSection = "tls" | "history" | "portability" | "trust";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -1040,6 +1041,7 @@ class AppStore {
     forgetEditors(id);
     this.unshown.delete(id);
     delete this.fileCursors[id];
+    delete this.fileCarets[id];
     this.releaseResponse(this.runs[id]?.response);
     delete this.runs[id];
     this.history.forget(id);
@@ -1267,6 +1269,19 @@ class AppStore {
    */
   setFileCursor(tabId: string, index: number | null) {
     this.fileCursors[tabId] = index;
+  }
+
+  /** Where each file view's caret is (by tab id), as the bottom bar shows it: "Ln l, Col c". */
+  private fileCarets = $state<Record<string, FileFact>>({});
+
+  /** File view `tabId`'s caret is now at `caret` (`caretFact`). */
+  setFileCaret(tabId: string, caret: FileFact) {
+    if (this.fileCarets[tabId]?.label !== caret.label) this.fileCarets[tabId] = caret;
+  }
+
+  /** Where file view `tabId`'s caret is, once its editor has shown its text. */
+  fileCaret(tabId: string): FileFact | undefined {
+    return this.fileCarets[tabId];
   }
 
   /**
@@ -1762,7 +1777,7 @@ class AppStore {
 
   /** The workspace's Session as the page sees it: its version, exchange shapes, test markers (session.svelte.ts). */
   readonly session: SessionStore = new SessionStore(this.sessionHost());
-  /** Whether the workspace's scripts may run (trust.ts). */
+  /** Whether the workspace's scripts may run (trust.svelte.ts). */
   readonly trust: Trust = new Trust(this.trustHost());
   /** Runs and the Runner panel (runner.svelte.ts). */
   readonly runnerStore: RunnerStore = new RunnerStore(this.runnerHost());
@@ -2035,6 +2050,11 @@ class AppStore {
   }
   stopRun(): Promise<void> {
     return this.runnerStore.stop();
+  }
+  /** Lets go of the ended Run: the Runner panel and the bottom bar's Runner item go back
+   *  to how they are before any Run. Nothing to clear while a Run is going. */
+  clearRun(): void {
+    if (!this.runnerStore.running) this.runnerStore.reset();
   }
   get runnerOptions(): RunnerOptions {
     return this.runnerStore.options;

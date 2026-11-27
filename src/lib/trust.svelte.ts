@@ -31,13 +31,45 @@ export type ScriptsChoice = "run" | "skip" | "cancel";
 export class Trust {
   constructor(private readonly host: TrustHost) {}
 
-  /** The workspace whose scripts the user chose to skip ("Send without scripts"), until it's opened again. */
-  private skippedIn: string | null = null;
+  /** The workspace whose scripts the user chose to skip ("Send without scripts"), until it's opened again. Reactive, for the bottom bar. */
+  private skippedIn = $state<string | null>(null);
 
   /** Whether the open workspace is a Trusted workspace (its scripts run). */
   get trusted(): boolean {
     const { root, settings } = this.host;
     return !!root && (settings?.trustedWorkspaces ?? []).includes(root);
+  }
+
+  /** Whether "Send without scripts" is in force for the open workspace: it isn't trusted, and sends skip their scripts without asking. */
+  get skipped(): boolean {
+    const { root } = this.host;
+    return !!root && this.skippedIn === root && !this.trusted;
+  }
+
+  /**
+   * Asks again, not tied to a send (the bottom bar's "Scripts skipped"): "Trust this
+   * workspace" stores trust as "Trust and run" does and ends the skip; "Keep skipping"
+   * (focused) or Cancel change nothing.
+   */
+  async askAgain(): Promise<void> {
+    const { root } = this.host;
+    if (!this.skipped) return;
+    const r = await this.host.choose(
+      "Trust this workspace?",
+      `Sends in ${root} skip their scripts, as you chose with "Send without scripts". Trust this workspace to run them, only if you trust whoever wrote its files. It's remembered in HttpDesk's settings, never in the workspace, and can be revoked in Settings.`,
+      [
+        CANCEL,
+        { label: "Keep skipping", value: "keep", focus: true },
+        { label: "Trust this workspace", value: "trust", role: "primary" },
+      ],
+    );
+    if (r.button !== "trust") return;
+    try {
+      this.setTrusted(await api.trustWorkspace());
+      this.skippedIn = null;
+    } catch (e) {
+      this.host.toast("error", errorMessage(e));
+    }
   }
 
   /**

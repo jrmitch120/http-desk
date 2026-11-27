@@ -11,6 +11,7 @@
   import { menu } from "../lib/menu.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { rovingList } from "../lib/rovingList";
+  import { runSummary } from "../lib/runSummary";
   import Badge from "./Badge.svelte";
   import Icon from "./Icon.svelte";
   import NumberField from "./NumberField.svelte";
@@ -42,14 +43,8 @@
     return out;
   });
 
-  const count = (state: RunItem["state"]) => runner?.items.filter((i) => i.state === state).length ?? 0;
-  const summary = $derived.by(() => {
-    if (!runner) return "";
-    const parts = [`${count("passed")} passed`, `${count("failed")} failed`];
-    const stopped = count("cancelled") + count("notRun");
-    if (stopped) parts.push(`${stopped} didn't run`);
-    return parts.join(" · ");
-  });
+  // As the bottom bar's Runner item says it (runSummary), so the two never disagree.
+  const summary = $derived(runner ? runSummary(runner.items, runner.running).text : "");
 
   const STATE_LABEL: Record<RunItem["state"], string> = {
     queued: "Waiting",
@@ -86,7 +81,7 @@
   <div class="toolbar">
     {#if runner}
       <span class="title selectable">{runner.title}</span>
-      <span class="muted" aria-live="polite">{runner.running ? "Running…" : summary}</span>
+      <span class="muted" aria-live="polite">{summary}</span>
     {:else}
       <span class="muted">Run a file or folder from its menu in the explorer, or select requests there and run the selection from their menu.</span>
     {/if}
@@ -106,6 +101,9 @@
           use:tooltip={"Save the results as JUnit XML or JSON"}
           onclick={exportMenu}><Icon name="download" />Export</button
         >
+      {/if}
+      {#if runner}
+        <button class="btn small ghost" use:tooltip={"Clear the results: the Runner goes back to how it is before any Run"} onclick={() => app.clearRun()}>Clear</button>
       {/if}
     {/if}
     <div class="options" role="group" aria-label="Runner options">

@@ -413,13 +413,14 @@ Global classes in `src/app.css`, not components:
   narrower, the view's own controls wrap onto a second row with Collapse sidebar and its
   divider still at their end, down to the minimum width (`e2e/sidebar-rail.spec.ts`).
   `.counted` shows a count beside its icon (a `<span class="count">`), as wide as both:
-  the window status bar's Problems button (`AppStatusBar.svelte`), which shows "0" too,
+  the bottom bar's Problems button (`BottomBar.svelte`), which shows "0" too,
   is given a fixed width there (room for "99+") so a changing count moves nothing, and whose `aria-label` says the count when there is one. With
   `.attention` it's warning-toned while not pressed (there are problems to see), and
   pressed, its count stays warning-toned.
   `.quiet` makes a toggle quietly pressed: with `.active`, the hover background and the
   text colour instead of accent. Use it where accent is kept for what needs attention:
-  the window status bar's Problems button (`e2e/app-status-bar.spec.ts`). The sidebar
+  the topbar's toggles. (The bottom bar's toggles override it to look like any
+  button, see [Bottom bar](#bottom-bar).) The sidebar
   rail's marked view follows the same rule (the text colour, the other view muted;
   `e2e/topbar-toggles.spec.ts`). Pressed icon buttons elsewhere (Wrap lines, the find
   bar's) keep the accent.
@@ -665,6 +666,47 @@ private env file isn't git-ignored, TLS checks are off, a send failed.
 - Errors are `role="alert"`; warnings and info are `role="status"`.
 - For the outcome of an action ("Saved", "Could not save settings"), use a toast
   instead.
+
+### Bottom bar
+
+`BottomBar.svelte`. The strip along the bottom of the window (a `<footer>`, role
+contentinfo, named "Bottom bar"), always shown. Not the **response status bar**, the
+strip at the top of the response pane (ResponseViewer's status, time, size, Copy and
+Save); "status bar" alone names neither.
+
+- **The rule: items show state only; a click opens the place where the user acts on
+  it** (a panel, a Settings section via `app.openSettings(section)`, a prompt). No item
+  toggles a setting or changes anything by itself, so clicking around the bar never
+  surprises.
+- **Nothing moves.** Every item of the right group has a permanent slot of fixed
+  width; a condition changes only what's inside its slot (its text, its tone), never
+  whether the slot is there or how wide it is. Each reads its state: muted in the
+  normal states ("History on", "Scripts trusted", "Scripts ask"), toned in the others.
+  A slot's width comes from its widest text (`data-widest` on a `.slot`, plus
+  `data-also` where which of two is wider depends on the font; laid out invisibly
+  under the shown text, so it follows the font), and text that could still be longer is cut off with an ellipsis, the whole
+  in the tooltip. Changing numbers use tabular numerals. The Runner is the exception
+  to `.slot`: one button of a fixed 120 px, its compact text ("▶ 3/10", "✓ 8 ✕ 2",
+  "■ 2/5") centred in it, the full sentence in its tooltip and accessible name, and its
+  progress as a 2 px line along the button's bottom edge, not a separate bar.
+- Three columns. Left: the active tab's file (display only); it comes and goes, but
+  nothing follows it, and its changing caret has a minimum width ("Ln 9999, Col 999").
+  Centre: the Runner, in the true centre of the window (the side columns share what's
+  left equally); it's there only while there's a Run, and its column keeps the sides
+  where they are whether it is or not, so it comes and goes without moving anything. Right, left to right: Portability, History, Scripts, Problems.
+- Items sit `--space-3` apart.
+- A clickable item is an owned `.icon-btn.quiet` button, 20 px high in the 24 px bar,
+  with `use:tooltip` naming the state and what clicking opens. A panel's item is a
+  pressed toggle like Problems (`aria-pressed`, `.active`; clicking it while its panel is
+  open closes the panel wherever focus is). Pressed, it still looks like any button: no
+  background off hover and its colours as when not pressed (Problems stays
+  warning-toned with problems), so opening a panel changes nothing in the bar.
+- A display-only item (the file's facts) is text, not a button, with a tooltip
+  explaining it; give it `tabindex="0"` so keyboard users can reach its tooltip
+  ([Tooltip](#tooltip)).
+- Tones: muted for a quiet fact, warning-toned for something that changes what a send
+  does (and a Run's failures); accent is not used. The Runner's progress line alone
+  uses the success colour, for the passed share.
 
 ### CheckStrip
 

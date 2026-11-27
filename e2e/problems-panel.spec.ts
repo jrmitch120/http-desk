@@ -1,14 +1,14 @@
 // #172: the Problems panel lists every `.http` file in the workspace with problems or
 // lines that behave differently in VS Code or Rider, grouped by file, each entry with
 // its line and message; clicking one opens the file's file view at that line. Its
-// button in the window's status bar counts the problems. `?problems=1` adds problems/broken.http (a request line
+// button in the bottom bar counts the problems. `?problems=1` adds problems/broken.http (a request line
 // with a space in its URL) and problems/upload.http (a body read from a file that
 // isn't there) to the mock's workspace.
 import { expect, test, type Page } from "@playwright/test";
 import { activeTab, menuClick, openApp, openRequest, urlBar } from "./helpers";
 
 const panel = (page: Page) => page.getByRole("region", { name: "Problems" });
-const toggle = (page: Page) => page.getByRole("contentinfo", { name: "Status bar" }).getByRole("button", { name: /^Show Problems/ });
+const toggle = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" }).getByRole("button", { name: /^Show Problems/ });
 const group = (page: Page, file: string) => panel(page).getByRole("group", { name: file });
 const fileView = (page: Page) => page.locator(".file-view .file-code");
 

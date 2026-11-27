@@ -227,7 +227,7 @@ answer per path (`src/lib/problems.svelte.ts`). The check strip lists both as
 
 **The Problems panel** (`ProblemsPanel.svelte`, a panel of the panel area beside the
 Session and Runner panels; View → Show Problems (⇧⌘M / Ctrl+Shift+M), or the Problems
-button at the right end of the window status bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
+button at the right end of the bottom bar, which shows the count) lists every `.http` file in the workspace with problems or lines that behave
 differently in VS Code or Rider, grouped by file, each entry with its line in the file
 and its message; clicking one opens the file's file view at that line
 (`openFileView(path, { line })`). The shell reads them off the main thread:
@@ -250,7 +250,7 @@ reads the whole workspace when it opens and when the watcher reports a folder, o
 when the watcher reports it, and an open document 300 ms after its edits pause (`track`,
 from an effect, comparing each document's kept JSON strings, `openVersion`, rather than
 stringifying it). It owns the panel's list and the count (`list`, `count`, which
-the window status bar and the panel area's Problems tab read). The list is live; the
+the bottom bar and the panel area's Problems tab read). The list is live; the
 count follows it once it has stopped changing for 300 ms (`PROBLEMS_COUNT_SETTLE_MS`,
 a `Settled` value from `src/lib/settled.svelte.ts` that the store tracks from an effect,
 `settle`), so it doesn't flicker as you type (#217): `src/lib/problemsList.ts` turns each file into its
@@ -611,7 +611,7 @@ The output is ordinary `.http` text produced by the same serializer the editor u
 | Risk / limitation | Mitigation |
 |---|---|
 | Dialect differences (JetBrains vs VS Code) | Parse the union, emit the common subset. JetBrains scripts are preserved verbatim; pre-request scripts and response handlers run (see Scripts below). |
-| Scripts from files other people wrote | JetBrains `> {% %}` response handlers run after the send in embedded QuickJS (`httpdesk_core::script`, [ADR-0008](adr/0008-scripts-run-in-embedded-quickjs.md)): a fresh runtime per script, no filesystem, network or process APIs, fixed limits of 5 s and 64 MB (the response body included), no setting. Only `script/prelude.js`'s API exists: `response.status`, `response.headers.valueOf/valuesOf`, `response.body` (parsed JSON for a JSON content type, else text), `response.contentType`, `client.test`, `client.assert`, `client.log` (its arguments joined by spaces, text as it is, objects as JSON; at most 64 KB per script, then one line says the log stopped: the log travels in the send's reply and in each Run event, and the Tests tab shows every line), `client.global.set/get/clear/isEmpty` (the Session's Global variables, in both kinds of script), and in a pre-request script `request.variables.set/get` and `request.environment.get`; every other JetBrains API (`client.global.clearAll`, other `request.*`, `crypto`, `$random`, `jsonPath`, `xpath`…) throws "`<api>` isn't supported in HttpDesk". A handler that throws, times out or runs out of memory still shows the response, with the error as a failed test (its handler line and message), flagged `scriptError` so a Run reports it as a script failure whatever the user's own tests are called. The runtime's allocator enforces the memory limit and records a refusal, which is how running out of memory is told from anything a script throws (`null` included). A thrown value reads the same in a `client.test` as at the top level. Cancel and a Run's Stop end a running script at once (the engine checks a stop signal with the time limit); Global variables it set before stand. Script files (`< sign.js`, `> check.js`) run like inline scripts: `script::ScriptFiles` reads them relative to the `.http` file's folder, following symlinks, and only from inside the workspace; a missing file, a folder, or one that is (or a symlink points) outside the workspace is a script error, naming the file, as is an error in the file itself (`(check.js line 3)`). The Scripts editor (Settings) shows a file reference's path, read-only, with "Open in default editor" (`open_script_file`), or why it can't run (`check_script_file`). The shell opens the file itself after the same check, and only a `.js` file (on Windows with Notepad, since Windows Script Host would run it); the webview has no permission to open paths (`src-tauri/tests/capabilities.rs`). JetBrains `>> file` / `>>! file` response redirects are kept but never run, and nothing is written: the send and the preview carry a warning saying so (`exec::redirect_not_run`), and the Scripts editor lists each one with that note. JetBrains `< {% %}` pre-request scripts run in `send_request` before variables are substituted, but after the Request variables the request writes are read: a send they block (unsent or unmatched) runs no script and asks for no trust (`script::run_pre_request_script`, off the async workers): `request.environment.get` reads the selected environment, private values included, and `request.variables.set` values become `{{name}}` for that request only, over every other variable but an answered Prompt variable (see Variable precedence). `client.global.set` writes the Session's Global variables (`session::GlobalVariables`) as the script runs, so a handler or pre-request script that throws keeps what it set before the throw, and a value a pre-request script sets is used by its own request. A pre-request script that throws, times out, runs out of memory or is a file that can't be read blocks the send: nothing is sent, and the send fails with `preRequestScript`, its message and its line (counted from the first `<` line). Its tests and logs come before the handler's on the response. The resolved preview never runs scripts and says so. The API that is implemented is listed in `script/api.json` (name, signature, description); a core test checks that list against what the prelude implements, and the Scripts editor completes from it, so it never offers an unsupported API. Results reach the webview as the response's `tests` and `logs`, shown in the viewer's Tests tab (its Log section lists that response's `client.log` lines). After a send whose scripts ran tests, the request's tab and tree row show a marker: green if every test passed, red if any failed (a handler error included). The page keeps markers by request key (`app.testMark`), so they outlast the tab; a send with no tests or a failed send drops that request's marker, and `app.clearTestMarks()` drops them all when the Session is cleared (opening a workspace). Scripts run only in a **Trusted workspace**: the first send that would run one in an untrusted workspace asks Trust and run / Send without scripts / Cancel. Trust is stored in `settings.json` as `trustedWorkspaces` (canonical roots), never in the workspace; only the shell changes it (`trust_workspace`, `revoke_workspace_trust`, Settings → Trusted workspaces), and `save_settings` keeps the shell's list, so a page saving an older copy can't undo it. `send_request` refuses (`untrustedWorkspace`, nothing sent) a request with a script in an untrusted workspace unless told `skipScripts`; then the response warns which scripts didn't run. "Send without scripts" is remembered by the page until the workspace is opened again. |
+| Scripts from files other people wrote | JetBrains `> {% %}` response handlers run after the send in embedded QuickJS (`httpdesk_core::script`, [ADR-0008](adr/0008-scripts-run-in-embedded-quickjs.md)): a fresh runtime per script, no filesystem, network or process APIs, fixed limits of 5 s and 64 MB (the response body included), no setting. Only `script/prelude.js`'s API exists: `response.status`, `response.headers.valueOf/valuesOf`, `response.body` (parsed JSON for a JSON content type, else text), `response.contentType`, `client.test`, `client.assert`, `client.log` (its arguments joined by spaces, text as it is, objects as JSON; at most 64 KB per script, then one line says the log stopped: the log travels in the send's reply and in each Run event, and the Tests tab shows every line), `client.global.set/get/clear/isEmpty` (the Session's Global variables, in both kinds of script), and in a pre-request script `request.variables.set/get` and `request.environment.get`; every other JetBrains API (`client.global.clearAll`, other `request.*`, `crypto`, `$random`, `jsonPath`, `xpath`…) throws "`<api>` isn't supported in HttpDesk". A handler that throws, times out or runs out of memory still shows the response, with the error as a failed test (its handler line and message), flagged `scriptError` so a Run reports it as a script failure whatever the user's own tests are called. The runtime's allocator enforces the memory limit and records a refusal, which is how running out of memory is told from anything a script throws (`null` included). A thrown value reads the same in a `client.test` as at the top level. Cancel and a Run's Stop end a running script at once (the engine checks a stop signal with the time limit); Global variables it set before stand. Script files (`< sign.js`, `> check.js`) run like inline scripts: `script::ScriptFiles` reads them relative to the `.http` file's folder, following symlinks, and only from inside the workspace; a missing file, a folder, or one that is (or a symlink points) outside the workspace is a script error, naming the file, as is an error in the file itself (`(check.js line 3)`). The Scripts editor (Settings) shows a file reference's path, read-only, with "Open in default editor" (`open_script_file`), or why it can't run (`check_script_file`). The shell opens the file itself after the same check, and only a `.js` file (on Windows with Notepad, since Windows Script Host would run it); the webview has no permission to open paths (`src-tauri/tests/capabilities.rs`). JetBrains `>> file` / `>>! file` response redirects are kept but never run, and nothing is written: the send and the preview carry a warning saying so (`exec::redirect_not_run`), and the Scripts editor lists each one with that note. JetBrains `< {% %}` pre-request scripts run in `send_request` before variables are substituted, but after the Request variables the request writes are read: a send they block (unsent or unmatched) runs no script and asks for no trust (`script::run_pre_request_script`, off the async workers): `request.environment.get` reads the selected environment, private values included, and `request.variables.set` values become `{{name}}` for that request only, over every other variable but an answered Prompt variable (see Variable precedence). `client.global.set` writes the Session's Global variables (`session::GlobalVariables`) as the script runs, so a handler or pre-request script that throws keeps what it set before the throw, and a value a pre-request script sets is used by its own request. A pre-request script that throws, times out, runs out of memory or is a file that can't be read blocks the send: nothing is sent, and the send fails with `preRequestScript`, its message and its line (counted from the first `<` line). Its tests and logs come before the handler's on the response. The resolved preview never runs scripts and says so. The API that is implemented is listed in `script/api.json` (name, signature, description); a core test checks that list against what the prelude implements, and the Scripts editor completes from it, so it never offers an unsupported API. Results reach the webview as the response's `tests` and `logs`, shown in the viewer's Tests tab (its Log section lists that response's `client.log` lines). After a send whose scripts ran tests, the request's tab and tree row show a marker: green if every test passed, red if any failed (a handler error included). The page keeps markers by request key (`app.testMark`), so they outlast the tab; a send with no tests or a failed send drops that request's marker, and `app.clearTestMarks()` drops them all when the Session is cleared (opening a workspace). Scripts run only in a **Trusted workspace**: the first send that would run one in an untrusted workspace asks Trust and run / Send without scripts / Cancel. Trust is stored in `settings.json` as `trustedWorkspaces` (canonical roots), never in the workspace; only the shell changes it (`trust_workspace`, `revoke_workspace_trust`, Settings → Trusted workspaces), and `save_settings` keeps the shell's list, so a page saving an older copy can't undo it. `send_request` refuses (`untrustedWorkspace`, nothing sent) a request with a script in an untrusted workspace unless told `skipScripts`; then the response warns which scripts didn't run. "Send without scripts" is remembered by the page until the workspace is opened again; while it is, the bottom bar shows a warning-toned "Scripts skipped" (`app.trust.skipped`), and clicking it asks again, not tied to a send (`app.trust.askAgain`): "Trust this workspace" stores trust as "Trust and run" does and ends the skip, "Keep skipping" (focused) or Cancel leave it. |
 | `#~` items render as comments in other editors | Intended; documented above. |
 | Disabled query params and multipart parts reorder after the enabled ones | Documented; deterministic. |
 | `@httpdesk-*` directives might trigger an "unknown tag" hint in JetBrains | They are plain comments to both parsers, and only written when needed (section off, API key auth). |
@@ -1020,15 +1020,51 @@ Decisions made during implementation, beyond the plan above:
   (`app.togglePanel` asks with `panelFocusWanted`, and `PanelArea` focuses the list with
   `focusList`, else the panel itself); with the panel showing and focus elsewhere it only
   focuses the list, and from inside the panel it hides it (#195). Below the panel
-  area, App.svelte puts the **window status bar** (`AppStatusBar.svelte`, a `<footer>`
-  named "Status bar"; not the response pane's status bar in ResponseViewer): a thin
-  strip the full width of the window, always shown, in the theme's panel colours. Problems
-  is at its right end, its icon and count ("0" muted; otherwise the count warning-toned;
-  above 99, "99+"), in a fixed-width button; later items go to its left. It is
-  pressed (`aria-pressed`) while the Problems panel is open; clicking it opens the panel,
-  or closes it wherever focus is (#217). Being fixed-width, a changing count moves
-  nothing (in the top bar, a growing count pushed its neighbours). The top bar keeps only the update
-  progress pill as its status. The
+  area, App.svelte puts the **bottom bar** (`BottomBar.svelte`, a `<footer>`, role
+  contentinfo, named "Bottom bar"; it pairs with the top bar). It is not the **response
+  status bar**, the strip at the top of the response pane in ResponseViewer (status, time,
+  size, Copy and Save); "status bar" alone names neither. The bottom bar is a thin strip
+  the full width of the window, always shown (no setting hides it), in the theme's panel
+  colours. **Its rule: items show state only, and clicking one opens the place where the
+  user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
+  prompt); no item changes a setting or anything else by itself. **Nothing in it moves**
+  (#235): every workspace item has a permanent slot of fixed width, sized for its widest
+  text, and a condition changes only what's inside it (text and tone, muted in the
+  normal state), never whether it's there or how wide. It has three columns (a grid whose
+  side columns share what's left equally): on the left, the active tab's file (its line endings and encoding, and the caret in a File
+  view), for a request tab or a File view, from its document's `lineEnding`,
+  `mixedEndings` and `bom` (labels and tooltips from `fileFacts`, src/lib/fileFacts.ts:
+  "LF" / "CRLF" / "Mixed", "UTF-8" / "UTF-8 BOM"; the tooltips say HttpDesk keeps them as
+  the file has them). They follow the active tab and the document as reloaded from disk;
+  the group is empty with no tab open or while a History entry, a named exchange or the
+  environment editor covers the tabs (#231). In a File view the caret's "Ln l, Col c"
+  follows them, last and at least as wide as "Ln 9999, Col 999" in tabular numerals, so
+  its changing width moves neither: 1-based, the column counting
+  characters (code points), not the editor's UTF-16 units (`caretFact`). The view's
+  editor publishes its main selection head (`app.setFileCaret`, by tab id) from the
+  start and on every selection or text change, so a jump from the Problems panel shows
+  too; a request tab shows none (#232). The left group comes and goes, but nothing
+  follows it. In the true centre of the window, the **Runner** (below). On the right,
+  workspace-wide state, left to right: **Portability, History, Scripts, Problems**.
+  Problems is at the right end, its
+  icon and count ("0" muted; otherwise the count warning-toned; above 99, "99+"),
+  centred in a fixed-width button. It is pressed (`aria-pressed`) while the Problems
+  panel is open; clicking it opens the panel, or closes it wherever focus is (#217).
+  Being fixed-width, a changing count moves nothing (in the top bar, a growing count
+  pushed its neighbours). **History** reads a muted "History on" while the History switch
+  is on and "History off" in the text colour (a deliberate choice, not a warning) while
+  it's off (`app.history.enabled`); clicking it opens Settings at History (#229).
+  **Scripts** reads a muted "Scripts trusted" while the workspace is trusted, a muted
+  "Scripts ask" while it hasn't been asked (the first send that would run a script
+  asks), and "Scripts skipped", warning-toned, while "Send without scripts" is in force
+  (`app.trust.skipped`). Skipped, clicking it asks again (`app.trust.askAgain`, #228);
+  otherwise it opens Settings at Trusted workspaces, where trust is kept and revoked
+  (the open workspace is listed there once trusted; the section says HttpDesk asks the
+  first time a send would run a script). **Portability**, at the left end, sized for
+  "VS Code · Rider": the editors turned on in Settings → Portability ("VS Code",
+  "Rider", "VS Code · Rider"), or "HttpDesk only" with both off, when no Portability
+  notes show (`portabilityLabel`); it opens Settings at Portability (#230). The top bar
+  keeps only the update progress pill as its status. The
   area shows one panel at a time with a switcher, so the Runner panel joins it as another
   `PanelId` and line in `PANELS`. The panel is one section per part of the Session
   (`SessionNamedExchanges.svelte`, `SessionGlobals.svelte` and `SessionCookies.svelte`, in that order), each a component that reads its part through
@@ -1041,7 +1077,7 @@ Decisions made during implementation, beyond the plan above:
   the one before, else the list), and Shift+F10 opens the row's menu. The page's side of the Session (that version, the
   exchange shapes completion reads, an opened exchange, the test markers, and the
   panel's deletes and clears) is `src/lib/session.svelte.ts`; workspace trust is
-  `trust.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
+  `trust.svelte.ts` and runs `runner.svelte.ts`. Each gets what it needs from the store through
   a small host interface, and `app.*` hands over to them. The Global variables section lists each one's
   name and value, with a Delete button each and Clear Global variables
   (`session_globals`, `delete_global`, `clear_globals`); nothing is edited by hand. The Cookies section uses the Cookies tab's table
@@ -1119,7 +1155,10 @@ Decisions made during implementation, beyond the plan above:
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
-  turns verification off), the timeouts open the request's Settings, and
+  turns verification off; any Settings section can be opened scrolled into view the same
+  way: `app.openSettings(section)`, with `SettingsSection` naming TLS, History and
+  Portability, and that `<section>` taking `use:settingsSection` from
+  `src/lib/settingsSection.svelte.ts`, which scrolls it in and clears the request), the timeouts open the request's Settings, and
   `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
   `unsentRequest` offers "Send `x` first" for the first request named. They ask through one-shot store
   fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
@@ -1374,8 +1413,27 @@ Decisions made during implementation, beyond the plan above:
   the Session panel (`PanelArea.svelte`; a run shows it, View → Show Runner shows and focuses it, or hides it from inside),
   lists each request's state, status, time and tests grouped by file, and opens a
   selected result in the response viewer beside the list (`ResponseViewer` given the
-  result, no tab). The last run's bodies are released when the next run starts or
-  another workspace opens.
+  result, no tab). The last run's bodies are released when the next run starts,
+  another workspace opens, or Clear in the panel (shown once a run has ended) lets go
+  of it: the panel reads as before any run and the Runner item goes (`app.clearRun`). The bottom bar's **Runner item** (#227, #235, in the centre
+  of the bar) follows the same run without the panel. It is there only while there's a
+  run, running or ended, from the first run until Clear or another workspace; its
+  centre column keeps the side groups where they are either way. One button
+  120 px wide (its hover box), whose box never moves or resizes, with compact text
+  centred in it in tabular numerals (longer text is cut off with an ellipsis) and a
+  2 px progress line along its bottom edge, as wide as the button. While running it reads
+  "▶ 4/12" (finished out of all) and the line shows passed in the success colour, then
+  failed in the warning colour, then the request being sent pulsing slowly (not under
+  reduced motion); a failure mid-run shows only in the line. Once ended, the line keeps
+  what finished and the text reads "✓ 12" (all passed), "✓ 11 ✕ 1" (with failures) or
+  "■ 4/12" (Stop, or Stop on first failure), followed by " ✕ 1" if any failed; the
+  "✕ k" part is warning-toned. The tooltip and accessible name ("Show Runner: …") keep
+  the full sentence ("Run: 11 passed · 1 failed", "Run stopped: 4/12 · 1 failed").
+  Once an ended run's panel has been shown (or was open as it ended) the item is muted,
+  its line dimmed, until the next run (in memory, in `BottomBar.svelte`). It toggles
+  the Runner panel like Problems. Its compact text (`compact`), its sentence (`text`)
+  and the panel's summary (`text`) all come from `runSummary`
+  (`src/lib/runSummary.ts`), so they never disagree.
 * **Run folder and Run selection** (#144) use the same list-building and runner. Run
   folder (the tree's folder menu) runs every `.http` file under the folder, subfolders
   included, in the order the tree shows them (folders first, then by name), each file's

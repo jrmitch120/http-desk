@@ -82,7 +82,7 @@
     height: 32px;
   }
   /* The last-used view: the text colour, the other muted. Quiet, not accent: accent
-     is kept for what needs attention (as the status bar's pressed Problems toggle). */
+     is kept for what needs attention (as the bottom bar's pressed Problems toggle). */
   .rail-btn.marked {
     color: var(--text);
   }

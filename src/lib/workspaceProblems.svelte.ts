@@ -80,7 +80,7 @@ export class WorkspaceProblems {
   private settled = new Settled(() => this.list, PROBLEMS_COUNT_SETTLE_MS);
 
   /**
-   * The count on the status bar's Problems button and the panel's tab. It follows the
+   * The count on the bottom bar's Problems button and the panel's tab. It follows the
    * list once it has stopped changing for PROBLEMS_COUNT_SETTLE_MS, so it doesn't
    * flicker while you type; the panel's list stays live.
    */

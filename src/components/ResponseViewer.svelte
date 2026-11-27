@@ -10,7 +10,7 @@
 </script>
 
 <script lang="ts">
-  // The response pane: the status bar (status, time, size, Copy and Save), the
+  // The response pane: the response status bar (status, time, size, Copy and Save), the
   // send error or warnings, and the tabs. Each tab is its own panel; the Body
   // tab's state lives in a BodyView so it outlives a switch to another tab.
   import { untrack } from "svelte";
@@ -174,7 +174,7 @@
 {/snippet}
 
 <div class="viewer">
-  <!-- The status bar: a request tab's always (its Response/History switch), else a
+  <!-- The response status bar: a request tab's always (its Response/History switch), else a
        result's once it has a run. Body actions and the Response position button sit
        together at its right end. -->
   {#if historyTab || run}
