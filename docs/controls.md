@@ -48,6 +48,7 @@ a line there for a new kind of field.
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
 | A list of rows that each open or show what they name | [`use:rovingList`](#userovinglist), rows styled [`.list-row`](#buttons-inputs-and-links) |
+| A column of categories beside the one page shown (the Settings rail) | [`use:rovingTabs`](#userovingtabs), tabs styled [`.list-row`](#buttons-inputs-and-links) |
 | An icon button with a count beside it | [`.icon-btn.counted`](#buttons-inputs-and-links) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A grid column the user can resize | a [KeyValueGrid](#keyvaluegrid) column's `resize` ([ColumnResizer](#columnresizer)) |
@@ -432,6 +433,10 @@ Global classes in `src/app.css`, not components:
   `--control-h-icon`; it hovers like a row, and `.current` with `aria-current="true"`
   marks the row for where the user is (the outline's request under the cursor) with an
   accent bar. A list sets only its own inset (the panel indents rows under their file).
+  It's also the tab of a vertical tablist (the Settings rail): a `role="tab"` button in
+  a [`use:rovingTabs`](#userovingtabs) tablist, where `.current` goes with
+  `aria-selected="true"` (a tab is selected, not current), and the keys are that
+  action's.
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
   toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
@@ -486,6 +491,30 @@ file view's outline, History, the Session panel, Problems, the Runner and Find u
   click moves focus elsewhere should do that on a double-click or Enter instead (the
   outline's rows go into the text).
 - Style rows with `.list-row`, whose focus ring follows the focus marks.
+
+### use:rovingTabs
+
+`src/lib/rovingTabs.ts`. A vertical tablist whose selected tab shows its page beside
+it: the Settings rail (#240), one tab per Settings category. The file tabs
+(`TabBar.svelte`) are a horizontal strip and keep their own keys (they wrap, and Enter
+switches), as do SegmentedControl's.
+
+- Roles: a `role="tablist"` with an `aria-label` and `aria-orientation="vertical"`, the
+  action on it; inside, `role="tab"` buttons styled `.list-row`, each with
+  `aria-selected`, `.current` on the selected one, and `aria-controls` naming the
+  `role="tabpanel"`, which is `aria-labelledby` the selected tab. The tablist itself
+  takes no focus (no `tabindex`): a click on its empty space focuses nothing in it.
+- One Tab stop, kept by the markup: the selected tab has `tabindex="0"`, the others
+  `-1`. Tab from it goes on into the page.
+- Keys on a focused tab: Up/Down move to the previous or next tab, stopping at the
+  ends, and Home/End to the first and last. Selection follows focus: the tab moved to is
+  clicked (its click selects it) and focused, so the page changes as the user arrows
+  through. Keys with ⌘, Ctrl or Alt held are left to the app's shortcuts, and every key
+  it handles is `preventDefault`ed (ADR-0005). No type-to-jump.
+- A status mark on a tab (the TLS tab's warning while certificate verification is
+  off): a dot (`.warning-mark` in `SettingsModal.svelte`), `aria-hidden`, with its words in a hidden element
+  outside the tab that the tab is `aria-describedby`, so they describe it without
+  joining its name.
 
 ### KeyValueGrid
 

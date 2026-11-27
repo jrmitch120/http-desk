@@ -1,7 +1,7 @@
 <script lang="ts">
   // Application settings, in six categories: a rail of tabs down the left (owned markup,
   // ADR 0002) and the selected category's page on the right, the only part that scrolls.
-  // The rail is a vertical tablist with a roving tabindex: only the selected tab is a Tab
+  // The rail is a vertical tablist (`use:rovingTabs`): only the selected tab is a Tab
   // stop, the arrow keys and Home/End select and focus, and Tab goes on into the page.
   // A page can be a component of its own (HistorySettings): the styles below reach into it.
   import { open } from "@tauri-apps/plugin-dialog";
@@ -13,6 +13,7 @@
   import HistorySettings from "./HistorySettings.svelte";
   import Icon from "./Icon.svelte";
   import { tooltip } from "../lib/popup/tooltip.svelte";
+  import { rovingTabs } from "../lib/rovingTabs";
   import Modal from "./Modal.svelte";
   import NumberField from "./NumberField.svelte";
   import SegmentedControl from "./SegmentedControl.svelte";
@@ -31,31 +32,11 @@
     { id: "trust", name: "Trusted workspaces", icon: "unlock" },
   ];
   const selected = $derived(CATEGORIES.find((c) => c.id === app.settingsCategory) ?? CATEGORIES[0]);
-  let rail: HTMLElement | undefined = $state();
-
-  /**
-   * The rail's keys, on a focused tab, without ⌘/Ctrl/Alt (app shortcuts, ADR-0005):
-   * Up/Down move to the previous or next category, stopping at the ends, and Home/End
-   * to the first and last. Selection follows focus, so the page changes as the user
-   * arrows through.
-   */
-  function onRailKeydown(e: KeyboardEvent) {
-    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-    const i = CATEGORIES.indexOf(selected);
-    let to: number;
-    if (e.key === "ArrowDown") to = Math.min(i + 1, CATEGORIES.length - 1);
-    else if (e.key === "ArrowUp") to = Math.max(i - 1, 0);
-    else if (e.key === "Home") to = 0;
-    else if (e.key === "End") to = CATEGORIES.length - 1;
-    else return;
-    e.preventDefault();
-    const id = CATEGORIES[to].id;
-    app.settingsCategory = id;
-    rail?.querySelector<HTMLElement>(`#settings-tab-${id}`)?.focus();
-  }
-
-  /** The rail's only status mark: TLS while certificate verification is off. */
-  const tlsWarning = $derived(app.settings?.exec.verifyTls === false);
+  /** A category's status mark, as the words that describe it: the rail's only one is
+   *  TLS while certificate verification is off. */
+  const warnings = $derived<Partial<Record<SettingsCategory, string>>>(
+    app.settings?.exec.verifyTls === false ? { tls: "Certificate verification is off" } : {},
+  );
 
   // Edits apply straight to the live settings, through the same save path as the
   // top bar: switches on click, text and number fields on blur or Enter.
@@ -127,8 +108,9 @@
 <Modal title="Settings" width="760px" height="min(540px, calc(100vh - 48px))" onclose={close}>
   {#if settings}
     <div class="body">
-      <div class="rail" bind:this={rail} role="tablist" aria-label="Settings categories" aria-orientation="vertical" tabindex="-1" onkeydown={onRailKeydown}>
+      <div class="rail" role="tablist" aria-label="Settings categories" aria-orientation="vertical" use:rovingTabs>
         {#each CATEGORIES as c (c.id)}
+          {@const warning = warnings[c.id]}
           <button
             class="list-row"
             class:current={c.id === selected.id}
@@ -137,16 +119,16 @@
             aria-selected={c.id === selected.id}
             tabindex={c.id === selected.id ? 0 : -1}
             aria-controls="settings-page"
-            aria-describedby={c.id === "tls" && tlsWarning ? "settings-tls-warning" : undefined}
+            aria-describedby={warning ? `settings-warning-${c.id}` : undefined}
             onclick={() => (app.settingsCategory = c.id)}
           >
             <Icon name={c.icon} size={16} />
             <span>{c.name}</span>
-            {#if c.id === "tls" && tlsWarning}<span class="warning-mark" data-testid="warning-mark" aria-hidden="true"></span>{/if}
+            {#if warning}<span class="warning-mark" data-testid="warning-mark" aria-hidden="true"></span>{/if}
           </button>
+          <!-- The mark's words, outside the tab so they describe it without joining its name. -->
+          {#if warning}<span id="settings-warning-{c.id}" hidden>{warning}</span>{/if}
         {/each}
-        <!-- The mark's words, outside the tab so they describe it without joining its name. -->
-        <span id="settings-tls-warning" hidden>Certificate verification is off</span>
       </div>
 
       <div class="page" role="tabpanel" id="settings-page" aria-labelledby="settings-tab-{selected.id}">

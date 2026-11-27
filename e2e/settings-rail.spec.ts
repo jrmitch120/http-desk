@@ -182,10 +182,31 @@ test("End and Home select the last and first categories", async ({ page }) => {
   await expect(categoryTab(page, "Trusted workspaces")).toBeFocused();
   await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("Trusted workspaces");
   await expect(panel(page, "Trusted workspaces")).toBeVisible();
+  // Down stops at the last category.
+  await page.keyboard.press("ArrowDown");
+  await expect(categoryTab(page, "Trusted workspaces")).toBeFocused();
   await page.keyboard.press("Home");
   await expect(categoryTab(page, "General")).toBeFocused();
   await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("General");
   await expect(panel(page, "General")).toBeVisible();
+});
+
+test("the rail's keys with Alt or Ctrl held are left to the app", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "Requests").click();
+  for (const key of ["Alt+ArrowDown", "Control+ArrowDown", "Alt+End", "Control+Home"]) await page.keyboard.press(key);
+  await expect(categoryTab(page, "Requests")).toBeFocused();
+  await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("Requests");
+});
+
+test("a click on the rail's empty space below the tabs doesn't focus the rail", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "TLS").click();
+  const box = (await rail(page).boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 8);
+  await expect(rail(page)).not.toBeFocused();
 });
 
 // #239: Settings reopens on the category last selected during this run, General after
