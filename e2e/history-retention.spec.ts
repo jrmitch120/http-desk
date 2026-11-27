@@ -4,7 +4,7 @@
 // confirming; retention's limits are edited in Settings. The mock's `?historyCap=`
 // lowers the cap so a test needn't send 10 MB.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, seedHistory } from "./helpers";
+import { dialog, mockState, openApp, openRequest, seedHistory, showSettingsPage } from "./helpers";
 
 const status = (page: Page) => page.locator(".statusbar").first();
 const historyButton = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" });
@@ -196,7 +196,7 @@ test("Clear workspace history is only in the sidebar's History view, not a reque
 test("retention limits are edited in Settings, and kept after a reload", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+Comma");
-  const settings = dialog(page, "Settings");
+  const settings = await showSettingsPage(page, "History");
   const perRequest = settings.getByRole("textbox", { name: "Entries per request" });
   const days = settings.getByRole("textbox", { name: "Keep for" });
   const size = settings.getByRole("textbox", { name: "Total size" });
@@ -219,7 +219,8 @@ test("retention limits are edited in Settings, and kept after a reload", async (
   await page.reload();
   await expect(page.getByRole("treeitem").first()).toBeVisible();
   await page.keyboard.press("Meta+Comma");
-  await expect(dialog(page, "Settings").getByRole("textbox", { name: "Entries per request" })).toHaveValue("10");
-  await expect(dialog(page, "Settings").getByRole("textbox", { name: "Keep for" })).toHaveValue("7");
-  await expect(dialog(page, "Settings").getByRole("textbox", { name: "Total size" })).toHaveValue("50");
+  const history = await showSettingsPage(page, "History");
+  await expect(history.getByRole("textbox", { name: "Entries per request" })).toHaveValue("10");
+  await expect(history.getByRole("textbox", { name: "Keep for" })).toHaveValue("7");
+  await expect(history.getByRole("textbox", { name: "Total size" })).toHaveValue("50");
 });

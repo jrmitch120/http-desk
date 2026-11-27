@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp } from "./helpers";
+import { dialog, mockState, openApp, showSettingsPage } from "./helpers";
 
-async function openSettings(page: Page) {
+/** Opens Settings on `category`. */
+async function openSettings(page: Page, category = "General") {
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, category);
   return dialog(page, "Settings");
 }
 
@@ -13,7 +15,7 @@ async function savedSettings(page: Page) {
 
 test("toggling Follow redirects applies at once and is still applied after reopening Settings", async ({ page }) => {
   await openApp(page);
-  let settings = await openSettings(page);
+  let settings = await openSettings(page, "Requests");
   const follow = () => settings.locator(".setting", { hasText: "Follow redirects" }).getByRole("switch");
   await expect(follow()).toHaveAttribute("aria-checked", "true");
 
@@ -23,13 +25,13 @@ test("toggling Follow redirects applies at once and is still applied after reope
 
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings).toHaveCount(0);
-  settings = await openSettings(page);
+  settings = await openSettings(page, "Requests");
   await expect(follow()).toHaveAttribute("aria-checked", "false");
 });
 
 test("clearing the idle timeout shows an error and saves nothing; leaving the field restores it", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
   await expect(idle).toHaveValue("30");
 
@@ -51,7 +53,7 @@ test("clearing the idle timeout shows an error and saves nothing; leaving the fi
 
 test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
 
   await idle.fill("45");
@@ -65,7 +67,7 @@ test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ 
 
 test("a maximum body size has to be a whole number of at least 1 MB", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
   const size = settings.getByRole("textbox", { name: "Maximum body size" });
   await expect(size).toHaveValue("100");
 
@@ -81,7 +83,7 @@ test("a maximum body size has to be a whole number of at least 1 MB", async ({ p
 
 test("a certificate path applies on Enter and on Clear, not per keystroke", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "TLS");
   const ca = settings.locator(".setting", { hasText: "CA certificate" });
 
   await ca.getByRole("textbox").fill("/certs/ca.pem");
@@ -139,7 +141,7 @@ test.describe("without a blur on removal (as in WebKit)", () => {
   for (const { how, close } of closers) {
     test(`closing Settings with ${how} applies the number being typed`, async ({ page }) => {
       await openApp(page);
-      const settings = await openSettings(page);
+      const settings = await openSettings(page, "Requests");
       await settings.getByRole("textbox", { name: "Idle timeout" }).fill("45");
       await close(page);
       await expect(settings).toHaveCount(0);
@@ -148,7 +150,7 @@ test.describe("without a blur on removal (as in WebKit)", () => {
 
     test(`closing Settings with ${how} applies the certificate path being typed`, async ({ page }) => {
       await openApp(page);
-      const settings = await openSettings(page);
+      const settings = await openSettings(page, "TLS");
       await settings.locator(".setting", { hasText: "CA certificate" }).getByRole("textbox").fill("/certs/ca.pem");
       await close(page);
       await expect(settings).toHaveCount(0);

@@ -1154,14 +1154,14 @@ Decisions made during implementation, beyond the plan above:
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
-  the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
-  turns verification off; any Settings section can be opened scrolled into view the same
-  way: `app.openSettings(section)`, with `SettingsSection` naming TLS, History and
-  Portability, and that `<section>` taking `use:settingsSection` from
-  `src/lib/settingsSection.svelte.ts`, which scrolls it in and clears the request), the timeouts open the request's Settings, and
+  the fix (`sendErrorFix`): `tls` opens Settings on TLS (never a switch that
+  turns verification off; any Settings category can be opened the same way:
+  `app.openSettings(category)`, with `SettingsSection` naming the six categories of the
+  Settings modal's rail, sets `app.settingsCategory`, which selects that category's tab and page;
+  without one Settings opens on General), the timeouts open the request's Settings, and
   `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
-  `unsentRequest` offers "Send `x` first" for the first request named. They ask through one-shot store
-  fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
+  `unsentRequest` offers "Send `x` first" for the first request named. The request's Settings and the environment picker are asked
+  for through one-shot store fields (`requestSettingsFor`, `envPickerWanted`) that the
   component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
   verifiers don't agree on reasons (macOS reports a self-signed or expired certificate

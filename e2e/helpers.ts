@@ -324,6 +324,18 @@ export function dialog(page: Page, title: string): Locator {
   return page.getByRole("dialog", { name: title, exact: true });
 }
 
+/** A category's page in the open Settings modal: its tabpanel, named by its tab in the rail. */
+export function settingsPage(page: Page, category: string): Locator {
+  return dialog(page, "Settings").getByRole("tabpanel", { name: category, exact: true });
+}
+
+/** Selects a category in the open Settings modal's rail and returns its page. */
+export async function showSettingsPage(page: Page, category: string): Promise<Locator> {
+  await dialog(page, "Settings").getByRole("tablist", { name: "Settings categories" }).getByRole("tab", { name: category, exact: true }).click();
+  await expect(settingsPage(page, category)).toBeVisible();
+  return settingsPage(page, category);
+}
+
 /** Switches the open Environments modal to its matrix (every environment side by side); it opens on the list. */
 export async function showEnvironmentMatrix(page: Page): Promise<void> {
   const modal = dialog(page, "Environments");

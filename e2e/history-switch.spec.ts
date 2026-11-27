@@ -4,7 +4,7 @@
 // where History is kept and clears it all after confirming. The sidebar's History
 // view (#156) says it's off too.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest } from "./helpers";
+import { dialog, mockState, openApp, openRequest, settingsPage, showSettingsPage } from "./helpers";
 
 const historyButton = (page: Page) => page.getByRole("radiogroup", { name: "Response pane" }).getByRole("radio", { name: "History" });
 const entries = (page: Page) => page.getByRole("list", { name: "History entries" }).getByRole("listitem");
@@ -17,10 +17,11 @@ async function send(page: Page) {
 
 async function openSettings(page: Page) {
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "History");
   return dialog(page, "Settings");
 }
 
-const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
+const historySection = (page: Page) => settingsPage(page, "History");
 const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
 
 test("History is on by default; turning it off with Keep keeps what's stored and records nothing more", async ({ page }) => {
