@@ -1,6 +1,8 @@
 <script lang="ts">
   // Application settings, in six categories: a rail of tabs down the left (owned markup,
   // ADR 0002) and the selected category's page on the right, the only part that scrolls.
+  // The rail is a vertical tablist with a roving tabindex: only the selected tab is a Tab
+  // stop, the arrow keys and Home/End select and focus, and Tab goes on into the page.
   // A page can be a component of its own (HistorySettings): the styles below reach into it.
   import { open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
@@ -29,6 +31,28 @@
     { id: "trust", name: "Trusted workspaces", icon: "unlock" },
   ];
   const selected = $derived(CATEGORIES.find((c) => c.id === app.settingsCategory) ?? CATEGORIES[0]);
+  let rail: HTMLElement | undefined = $state();
+
+  /**
+   * The rail's keys, on a focused tab, without ⌘/Ctrl/Alt (app shortcuts, ADR-0005):
+   * Up/Down move to the previous or next category, stopping at the ends, and Home/End
+   * to the first and last. Selection
+   * follows focus, so the page changes as the user arrows through.
+   */
+  function onRailKeydown(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const i = CATEGORIES.indexOf(selected);
+    let to: number;
+    if (e.key === "ArrowDown") to = Math.min(i + 1, CATEGORIES.length - 1);
+    else if (e.key === "ArrowUp") to = Math.max(i - 1, 0);
+    else if (e.key === "Home") to = 0;
+    else if (e.key === "End") to = CATEGORIES.length - 1;
+    else return;
+    e.preventDefault();
+    const id = CATEGORIES[to].id;
+    app.settingsCategory = id;
+    rail?.querySelector<HTMLElement>(`#settings-tab-${id}`)?.focus();
+  }
 
   // Edits apply straight to the live settings, through the same save path as the
   // top bar: switches on click, text and number fields on blur or Enter.
@@ -100,7 +124,7 @@
 <Modal title="Settings" width="760px" height="min(540px, calc(100vh - 48px))" onclose={close}>
   {#if settings}
     <div class="body">
-      <div class="rail" role="tablist" aria-label="Settings categories" aria-orientation="vertical">
+      <div class="rail" bind:this={rail} role="tablist" aria-label="Settings categories" aria-orientation="vertical" tabindex="-1" onkeydown={onRailKeydown}>
         {#each CATEGORIES as c (c.id)}
           <button
             class="list-row"
@@ -108,6 +132,7 @@
             role="tab"
             id="settings-tab-{c.id}"
             aria-selected={c.id === selected.id}
+            tabindex={c.id === selected.id ? 0 : -1}
             aria-controls="settings-page"
             onclick={() => (app.settingsCategory = c.id)}
           >

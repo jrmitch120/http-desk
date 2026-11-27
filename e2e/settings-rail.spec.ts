@@ -1,7 +1,7 @@
 // #238: Settings is a fixed-size modal with a rail of six categories down its left
 // side (a vertical tablist) and the selected category's page (its tabpanel) on the right.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, openApp } from "./helpers";
+import { dialog, hasRing, openApp } from "./helpers";
 
 const CATEGORIES = ["General", "Requests", "TLS", "Portability", "History", "Trusted workspaces"];
 
@@ -109,4 +109,81 @@ test("the modal keeps its size across categories, and a long Trusted workspaces 
   expect(await rail(page).boundingBox()).toEqual(railBefore);
   expect(await done.boundingBox()).toEqual(doneBefore);
   await expect(done).toBeInViewport();
+});
+
+// #240: the rail is a vertical tablist from the keyboard.
+test("Down and Up move selection and focus between the rail's tabs, and the page follows", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "General").focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(categoryTab(page, "Requests")).toBeFocused();
+  await expect(categoryTab(page, "Requests")).toHaveAttribute("aria-selected", "true");
+  await expect(panel(page, "Requests")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(categoryTab(page, "TLS")).toBeFocused();
+  await expect(panel(page, "TLS")).toBeVisible();
+  await page.keyboard.press("ArrowUp");
+  await expect(categoryTab(page, "Requests")).toBeFocused();
+  await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("Requests");
+  await expect(panel(page, "Requests")).toBeVisible();
+  // Up stops at the first category.
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(categoryTab(page, "General")).toBeFocused();
+  await expect(panel(page, "General")).toBeVisible();
+});
+
+test("only the selected tab is in the Tab order, and Tab from it moves into the page", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "General").focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(categoryTab(page, "TLS")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(panel(page, "TLS").getByRole("switch", { name: "Verify server certificates" })).toBeFocused();
+  // Back out of the page: the selected tab, then what comes before the rail (the modal's Close).
+  await page.keyboard.press("Shift+Tab");
+  await expect(categoryTab(page, "TLS")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(settings(page).getByRole("button", { name: "Close" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(categoryTab(page, "TLS")).toBeFocused();
+});
+
+test("the focused tab draws the app's row focus ring", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "General").click();
+  // A click draws no ring; the arrow keys do.
+  expect(await hasRing(categoryTab(page, "General"))).toBe(false);
+  await page.keyboard.press("ArrowDown");
+  await expect(categoryTab(page, "Requests")).toBeFocused();
+  expect(await hasRing(categoryTab(page, "Requests"))).toBe(true);
+  // The same ring as the app's other selected rows (the inset row ring).
+  const shadow = await categoryTab(page, "Requests").evaluate((el) => getComputedStyle(el).boxShadow);
+  const token = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.boxShadow = "var(--focus-ring-row-inside)";
+    document.body.append(probe);
+    const s = getComputedStyle(probe).boxShadow;
+    probe.remove();
+    return s;
+  });
+  expect(shadow).toBe(token);
+});
+
+test("End and Home select the last and first categories", async ({ page }) => {
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await categoryTab(page, "Requests").click();
+  await page.keyboard.press("End");
+  await expect(categoryTab(page, "Trusted workspaces")).toBeFocused();
+  await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("Trusted workspaces");
+  await expect(panel(page, "Trusted workspaces")).toBeVisible();
+  await page.keyboard.press("Home");
+  await expect(categoryTab(page, "General")).toBeFocused();
+  await expect(rail(page).getByRole("tab", { selected: true })).toHaveText("General");
+  await expect(panel(page, "General")).toBeVisible();
 });
