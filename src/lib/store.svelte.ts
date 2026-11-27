@@ -177,8 +177,8 @@ export type ModalKind = "env" | "openapi" | "settings" | "about" | null;
 export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
-/** A section of the Settings modal that can be opened scrolled into view (`settingsSection.svelte.ts`). */
-export type SettingsSection = "tls" | "history" | "portability" | "trust";
+/** A category of the Settings modal: a tab in its rail and the page it shows (`SettingsModal.svelte`). */
+export type SettingsSection = "general" | "requests" | "tls" | "portability" | "history" | "trust";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -307,10 +307,11 @@ class AppStore {
    *  Each clears its own once it has, which may be only once it has loaded. */
   explorerFocusWanted = $state(false);
   historyFocusWanted = $state(false);
+  /** The category the Settings modal shows (`openSettings` selects it). */
+  settingsCategory = $state<SettingsSection>("general");
   /** Fix-it requests from the error panel, each cleared by the component that
-   *  acts on it: the Settings section to scroll to when the modal opens, the tab
-   *  whose request editor should show its Settings, and the environment picker. */
-  settingsSection = $state<SettingsSection | null>(null);
+   *  acts on it: the tab whose request editor should show its Settings, and the
+   *  environment picker. */
   requestSettingsFor = $state<string | null>(null);
   /** A variable definition whose row a hover card's Edit asked for: the request's
    *  Settings or the Environments modal focuses it and clears this. With `add`
@@ -2159,9 +2160,9 @@ class AppStore {
     return this.updateSettings({ environmentSettings: all });
   }
 
-  /** Opens the Settings modal, scrolled to `section` if given. */
+  /** Opens the Settings modal on `section`, else on General. */
   openSettings(section: SettingsSection | null = null) {
-    this.settingsSection = section;
+    this.settingsCategory = section ?? "general";
     this.modal = "settings";
   }
 

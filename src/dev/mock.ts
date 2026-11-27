@@ -490,6 +490,11 @@ function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: E
 let envFiles = splitEnvFiles(envSet, { shared: {} });
 /** The editors `?portability=` names, comma-separated. */
 const portabilityQuery = (new URLSearchParams(location.search).get("portability") ?? "").split(",");
+/** The Trusted workspaces `?trusted=` names: `1` for the demo workspace, else comma-separated paths. */
+function trustedQuery(query: string | null): string[] {
+  if (!query) return [];
+  return query === "1" ? [ROOT] : query.split(",");
+}
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   // `?recent=/work/shop,/work/api`: more recent workspaces after the demo one (File → Open Recent).
@@ -514,7 +519,8 @@ let settings = {
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
-  trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
+  // `?trusted=/work/a,/work/b`: those workspaces are, instead.
+  trustedWorkspaces: trustedQuery(new URLSearchParams(location.search).get("trusted")),
   runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
   history: { enabled: true, maxPerRequest: 50, maxAgeDays: 30, maxSizeMb: 200 },
 };

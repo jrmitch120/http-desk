@@ -87,7 +87,7 @@
   {/if}
 
   <div class="group">
-    <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => (app.modal = "settings")}><Icon name="settings" /></button>
+    <button class="icon-btn" aria-label="Settings" use:tooltip={`Settings (${shortcutHint("settings")})`} onclick={() => app.openSettings()}><Icon name="settings" /></button>
   </div>
 </header>
 
