@@ -13,7 +13,8 @@
     (`caretFact`, published by the view's editor), display only. Empty with no tab open,
     or while something not backed by a file covers the tabs (a History entry, a named
     exchange, the environment editor). It comes and goes, but nothing follows it.
-  - Centre: the Runner, in the true centre of the window whatever the sides hold.
+  - Centre: the Runner, in the true centre of the window whatever the sides hold; only
+    while there's a Run (running or ended), gone once cleared.
   - Right: workspace-wide, left to right: Portability, History, Scripts, Problems.
 
   Problems sits at the right end: its icon and count, "0" included, muted at zero and
@@ -56,8 +57,8 @@
     else runCommand(`toggle-${panel}`);
   }
 
-  // The Runner slot: the current Run (until the next, or the workspace closes), or a
-  // muted "Runner" before any.
+  // The Runner item: the current Run, until the next, Clear in the Runner panel, or
+  // another workspace. Not there before any.
   const run = $derived(app.runner);
   const summary = $derived(run && runSummary(run.items, run.running));
   // Once an ended Run's results have been seen in the Runner panel (shown after it
@@ -66,7 +67,7 @@
   $effect(() => {
     if (run && !run.running && app.panel === "runner") seenRun = run.runId;
   });
-  const runnerMuted = $derived(!run || !summary || (!run.running && seenRun === run.runId));
+  const runnerMuted = $derived(!!run && !run.running && seenRun === run.runId);
 
   // The Scripts slot. Skipped: clicking asks again to trust the workspace. Otherwise
   // (trusted, or not asked yet) it opens Settings at Trusted workspaces, where the trust
@@ -103,25 +104,27 @@
     <span class="fact" class:at-least={atLeast} data-widest={atLeast} tabindex="0" use:tooltip={fact.tooltip}>{#if atLeast}<span class="shown">{fact.label}</span>{:else}{fact.label}{/if}</span>
   {/snippet}
   <div class="group run">
-    <!-- The Runner, in the centre: one fixed-width button, compact text over a progress line along its bottom edge. -->
+    <!-- The Runner, in the centre: one fixed-width button, compact text over a progress line
+         along its bottom edge. Only while there's a Run (running or ended), gone once cleared;
+         its column keeps the side groups where they are either way. -->
+    {#if summary}
     <button
       class="icon-btn quiet runner"
       class:active={app.panel === "runner"}
       class:muted={runnerMuted}
-      aria-label={summary ? `Show Runner: ${summary.text}` : "Show Runner"}
+      aria-label={`Show Runner: ${summary.text}`}
       aria-pressed={app.panel === "runner"}
-      use:tooltip={summary ? `${summary.text}. Opens the Runner panel` : "Runner: no Run yet. Opens the Runner panel"}
+      use:tooltip={`${summary.text}. Opens the Runner panel`}
       onclick={() => togglePanelItem("runner")}
     >
-      <span class="shown">{#if summary}{summary.compact.label}{#if summary.compact.failed}{" "}<span class="failed-count">{summary.compact.failed}</span>{/if}{:else}Runner{/if}</span>
-      {#if summary}
-        <span class="run-line" aria-hidden="true">
-          <span class="passed" style:width="{summary.passedShare * 100}%"></span>
-          <span class="failed" style:width="{summary.failedShare * 100}%"></span>
-          <span class="sending" style:width="{summary.sendingShare * 100}%"></span>
-        </span>
-      {/if}
+      <span class="shown">{summary.compact.label}{#if summary.compact.failed}{" "}<span class="failed-count">{summary.compact.failed}</span>{/if}</span>
+      <span class="run-line" aria-hidden="true">
+        <span class="passed" style:width="{summary.passedShare * 100}%"></span>
+        <span class="failed" style:width="{summary.failedShare * 100}%"></span>
+        <span class="sending" style:width="{summary.sendingShare * 100}%"></span>
+      </span>
     </button>
+    {/if}
   </div>
   <div class="group workspace">
     <!-- Portability: the editors whose Portability notes show (Settings → Portability). -->
@@ -135,7 +138,7 @@
     >
       <span class="slot" data-widest="VS Code · Rider"><span class="shown">{portability}</span></span>
     </button>
-    <!-- History: muted "History" while the switch is on, "History off" while it's off. -->
+    <!-- History: muted "History on" while the switch is on, "History off" while it's off. -->
     <button
       class="icon-btn quiet label-item history"
       class:off={!historyOn}
@@ -145,9 +148,10 @@
         : "History is off: sends aren't recorded in History. Click to open the setting."}
       onclick={() => app.openSettings("history")}
     >
-      <span class="slot" data-widest="History off"><span class="shown">{historyOn ? "History" : "History off"}</span></span>
+      <span class="slot" data-widest="History off"><span class="shown">{historyOn ? "History on" : "History off"}</span></span>
     </button>
-    <!-- Scripts: muted "Scripts", or "Scripts skipped" warning-toned while the skip is in force. -->
+    <!-- Scripts: muted "Scripts trusted" or "Scripts ask" (the first send with a script asks),
+         or "Scripts skipped" warning-toned while the skip is in force. -->
     <button
       class="icon-btn quiet label-item scripts"
       class:skipped
@@ -155,7 +159,7 @@
       use:tooltip={scriptsTooltip}
       onclick={openScripts}
     >
-      <span class="slot" data-widest="Scripts skipped"><span class="shown">{skipped ? "Scripts skipped" : "Scripts"}</span></span>
+      <span class="slot" data-widest="Scripts skipped" data-also="Scripts trusted"><span class="shown">{skipped ? "Scripts skipped" : trusted ? "Scripts trusted" : "Scripts ask"}</span></span>
     </button>
     <!-- Problems: the right end. -->
     <button
@@ -257,9 +261,21 @@
     display: inline-block;
     white-space: nowrap;
   }
+  /* Room for the widest text, and for `data-also` where the widest of two depends on the
+     font: both laid out invisibly in the same cell. */
+  .slot {
+    display: inline-grid;
+  }
+  .slot::before,
+  .slot::after {
+    grid-area: 1 / 1;
+    visibility: hidden;
+  }
   .slot::before {
     content: attr(data-widest);
-    visibility: hidden;
+  }
+  .slot::after {
+    content: attr(data-also);
   }
   .slot > .shown {
     position: absolute;
@@ -281,7 +297,7 @@
   }
   /* The Runner: one fixed-width button (its hover box), compact text centred in it with
      tabular numerals, so no state moves or resizes it. In the text colour while its Run
-     wants a look; muted with no Run yet, or once an ended Run's results have been seen.
+     wants a look; muted once an ended Run's results have been seen.
      The failed count ("✕ k") warning-toned. */
   .bottom-bar .runner {
     position: relative;
@@ -308,7 +324,7 @@
      finished requests (passed in the success colour, then failed in the warning colour)
      out of all, then the request being sent, pulsing slowly. Dimmed with the item once
      its Run has been seen. Nothing else in the bar animates, and nothing does under
-     reduced motion. Not there before any Run. */
+     reduced motion. */
   .run-line {
     position: absolute;
     left: 0;

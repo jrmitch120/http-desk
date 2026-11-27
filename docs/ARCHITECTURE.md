@@ -1051,11 +1051,12 @@ Decisions made during implementation, beyond the plan above:
   centred in a fixed-width button. It is pressed (`aria-pressed`) while the Problems
   panel is open; clicking it opens the panel, or closes it wherever focus is (#217).
   Being fixed-width, a changing count moves nothing (in the top bar, a growing count
-  pushed its neighbours). **History** reads a muted "History" while the History switch
+  pushed its neighbours). **History** reads a muted "History on" while the History switch
   is on and "History off" in the text colour (a deliberate choice, not a warning) while
   it's off (`app.history.enabled`); clicking it opens Settings at History (#229).
-  **Scripts** reads a muted "Scripts" while the workspace is trusted or hasn't been
-  asked, and "Scripts skipped", warning-toned, while "Send without scripts" is in force
+  **Scripts** reads a muted "Scripts trusted" while the workspace is trusted, a muted
+  "Scripts ask" while it hasn't been asked (the first send that would run a script
+  asks), and "Scripts skipped", warning-toned, while "Send without scripts" is in force
   (`app.trust.skipped`). Skipped, clicking it asks again (`app.trust.askAgain`, #228);
   otherwise it opens Settings at Trusted workspaces, where trust is kept and revoked
   (the open workspace is listed there once trusted; the section says HttpDesk asks the
@@ -1414,12 +1415,13 @@ Decisions made during implementation, beyond the plan above:
   selected result in the response viewer beside the list (`ResponseViewer` given the
   result, no tab). The last run's bodies are released when the next run starts,
   another workspace opens, or Clear in the panel (shown once a run has ended) lets go
-  of it: the panel and the Runner item then read as before any run (`app.clearRun`). The bottom bar's **Runner item** (#227, #235, in the centre
-  of the bar) follows the same run without the panel. It is always there: one button
+  of it: the panel reads as before any run and the Runner item goes (`app.clearRun`). The bottom bar's **Runner item** (#227, #235, in the centre
+  of the bar) follows the same run without the panel. It is there only while there's a
+  run, running or ended, from the first run until Clear or another workspace; its
+  centre column keeps the side groups where they are either way. One button
   120 px wide (its hover box), whose box never moves or resizes, with compact text
   centred in it in tabular numerals (longer text is cut off with an ellipsis) and a
-  2 px progress line along its bottom edge, as wide as the button. Before the
-  workspace's first run it reads a muted "Runner", with no line. While running it reads
+  2 px progress line along its bottom edge, as wide as the button. While running it reads
   "▶ 4/12" (finished out of all) and the line shows passed in the success colour, then
   failed in the warning colour, then the request being sent pulsing slowly (not under
   reduced motion); a failure mid-run shows only in the line. Once ended, the line keeps

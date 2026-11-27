@@ -678,12 +678,13 @@ Save); "status bar" alone names neither.
   it** (a panel, a Settings section via `app.openSettings(section)`, a prompt). No item
   toggles a setting or changes anything by itself, so clicking around the bar never
   surprises.
-- **Nothing moves.** Every workspace item has a permanent slot of fixed width; a
-  condition changes only what's inside its slot (its text, its tone), never whether the
-  slot is there or how wide it is. A normal state reads muted ("Runner", "History",
-  "Scripts"); the other states are toned. A slot's width comes from its widest text
-  (`data-widest` on a `.slot`, laid out invisibly under the shown text, so it follows
-  the font), and text that could still be longer is cut off with an ellipsis, the whole
+- **Nothing moves.** Every item of the right group has a permanent slot of fixed
+  width; a condition changes only what's inside its slot (its text, its tone), never
+  whether the slot is there or how wide it is. Each reads its state: muted in the
+  normal states ("History on", "Scripts trusted", "Scripts ask"), toned in the others.
+  A slot's width comes from its widest text (`data-widest` on a `.slot`, plus
+  `data-also` where which of two is wider depends on the font; laid out invisibly
+  under the shown text, so it follows the font), and text that could still be longer is cut off with an ellipsis, the whole
   in the tooltip. Changing numbers use tabular numerals. The Runner is the exception
   to `.slot`: one button of a fixed 120 px, its compact text ("▶ 3/10", "✓ 8 ✕ 2",
   "■ 2/5") centred in it, the full sentence in its tooltip and accessible name, and its
@@ -691,7 +692,8 @@ Save); "status bar" alone names neither.
 - Three columns. Left: the active tab's file (display only); it comes and goes, but
   nothing follows it, and its changing caret has a minimum width ("Ln 9999, Col 999").
   Centre: the Runner, in the true centre of the window (the side columns share what's
-  left equally). Right, left to right: Portability, History, Scripts, Problems.
+  left equally); it's there only while there's a Run, and its column keeps the sides
+  where they are whether it is or not, so it comes and goes without moving anything. Right, left to right: Portability, History, Scripts, Problems.
 - Items sit `--space-3` apart.
 - A clickable item is an owned `.icon-btn.quiet` button, 20 px high in the 24 px bar,
   with `use:tooltip` naming the state and what clicking opens. A panel's item is a
