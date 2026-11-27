@@ -1026,7 +1026,7 @@ Decisions made during implementation, beyond the plan above:
   size, Copy and Save); "status bar" alone names neither. The bottom bar is a thin strip
   the full width of the window, always shown (no setting hides it), in the theme's panel
   colours. **Its rule: items show state only, and clicking one opens the place where the
-  user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
+  user acts on it** (a panel, a Settings category via `app.openSettings(category)`, a
   prompt); no item changes a setting or anything else by itself. **Nothing in it moves**
   (#235): every workspace item has a permanent slot of fixed width, sized for its widest
   text, and a condition changes only what's inside it (text and tone, muted in the
@@ -1156,7 +1156,7 @@ Decisions made during implementation, beyond the plan above:
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
   the fix (`sendErrorFix`): `tls` opens Settings on TLS (never a switch that
   turns verification off; any Settings category can be opened the same way:
-  `app.openSettings(category)`, with `SettingsSection` naming the six categories of the
+  `app.openSettings(category)`, with `SettingsCategory` naming the six categories of the
   Settings modal's rail, sets `app.settingsCategory`, which selects that category's tab and page;
   without one Settings opens on the category last shown during this run, General at
   first; that memory lives only in the store, never in app settings), the timeouts open the request's Settings, and

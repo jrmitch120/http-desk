@@ -7,7 +7,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
   import { updates } from "../lib/updates.svelte";
-  import { app, type SettingsSection } from "../lib/store.svelte";
+  import { app, type SettingsCategory } from "../lib/store.svelte";
   import type { AppSettings, ExecSettings } from "../lib/types";
   import Banner from "./Banner.svelte";
   import HistorySettings from "./HistorySettings.svelte";
@@ -22,7 +22,7 @@
   import Toggle from "./Toggle.svelte";
 
   /** The rail's categories, in order. */
-  const CATEGORIES: { id: SettingsSection; name: string; icon: string }[] = [
+  const CATEGORIES: { id: SettingsCategory; name: string; icon: string }[] = [
     { id: "general", name: "General", icon: "settings" },
     { id: "requests", name: "Requests", icon: "send" },
     { id: "tls", name: "TLS", icon: "lock" },

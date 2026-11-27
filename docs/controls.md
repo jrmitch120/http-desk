@@ -675,7 +675,7 @@ strip at the top of the response pane (ResponseViewer's status, time, size, Copy
 Save); "status bar" alone names neither.
 
 - **The rule: items show state only; a click opens the place where the user acts on
-  it** (a panel, a Settings section via `app.openSettings(section)`, a prompt). No item
+  it** (a panel, a Settings category via `app.openSettings(category)`, a prompt). No item
   toggles a setting or changes anything by itself, so clicking around the bar never
   surprises.
 - **Nothing moves.** Every item of the right group has a permanent slot of fixed

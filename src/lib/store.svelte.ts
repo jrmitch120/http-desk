@@ -178,7 +178,7 @@ export type PanelId = "session" | "runner" | "problems";
 /** What the sidebar shows (`Sidebar.svelte`): the Explorer, or the workspace's History. */
 export type SidebarView = "explorer" | "history";
 /** A category of the Settings modal: a tab in its rail and the page it shows (`SettingsModal.svelte`). */
-export type SettingsSection = "general" | "requests" | "tls" | "portability" | "history" | "trust";
+export type SettingsCategory = "general" | "requests" | "tls" | "portability" | "history" | "trust";
 
 /** Methods that don't change data, so the production guard lets them through. */
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -310,7 +310,7 @@ class AppStore {
   /** The category the Settings modal shows (`openSettings` selects it). It outlives
    *  the modal, so Settings reopens where it was left, but only for this run: it is
    *  never saved in app settings or on disk. */
-  settingsCategory = $state<SettingsSection>("general");
+  settingsCategory = $state<SettingsCategory>("general");
   /** Fix-it requests from the error panel, each cleared by the component that
    *  acts on it: the tab whose request editor should show its Settings, and the
    *  environment picker. */
@@ -2162,10 +2162,10 @@ class AppStore {
     return this.updateSettings({ environmentSettings: all });
   }
 
-  /** Opens the Settings modal on `section`, which becomes the remembered category;
+  /** Opens the Settings modal on `category`, which becomes the remembered category;
    *  without one, on the category last shown during this run (General at first). */
-  openSettings(section: SettingsSection | null = null) {
-    if (section) this.settingsCategory = section;
+  openSettings(category: SettingsCategory | null = null) {
+    if (category) this.settingsCategory = category;
     this.modal = "settings";
   }
 
