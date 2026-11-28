@@ -60,7 +60,8 @@
 
   <div class="spacer"></div>
 
-  <!-- Three groups, set apart by spacing: environment; status; view and app (Settings).
+  <!-- Three groups: environment; status; view and app (Settings), each the bar's standard
+       6px gap from the next, as neighbouring controls are in the tab bar and request toolbar.
        The sidebar collapses from its own header (Sidebar.svelte). -->
   <div class="group">
     <div class="env" class:none={!app.envName} class:tinted={!!app.envColor} style:--env-color={app.envColor ? envColorShade(app.envColor, app.effectiveTheme) : null}>
@@ -117,10 +118,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-  /* A little extra space between groups, no divider lines. */
-  .group + .group {
-    margin-left: var(--space-3);
   }
   .ws {
     display: flex;

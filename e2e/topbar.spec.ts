@@ -1,6 +1,6 @@
-// #214: the topbar holds only workspace-level controls, in groups set apart by
-// spacing: [workspace] ……… [environment, Manage environments] · [update progress,
-// while downloading] · [Settings]. The sidebar collapses from its own header (#218,
+// #214: the topbar holds only workspace-level controls: [workspace] ………
+// [environment, Manage environments] [update progress, while downloading] [Settings],
+// each the toolbar's standard 6px from the next. The sidebar collapses from its own header (#218,
 // sidebar-rail.spec.ts), so no sidebar toggle. Import OpenAPI and the theme button aren't
 // there; both stay reachable elsewhere (Theme: theme.spec.ts). Problems isn't there
 // either: it's in the bottom bar (#217, bottom-bar.spec.ts).
@@ -40,16 +40,12 @@ test("every control keeps its tooltip with its shortcut hint", async ({ page }) 
   }
 });
 
-test("the environment and view-and-app groups are set apart by more space than the controls within a group", async ({ page }) => {
+test("Settings sits the toolbar's standard 6px from the environment, as the tab bar's controls do", async ({ page }) => {
   await openApp(page);
   const box = async (l: Locator) => (await l.boundingBox())!;
   const env = await box(page.locator(".topbar .env"));
-  const manage = await box(topbar(page).getByRole("button", { name: "Manage environments" }));
-  const picker = await box(topbar(page).getByRole("combobox", { name: "Active environment" }));
   const settings = await box(topbar(page).getByRole("button", { name: "Settings" }));
-
-  const within = manage.x - (picker.x + picker.width);
-  expect(settings.x - (env.x + env.width), "environment · view and app").toBeGreaterThan(within);
+  expect(Math.round(settings.x - (env.x + env.width))).toBe(6);
 });
 
 test.describe("Import OpenAPI, outside the topbar", () => {
