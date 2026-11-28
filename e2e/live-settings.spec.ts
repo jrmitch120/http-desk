@@ -29,23 +29,54 @@ test("toggling Follow redirects applies at once and is still applied after reope
   await expect(follow()).toHaveAttribute("aria-checked", "false");
 });
 
-test("the idle timeout takes only digits and one decimal point; anything else typed or pasted is dropped", async ({ page }) => {
-  // Linux, where the Edit menu's Paste is the app's own command (as a paste lands in a field).
-  await openApp(page, "?platform=linux");
-  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
-  const settings = await showSettingsPage(page, "Requests");
+test("the idle timeout refuses a keystroke a number can't take, leaving the rest as typed", async ({ page }) => {
+  await openApp(page);
+  const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
 
   await idle.selectText();
   await idle.pressSequentially("1a.5s.2");
   await expect(idle).toHaveValue("1.52");
-  // A paste is cleaned the same way, and the caret stays after what was inserted.
-  await idle.fill("");
-  await setClipboard(page, "4x5");
-  await menuClick(page, "paste");
-  await expect(idle).toHaveValue("45");
+  // A second decimal point is refused wherever it's typed, not moved.
+  await idle.press("Home");
+  await idle.press(".");
+  await expect(idle).toHaveValue("1.52");
+  // So is a minus, as the timeout can't be negative; the caret stays where it was.
+  await idle.press("-");
+  await idle.press("3");
+  await expect(idle).toHaveValue("31.52");
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+});
+
+test("a paste a number field can't take is refused whole, not stripped into another number", async ({ page }) => {
+  // Linux, where the Edit menu's Paste is the app's own command (as a paste lands in a field).
+  await openApp(page, "?platform=linux");
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  const settings = await showSettingsPage(page, "Requests");
+  const idle = settings.getByRole("textbox", { name: "Idle timeout" });
+  const size = settings.getByRole("textbox", { name: "Maximum body size" });
+
+  await idle.fill("7");
+  for (const text of ["4x5", "1e3", "1,5", "-5"]) {
+    await setClipboard(page, text);
+    await menuClick(page, "paste");
+    await expect(idle).toHaveValue("7");
+  }
+  // The caret stays where it was, so the next keystroke lands after the 7.
   await idle.pressSequentially("0");
-  await expect(idle).toHaveValue("450");
+  await expect(idle).toHaveValue("70");
+  // A paste it can take goes in at the caret.
+  await setClipboard(page, ".25");
+  await menuClick(page, "paste");
+  await expect(idle).toHaveValue("70.25");
+
+  // A whole-number field refuses a decimal point, however it arrives.
+  await size.fill("8");
+  await setClipboard(page, "2.5");
+  await menuClick(page, "paste");
+  await expect(size).toHaveValue("8");
+  await size.press(".");
+  await expect(size).toHaveValue("8");
   await expect(settings.getByRole("alert")).toHaveCount(0);
 });
 
@@ -80,16 +111,12 @@ test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ 
   await expect(settings).toBeVisible();
 });
 
-test("a maximum body size takes only digits, and below 1 MB puts back the last value", async ({ page }) => {
+test("a maximum body size below 1 MB puts back the last value", async ({ page }) => {
   await openApp(page);
   const settings = await openSettings(page, "Requests");
   const size = settings.getByRole("textbox", { name: "Maximum body size" });
   await expect(size).toHaveValue("100");
 
-  // A whole-number field drops the decimal point too.
-  await size.selectText();
-  await size.pressSequentially("2.5");
-  await expect(size).toHaveValue("25");
   await size.fill("0");
   await size.blur();
   await expect(size).toHaveValue("100");
@@ -103,6 +130,8 @@ test("a certificate path is set only with Browse…, shown read-only, and remove
   await openApp(page);
   const settings = await openSettings(page, "TLS");
   const ca = settings.getByRole("textbox", { name: "CA certificate" });
+  // The field's bordered box, which also holds Clear.
+  const box = ca.locator("xpath=..");
   await expect(ca).toHaveValue("");
   await expect(ca).toHaveAttribute("readonly", "");
 
@@ -117,15 +146,15 @@ test("a certificate path is set only with Browse…, shown read-only, and remove
 
   // Setting a path shows Clear in a slot kept for it: the field and Browse… don't move.
   const browse = settings.getByRole("button", { name: "Browse for CA certificate" });
-  const before = [await ca.boundingBox(), await browse.boundingBox()];
+  const before = [await ca.boundingBox(), await box.boundingBox(), await browse.boundingBox()];
   await setFilePick(page, "/certs/ca.pem");
   await browse.click();
   await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
   await expect(ca).toHaveValue("/certs/ca.pem");
   await expect(settings.getByRole("button", { name: "Clear CA certificate" })).toBeVisible();
-  expect([await ca.boundingBox(), await browse.boundingBox()]).toEqual(before);
+  expect([await ca.boundingBox(), await box.boundingBox(), await browse.boundingBox()]).toEqual(before);
   // Clear sits inside the field's box, at its end; Browse… ends on the page's edge, with the switch.
-  const field = (await ca.boundingBox())!;
+  const field = (await box.boundingBox())!;
   const clear = (await settings.getByRole("button", { name: "Clear CA certificate" }).boundingBox())!;
   expect(clear.x).toBeGreaterThan(field.x);
   expect(clear.x + clear.width).toBeLessThanOrEqual(field.x + field.width);

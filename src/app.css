@@ -49,6 +49,8 @@
   --control-h-sm: 24px;
   --control-h-icon: 26px;
   --control-h-icon-sm: 22px;
+  /* a text field's inset from its border to its text, left and right */
+  --input-pad-x: 9px;
 
   /* the one focus ring every control uses: outline: var(--focus-ring);
      outline-offset: var(--focus-ring-offset). A control flush against an edge
@@ -198,7 +200,7 @@ textarea,
 
 .input {
   height: var(--control-h);
-  padding: 0 9px;
+  padding: 0 var(--input-pad-x);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -206,12 +208,14 @@ textarea,
   min-width: 0;
 }
 .input:focus,
-.var-field.input:focus-within {
+.var-field.input:focus-within,
+.input.boxed:focus-within {
   border-color: var(--focus);
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
-.input::placeholder {
+.input::placeholder,
+.input.boxed > input::placeholder {
   color: var(--faint);
 }
 .input.small {
@@ -223,8 +227,49 @@ textarea,
 }
 textarea.input {
   height: auto;
-  padding: 7px 9px;
+  padding: 7px var(--input-pad-x);
   resize: vertical;
+}
+/* A text field with something inside its end: a unit, a Clear button (docs/controls.md,
+   "Input with an end slot"). The `.input` box is a wrapper; the field inside is
+   borderless and fills it, and `.input-end` is its flex sibling, so nothing is measured
+   or drawn over the text. The field covers the box's left inset and the end slot its
+   right, so a press anywhere in the box lands on one of them. */
+.input.boxed {
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+.input.boxed > input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0 0 var(--input-pad-x);
+  border: none;
+  background: transparent;
+  outline: none;
+}
+.input.boxed > input:last-child {
+  padding-right: var(--input-pad-x);
+}
+/* Text (a unit): muted, a small gap after the field's text, the field's inset after. */
+.input-end {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--input-pad-x) 0 var(--space-1);
+  color: var(--muted);
+}
+.input.boxed > input:disabled + .input-end {
+  opacity: 0.5;
+}
+/* An icon button: a slot always as wide as the button, whether or not it's shown, with
+   the button as far from the box's end as from its top and bottom. */
+.input-end.button {
+  --inset: calc((var(--control-h) - var(--control-h-icon)) / 2 - 1px);
+  width: calc(var(--control-h-icon) + 2 * var(--inset));
+  padding: 0 var(--inset);
 }
 
 /* Keyboard focus shows while focus marks are on (src/lib/focusMarks.ts). */

@@ -41,11 +41,14 @@ text-replacement bubbles in them. `src/guardrail/text-fields.test.ts` fails on a
 without the spread; `e2e/text-fields.spec.ts` checks the rendered fields, CodeMirror's
 editors included (CodeMirror turns these off itself).
 
-A value that must name an existing file is chosen with a file picker, not typed: show
-it in a read-only `.input` (still selectable and copyable) that takes up the row's
-slack, with a **Clear** ✕ inside its end (in padding kept for it, so nothing moves when
-it appears) and **Browse…** after it, ending on the page's edge with the switches, as
-Settings' TLS certificate paths do. The OS picker still takes a typed or pasted path.
+A Settings value naming a file on this computer (an absolute path, such as Settings'
+TLS certificate paths) is chosen with a file picker, not typed: show it in a read-only
+[boxed `.input`](#input-with-an-end-slot) (still selectable and copyable) that takes up
+the row's slack, with a **Clear** ✕ in its end slot (kept whether or not it's shown, so
+nothing moves when it appears) and **Browse…** after it, ending on the page's edge with
+the switches. The OS picker still takes a typed or pasted path. This is for Settings
+only: other path fields stay typed, such as OpenAPI import's file (typed or pasted, then
+loaded) and a body's `< ./file` reference (relative to the `.http` file).
 
 ## Stable layout
 
@@ -68,6 +71,7 @@ unchanged.
 | Turning a setting or a whole request section on or off | [Toggle](#toggle) |
 | Including rows or items in a set (enable a row, pick operations), or an option sentence in a form | [Checkbox](#checkbox) |
 | A number with limits and a unit | [NumberField](#numberfield) |
+| A text field with a unit or a button inside its end | [`.input.boxed`](#input-with-an-end-slot) |
 | Free text, paths, or values with their own syntax (`30s`) | [`.input`](#buttons-inputs-and-links) |
 | A single-line value that can hold `{{variables}}` | [VarField](#varfield) |
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
@@ -248,17 +252,45 @@ spinners.
 
 - Props: `value`, `onchange(n)`, `label` (accessible name), `unit?` (suffix such as `s` or
   `MB`), `min?`, `integer?`, `disabled?`.
-- One width (96px) whatever its unit. The unit is drawn inside the box, after the number,
-  so number fields down a page end on the same edge as its switches and buttons. Pressing
-  on the unit focuses the field.
+- One width (96px) whatever its unit. The unit sits in the box's
+  [end slot](#input-with-an-end-slot), after the number, so number fields down a page
+  end on the same edge as its switches and buttons, and nothing is measured. Pressing on
+  the unit focuses the field.
 - Takes only what its number can hold: digits, one decimal point (none when
-  `integer`), and a leading minus only when `min` allows a negative. Anything else,
-  typed or pasted, is dropped as it arrives, and the caret stays where the user put it.
+  `integer`), and a leading minus only when `min` allows a negative. A keystroke or
+  paste that would leave anything else is refused whole: the text and caret stay as
+  they were. It is never stripped down to the characters that fit, which would turn
+  `2.5` into `25` or `1e3` into `13`.
 - Applies on blur or Enter, never per keystroke. A value it still can't apply (empty,
   or below `min`) puts back the last value. There is no error message: the field never
   holds a value worth explaining.
 - Use for numeric settings. A value with its own syntax, such as a per-request `@timeout`
   (`500 ms`, `2m`), is a plain `.input`.
+
+### Input with an end slot
+
+Global classes in `src/app.css`: a text field with something inside its end, such as
+NumberField's unit or the TLS paths' Clear ✕.
+
+```svelte
+<div class="input boxed">
+  <input {...textFieldAttrs} aria-label="Total size" />
+  <label class="input-end" for="…">MB</label>
+</div>
+```
+
+- `.input.boxed` puts the `.input` look (border, `.mono`, `.small`) on a flex wrapper,
+  with the focus ring on `:focus-within`. The `<input>` inside is borderless and fills
+  what the end slot leaves, so nothing is measured or drawn over its text, and nothing
+  moves once it has drawn.
+- `.input-end` is the slot, the input's flex sibling: muted text (a unit), a
+  `--space-1` gap after the field's text and `--input-pad-x` after it. Make it a
+  `<label for>` the field when pressing on it should focus the field.
+- `.input-end.button` holds an `.icon-btn`, inset as far from the box's end as from its
+  top and bottom. It's always as wide as the button, so render the slot whether or not
+  the button is shown and nothing moves when it appears.
+- Without an end slot, the field keeps the right inset. Don't absolutely position an
+  affordance over an `.input` and pad for it instead.
 
 ### VarField
 
@@ -482,7 +514,8 @@ Global classes in `src/app.css`, not components:
   `<thead>` `aria-hidden`, and `.list-row` on each `<tr>`, which stays a table row.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
   `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
-  Focus shows `--focus-ring`.
+  Focus shows `--focus-ring`. Its text is inset `--input-pad-x` from the border.
+  With something inside its end, it's [boxed](#input-with-an-end-slot).
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.
   Icons are `aria-hidden`, so the button around them carries the name.
 
@@ -836,7 +869,7 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 
 New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `--control-h` (30px), `--control-h-sm` (24px), `--control-h-icon` (26px) and
-`--control-h-icon-sm` (22px) for heights;
+`--control-h-icon-sm` (22px) for heights; `--input-pad-x` (9px) for a text field's inset;
 `--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
 also for the size of small fixed elements that are not controls (a badge's height, a
 Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared

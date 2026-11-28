@@ -401,6 +401,43 @@ for (const name of ["Requests", "History"]) {
   });
 }
 
+// The number's end is placed by layout alone, never by a measurement taken after the
+// field appears and written back as padding (which moves the number once it's taken,
+// and again whenever the field is drawn before it can be measured, as in a hidden page).
+test("a number field's number doesn't move after the field appears", async ({ page }) => {
+  await page.addInitScript(() => {
+    const probe = { ends: {} as Record<string, number[]>, restyled: [] as string[] };
+    (window as unknown as { numberProbe: typeof probe }).numberProbe = probe;
+    /** Where the field's text ends: its box's right edge, less its border and padding. */
+    const end = (el: HTMLInputElement) => {
+      const css = getComputedStyle(el);
+      return el.getBoundingClientRect().right - parseFloat(css.paddingRight) - parseFloat(css.borderRightWidth);
+    };
+    new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as Element;
+        if (r.type === "attributes" && el.matches(".number-field input")) probe.restyled.push(el.getAttribute("aria-label")!);
+      }
+      // Each time the page changes, note where every number field's text ends, if that moved.
+      for (const el of document.querySelectorAll<HTMLInputElement>(".number-field input")) {
+        const seen = (probe.ends[el.getAttribute("aria-label")!] ??= []);
+        const at = end(el);
+        if (seen.at(-1) !== at) seen.push(at);
+      }
+    }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+  });
+  await openApp(page);
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  await categoryTab(page, "Requests").click();
+  await expect(panel(page, "Requests").getByRole("textbox", { name: "Maximum body size" })).toBeVisible();
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  // Touch the page once more, so a late change is noted too.
+  await page.evaluate(() => document.body.setAttribute("class", document.body.className));
+  const probe = await page.evaluate(() => (window as unknown as { numberProbe: { ends: Record<string, number[]>; restyled: string[] } }).numberProbe);
+  expect(probe.restyled).toEqual([]);
+  for (const name of ["Idle timeout", "Maximum body size"]) expect(probe.ends[name]).toHaveLength(1);
+});
+
 test("clicking a number field's unit focuses the field", async ({ page }) => {
   await openApp(page);
   await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();

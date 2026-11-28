@@ -1,11 +1,14 @@
 <script lang="ts">
+  // A number typed into a text field (ADR 0002): a unit inside the box's end (an
+  // `.input.boxed` with an `.input-end`, docs/controls.md) and no spinners. It refuses any
+  // keystroke or paste that would leave something a number of its kind can't become
+  // (digits, one decimal point unless `integer`, a leading minus only when `min` allows
+  // one): the field keeps its text and caret as they were, rather than keeping part of
+  // what arrived. It applies on blur or Enter, never per keystroke. A value it still can't
+  // apply (empty, or below `min`) puts back the last value, with no error message: there
+  // is nothing to show and nothing to move.
   import { textFieldAttrs } from "../lib/textField";
-  // A number typed into a text field (ADR 0002): a unit suffix inside the box and no
-  // spinners. It takes only what a number of its kind can hold (digits, one decimal
-  // point unless `integer`, a leading minus only when `min` allows one); anything else
-  // typed or pasted is dropped as it arrives. It applies on blur or Enter, never per
-  // keystroke. A value it still can't apply (empty, or below `min`) puts back the last
-  // value, with no error message: there is nothing to show and nothing to move.
+
   interface Props {
     value: number;
     onchange: (value: number) => void;
@@ -24,30 +27,16 @@
   const id = $props.id();
   // What the user has typed since the field last applied; null shows `value`.
   let draft = $state<string | null>(null);
-  // The unit is drawn over the input's right padding; the number stops short of it.
-  let unitWidth = $state(0);
 
-  /** `text` with everything this field can't hold removed, and where `caret` ends up. */
-  function clean(text: string, caret: number): { text: string; caret: number } {
-    const negative = min === undefined || min < 0;
-    let out = "";
-    let at = caret;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      const keep =
-        (c >= "0" && c <= "9") ||
-        (c === "." && !integer && !out.includes(".")) ||
-        (c === "-" && negative && out === "");
-      if (keep) out += c;
-      else if (i < caret) at--;
-    }
-    return { text: out, caret: at };
-  }
+  /** Whether `text` is on the way to a number this field can hold ("", "-" and "1." are). */
+  const partial = $derived(
+    new RegExp(`^${min === undefined || min < 0 ? "-?" : ""}\\d*${integer ? "" : "(\\.\\d*)?"}$`),
+  );
 
   /** The number `text` holds, or null when it can't be applied (empty, or below `min`). */
   function parse(text: string): number | null {
     const n = Number(text);
-    if (text === "" || text === "-" || text === "." || !Number.isFinite(n)) return null;
+    if (text === "" || text === "-" || text === "." || text === "-." || !Number.isFinite(n)) return null;
     if (min !== undefined && n < min) return null;
     return n;
   }
@@ -62,25 +51,33 @@
 
   function oninput(e: Event & { currentTarget: HTMLInputElement }) {
     const el = e.currentTarget;
-    const { text, caret } = clean(el.value, el.selectionStart ?? el.value.length);
-    if (text !== el.value) {
-      el.value = text;
-      el.setSelectionRange(caret, caret);
+    const before = draft ?? String(value);
+    if (partial.test(el.value)) {
+      draft = el.value;
+      return;
     }
-    draft = text;
+    // Refused: put back the text, and select what the edit replaced (the caret where it
+    // was, for a plain keystroke or paste). The edit replaced before[start, end) with
+    // after[start, caret): what's before the caret and after it is unchanged.
+    const after = el.value;
+    const caret = el.selectionStart ?? after.length;
+    let tail = 0;
+    while (tail < before.length && tail < after.length - caret && before.at(-1 - tail) === after.at(-1 - tail)) tail++;
+    let start = 0;
+    while (start < before.length - tail && start < caret && before[start] === after[start]) start++;
+    el.value = before;
+    el.setSelectionRange(start, before.length - tail);
   }
 </script>
 
-<div class="number-field">
+<div class="number-field input boxed">
   <input
     {...textFieldAttrs}
     id="{id}-input"
-    class="input"
     type="text"
     inputmode={integer ? "numeric" : "decimal"}
     aria-label={label}
     {disabled}
-    style:padding-right={unit ? `${unitWidth + 13}px` : undefined}
     value={draft ?? String(value)}
     {oninput}
     onblur={commit}
@@ -93,31 +90,21 @@
   />
   {#if unit}
     <!-- A label, so pressing on the unit focuses the field; the field's name stays `label`. -->
-    <label class="unit" class:disabled for="{id}-input" bind:offsetWidth={unitWidth}>{unit}</label>
+    <label class="unit input-end" for="{id}-input">{unit}</label>
   {/if}
 </div>
 
 <style>
   /* One width for every NumberField, whatever its unit, so fields line up down a page. */
   .number-field {
-    position: relative;
     width: 96px;
   }
-  .input {
-    width: 100%;
+  input {
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
   .unit {
-    position: absolute;
-    top: 50%;
-    right: 9px;
-    transform: translateY(-50%);
-    color: var(--muted);
     cursor: text;
     user-select: none;
-  }
-  .unit.disabled {
-    opacity: 0.5;
   }
 </style>

@@ -94,13 +94,15 @@
     <div class="row">
       <!-- Read-only: a path is chosen with Browse… (where the OS picker also takes a typed
            or pasted path), so it can't be mistyped; it can still be selected and copied.
-           Clear sits inside the field's end, in padding kept for it whether or not there's
-           a path, so neither the field nor Browse… moves and Browse… ends on the page's edge. -->
-      <div class="path-field grow">
-        <input {...textFieldAttrs} class="input mono" readonly aria-label={f.label} value={exec[f.key] ?? ""} placeholder="None" />
-        {#if exec[f.key]}
-          <button class="icon-btn clear" aria-label="Clear {f.label}" use:tooltip onclick={() => setPath(f.key, null)}><Icon name="x" size={14} /></button>
-        {/if}
+           Clear sits in the field's end slot, kept whether or not there's a path, so neither
+           the field nor Browse… moves and Browse… ends on the page's edge. -->
+      <div class="input boxed mono grow">
+        <input {...textFieldAttrs} readonly aria-label={f.label} value={exec[f.key] ?? ""} placeholder="None" />
+        <span class="input-end button">
+          {#if exec[f.key]}
+            <button class="icon-btn" aria-label="Clear {f.label}" use:tooltip onclick={() => setPath(f.key, null)}><Icon name="x" size={14} /></button>
+          {/if}
+        </span>
       </div>
       <button class="btn small" aria-label="Browse for {f.label}" onclick={() => browse(f.key)}>Browse…</button>
     </div>
@@ -326,20 +328,5 @@
   }
   .page :global(.tls-off) {
     margin: 2px 0 6px;
-  }
-  .path-field {
-    position: relative;
-    display: flex;
-    min-width: 0;
-  }
-  .path-field .input {
-    flex: 1;
-    padding-right: calc(var(--control-h-icon) + 6px);
-  }
-  .path-field .clear {
-    position: absolute;
-    top: 50%;
-    right: 3px;
-    transform: translateY(-50%);
   }
 </style>
