@@ -1,6 +1,7 @@
 <script lang="ts">
-  // A number typed into a text field (ADR 0002): a unit suffix inside the box, inline validation
-  // and no spinners. It applies on blur or Enter, never per keystroke. A value
+  // A number typed into a text field (ADR 0002): a unit suffix inside the box, no
+  // spinners, and validation in a message that floats under the field, so it never
+  // moves the layout. It applies on blur or Enter, never per keystroke. A value
   // that isn't valid shows an error and is never applied; leaving the field puts
   // back the last valid value.
   interface Props {
@@ -81,11 +82,10 @@
 </div>
 
 <style>
+  /* The error floats below the field rather than taking space in the layout: showing
+     or clearing it must never move the field, its row, or anything after it. */
   .number-field {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-1);
+    position: relative;
   }
   /* One width for every NumberField, whatever its unit, so fields line up down a page. */
   .box {
@@ -113,6 +113,15 @@
     opacity: 0.5;
   }
   .error {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    z-index: 10;
+    padding: 3px 8px;
+    background: var(--popup-bg);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--popup-shadow);
     color: var(--danger);
     font-size: 11.5px;
     white-space: nowrap;

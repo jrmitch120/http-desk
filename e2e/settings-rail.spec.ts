@@ -408,3 +408,34 @@ test("clicking a number field's unit focuses the field", async ({ page }) => {
   await panel(page, "Requests").locator(".number-field .unit", { hasText: "MB" }).click();
   await expect(panel(page, "Requests").getByRole("textbox", { name: "Maximum body size" })).toBeFocused();
 });
+
+// A NumberField's error floats over the page below the field: showing or clearing it never
+// moves the field, its row, or anything after it.
+test("an invalid number shows its error without moving anything on the page", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  await categoryTab(page, "Requests").click();
+  const p = panel(page, "Requests");
+  const watched = [
+    p.getByRole("textbox", { name: "Idle timeout" }),
+    p.getByRole("textbox", { name: "Connection timeout" }),
+    p.getByRole("switch", { name: "Follow redirects" }),
+    p.getByRole("textbox", { name: "Maximum body size" }),
+  ];
+  const boxes = () => Promise.all(watched.map((l) => l.boundingBox()));
+  const before = await boxes();
+  const idle = watched[0];
+  await idle.fill("soon");
+  const alert = p.getByRole("alert");
+  await expect(alert).toHaveText("Enter a number");
+  expect(await boxes()).toEqual(before);
+  // The message sits just under its field, right-aligned with it, and is fully shown.
+  const field = (await idle.boundingBox())!;
+  const msg = (await alert.boundingBox())!;
+  expect(msg.y).toBeGreaterThanOrEqual(field.y + field.height);
+  expect(Math.round(msg.x + msg.width)).toBe(Math.round(field.x + field.width));
+  await expect(alert).toBeInViewport({ ratio: 1 });
+  await idle.blur();
+  await expect(alert).toHaveCount(0);
+  expect(await boxes()).toEqual(before);
+});
