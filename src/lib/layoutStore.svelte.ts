@@ -35,6 +35,8 @@ export interface LayoutHost {
   removeTab(id: string): void;
   /** Restored tabs are about to show: each (by id) is re-attached, or dropped, once its promise settles. */
   restoring(ready: Map<string, Promise<void>>): void;
+  /** Restored tab `id` is re-attached to its request (or its file view to its file), as the Layout left it. */
+  restored(id: string): void;
   toast(kind: "info" | "error", message: string): void;
 }
 
@@ -76,10 +78,12 @@ export class LayoutStore {
     for (const t of open) {
       const doc = docs[t.path];
       const path = inWorkspace(root, t.path);
+      // Kept tabs are saved as before Preview tabs: without the flag.
+      const preview = t.preview ? { preview: true as const } : {};
       if (t.kind === "file") {
         if (!doc || path === null) continue;
         if (t.id === activeTabId) active = tabs.length;
-        tabs.push({ kind: "file", path });
+        tabs.push({ kind: "file", path, ...preview });
         continue;
       }
       const saved = doc?.saved[t.key];
@@ -96,6 +100,7 @@ export class LayoutStore {
         position: position < 0 ? null : position,
         section: t.section,
         responseView: { ...t.responseView },
+        ...preview,
       });
     }
     const expanded = Object.keys(shown).flatMap((p) => {
@@ -148,8 +153,9 @@ export class LayoutStore {
     const layout = readLayout(saved);
     const tabs = layout.tabs.map((t): Tab => {
       const path = fromWorkspace(root, t.path);
-      if (t.kind === "file") return { ...newFileTab(path), restoring: { method: "", name: basename(path) } };
-      return { ...newTab(path, uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) } };
+      const preview = t.preview ? { preview: true as const } : {};
+      if (t.kind === "file") return { ...newFileTab(path), restoring: { method: "", name: basename(path) }, ...preview };
+      return { ...newTab(path, uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) }, ...preview };
     });
     this.host.restoring(this.reattach(open, root, layout.tabs, tabs));
     this.host.tabs = tabs;
@@ -186,6 +192,7 @@ export class LayoutStore {
           const doc = this.host.docs[path];
           if (t.kind === "file" ? !!doc : doc?.file.requests.some((r) => r._key === t.key)) {
             shown.restoring = undefined;
+            this.host.restored(id);
           } else if (t.kind === "file") {
             this.host.removeTab(id);
           } else {

@@ -15,6 +15,9 @@
       { label: "Close", icon: "x", action: () => app.closeTab(tab.id) },
       { label: "Close others", icon: "close-others", action: () => app.closeTabs(app.tabs.filter((t) => t.id !== tab.id).map((t) => t.id)) },
       { label: "Close all", icon: "close-all", action: () => app.closeTabs(app.tabs.map((t) => t.id)) },
+      { separator: true },
+      // Enabled only for the Preview tab: the keyboard's way to do what a double-click on it does.
+      { label: "Keep open", icon: "lock", disabled: !tab.preview, action: () => app.keepTab(tab.id) },
       ...(tab.kind === "file"
         ? []
         : [
@@ -74,6 +77,7 @@
         tabindex={active ? 0 : -1}
         use:tooltip={asText ? `${tab.path} as text` : `${shown?.name ?? ""} — ${orphaned ? `no longer in ${basename(tab.path)}` : basename(tab.path)}`}
         onclick={() => (app.activeTabId = tab.id)}
+        ondblclick={() => app.keepTab(tab.id)}
         onkeydown={(e) => onTabKey(e, tab)}
         onauxclick={(e) => e.button === 1 && app.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}

@@ -18,12 +18,16 @@ export interface LayoutRequestTab extends PlacedRequest {
   title?: string;
   section: RequestSection;
   responseView: ResponseView;
+  /** The workspace's Preview tab. Missing means kept (and in a Layout saved before Preview tabs). */
+  preview?: true;
 }
 
 /** An open file view: the whole file at `path` as one text. */
 export interface LayoutFileTab {
   kind: "file";
   path: string;
+  /** The workspace's Preview tab. Missing means kept (and in a Layout saved before Preview tabs). */
+  preview?: true;
 }
 
 export type LayoutTab = LayoutRequestTab | LayoutFileTab;
@@ -63,7 +67,8 @@ const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 function readTab(v: unknown): LayoutTab | null {
   if (!isObject(v)) return null;
-  if (v.kind === "file") return typeof v.path === "string" ? { kind: "file", path: v.path } : null;
+  const preview = v.preview === true ? { preview: true as const } : {};
+  if (v.kind === "file") return typeof v.path === "string" ? { kind: "file", path: v.path, ...preview } : null;
   const [path, name, method, url, title] = [str(v.path), str(v.name), str(v.method), str(v.url), str(v.title)];
   if (path === null || name === null || method === null || url === null) return null;
   const position = typeof v.position === "number" && Number.isInteger(v.position) && v.position >= 0 ? v.position : null;
@@ -75,11 +80,12 @@ function readTab(v: unknown): LayoutTab | null {
     mode: MODES.find((m) => m === view.mode) ?? fallback.mode,
     wrap: typeof view.wrap === "boolean" ? view.wrap : fallback.wrap,
   };
-  return { path, name, method, url, ...(title ? { title } : {}), position, section, responseView };
+  return { path, name, method, url, ...(title ? { title } : {}), position, section, responseView, ...preview };
 }
 
 /** What `load_layout` returned, as a Layout: none, or anything damaged, is an empty
- *  one; a damaged tab is left out, and anything else unusable takes its default. */
+ *  one; a damaged tab is left out, and anything else unusable takes its default. Of
+ *  several tabs marked as the Preview tab, only the first stays one. */
 export function readLayout(value: unknown): Layout {
   const v = isObject(value) ? value : {};
   const tabs: LayoutTab[] = [];
@@ -87,6 +93,7 @@ export function readLayout(value: unknown): Layout {
   (Array.isArray(v.tabs) ? v.tabs : []).forEach((t, i) => {
     const tab = readTab(t);
     if (!tab) return;
+    if (tab.preview && tabs.some((t) => t.preview)) delete tab.preview;
     if (i === v.active) active = tabs.length;
     tabs.push(tab);
   });

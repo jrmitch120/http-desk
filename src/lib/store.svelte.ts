@@ -831,14 +831,15 @@ class AppStore {
   }
 
   /** Reloads from disk, keeping tabs attached to the same requests where possible.
-   *  Tabs whose request can't be found any more become Orphaned tabs. */
+   *  Tabs whose request can't be found any more become Orphaned tabs, except the
+   *  Preview tab, which closes (see `dropVanishedPreview`). */
   async reload(path: string) {
     const old = this.docs[path];
     let file: HttpFile;
     try {
       file = await api.readHttpFile(path);
     } catch {
-      if (old) old.missing = true;
+      if (old) this.markMissing(path);
       return;
     }
     let orphans: Request[] = [];
@@ -846,10 +847,28 @@ class AppStore {
       // Earlier orphans can re-attach too, e.g. when the other editor undoes its change.
       const known = (r: Request, position: number | null): KnownRequest => ({ key: r._key!, name: r.name, method: r.method, url: r.url, position });
       const unused = reattach([...old.file.requests.map((r, i) => known(r, i)), ...old.orphans.map((r) => known(r, null))], file.requests);
+      this.dropVanishedPreview((t) => t.path === path && t.kind === "request" && unused.has(t.key));
       const held = new Set(this.tabs.flatMap((t) => (t.kind === "request" && t.path === path ? [t.key] : [])));
       orphans = [...old.file.requests, ...old.orphans].filter((r) => unused.has(r._key!) && held.has(r._key!));
     }
     this.fromElsewhere(() => (this.docs[path] = this.makeDoc(path, file, orphans, old?.saved)));
+  }
+
+  /** The file at `path` is gone from disk: its kept tabs become Orphaned tabs, and its Preview tab closes. */
+  private markMissing(path: string) {
+    this.docs[path].missing = true;
+    this.dropVanishedPreview((t) => t.path === path);
+  }
+
+  /**
+   * Closes the Preview tab if `vanished` (its request or file is gone from disk), rather
+   * than leave it an Orphaned tab: it holds no edits or response of its own, so nothing
+   * is lost. Quietly, like a replaced Preview tab: no question, no toast, and not on the
+   * Reopen Closed Tab list.
+   */
+  private dropVanishedPreview(vanished: (tab: Tab) => boolean) {
+    const tab = this.tabs.find((t) => t.preview);
+    if (tab && vanished(tab)) this.removeTab(tab.id);
   }
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -897,7 +916,7 @@ class AppStore {
       if (!doc) continue;
       const exists = await api.pathExists(p).catch(() => true);
       if (!exists) {
-        doc.missing = true;
+        this.markMissing(p);
       } else if (this.isDocDirty(p)) {
         doc.missing = false;
         // Our own rename or move (or a touch) leaves the content as loaded: nothing to warn about.
@@ -1968,6 +1987,10 @@ class AppStore {
       restoring: (ready) => {
         store.unshown = new Set(ready.keys());
         store.reattaching = ready;
+      },
+      // A restored Preview tab's request is as the tab finds it: only changes from here on keep it.
+      restored: (id) => {
+        if (store.tabs.find((t) => t.id === id)?.preview) store.notePreviewShown();
       },
       toast: (kind, message) => store.toast(kind, message),
     };
