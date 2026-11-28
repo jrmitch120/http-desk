@@ -489,9 +489,10 @@ class AppStore {
   /** Applies and saves settings; a failed save shows an error toast and returns false. */
   async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
     if (!this.settings) return false;
+    const hadPreviewTabs = this.previewTabs;
     Object.assign(this.settings, patch);
-    // With the Preview tabs switch off every tab is kept, the open Preview tab too.
-    if (!this.previewTabs) this.tabs.forEach((t) => this.keepTab(t.id));
+    // Turning the Preview tabs switch off (here or in the Settings window) keeps the open Preview tab.
+    if (hadPreviewTabs && !this.previewTabs && this.previewTab) this.keepTab(this.previewTab.id);
     this.applyTheme();
     this.applyZoom();
     return this.saveSettings();
