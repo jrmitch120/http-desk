@@ -423,6 +423,77 @@ describe("closing an Orphaned tab", () => {
   });
 });
 
+describe("Preview tabs (#248)", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed, so the reopen list holds only this test's.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const books = () => fileOf(["GET", "List", "https://x/books"], ["DELETE", "Remove", "https://x/books/1"]);
+  const names = () => app.tabs.map((t) => app.requestFor(t)?.name);
+
+  it("a Preview tab whose request vanishes on reload closes instead of becoming an Orphaned tab", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openRequest(PATH, { index: 1 }, { preview: true });
+    const remove = app.tabs[1];
+    app.runs[remove.id] = { runId: "r1", loading: false, startedAt: 0, response: { status: 204 } as HttpResponse };
+
+    // Another editor removed the request.
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    expect(names()).toEqual(["List"]);
+    expect(app.activeTabId).toBe(app.tabs[0].id);
+    expect(app.docs[PATH].orphans).toEqual([]);
+    expect(app.runs[remove.id]).toBeUndefined();
+    expect(canRun("reopen-tab")).toBe(false);
+    expect(app.toasts).toEqual([]);
+  });
+
+  it("a Preview tab whose file is deleted closes; kept tabs of it stay as Orphaned tabs", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openRequest(PATH, { index: 1 }, { preview: true });
+    const list = app.tabs[0];
+
+    pathExists.mockResolvedValueOnce(false);
+    await app.onExternalChange([PATH]);
+
+    expect(app.tabs).toEqual([list]);
+    expect(app.isOrphaned(list)).toBe(true);
+    expect(canRun("reopen-tab")).toBe(false);
+    expect(app.toasts).toEqual([]);
+  });
+
+  it("a Preview tab whose file can't be read on reload closes too", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 }, { preview: true });
+
+    readHttpFile.mockRejectedValueOnce("not found");
+    await app.reload(PATH);
+
+    expect(app.tabs).toEqual([]);
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+
+  it("a kept tab whose request vanishes still becomes an Orphaned tab", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 }, { preview: true });
+    await app.openRequest(PATH, { index: 1 });
+    const remove = app.tabs[1];
+
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"]));
+    await app.reload(PATH);
+
+    expect(names()).toEqual(["List", "Remove"]);
+    expect(app.isOrphaned(remove)).toBe(true);
+    expect(app.tabs[0].preview).toBe(true);
+  });
+});
+
 describe("restoring a workspace's Layout", () => {
   const WS = "/ws";
   const placed = (path: string, name: string, position: number) => ({ path, name, method: "GET", url: `https://x/${name}`, position, section: "params", responseView: { tab: "body", mode: "pretty", wrap: false } });
