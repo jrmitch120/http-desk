@@ -98,9 +98,14 @@ _Avoid_: HttpDesk's own line, private directive
 ### Editing
 
 **Layout**:
-How the user left a workspace: its open tabs in order, the active tab, each tab's request section and response view, and which folders are expanded.
+How the user left a workspace: its open tabs in order, which of them is the Preview tab, the active tab, each tab's request section and response view, and which folders are expanded.
 It is kept per workspace and comes back when the workspace reopens; pane sizes are an app setting, not part of it.
 _Avoid_: session, workbench, restore state
+
+**Preview tab**:
+A tab that navigating to a request or file opens, and that the next navigation replaces in place instead of opening another tab beside it. A workspace has at most one.
+Editing in it, sending from it or double-clicking it makes it a **kept tab**, which only the user closes. While the **Preview tabs** switch (one app setting, on by default) is off, every tab is kept.
+_Avoid_: transient tab, temporary tab, italic tab, pinned tab
 
 **Response position**:
 Where a request tab shows the response beside the request: on the right or below.
