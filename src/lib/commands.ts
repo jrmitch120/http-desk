@@ -216,7 +216,7 @@ const COMMANDS: Command[] = [
     // One window: quitting is closing it, through the same unsaved-changes flow.
     run: () => void getCurrentWindow().close(),
   },
-  { id: "settings", label: "Settings…", shortcut: { mod: true, key: "," }, enabled: always, run: () => (app.modal = "settings") },
+  { id: "settings", label: "Settings…", shortcut: { mod: true, key: "," }, enabled: always, run: () => app.openSettings() },
   {
     id: "check-updates",
     label: "Check for Updates…",

@@ -7,7 +7,7 @@
 // doesn't flicker as you type; the panel's list stays live. A changing count moves
 // nothing in the topbar or the bottom bar but its own digits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { activeTab, dialog, hasRing, menuClick, mockState, openApp, openRequest, seedHistory, sentRequests, tab, tabTo, treeItem, treeMenu, urlBar, writeFileText } from "./helpers";
+import { activeTab, dialog, hasRing, menuClick, mockState, openApp, openRequest, seedHistory, sentRequests, settingsPage, showSettingsPage, tab, tabTo, treeItem, treeMenu, urlBar, writeFileText } from "./helpers";
 
 const bottomBar = (page: Page) => page.getByRole("contentinfo", { name: "Bottom bar" });
 const problemsButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Show Problems/ });
@@ -53,12 +53,13 @@ const pets = (ending: string) => ["### List pets", "GET {{baseUrl}}/pets", "", "
 const historyOff = (page: Page) => bottomBar(page).getByRole("button", { name: /History off/ });
 /** The History slot, always shown: "History on" while the switch is on, "History off" while it's off. */
 const historyItem = (page: Page) => bottomBar(page).getByRole("button", { name: /^History/ });
-const historySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "History" });
+const historySection = (page: Page) => settingsPage(page, "History");
 const historySwitch = (page: Page) => historySection(page).getByRole("switch", { name: "Record History" });
 
 /** Flips the History switch in Settings (keeping what's stored when turning it off), then closes Settings. */
 async function flipHistory(page: Page) {
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "History");
   const wasOn = (await historySwitch(page).getAttribute("aria-checked")) === "true";
   await historySwitch(page).click();
   if (wasOn) await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
@@ -646,7 +647,7 @@ test.describe("Runner item", () => {
 // workspace ends the skip. Otherwise (trusted, or not asked yet) it opens Settings at
 // Trusted workspaces.
 test.describe("Scripts skipped", () => {
-  const trustSection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Trusted workspaces" });
+  const trustSection = (page: Page) => settingsPage(page, "Trusted workspaces");
   const askAgain = (page: Page) => dialog(page, "Trust this workspace?");
 
   test("a muted Scripts ask before the user is asked, then Scripts skipped warning-toned after Send without scripts", async ({ page }) => {
@@ -731,6 +732,7 @@ test.describe("Scripts skipped", () => {
     expect((await mockState(page, "settings")).trustedWorkspaces).toEqual(["/demo"]);
 
     await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+    await showSettingsPage(page, "Trusted workspaces");
     await expect(dialog(page, "Settings").getByTestId("trusted-workspace")).toContainText("/demo");
     await dialog(page, "Settings").getByRole("button", { name: "Done" }).click();
 
@@ -755,7 +757,7 @@ test.describe("Scripts skipped", () => {
 // #230: Portability, always shown at the left end of the right group, names the editors
 // turned on in Settings → Portability, or "HttpDesk only" with both off. It opens Settings there.
 const portabilityButton = (page: Page) => bottomBar(page).getByRole("button", { name: /^Portability/ });
-const portabilitySection = (page: Page) => dialog(page, "Settings").getByRole("region", { name: "Portability" });
+const portabilitySection = (page: Page) => settingsPage(page, "Portability");
 
 test.describe("Portability", () => {
   for (const [query, label] of [
@@ -774,6 +776,7 @@ test.describe("Portability", () => {
     await openApp(page);
     await expect(portabilityButton(page)).toHaveText("HttpDesk only");
     await page.keyboard.press("Meta+Comma");
+    await showSettingsPage(page, "Portability");
     const settings = dialog(page, "Settings");
     await settings.getByRole("switch", { name: "Rider" }).click();
     await expect(portabilityButton(page)).toHaveText("Rider");
@@ -816,6 +819,7 @@ test.describe("Portability", () => {
     expect(portability.x + portability.width).toBeLessThanOrEqual(problems.x);
 
     await page.keyboard.press("Meta+Comma");
+    await showSettingsPage(page, "Portability");
     await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
     await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();
     await expect(portabilityButton(page)).toHaveText("VS Code · Rider");
@@ -937,6 +941,7 @@ test("no item moves or resizes as the Run, History, Scripts and Portability chan
   await unmoved("Scripts trusted");
 
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "Portability");
   await dialog(page, "Settings").getByRole("switch", { name: "VS Code" }).click();
   await expect(portabilityButton(page)).toHaveText("VS Code");
   await dialog(page, "Settings").getByRole("switch", { name: "Rider" }).click();

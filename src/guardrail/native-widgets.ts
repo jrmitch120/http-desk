@@ -1,15 +1,10 @@
 // Finds native form widgets and `title` tooltips in the app's sources (ADR 0002).
 // Used only by native-widgets.test.ts; never imported by the app.
 import { parse } from "svelte/compiler";
+import { lineAt, walk, type Node, type SourceFile } from "./source";
 
 export const WIDGET_KINDS = ["select", "checkbox", "radio", "number", "datalist", "title"] as const;
 export type WidgetKind = (typeof WIDGET_KINDS)[number];
-
-export interface SourceFile {
-  /** Repo-relative path, e.g. `src/components/TopBar.svelte`. */
-  path: string;
-  source: string;
-}
 
 export interface Finding {
   kind: WidgetKind;
@@ -54,12 +49,11 @@ function findInScript(source: string): Finding[] {
 
 function findInSvelte(source: string): Finding[] {
   const findings: Finding[] = [];
-  const lineAt = (offset: number) => source.slice(0, offset).split("\n").length;
   const ast = parse(source, { modern: true });
 
   walk(ast.fragment, (node) => {
     if (node.type !== "RegularElement") return;
-    const at = (kind: WidgetKind, n: Node) => findings.push({ kind, line: lineAt(n.start) });
+    const at = (kind: WidgetKind, n: Node) => findings.push({ kind, line: lineAt(source, n.start) });
     if (node.name === "select" || node.name === "datalist") at(node.name, node);
     for (const attr of node.attributes as Node[]) {
       if (attr.type !== "Attribute") continue;
@@ -76,7 +70,7 @@ function findInSvelte(source: string): Finding[] {
 
   for (const script of [ast.module, ast.instance]) {
     if (!script) continue;
-    const offset = lineAt(script.start) - 1;
+    const offset = lineAt(source, script.start) - 1;
     for (const f of findInScript(source.slice(script.start, script.end))) findings.push({ kind: f.kind, line: f.line + offset });
   }
   return findings.sort((a, b) => a.line - b.line);
@@ -99,18 +93,4 @@ function staticValue(attr: Node): string | undefined {
  */
 export function checkSources(files: SourceFile[]): string[] {
   return files.flatMap((file) => findNativeWidgets(file).map((f) => `${file.path}:${f.line} uses a ${LABEL[f.kind]}`));
-}
-
-type Node = { type: string; name?: string; start: number; [key: string]: unknown };
-
-function walk(value: unknown, visit: (node: Node) => void): void {
-  if (Array.isArray(value)) {
-    for (const v of value) walk(v, visit);
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  if (typeof (value as Node).type === "string") visit(value as Node);
-  for (const [key, child] of Object.entries(value)) {
-    if (key !== "metadata" && key !== "parent") walk(child, visit);
-  }
 }

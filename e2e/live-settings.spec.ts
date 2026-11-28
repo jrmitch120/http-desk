@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp } from "./helpers";
+import { dialog, menuClick, mockState, openApp, setClipboard, setFilePick, showSettingsPage } from "./helpers";
 
-async function openSettings(page: Page) {
+/** Opens Settings on `category`. */
+async function openSettings(page: Page, category = "General") {
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, category);
   return dialog(page, "Settings");
 }
 
@@ -13,7 +15,7 @@ async function savedSettings(page: Page) {
 
 test("toggling Follow redirects applies at once and is still applied after reopening Settings", async ({ page }) => {
   await openApp(page);
-  let settings = await openSettings(page);
+  let settings = await openSettings(page, "Requests");
   const follow = () => settings.locator(".setting", { hasText: "Follow redirects" }).getByRole("switch");
   await expect(follow()).toHaveAttribute("aria-checked", "true");
 
@@ -23,25 +25,71 @@ test("toggling Follow redirects applies at once and is still applied after reope
 
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings).toHaveCount(0);
-  settings = await openSettings(page);
+  settings = await openSettings(page, "Requests");
   await expect(follow()).toHaveAttribute("aria-checked", "false");
 });
 
-test("clearing the idle timeout shows an error and saves nothing; leaving the field restores it", async ({ page }) => {
+test("the idle timeout refuses a keystroke a number can't take, leaving the rest as typed", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
+  const idle = settings.getByRole("textbox", { name: "Idle timeout" });
+
+  await idle.selectText();
+  await idle.pressSequentially("1a.5s.2");
+  await expect(idle).toHaveValue("1.52");
+  // A second decimal point is refused wherever it's typed, not moved.
+  await idle.press("Home");
+  await idle.press(".");
+  await expect(idle).toHaveValue("1.52");
+  // So is a minus, as the timeout can't be negative; the caret stays where it was.
+  await idle.press("-");
+  await idle.press("3");
+  await expect(idle).toHaveValue("31.52");
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+});
+
+test("a paste a number field can't take is refused whole, not stripped into another number", async ({ page }) => {
+  // Linux, where the Edit menu's Paste is the app's own command (as a paste lands in a field).
+  await openApp(page, "?platform=linux");
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  const settings = await showSettingsPage(page, "Requests");
+  const idle = settings.getByRole("textbox", { name: "Idle timeout" });
+  const size = settings.getByRole("textbox", { name: "Maximum body size" });
+
+  await idle.fill("7");
+  for (const text of ["4x5", "1e3", "1,5", "-5"]) {
+    await setClipboard(page, text);
+    await menuClick(page, "paste");
+    await expect(idle).toHaveValue("7");
+  }
+  // The caret stays where it was, so the next keystroke lands after the 7.
+  await idle.pressSequentially("0");
+  await expect(idle).toHaveValue("70");
+  // A paste it can take goes in at the caret.
+  await setClipboard(page, ".25");
+  await menuClick(page, "paste");
+  await expect(idle).toHaveValue("70.25");
+
+  // A whole-number field refuses a decimal point, however it arrives.
+  await size.fill("8");
+  await setClipboard(page, "2.5");
+  await menuClick(page, "paste");
+  await expect(size).toHaveValue("8");
+  await size.press(".");
+  await expect(size).toHaveValue("8");
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+});
+
+test("leaving the idle timeout empty puts back the last value and saves nothing, on blur or Enter", async ({ page }) => {
+  await openApp(page);
+  const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
   await expect(idle).toHaveValue("30");
 
   await idle.fill("");
-  await expect(idle).toHaveAttribute("aria-invalid", "true");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
   await idle.press("Enter");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
-
-  await idle.fill("soon");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
-
+  await expect(idle).toHaveValue("30");
+  await idle.fill("");
   await idle.blur();
   await expect(idle).toHaveValue("30");
   await expect(idle).not.toHaveAttribute("aria-invalid", "true");
@@ -51,7 +99,7 @@ test("clearing the idle timeout shows an error and saves nothing; leaving the fi
 
 test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
 
   await idle.fill("45");
@@ -63,35 +111,60 @@ test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ 
   await expect(settings).toBeVisible();
 });
 
-test("a maximum body size has to be a whole number of at least 1 MB", async ({ page }) => {
+test("a maximum body size below 1 MB puts back the last value", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
+  const settings = await openSettings(page, "Requests");
   const size = settings.getByRole("textbox", { name: "Maximum body size" });
   await expect(size).toHaveValue("100");
 
   await size.fill("0");
-  await expect(settings.getByRole("alert")).toHaveText("Must be at least 1");
-  await size.fill("2.5");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a whole number");
-  await size.fill("8");
+  await size.blur();
+  await expect(size).toHaveValue("100");
   await expect(settings.getByRole("alert")).toHaveCount(0);
+  await size.fill("8");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect.poll(async () => (await savedSettings(page)).exec.maxBodyBytes).toBe(8 * 1024 * 1024);
 });
 
-test("a certificate path applies on Enter and on Clear, not per keystroke", async ({ page }) => {
+test("a certificate path is set only with Browse…, shown read-only, and removed with Clear", async ({ page }) => {
   await openApp(page);
-  const settings = await openSettings(page);
-  const ca = settings.locator(".setting", { hasText: "CA certificate" });
+  const settings = await openSettings(page, "TLS");
+  const ca = settings.getByRole("textbox", { name: "CA certificate" });
+  // The field's bordered box, which also holds Clear.
+  const box = ca.locator("xpath=..");
+  await expect(ca).toHaveValue("");
+  await expect(ca).toHaveAttribute("readonly", "");
 
-  await ca.getByRole("textbox").fill("/certs/ca.pem");
+  // Typing does nothing: the path can't be mistyped.
+  await ca.click();
+  await page.keyboard.type("asdasd");
+  await expect(ca).toHaveValue("");
+
+  // Cancelling the picker changes nothing.
+  await settings.getByRole("button", { name: "Browse for CA certificate" }).click();
   expect((await savedSettings(page)).exec.caCertPath).toBeNull();
-  await ca.getByRole("textbox").press("Enter");
-  await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
 
-  await ca.getByRole("button", { name: "Clear" }).click();
+  // Setting a path shows Clear in a slot kept for it: the field and Browse… don't move.
+  const browse = settings.getByRole("button", { name: "Browse for CA certificate" });
+  const before = [await ca.boundingBox(), await box.boundingBox(), await browse.boundingBox()];
+  await setFilePick(page, "/certs/ca.pem");
+  await browse.click();
+  await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
+  await expect(ca).toHaveValue("/certs/ca.pem");
+  await expect(settings.getByRole("button", { name: "Clear CA certificate" })).toBeVisible();
+  expect([await ca.boundingBox(), await box.boundingBox(), await browse.boundingBox()]).toEqual(before);
+  // Clear sits inside the field's box, at its end; Browse… ends on the page's edge, with the switch.
+  const field = (await box.boundingBox())!;
+  const clear = (await settings.getByRole("button", { name: "Clear CA certificate" }).boundingBox())!;
+  expect(clear.x).toBeGreaterThan(field.x);
+  expect(clear.x + clear.width).toBeLessThanOrEqual(field.x + field.width);
+  const toggle = (await settings.getByRole("switch", { name: "Verify server certificates" }).boundingBox())!;
+  const b = (await browse.boundingBox())!;
+  expect(Math.round(b.x + b.width)).toBe(Math.round(toggle.x + toggle.width));
+
+  await settings.getByRole("button", { name: "Clear CA certificate" }).click();
   await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBeNull();
-  await expect(ca.getByRole("textbox")).toHaveValue("");
+  await expect(ca).toHaveValue("");
 });
 
 /**
@@ -139,20 +212,11 @@ test.describe("without a blur on removal (as in WebKit)", () => {
   for (const { how, close } of closers) {
     test(`closing Settings with ${how} applies the number being typed`, async ({ page }) => {
       await openApp(page);
-      const settings = await openSettings(page);
+      const settings = await openSettings(page, "Requests");
       await settings.getByRole("textbox", { name: "Idle timeout" }).fill("45");
       await close(page);
       await expect(settings).toHaveCount(0);
       await expect.poll(async () => (await savedSettings(page)).exec.timeoutMs).toBe(45000);
-    });
-
-    test(`closing Settings with ${how} applies the certificate path being typed`, async ({ page }) => {
-      await openApp(page);
-      const settings = await openSettings(page);
-      await settings.locator(".setting", { hasText: "CA certificate" }).getByRole("textbox").fill("/certs/ca.pem");
-      await close(page);
-      await expect(settings).toHaveCount(0);
-      await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
     });
   }
 });

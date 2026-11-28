@@ -6,7 +6,7 @@
 // sessionStorage, so a page reload stands in for a restart; `historyOpened` lists
 // the entries `open_history_entry` opened.
 import { expect, test, type Page } from "@playwright/test";
-import { activeTab, dialog, mockState, openApp, openRequest, tab, treeItem } from "./helpers";
+import { activeTab, dialog, mockState, openApp, openRequest, showSettingsPage, tab, treeItem } from "./helpers";
 
 const marker = (page: Page) => page.locator(".statusbar").getByText(/^from History, /);
 const status = (page: Page) => page.locator(".statusbar .badge").first();
@@ -34,7 +34,7 @@ const historyOpened = (page: Page) => mockState(page, "historyOpened");
 
 async function turnHistoryOff(page: Page) {
   await page.keyboard.press("Meta+Comma");
-  await dialog(page, "Settings").getByRole("region", { name: "History" }).getByRole("switch", { name: "Record History" }).click();
+  await (await showSettingsPage(page, "History")).getByRole("switch", { name: "Record History" }).click();
   await dialog(page, "Also delete existing history?").getByRole("button", { name: "Keep" }).click();
   await expect.poll(async () => (await mockState(page, "settings")).history.enabled).toBe(false);
   await page.keyboard.press("Escape");

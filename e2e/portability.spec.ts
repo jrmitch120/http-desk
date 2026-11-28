@@ -4,7 +4,7 @@
 // is the core's portability table (crates/httpdesk-text/src/portability.rs), which
 // the mock runs too (WASM).
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, menuClick, mockState, openApp, openRequest, treeItem, treeMenu } from "./helpers";
+import { dialog, menuClick, mockState, openApp, openRequest, showSettingsPage, treeItem, treeMenu } from "./helpers";
 
 /** Both editors turned on in Settings → Portability: their notes show. */
 const BOTH = "?portability=vscode,rider";
@@ -112,7 +112,8 @@ test("nothing is marked until an editor is turned on; turning on VS Code marks w
   await expect(problems).not.toContainText("behave differently");
 
   await page.keyboard.press("Meta+Comma");
-  const settings = dialog(page, "Settings");
+  const settings = await showSettingsPage(page, "Portability");
+  const done = dialog(page, "Settings").getByRole("button", { name: "Done" });
   const [vscode, rider] = [settings.getByRole("switch", { name: "VS Code" }), settings.getByRole("switch", { name: "Rider" })];
   const warnings = settings.getByRole("switch", { name: "Show portability notes as warnings" });
   await expect(vscode).toHaveAttribute("aria-checked", "false");
@@ -124,7 +125,7 @@ test("nothing is marked until an editor is turned on; turning on VS Code marks w
   await vscode.click();
   await expect.poll(async () => (await mockState(page, "settings")).portabilityEditors).toEqual({ vscode: true, rider: false });
   await expect(warnings).toBeEnabled();
-  await settings.getByRole("button", { name: "Done" }).click();
+  await done.click();
 
   // The open request and the Problems panel follow without being reopened: VS Code's notes only.
   await expect(await markerOf(page, "> {%")).toHaveClass(/cm-line-mark-jetbrains-only/);
@@ -134,18 +135,20 @@ test("nothing is marked until an editor is turned on; turning on VS Code marks w
 
   // Rider in its place: the handler, which only Rider runs, isn't Rider's to note.
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "Portability");
   await rider.click();
   await vscode.click();
   await expect.poll(async () => (await mockState(page, "settings")).portabilityEditors).toEqual({ vscode: false, rider: true });
-  await settings.getByRole("button", { name: "Done" }).click();
+  await done.click();
   await expect(strip(page)).toHaveCount(0);
   await expect(problems).not.toContainText("differently in VS Code");
 
   // Turned off too, every mark goes, and the warnings switch waits again.
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "Portability");
   await rider.click();
   await expect(warnings).toBeDisabled();
-  await settings.getByRole("button", { name: "Done" }).click();
+  await done.click();
   await expect(source(page).locator(".cm-line-mark")).toHaveCount(0);
   await expect(strip(page)).toHaveCount(0);
   await expect(problems).not.toContainText("behave differently");
@@ -159,6 +162,7 @@ test("turning on portability warnings makes a handler line's marker and the stri
   await expect(strip(page).locator("li.note")).toHaveCount(1);
 
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "Portability");
   const settings = dialog(page, "Settings");
   const warnings = settings.getByRole("switch", { name: "Show portability notes as warnings" });
   await expect(warnings).toHaveAttribute("aria-checked", "false");
@@ -190,11 +194,11 @@ test("the file view marks the lines that behave differently too, each with what 
   await expect(page.getByRole("tooltip")).toHaveText("VS Code doesn't know this variable and sends it as written");
 });
 
-test("Settings → Portability is a section of its own, holding the editor switches", async ({ page }) => {
+test("Settings → Portability is a category of its own, holding the editor switches", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+Comma");
-  // A named region, so a link can open Settings at it (#226; the bottom bar's Portability item, #230).
-  const section = dialog(page, "Settings").getByRole("region", { name: "Portability" });
+  // A category's page, so a link can open Settings on it (#226, #238; the bottom bar's Portability item, #230).
+  const section = await showSettingsPage(page, "Portability");
   await expect(section.getByRole("switch", { name: "VS Code" })).toBeVisible();
   await expect(section.getByRole("switch", { name: "Rider" })).toBeVisible();
   await expect(section.getByRole("switch", { name: "Show portability notes as warnings" })).toBeVisible();

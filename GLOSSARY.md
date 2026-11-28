@@ -107,6 +107,11 @@ Where a request tab shows the response beside the request: on the right or below
 It is one app setting for every workspace, not part of a workspace's Layout.
 _Avoid_: response layout, orientation, layout
 
+**Settings category**:
+One of the six groups of app settings in the Settings window (General, Requests, TLS, Portability, History, Trusted workspaces), each a tab in its rail with a page of its own.
+Settings opens on the one last shown during this run unless a link names another; a request tab's Settings section is a different thing, the request's own settings.
+_Avoid_: section, settings page, settings tab
+
 **File view**:
 A tab showing a whole `.http` file as one editable text: file variables, comments between requests and every request together.
 It and the file's request tabs edit the same document, so each shows the other's edits; text that doesn't parse leaves the document as it last read.

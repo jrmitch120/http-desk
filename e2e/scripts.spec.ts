@@ -4,7 +4,7 @@
 // `response.status === 200`; the mock answers a POST with 201 (so it fails)
 // unless `?status=200`. `?trusted=1` starts with the demo workspace trusted.
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, openRequest, sentRequests } from "./helpers";
+import { dialog, mockState, openApp, openRequest, sentRequests, showSettingsPage } from "./helpers";
 
 const send = (page: Page) => page.getByRole("button", { name: "Send", exact: true }).click();
 const trustPrompt = (page: Page) => dialog(page, "Run this workspace's scripts?");
@@ -83,6 +83,7 @@ test("a request without a handler has no Tests tab and never asks", async ({ pag
 test("Settings lists Trusted workspaces and revoking one asks again on the next send", async ({ page }) => {
   await openApp(page, "?trusted=1");
   await page.getByRole("button", { name: "Settings" }).click();
+  await showSettingsPage(page, "Trusted workspaces");
   const settings = dialog(page, "Settings");
   const row = settings.getByTestId("trusted-workspace");
   await expect(row).toContainText("/demo");

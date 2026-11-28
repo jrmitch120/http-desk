@@ -1026,7 +1026,7 @@ Decisions made during implementation, beyond the plan above:
   size, Copy and Save); "status bar" alone names neither. The bottom bar is a thin strip
   the full width of the window, always shown (no setting hides it), in the theme's panel
   colours. **Its rule: items show state only, and clicking one opens the place where the
-  user acts on it** (a panel, a Settings section via `app.openSettings(section)`, a
+  user acts on it** (a panel, a Settings category via `app.openSettings(category)`, a
   prompt); no item changes a setting or anything else by itself. **Nothing in it moves**
   (#235): every workspace item has a permanent slot of fixed width, sized for its widest
   text, and a condition changes only what's inside it (text and tone, muted in the
@@ -1154,14 +1154,15 @@ Decisions made during implementation, beyond the plan above:
   reason), and `other` (no details). The core owns `message` (the error chain for
   transport errors); the response viewer picks the heading and hint by kind
   (`src/lib/sendError.ts`) and always offers Retry. Before Retry, some kinds offer
-  the fix (`sendErrorFix`): `tls` opens Settings scrolled to TLS (never a switch that
-  turns verification off; any Settings section can be opened scrolled into view the same
-  way: `app.openSettings(section)`, with `SettingsSection` naming TLS, History and
-  Portability, and that `<section>` taking `use:settingsSection` from
-  `src/lib/settingsSection.svelte.ts`, which scrolls it in and clears the request), the timeouts open the request's Settings, and
+  the fix (`sendErrorFix`): `tls` opens Settings on TLS (never a switch that
+  turns verification off; any Settings category can be opened the same way:
+  `app.openSettings(category)`, with `SettingsCategory` naming the six categories of the
+  Settings modal's rail, sets `app.settingsCategory`, which selects that category's tab and page;
+  without one Settings opens on the category last shown during this run, General at
+  first; that memory lives only in the store, never in app settings), the timeouts open the request's Settings, and
   `unresolvedVariable` opens the environment picker (as ⌘⌥E / Ctrl+Alt+E does), and
-  `unsentRequest` offers "Send `x` first" for the first request named. They ask through one-shot store
-  fields (`settingsSection`, `requestSettingsFor`, `envPickerWanted`) that the
+  `unsentRequest` offers "Send `x` first" for the first request named. The request's Settings and the environment picker are asked
+  for through one-shot store fields (`requestSettingsFor`, `envPickerWanted`) that the
   component acting on them clears. DNS errors are recognised by the
   text of hyper-util's and reqwest's private resolver errors. The platform certificate
   verifiers don't agree on reasons (macOS reports a self-signed or expired certificate

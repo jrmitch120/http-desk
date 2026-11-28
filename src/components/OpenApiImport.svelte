@@ -14,6 +14,7 @@
   import Modal from "./Modal.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import Toggle from "./Toggle.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   const sources: SegmentedOption<"file" | "url">[] = [
     { value: "file", label: "File", icon: "file" },
@@ -186,14 +187,14 @@
         <label class="field">
           <span>Specification file</span>
           <div class="row">
-            <input class="input mono grow" placeholder="/path/to/openapi.yaml" bind:value={filePath} onkeydown={(e) => e.key === "Enter" && load()} />
+            <input {...textFieldAttrs} class="input mono grow" placeholder="/path/to/openapi.yaml" bind:value={filePath} onkeydown={(e) => e.key === "Enter" && load()} />
             <button class="btn" onclick={browseSpec}>Browse…</button>
           </div>
         </label>
       {:else}
         <label class="field">
           <span>Specification URL</span>
-          <input class="input mono" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" bind:value={url} onkeydown={(e) => e.key === "Enter" && load()} />
+          <input {...textFieldAttrs} class="input mono" placeholder="https://petstore3.swagger.io/api/v3/openapi.json" bind:value={url} onkeydown={(e) => e.key === "Enter" && load()} />
         </label>
       {/if}
       {#if loadError}
@@ -235,7 +236,7 @@
           <div class="ops-toolbar">
             <div class="filter">
               <Icon name="search" size={13} />
-              <input class="input" placeholder="Filter operations" bind:value={filter} />
+              <input {...textFieldAttrs} class="input" placeholder="Filter operations" bind:value={filter} />
             </div>
             <div class="spacer"></div>
             <span class="muted small-text">{selected.size} of {total} selected</span>
@@ -287,7 +288,7 @@
             <span>Base URL variable</span>
             <div class="var-input">
               <span class="muted mono">{"{{"}</span>
-              <input class="input mono" bind:value={baseUrlVariable} placeholder="baseUrl" />
+              <input {...textFieldAttrs} class="input mono" bind:value={baseUrlVariable} placeholder="baseUrl" />
               <span class="muted mono">{"}}"}</span>
             </div>
             <small class="muted">Server URLs are written to <span class="mono">http-client.env.json</span>.</small>
@@ -299,7 +300,7 @@
           </div>
           <label class="field">
             <span>Output directory</span>
-            <input class="input mono" bind:value={outputDir} placeholder="Choose a folder" use:tooltip={outputDir} />
+            <input {...textFieldAttrs} class="input mono" bind:value={outputDir} placeholder="Choose a folder" use:tooltip={outputDir} />
             <button class="btn small browse" onclick={browseOutput}>Browse…</button>
           </label>
           <div class="estimate">

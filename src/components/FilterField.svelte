@@ -6,6 +6,7 @@
   // `suggest` turns it into a combobox (see use:suggestions).
   import Icon from "./Icon.svelte";
   import { suggestions, type SuggestionsOptions } from "../lib/popup/suggestions.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   interface Props {
     value: string;
@@ -35,11 +36,10 @@
 <div class="filter-field">
   <span class="icon" aria-hidden="true"><Icon name={icon} size={13} /></span>
   <input
+    {...textFieldAttrs}
     class="input small"
     class:mono
     type="text"
-    spellcheck="false"
-    autocomplete="off"
     {placeholder}
     aria-label={label}
     aria-invalid={invalid ? "true" : undefined}

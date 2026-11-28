@@ -15,6 +15,7 @@
   import Modal from "./Modal.svelte";
   import Checkbox from "./Checkbox.svelte";
   import Banner from "./Banner.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   const { name: old, dir } = app.renaming!;
   let name = $state(old);
@@ -50,12 +51,11 @@
     <div class="field">
       <label class="label" for="rename-name">New name</label>
       <input
+        {...textFieldAttrs}
         id="rename-name"
         class="input mono"
         bind:this={input}
         bind:value={name}
-        spellcheck="false"
-        autocomplete="off"
         aria-invalid={error ? "true" : undefined}
         aria-describedby={error ? "rename-name-error" : undefined}
         onkeydown={(e) => {

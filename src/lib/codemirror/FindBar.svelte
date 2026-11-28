@@ -9,6 +9,7 @@
   import Icon from "../../components/Icon.svelte";
   import { tooltip } from "../popup/tooltip.svelte";
   import type { FindActions, FindQuery } from "./findPanel.svelte";
+  import { textFieldAttrs } from "../textField";
 
   interface Props {
     /** The query; the bar edits it in place and calls `actions.commit()`. */
@@ -97,10 +98,9 @@
   {#if invalid}<div class="error" id="{id}-error" role="alert">Not a valid regular expression</div>{/if}
   {#if !readonly}
     <input
+      {...textFieldAttrs}
       class="input small"
       type="text"
-      spellcheck="false"
-      autocomplete="off"
       placeholder="Replace"
       aria-label="Replace"
       value={query.replace}
