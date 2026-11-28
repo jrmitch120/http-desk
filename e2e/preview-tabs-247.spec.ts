@@ -52,3 +52,31 @@ test("View file as text opens the File view as the Preview tab; its Request butt
   await treeItem(page, "Get pet image").click();
   await expect(tabs(page)).toHaveCount(3);
 });
+
+test("a click in the tree on a request of the Preview File view shows it there and leaves it the Preview tab; a double-click keeps it", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+  await page.getByRole("button", { name: "View file as text" }).click();
+  await expect(activeTab(page)).toContainText("pets.http");
+  expect(await italic(tab(page, "pets.http"))).toBe(true);
+
+  await treeItem(page, "Create pet").click();
+  await expect(fileLine(page, "### Create pet")).toBeVisible();
+  await expect(activeTab(page)).toContainText("pets.http");
+  await expect(tabs(page)).toHaveCount(2);
+  expect(await italic(tab(page, "pets.http"))).toBe(true);
+
+  await treeItem(page, "Get pet image").dblclick();
+  await expect(activeTab(page)).toContainText("pets.http");
+  await expect.poll(() => italic(tab(page, "pets.http"))).toBe(false);
+});
+
+test("the explorer's View file as text on a file opens its File view as the Preview tab", async ({ page }) => {
+  await openApp(page);
+  await openRequest(page, ["api", "pets.http"], "List pets");
+
+  await treeItem(page, "pets.http").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "View file as text", exact: true }).click();
+  await expect(activeTab(page)).toContainText("pets.http");
+  expect(await italic(tab(page, "pets.http"))).toBe(true);
+});
