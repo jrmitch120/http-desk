@@ -31,6 +31,10 @@ export const fileView: TextView = { kind: "file" };
 /** Request `key`'s Source view. */
 export const sourceView = (key: string): TextView => ({ kind: "request", key });
 
+/** Whether `tab` shows `view` of the file at `path`: its file view, or the tab on its request. */
+export const showsView = (tab: Tab, path: string, view: TextView): boolean =>
+  tab.path === path && (view.kind === "file" ? tab.kind === "file" : tab.kind === "request" && tab.key === view.key);
+
 /** What a view holds once the user has typed in it. */
 export interface TypedText {
   /** The text as typed (the latest keystroke; it's read after a short pause). */

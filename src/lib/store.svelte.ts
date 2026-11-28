@@ -29,7 +29,7 @@ import { carryKeys, reattach, signature, type KnownRequest } from "./reattach";
 import { LayoutStore, type LayoutHost } from "./layoutStore.svelte";
 import { docSnapshot, fileShot, kept, restShot, snapshot } from "./snapshots.svelte";
 import { forgetEditors } from "./editorMemory";
-import { fileEdit, fileView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
+import { fileEdit, fileView, showsView, sourceEdit, sourceView, TextViews, type FileEdit, type SourceEdit, type TextView, type TextViewsHost, type UnparsedText } from "./textViews.svelte";
 import { WorkspaceProblems, type ProblemsHost } from "./workspaceProblems.svelte";
 import type { FileFact } from "./fileFacts";
 import { isRequestTab, newFileTab, newTab, type RequestSection, type RequestTab, type Tab } from "./tabView";
@@ -875,7 +875,7 @@ class AppStore {
    * Reopen Closed Tab list.
    */
   private dropVanishedPreview(vanished: (tab: Tab) => boolean) {
-    const tab = this.tabs.find((t) => t.preview);
+    const tab = this.previewTab;
     if (tab && vanished(tab)) this.removeTab(tab.id);
   }
 
@@ -1052,14 +1052,22 @@ class AppStore {
     if (!doc) return;
     const req = which.key ? doc.file.requests.find((r) => r._key === which.key) : doc.file.requests[which.index ?? 0];
     if (!req) return;
-    const key = req._key!;
-    let tab = this.tabs.find((t) => t.kind === "request" && t.path === path && t.key === key);
+    this.showView(path, sourceView(req._key!), how);
+  }
+
+  /**
+   * Makes the tab on `view` of `path` active (kept, unless `preview`), or opens one there
+   * (`placeTab`). What `openRequest` and `openFileView` share.
+   */
+  private showView(path: string, view: TextView, how: { preview?: boolean }): Tab {
+    let tab = this.tabs.find((t) => showsView(t, path, view));
     if (tab && !how.preview) this.keepTab(tab.id);
     if (!tab) {
-      tab = newTab(path, key);
+      tab = view.kind === "file" ? newFileTab(path) : newTab(path, view.key);
       this.placeTab(tab, !!how.preview);
     }
     this.activeTabId = tab.id;
+    return tab;
   }
 
   /**
@@ -1071,7 +1079,7 @@ class AppStore {
    */
   private placeTab(tab: Tab, preview: boolean) {
     preview &&= this.previewTabs;
-    const old = preview ? this.tabs.find((t) => t.preview) : undefined;
+    const old = preview ? this.previewTab : undefined;
     if (preview) tab.preview = true;
     if (old) {
       const at = this.tabs.indexOf(old);
@@ -1082,6 +1090,11 @@ class AppStore {
       this.tabs.splice(at < 0 ? this.tabs.length : at + 1, 0, tab);
     }
     if (preview) this.notePreviewShown();
+  }
+
+  /** The workspace's Preview tab, if it has one. */
+  private get previewTab(): Tab | undefined {
+    return this.tabs.find((t) => t.preview);
   }
 
   /** Makes tab `id` a kept tab, if it's the Preview tab: no navigation replaces it, and only the user closes it. */
@@ -1099,7 +1112,7 @@ class AppStore {
   private previewShot: string | null = null;
 
   private previewRequest(): { tab: Tab; req: Request } | null {
-    const tab = this.tabs.find((t) => t.preview);
+    const tab = this.previewTab;
     const req = tab && this.requestFor(tab);
     return tab && req ? { tab, req } : null;
   }
@@ -1364,13 +1377,7 @@ class AppStore {
   async openFileView(path: string, at: { line?: number; column?: number; key?: string } = {}, how: { preview?: boolean } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
-    let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
-    if (tab && !how.preview) this.keepTab(tab.id);
-    if (!tab) {
-      tab = newFileTab(path);
-      this.placeTab(tab, !!how.preview);
-    }
-    this.activeTabId = tab.id;
+    const tab = this.showView(path, fileView, how);
     if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line, column: at.column };
     if (at.key) this.fileRequestWanted = { tabId: tab.id, key: at.key };
   }
@@ -1966,7 +1973,7 @@ class AppStore {
       },
       toast: (kind, message) => store.toast(kind, message),
       typed: (path, view) => {
-        const tab = store.tabs.find((t) => t.path === path && (view.kind === "file" ? t.kind === "file" : t.kind === "request" && t.key === view.key));
+        const tab = store.tabs.find((t) => showsView(t, path, view));
         if (tab) store.keepTab(tab.id);
       },
       fromFileView: (change) => store.fromElsewhere(change),
