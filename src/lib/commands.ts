@@ -280,7 +280,7 @@ const COMMANDS: Command[] = [
     label: "View File as Text",
     enabled: () => app.activeTab?.kind === "request",
     // At the request it's asked from, as the request tab's File button opens it.
-    run: () => isRequestTab(app.activeTab) && void app.openFileView(app.activeTab.path, { key: app.activeTab.key }),
+    run: () => isRequestTab(app.activeTab) && void app.openFileView(app.activeTab.path, { key: app.activeTab.key }, { preview: true }),
   },
   {
     // Switches between open and the rail (on the view the rail marks). Collapsing never

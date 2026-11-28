@@ -39,7 +39,7 @@
             {#each f.entries as e, i (i)}
               <!-- The list's keys are rovingList's: Enter clicks the row. -->
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-              <div role="listitem" tabindex="-1" class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line, column: e.column })} use:clipped={e.message}>
+              <div role="listitem" tabindex="-1" class="list-row {e.tone}" onclick={() => app.openFileView(f.path, { line: e.line, column: e.column }, { preview: true })} use:clipped={e.message}>
                 <span class="icon" role="img" aria-label={TONES[e.tone]}><Icon name={e.tone === "note" ? "info" : "alert"} size={12} /></span>
                 <span class="line">Line {e.line}</span>
                 <span class="message">{e.message}</span>

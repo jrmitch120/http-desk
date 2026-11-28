@@ -1030,6 +1030,15 @@ describe("Preview tabs (#250)", () => {
     expect(shown()).toEqual([["List", false], ["Create", false]]);
   });
 
+  it("while it's off, a File view opened as a navigation is kept too", async () => {
+    app.settings = settings({ previewTabs: false });
+    readHttpFile.mockResolvedValueOnce(books());
+
+    await browse(0);
+    await app.openFileView(PATH, {}, { preview: true });
+    expect(app.tabs.map((t) => [t.kind === "file" ? "file" : app.requestFor(t)?.name, !!t.preview])).toEqual([["List", false], ["file", false]]);
+  });
+
   it("turning it off makes the open Preview tab kept; turning it back on affects only later navigations", async () => {
     readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
     await browse(0);
@@ -4687,5 +4696,201 @@ describe("Preview tabs (#246)", () => {
     await browse(1);
     app.keepTab(app.tabs[0].id);
     expect(shown()).toEqual([["List", false], ["Create", true]]);
+  });
+});
+
+describe("Preview tabs (#247)", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed, so the reopen list holds only this test's.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const books = () => fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]);
+  /** Each tab, as [its request's name (a file view: "file"), whether it's the Preview tab]. */
+  const shown = () => app.tabs.map((t) => [t.kind === "file" ? "file" : app.requestFor(t)?.name, !!t.preview]);
+  /** Navigates to request `index` of PATH as the sidebar's single click does. */
+  const browse = async (index: number) => app.openRequest(PATH, { key: (await app.loadDoc(PATH))!.file.requests[index]._key }, { preview: true });
+
+  it("a File view opened as a navigation is the Preview tab: it replaces the one there is, and the next navigation replaces it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await browse(1);
+
+    await app.openFileView(PATH, {}, { preview: true });
+    expect(shown()).toEqual([["List", false], ["file", true]]);
+    expect(app.activeTab?.kind).toBe("file");
+
+    await browse(2);
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+  });
+
+  it("opening a File view is kept unless asked for a Preview tab; a kept open of the previewed File view keeps it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openFileView(PATH);
+    expect(shown()).toEqual([["file", false]]);
+
+    app.tabs = [];
+    await app.openFileView(PATH, {}, { preview: true });
+    await app.openFileView(PATH);
+    expect(shown()).toEqual([["file", false]]);
+  });
+
+  it("navigating to a File view already open focuses it and leaves the Preview tab alone", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openFileView(PATH);
+    await browse(0);
+    const tabs = [...app.tabs];
+
+    await app.openFileView(PATH, { line: 4 }, { preview: true });
+    expect(app.tabs).toEqual(tabs);
+    expect(shown()).toEqual([["file", false], ["List", true]]);
+    expect(app.activeTabId).toBe(tabs[0].id);
+    expect(app.fileLineWanted).toEqual({ tabId: tabs[0].id, line: 4 });
+  });
+
+  it("the first text edit in a File view Preview tab keeps it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openFileView(PATH, {}, { preview: true });
+    void app.texts.edit(PATH, fileView, "### List\nGET https://x/books?page=2\n");
+    expect(shown()).toEqual([["file", false]]);
+  });
+
+  it("a sidebar search hit opens a Preview tab, and the next one replaces it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openSearchHit({ path: PATH, index: 1, name: "Create", method: "POST", url: "https://x/books" });
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+
+    await app.openSearchHit({ path: PATH, index: 2, name: "Get", method: "GET", url: "https://x/books/1" });
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+
+    // One already open is focused, the Preview tab left alone.
+    await app.openSearchHit({ path: PATH, index: 0, name: "List", method: "GET", url: "https://x/books" });
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+    expect(app.activeTabId).toBe(app.tabs[0].id);
+  });
+
+  it("a Find usages result opens its request in a Preview tab, on the field holding it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    const usage = (index: number, name: string, method: string, url: string): Usage => ({
+      kind: "request",
+      path: PATH,
+      index,
+      name,
+      method,
+      url,
+      field: { kind: "url" },
+      disabled: false,
+      start: 0,
+      end: 4,
+    });
+
+    await app.openUsage(usage(1, "Create", "POST", "https://x/books"));
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+    expect(app.fieldWanted).toEqual({ tabId: app.activeTabId, field: { kind: "url" } });
+
+    await app.openUsage(usage(2, "Get", "GET", "https://x/books/1"));
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+  });
+
+  it("a File variable's Find usages result opens its file's request in a Preview tab", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openUsage({ kind: "fileVariable", path: PATH, index: 0, name: "base", start: 0, end: 8 });
+    expect(shown()).toEqual([["List", true]]);
+  });
+
+  describe("what creates or changes something opens a kept tab, beside the Preview tab", () => {
+    beforeEach(async () => {
+      saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+      readHttpFile.mockResolvedValueOnce(books());
+      await app.openRequest(PATH, { index: 0 });
+      await browse(1);
+      app.activeTabId = app.tabs[0].id;
+    });
+
+    it("new request", async () => {
+      await app.addRequest(PATH, { ...newRequest("Archive"), method: "POST", url: "https://x/archive" });
+      expect(shown()).toEqual([["List", false], ["Archive", false], ["Create", true]]);
+    });
+
+    it("new file", async () => {
+      readHttpFile.mockResolvedValueOnce(fileOf(["GET", "New request", "https://httpbin.org/get"]));
+      await answerPrompt(app.createFile("/ws"), "new.http");
+      expect(shown()).toEqual([["List", false], ["New request", false], ["Create", true]]);
+    });
+
+    it("Duplicate", async () => {
+      await app.duplicateRequest(PATH, (app.tabs[0] as RequestTab).key);
+      expect(shown()).toEqual([["List", false], ["List copy", false], ["Create", true]]);
+    });
+
+    it("History's Restore request", async () => {
+      api.parseRequest.mockImplementationOnce(async (text: string) => invokeCore("parse_request", { text }));
+      await app.restoreRequest(PATH, null, "### Restored\nGET https://x/restored\n");
+      expect(shown()).toEqual([["List", false], ["Restored", false], ["Create", true]]);
+    });
+
+    it("Send `name` first", async () => {
+      app.envName = null;
+      app.envSet = null;
+      app.envFolders = [];
+      app.docs[PATH].file.requests[2].directives = [{ name: "name", value: "item" }];
+      api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+      await app.sendFirst(app.tabs[0].id, "item");
+      expect(shown()).toEqual([["List", false], ["Get", false], ["Create", true]]);
+    });
+
+    it("Reopen Closed Tab", async () => {
+      await app.closeTab(app.tabs[0].id);
+      app.reopenClosedTab();
+      expect(shown()).toEqual([["List", false], ["Create", true]]);
+    });
+  });
+
+  it("a request typed back into the File view comes back in a kept tab, as it was", async () => {
+    const TEXT = "@host = https://example.com\n\n### List\nGET {{host}}/books\n\n### Create\nPOST {{host}}/books\n";
+    api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+    api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+    readHttpFile.mockResolvedValueOnce(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    await app.openRequest(PATH, { index: 0 });
+    await app.openFileView(PATH);
+    await browse(1);
+    app.activeTabId = app.tabs[1].id;
+
+    await app.texts.edit(PATH, fileView, "@host = https://example.com\n\n### Create\nPOST {{host}}/books\n");
+    expect(shown()).toEqual([["file", false], ["Create", true]]);
+    await app.texts.edit(PATH, fileView, TEXT);
+    expect(shown()).toEqual([["List", false], ["file", false], ["Create", true]]);
+  });
+
+  describe("a Send from a File view", () => {
+    const TEXT = "@host = https://example.com\n\n### List\nGET {{host}}/books\n\n### Create\nPOST {{host}}/books\n";
+    beforeEach(() => {
+      api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+      api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+      readHttpFile.mockResolvedValueOnce(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+      api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 201 } as HttpResponse);
+    });
+    const fileTab = () => app.tabs.find((t) => t.kind === "file")!;
+
+    it("from the Preview tab keeps it, and opens the request under the cursor in a kept tab", async () => {
+      await app.openFileView(PATH, {}, { preview: true });
+      app.setFileCursor(fileTab().id, 1);
+      await app.send(fileTab().id);
+      expect(shown()).toEqual([["file", false], ["Create", false]]);
+      expect(app.requestFor(app.activeTab)?.name).toBe("Create");
+    });
+
+    it("keeps the Preview tab already showing the request under the cursor", async () => {
+      await app.openFileView(PATH);
+      await browse(1);
+      app.activeTabId = fileTab().id;
+      app.setFileCursor(fileTab().id, 1);
+      await app.send(fileTab().id);
+      expect(shown()).toEqual([["file", false], ["Create", false]]);
+    });
   });
 });
