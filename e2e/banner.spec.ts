@@ -2,7 +2,7 @@
 // alerts, everything else as a status, and a severity looks the same wherever
 // the banner appears.
 import { expect, test, type Locator } from "@playwright/test";
-import { importOpenApiButton, openApp, openRequest } from "./helpers";
+import { importOpenApiButton, openApp, openRequest, showSettingsPage } from "./helpers";
 
 /** The colours a banner's severity is read from. */
 function tone(banner: Locator): Promise<{ color: string; background: string }> {
@@ -15,6 +15,7 @@ function tone(banner: Locator): Promise<{ color: string; background: string }> {
 test("a warning banner in Settings is exposed as a status", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "TLS");
   await page.locator(".setting", { hasText: "Verify server certificates" }).getByRole("switch").click();
 
   await expect(page.getByRole("status").filter({ hasText: "Certificate verification is off" })).toBeVisible();
@@ -61,6 +62,7 @@ test("warning banners look the same in the request editor, the Environments edit
   await page.keyboard.press("Escape");
 
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "TLS");
   await page.locator(".setting", { hasText: "Verify server certificates" }).getByRole("switch").click();
   const settings = await tone(status("Certificate verification is off"));
 

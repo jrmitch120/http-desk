@@ -30,6 +30,7 @@
   import SectionBar from "./SectionBar.svelte";
   import Banner from "./Banner.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   let { req, filePath, variables, onsend }: { req: Request; filePath: string; variables: VarProvider | null; onsend?: () => void } = $props();
 
@@ -131,7 +132,7 @@
 {/snippet}
 
 {#snippet contentTypeCell({ row, set }: GridCell<MultipartPart>)}
-  <input class="cell" value={row.contentType ?? ""} placeholder="auto" spellcheck="false" oninput={(e) => set({ contentType: e.currentTarget.value || undefined })} />
+  <input {...textFieldAttrs} class="cell" value={row.contentType ?? ""} placeholder="auto" oninput={(e) => set({ contentType: e.currentTarget.value || undefined })} />
 {/snippet}
 
 <SectionBar title="Body" enabled={body.enabled} onchange={(v) => (body.enabled = v)} showToggle={body.mode !== "none"}>
@@ -160,7 +161,7 @@
       <label class="field">
         <span class="muted">File (relative to the .http file)</span>
         <span class="row">
-          <input class="input mono" value={fileRef?.path ?? ""} placeholder="./payload.json" spellcheck="false" oninput={(e) => setFileRef(e.currentTarget.value, !!fileRef?.substitute)} />
+          <input {...textFieldAttrs} class="input mono" value={fileRef?.path ?? ""} placeholder="./payload.json" oninput={(e) => setFileRef(e.currentTarget.value, !!fileRef?.substitute)} />
           <button class="btn" onclick={() => pickFile((rel) => setFileRef(rel, !!fileRef?.substitute))}>Choose…</button>
         </span>
       </label>
@@ -169,14 +170,14 @@
       </Checkbox>
       <label class="field">
         <span class="muted">Content-Type</span>
-        <input class="input mono" value={contentType} placeholder="application/octet-stream" spellcheck="false" oninput={(e) => setHeader(req, "Content-Type", e.currentTarget.value)} />
+        <input {...textFieldAttrs} class="input mono" value={contentType} placeholder="application/octet-stream" oninput={(e) => setHeader(req, "Content-Type", e.currentTarget.value)} />
       </label>
     </div>
   {:else}
     {#if body.mode === "raw"}
       <label class="ct row">
         <span class="muted">Content-Type</span>
-        <input class="input mono" value={contentType} placeholder="application/octet-stream" spellcheck="false" oninput={(e) => setHeader(req, "Content-Type", e.currentTarget.value)} />
+        <input {...textFieldAttrs} class="input mono" value={contentType} placeholder="application/octet-stream" oninput={(e) => setHeader(req, "Content-Type", e.currentTarget.value)} />
       </label>
     {/if}
     <div class="code">

@@ -34,6 +34,7 @@
   import { tooltip } from "../lib/popup/tooltip.svelte";
   import { shortcutHint } from "../lib/commands";
   import { editorMemoryKey } from "../lib/editorMemory";
+  import { textFieldAttrs } from "../lib/textField";
 
   let { tab }: { tab: RequestTab } = $props();
 
@@ -315,7 +316,7 @@
     <div class="crumbs">
       <span class="file" use:tooltip={tab.path}>{basename(tab.path)}</span>
       <Icon name="chevron-right" size={12} />
-      <input class="name-input" readonly={!!lock} value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} spellcheck="false" bind:this={nameInput} use:tooltip={clippedName} />
+      <input {...textFieldAttrs} class="name-input" readonly={!!lock} value={req.name} placeholder={displayName(req)} oninput={(e) => (req.name = e.currentTarget.value)} bind:this={nameInput} use:tooltip={clippedName} />
       <button
         class="btn small ghost"
         class:on={resolved}

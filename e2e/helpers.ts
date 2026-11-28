@@ -242,6 +242,13 @@ export function setClipboard(page: Page, text: string): Promise<void> {
   }, text);
 }
 
+/** The file the next open-file dialog picks; null cancels it (the default). */
+export function setFilePick(page: Page, path: string | null): Promise<void> {
+  return page.evaluate((p) => {
+    (window as unknown as { __mock: { filePick: string | null } }).__mock.filePick = p;
+  }, path);
+}
+
 /** Makes the clipboard plugin's writes fail (or succeed again), as when the OS clipboard is unavailable. */
 export function setClipboardFails(page: Page, fails: boolean): Promise<void> {
   return page.evaluate((f) => {
@@ -322,6 +329,18 @@ export function tab(page: Page, name: string): Locator {
 /** A confirm/prompt dialog (or any modal) by its title. */
 export function dialog(page: Page, title: string): Locator {
   return page.getByRole("dialog", { name: title, exact: true });
+}
+
+/** A category's page in the open Settings modal: its tabpanel, named by its tab in the rail. */
+export function settingsPage(page: Page, category: string): Locator {
+  return dialog(page, "Settings").getByRole("tabpanel", { name: category, exact: true });
+}
+
+/** Selects a category in the open Settings modal's rail and returns its page. */
+export async function showSettingsPage(page: Page, category: string): Promise<Locator> {
+  await dialog(page, "Settings").getByRole("tablist", { name: "Settings categories" }).getByRole("tab", { name: category, exact: true }).click();
+  await expect(settingsPage(page, category)).toBeVisible();
+  return settingsPage(page, category);
 }
 
 /** Switches the open Environments modal to its matrix (every environment side by side); it opens on the list. */

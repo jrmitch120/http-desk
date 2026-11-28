@@ -32,6 +32,35 @@ the app's [edit menu](#the-edit-menu); anything else shows the app's own
 field and checks the event's default was prevented and the app's menu opened; add
 a line there for a new kind of field.
 
+## Text fields don't autocorrect
+
+Every `<input>` and `<textarea>` spreads `textFieldAttrs` (`src/lib/textField.ts`):
+autocomplete, autocorrect and autocapitalize off, and no spell-check. The app's fields
+hold paths, names, URLs, numbers and code, and on macOS WebKit otherwise offers
+text-replacement bubbles in them. `src/guardrail/text-fields.test.ts` fails on a field
+without the spread; `e2e/text-fields.spec.ts` checks the rendered fields, CodeMirror's
+editors included (CodeMirror turns these off itself).
+
+A Settings value naming a file on this computer (an absolute path, such as Settings'
+TLS certificate paths) is chosen with a file picker, not typed: show it in a read-only
+[boxed `.input`](#input-with-an-end-slot) (still selectable and copyable) that takes up
+the row's slack, with a **Clear** ✕ in its end slot (kept whether or not it's shown, so
+nothing moves when it appears) and **Browse…** after it, ending on the page's edge with
+the switches. The OS picker still takes a typed or pasted path. This is for Settings
+only: other path fields stay typed, such as OpenAPI import's file (typed or pasted, then
+loaded) and a body's `< ./file` reference (relative to the `.http` file).
+
+## Stable layout
+
+Nothing that appears or goes while someone works may move what's around it: an error,
+a hint, a count, a badge, a spinner or a hover affordance. A layout shift moves the
+thing the user is looking at or about to click. Prefer a design where the transient
+thing isn't needed (NumberField refuses what it can't hold rather than explaining it).
+Otherwise reserve the space up front (a fixed width, a slot that is always there) or
+float it over the layout (absolutely positioned). A control that gains such a state
+gets an e2e test that measures the boxes around it before and after and expects them
+unchanged.
+
 ## Picking a control
 
 | You need | Use |
@@ -42,12 +71,14 @@ a line there for a new kind of field.
 | Turning a setting or a whole request section on or off | [Toggle](#toggle) |
 | Including rows or items in a set (enable a row, pick operations), or an option sentence in a form | [Checkbox](#checkbox) |
 | A number with limits and a unit | [NumberField](#numberfield) |
+| A text field with a unit or a button inside its end | [`.input.boxed`](#input-with-an-end-slot) |
 | Free text, paths, or values with their own syntax (`30s`) | [`.input`](#buttons-inputs-and-links) |
 | A single-line value that can hold `{{variables}}` | [VarField](#varfield) |
 | Text with suggested values from a fixed list | [`use:suggestions`](#usesuggestions) |
 | A box that narrows what a panel shows | [FilterField](#filterfield) |
 | A list of name/value rows | [KeyValueGrid](#keyvaluegrid) |
 | A list of rows that each open or show what they name | [`use:rovingList`](#userovinglist), rows styled [`.list-row`](#buttons-inputs-and-links) |
+| A column of categories beside the one page shown (the Settings rail) | [`use:rovingTabs`](#userovingtabs), tabs styled [`.list-row`](#buttons-inputs-and-links) |
 | An icon button with a count beside it | [`.icon-btn.counted`](#buttons-inputs-and-links) |
 | Two panes the user can resize | [SplitPane](#splitpane) |
 | A grid column the user can resize | a [KeyValueGrid](#keyvaluegrid) column's `resize` ([ColumnResizer](#columnresizer)) |
@@ -221,11 +252,45 @@ spinners.
 
 - Props: `value`, `onchange(n)`, `label` (accessible name), `unit?` (suffix such as `s` or
   `MB`), `min?`, `integer?`, `disabled?`.
-- Applies on blur or Enter, never per keystroke. An invalid value shows an inline error
-  (`role="alert"`, linked by `aria-describedby`) and isn't applied; leaving the field
-  puts back the last valid value.
+- One width (96px) whatever its unit. The unit sits in the box's
+  [end slot](#input-with-an-end-slot), after the number, so number fields down a page
+  end on the same edge as its switches and buttons, and nothing is measured. Pressing on
+  the unit focuses the field.
+- Takes only what its number can hold: digits, one decimal point (none when
+  `integer`), and a leading minus only when `min` allows a negative. A keystroke or
+  paste that would leave anything else is refused whole: the text and caret stay as
+  they were. It is never stripped down to the characters that fit, which would turn
+  `2.5` into `25` or `1e3` into `13`.
+- Applies on blur or Enter, never per keystroke. A value it still can't apply (empty,
+  or below `min`) puts back the last value. There is no error message: the field never
+  holds a value worth explaining.
 - Use for numeric settings. A value with its own syntax, such as a per-request `@timeout`
   (`500 ms`, `2m`), is a plain `.input`.
+
+### Input with an end slot
+
+Global classes in `src/app.css`: a text field with something inside its end, such as
+NumberField's unit or the TLS paths' Clear ✕.
+
+```svelte
+<div class="input boxed">
+  <input {...textFieldAttrs} aria-label="Total size" />
+  <label class="input-end" for="…">MB</label>
+</div>
+```
+
+- `.input.boxed` puts the `.input` look (border, `.mono`, `.small`) on a flex wrapper,
+  with the focus ring on `:focus-within`. The `<input>` inside is borderless and fills
+  what the end slot leaves, so nothing is measured or drawn over its text, and nothing
+  moves once it has drawn.
+- `.input-end` is the slot, the input's flex sibling: muted text (a unit), a
+  `--space-1` gap after the field's text and `--input-pad-x` after it. Make it a
+  `<label for>` the field when pressing on it should focus the field.
+- `.input-end.button` holds an `.icon-btn`, inset as far from the box's end as from its
+  top and bottom. It's always as wide as the button, so render the slot whether or not
+  the button is shown and nothing moves when it appears.
+- Without an end slot, the field keeps the right inset. Don't absolutely position an
+  affordance over an `.input` and pad for it instead.
 
 ### VarField
 
@@ -432,6 +497,10 @@ Global classes in `src/app.css`, not components:
   `--control-h-icon`; it hovers like a row, and `.current` with `aria-current="true"`
   marks the row for where the user is (the outline's request under the cursor) with an
   accent bar. A list sets only its own inset (the panel indents rows under their file).
+  It's also the tab of a vertical tablist (the Settings rail): a `role="tab"` button in
+  a [`use:rovingTabs`](#userovingtabs) tablist, where `.current` goes with
+  `aria-selected="true"` (a tab is selected, not current), and the keys are that
+  action's.
 - `.link`: a button that reads as a link.
 - `.copyable`: a `<button>` showing a value as plain text that copies it on click, with a
   toast and a `use:tooltip={"Click to copy"}` (response header and cookie values). Its
@@ -445,7 +514,8 @@ Global classes in `src/app.css`, not components:
   `<thead>` `aria-hidden`, and `.list-row` on each `<tr>`, which stays a table row.
 - `.input`: a single-line text field or a `<textarea>`; `.mono` for code-like values,
   `.small` (`--control-h-sm`) beside `.btn.small` buttons and in bars (FilterField uses it).
-  Focus shows `--focus-ring`.
+  Focus shows `--focus-ring`. Its text is inset `--input-pad-x` from the border.
+  With something inside its end, it's [boxed](#input-with-an-end-slot).
 - `Icon.svelte`: stroke icons by name; the names are the keys of `paths` in that file.
   Icons are `aria-hidden`, so the button around them carries the name.
 
@@ -486,6 +556,30 @@ file view's outline, History, the Session panel, Problems, the Runner and Find u
   click moves focus elsewhere should do that on a double-click or Enter instead (the
   outline's rows go into the text).
 - Style rows with `.list-row`, whose focus ring follows the focus marks.
+
+### use:rovingTabs
+
+`src/lib/rovingTabs.ts`. A vertical tablist whose selected tab shows its page beside
+it: the Settings rail (#240), one tab per Settings category. The file tabs
+(`TabBar.svelte`) are a horizontal strip and keep their own keys (they wrap, and Enter
+switches), as do SegmentedControl's.
+
+- Roles: a `role="tablist"` with an `aria-label` and `aria-orientation="vertical"`, the
+  action on it; inside, `role="tab"` buttons styled `.list-row`, each with
+  `aria-selected`, `.current` on the selected one, and `aria-controls` naming the
+  `role="tabpanel"`, which is `aria-labelledby` the selected tab. The tablist itself
+  takes no focus (no `tabindex`): a click on its empty space focuses nothing in it.
+- One Tab stop, kept by the markup: the selected tab has `tabindex="0"`, the others
+  `-1`. Tab from it goes on into the page.
+- Keys on a focused tab: Up/Down move to the previous or next tab, stopping at the
+  ends, and Home/End to the first and last. Selection follows focus: the tab moved to is
+  clicked (its click selects it) and focused, so the page changes as the user arrows
+  through. Keys with ⌘, Ctrl or Alt held are left to the app's shortcuts, and every key
+  it handles is `preventDefault`ed (ADR-0005). No type-to-jump.
+- A status mark on a tab (the TLS tab's warning while certificate verification is
+  off): a dot (`.warning-mark` in `SettingsModal.svelte`), `aria-hidden`, with its words in a hidden element
+  outside the tab that the tab is `aria-describedby`, so they describe it without
+  joining its name.
 
 ### KeyValueGrid
 
@@ -675,7 +769,7 @@ strip at the top of the response pane (ResponseViewer's status, time, size, Copy
 Save); "status bar" alone names neither.
 
 - **The rule: items show state only; a click opens the place where the user acts on
-  it** (a panel, a Settings section via `app.openSettings(section)`, a prompt). No item
+  it** (a panel, a Settings category via `app.openSettings(category)`, a prompt). No item
   toggles a setting or changes anything by itself, so clicking around the bar never
   surprises.
 - **Nothing moves.** Every item of the right group has a permanent slot of fixed
@@ -775,7 +869,7 @@ keyboard handling, the open flag and focus. See the comments in `popup.ts` and
 
 New controls use the tokens in `src/app.css` `:root` rather than literal sizes:
 `--control-h` (30px), `--control-h-sm` (24px), `--control-h-icon` (26px) and
-`--control-h-icon-sm` (22px) for heights;
+`--control-h-icon-sm` (22px) for heights; `--input-pad-x` (9px) for a text field's inset;
 `--space-1` to `--space-6` and `--space-8` (4px to 32px on a 4px grid) for spacing, and
 also for the size of small fixed elements that are not controls (a badge's height, a
 Toggle's track); `--bar-pad-y`, `--bar-pad-start` and `--bar-pad-end` for the inset shared

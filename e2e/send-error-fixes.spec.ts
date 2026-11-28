@@ -3,8 +3,7 @@
 import { expect, test } from "@playwright/test";
 import { openApp, openRequest, sentRequests } from "./helpers";
 
-test("a TLS error opens Settings scrolled to TLS, and offers no way to turn verification off", async ({ page }) => {
-  // Short enough that the TLS section starts below the fold of the Settings modal.
+test("a TLS error opens Settings on TLS, and offers no way to turn verification off", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 480 });
   await openApp(page, "?sendError=tls");
   await openRequest(page, ["api", "pets.http"], "List pets");
@@ -15,7 +14,8 @@ test("a TLS error opens Settings scrolled to TLS, and offers no way to turn veri
   await panel.getByRole("button", { name: "Open Settings → TLS" }).click();
 
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await expect(settings.getByRole("region", { name: "TLS" })).toBeInViewport();
+  await expect(settings.getByRole("tab", { selected: true })).toHaveText("TLS");
+  await expect(settings.getByRole("tabpanel", { name: "TLS" })).toBeInViewport();
   await expect(settings.getByRole("switch", { name: "Verify server certificates" })).toBeChecked();
 });
 

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openApp, openRequest } from "./helpers";
+import { openApp, openRequest, showSettingsPage } from "./helpers";
 
 test("Request Settings label the per-request idle and connection timeouts", async ({ page }) => {
   await openApp(page);
@@ -15,6 +15,7 @@ test("Request Settings label the per-request idle and connection timeouts", asyn
 test("app Settings label the default idle and connection timeouts", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+Comma");
+  await showSettingsPage(page, "Requests");
 
   await expect(page.locator(".setting .label > span", { hasText: /^Idle timeout$/ })).toBeVisible();
   await expect(page.locator(".setting .label > span", { hasText: /^Connection timeout$/ })).toBeVisible();

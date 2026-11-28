@@ -490,6 +490,11 @@ function splitEnvFiles(set: typeof envSet, old: { shared: EnvMap }): { shared: E
 let envFiles = splitEnvFiles(envSet, { shared: {} });
 /** The editors `?portability=` names, comma-separated. */
 const portabilityQuery = (new URLSearchParams(location.search).get("portability") ?? "").split(",");
+/** The Trusted workspaces `?trusted=` names: `1` for the demo workspace, else comma-separated paths. */
+function trustedQuery(query: string | null): string[] {
+  if (!query) return [];
+  return query === "1" ? [ROOT] : query.split(",");
+}
 let settings = {
   exec: { timeoutMs: 30000, connectTimeoutMs: 10000, followRedirects: true, maxRedirects: 10, verifyTls: true, caCertPath: null, clientCertPath: null, clientKeyPath: null, maxBodyBytes: 104857600 },
   // `?recent=/work/shop,/work/api`: more recent workspaces after the demo one (File → Open Recent).
@@ -514,7 +519,8 @@ let settings = {
   envView: new URLSearchParams(location.search).get("envView") === "matrix" ? "matrix" : "list",
   envMatrixWidths: {},
   // `?trusted=1`: the demo workspace is already a Trusted workspace.
-  trustedWorkspaces: new URLSearchParams(location.search).get("trusted") ? [ROOT] : ([] as string[]),
+  // `?trusted=/work/a,/work/b`: those workspaces are, instead.
+  trustedWorkspaces: trustedQuery(new URLSearchParams(location.search).get("trusted")),
   runnerOptions: {} as Record<string, { delayMs: number; stopOnFailure: boolean }>,
   history: { enabled: true, maxPerRequest: 50, maxAgeDays: 30, maxSizeMb: 200 },
 };
@@ -627,6 +633,8 @@ const openedUrls: string[] = [];
 const openedPaths: string[] = [];
 /** The OS clipboard, as the clipboard plugin reads and writes it. */
 let clipboardText = "";
+// What `plugin:dialog|open` picks: null is a cancelled dialog (`__mock.filePick`).
+let filePick: string | null = null;
 /** The texts the clipboard plugin wrote, in order. */
 const clipboardWrites: string[] = [];
 /** Whether the clipboard plugin's writes fail (a test sets it). */
@@ -706,6 +714,13 @@ window.addEventListener(
   /** The script files opened in the default editor, in order. */
   get openedPaths() {
     return [...openedPaths];
+  },
+  /** The file the next open-file dialog picks (null cancels it); a test may set it. */
+  get filePick() {
+    return filePick;
+  },
+  set filePick(path: string | null) {
+    filePick = path;
   },
   /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
   get clipboard() {
@@ -1756,6 +1771,8 @@ mockIPC(
       }
       case "read_http_file":
         await readsReleased;
+        // Like the shell, a file that isn't there fails to read.
+        if (fileAt(args.path) === undefined) throw `Could not read ${args.path}: No such file or directory (os error 2)`;
         return clone(fileAt(args.path));
       case "save_http_file": {
         // Like the shell: the file is written as text, then read back.
@@ -2032,6 +2049,8 @@ mockIPC(
         if (body === undefined) throw RESPONSE_GONE;
         return mockShape(JSON.parse(body));
       }
+      case "plugin:dialog|open":
+        return filePick;
       case "plugin:dialog|save":
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {

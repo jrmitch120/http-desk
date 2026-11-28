@@ -15,6 +15,7 @@
   import Modal from "./Modal.svelte";
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import Banner from "./Banner.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   const x = app.extraction!;
   const tab = app.tabs.find((t) => t.id === x.tabId);
@@ -64,13 +65,12 @@
     <div class="field">
       <label class="label" for="extract-name">Name</label>
       <input
+        {...textFieldAttrs}
         id="extract-name"
         class="input mono"
         bind:this={input}
         bind:value={name}
         placeholder="baseUrl"
-        spellcheck="false"
-        autocomplete="off"
         aria-invalid={error ? "true" : undefined}
         aria-describedby={error ? "extract-name-error" : undefined}
         onkeydown={(e) => {

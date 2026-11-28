@@ -7,6 +7,7 @@
   import KeyValueGrid from "./KeyValueGrid.svelte";
   import ScriptsEditor from "./ScriptsEditor.svelte";
   import type { VarProvider } from "../lib/codemirror/setup";
+  import { textFieldAttrs } from "../lib/textField";
 
   let {
     req,
@@ -53,11 +54,11 @@
     <h3>Request</h3>
     <label class="field">
       <span>Name</span>
-      <input class="input" bind:value={req.name} placeholder="Request name" />
+      <input {...textFieldAttrs} class="input" bind:value={req.name} placeholder="Request name" />
     </label>
     <label class="field">
       <span>Description <em class="muted">(saved as # comments above the request)</em></span>
-      <textarea class="input" rows="3" value={description} oninput={(e) => (req.comments = e.currentTarget.value === "" ? [] : e.currentTarget.value.split("\n"))}></textarea>
+      <textarea {...textFieldAttrs} class="input" rows="3" value={description} oninput={(e) => (req.comments = e.currentTarget.value === "" ? [] : e.currentTarget.value.split("\n"))}></textarea>
     </label>
   </section>
 
@@ -77,6 +78,7 @@
           <div class="muted sub">{t.hint} Seconds, or e.g. <code>500 ms</code>, <code>2 m</code>; empty uses the app default. Saved as <code># @{t.directive}</code></div>
         </div>
         <input
+          {...textFieldAttrs}
           class="input mono num"
           aria-label={t.label}
           value={getDirective(req, t.directive) ?? ""}
@@ -87,7 +89,7 @@
     {/each}
     <label class="field">
       <span>HTTP version <em class="muted">(optional, e.g. HTTP/1.1)</em></span>
-      <input class="input mono narrow" value={req.httpVersion ?? ""} oninput={(e) => (req.httpVersion = e.currentTarget.value.trim() || null)} placeholder="—" />
+      <input {...textFieldAttrs} class="input mono narrow" value={req.httpVersion ?? ""} oninput={(e) => (req.httpVersion = e.currentTarget.value.trim() || null)} placeholder="—" />
     </label>
   </section>
 
