@@ -124,6 +124,14 @@ test("a certificate path is set only with Browse…, shown read-only, and remove
   await expect(ca).toHaveValue("/certs/ca.pem");
   await expect(settings.getByRole("button", { name: "Clear CA certificate" })).toBeVisible();
   expect([await ca.boundingBox(), await browse.boundingBox()]).toEqual(before);
+  // Clear sits inside the field's box, at its end; Browse… ends on the page's edge, with the switch.
+  const field = (await ca.boundingBox())!;
+  const clear = (await settings.getByRole("button", { name: "Clear CA certificate" }).boundingBox())!;
+  expect(clear.x).toBeGreaterThan(field.x);
+  expect(clear.x + clear.width).toBeLessThanOrEqual(field.x + field.width);
+  const toggle = (await settings.getByRole("switch", { name: "Verify server certificates" }).boundingBox())!;
+  const b = (await browse.boundingBox())!;
+  expect(Math.round(b.x + b.width)).toBe(Math.round(toggle.x + toggle.width));
 
   await settings.getByRole("button", { name: "Clear CA certificate" }).click();
   await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBeNull();

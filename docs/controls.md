@@ -42,9 +42,10 @@ without the spread; `e2e/text-fields.spec.ts` checks the rendered fields, CodeMi
 editors included (CodeMirror turns these off itself).
 
 A value that must name an existing file is chosen with a file picker, not typed: show
-it in a read-only `.input` (still selectable and copyable) beside **Browse…** and a
-**Clear** button, as Settings' TLS certificate paths do. The OS picker still takes a
-typed or pasted path.
+it in a read-only `.input` (still selectable and copyable) that takes up the row's
+slack, with a **Clear** ✕ inside its end (in padding kept for it, so nothing moves when
+it appears) and **Browse…** after it, ending on the page's edge with the switches, as
+Settings' TLS certificate paths do. The OS picker still takes a typed or pasted path.
 
 ## Stable layout
 
