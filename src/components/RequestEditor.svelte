@@ -307,7 +307,7 @@
         {#snippet actions()}
           {#if lock.heldBy.kind === "file"}
             {@const error = app.texts.firstError(tab.path, lock.heldBy)}
-            <button class="btn small" onclick={() => app.openFileView(tab.path, error ? { line: error.line, column: error.column } : { key: tab.key })}>
+            <button class="btn small" onclick={() => app.openFileView(tab.path, error ? { line: error.line, column: error.column } : { key: tab.key }, { preview: true })}>
               {error ? `Show line ${error.line} in the file view` : "Show file view"}
             </button>
           {:else if ownSource}

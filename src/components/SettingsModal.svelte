@@ -147,7 +147,7 @@
             <SegmentedControl label="Response position" options={RESPONSE_POSITIONS} value={app.responsePosition} onchange={(v) => void app.setResponsePosition(v)} />
           </div>
           <div class="setting">
-            <div class="label"><span>Preview tabs</span><small class="muted">Browsing opens one italic tab that the next replaces; off, every request opens in a tab of its own</small></div>
+            <div class="label"><span>Preview tabs</span><small class="muted">Browsing opens a Preview tab, which the next navigation replaces; off, every request opens in a kept tab of its own</small></div>
             <Toggle ariaLabel="Preview tabs" checked={app.previewTabs} onchange={(v) => void app.setPreviewTabs(v)} />
           </div>
           <div class="setting">
