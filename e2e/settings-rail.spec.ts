@@ -44,7 +44,7 @@ test("every setting sits under its new category", async ({ page }) => {
   await openApp(page);
   await page.keyboard.press("Meta+Comma");
   const expected: Record<string, string[]> = {
-    General: ["Theme", "Response position", "Show parameter descriptions", "Check for updates on startup", "Check now"],
+    General: ["Theme", "Response position", "Preview tabs", "Show parameter descriptions", "Check for updates on startup", "Check now"],
     Requests: ["Idle timeout", "Connection timeout", "Follow redirects", "Maximum redirects", "Maximum body size"],
     TLS: ["Verify server certificates", "CA certificate", "Client certificate", "Client key"],
     Portability: ["VS Code", "Rider", "Show portability notes as warnings"],

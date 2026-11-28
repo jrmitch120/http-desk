@@ -697,6 +697,8 @@ export interface AppSettings {
   layout: ResponsePosition;
   checkUpdates: boolean;
   showDescriptions: boolean;
+  /** The Preview tabs switch (Settings → General): while off, every navigation opens a kept tab. On by default. */
+  previewTabs: boolean;
   /** Sidebar width in px, kept while the sidebar is hidden. */
   sidebarWidth: number;
   /** The sidebar is hidden (View → Show Sidebar, ⌘B / Ctrl+B). */

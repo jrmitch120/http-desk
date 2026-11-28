@@ -505,6 +505,7 @@ let settings = {
   layout: new URLSearchParams(location.search).get("layout") ?? "horizontal",
   checkUpdates: true,
   showDescriptions: true,
+  previewTabs: true,
   sidebarWidth: 280,
   sidebarHidden: false,
   panelHeight: 260,

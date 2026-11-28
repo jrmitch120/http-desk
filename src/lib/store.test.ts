@@ -820,6 +820,56 @@ describe("saving settings", () => {
   });
 });
 
+describe("Preview tabs (#250)", () => {
+  const settings = (patch: Partial<AppSettings> = {}) => ({ theme: "dark", recentWorkspaces: [], environments: {}, ...patch }) as unknown as AppSettings;
+
+  beforeEach(() => {
+    vi.stubGlobal("document", { documentElement: { dataset: {} } });
+    app.settings = settings();
+  });
+
+  it("the Preview tabs setting is on by default, including in settings saved before it existed, and is saved as an app setting", async () => {
+    expect(app.previewTabs).toBe(true);
+
+    await app.setPreviewTabs(false);
+    expect(app.previewTabs).toBe(false);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ previewTabs: false }));
+
+    await app.setPreviewTabs(true);
+    expect(api.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ previewTabs: true }));
+  });
+
+  const books = () => fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]);
+  const shown = () => app.tabs.map((t) => [app.requestFor(t)?.name, !!t.preview]);
+  /** Navigates to request `index` of PATH as the sidebar's single click, Enter or Open does. */
+  const browse = (index: number) => app.openRequest(PATH, { index }, { preview: true });
+
+  it("while it's off, every navigation opens a kept tab", async () => {
+    app.settings = settings({ previewTabs: false });
+    readHttpFile.mockResolvedValueOnce(books());
+
+    await browse(0);
+    await browse(1);
+    expect(shown()).toEqual([["List", false], ["Create", false]]);
+  });
+
+  it("turning it off makes the open Preview tab kept; turning it back on affects only later navigations", async () => {
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]));
+    await browse(0);
+    expect(shown()).toEqual([["List", true]]);
+
+    // As the Settings window's switch changes it.
+    await app.updateSettings({ previewTabs: false });
+    expect(shown()).toEqual([["List", false]]);
+
+    await app.setPreviewTabs(true);
+    expect(shown()).toEqual([["List", false]]);
+    await browse(1);
+    await browse(2);
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+  });
+});
+
 describe("the sidebar", () => {
   const loaded = (extra: Record<string, unknown>) =>
     ({ theme: "dark", recentWorkspaces: [], environments: {}, sidebarWidth: 340, ...extra }) as unknown as AppSettings;

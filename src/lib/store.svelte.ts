@@ -255,6 +255,12 @@ class AppStore {
   setResponsePosition(position: ResponsePosition): Promise<boolean> {
     return this.updateSettings({ layout: position });
   }
+  /** The Preview tabs switch: on unless a saved `previewTabs: false` turns it off (as lib.rs reads it). */
+  previewTabs = $derived(this.settings?.previewTabs !== false);
+  /** Turns the Preview tabs switch on or off, for every workspace, and keeps the choice in settings. */
+  setPreviewTabs(on: boolean): Promise<boolean> {
+    return this.updateSettings({ previewTabs: on });
+  }
   /** Whether the sidebar is open (else collapsed to its rail, SidebarRail.svelte). Only a
    *  saved `sidebarHidden: true` collapses it; anything else in a hand-edited settings
    *  file opens it (as lib.rs reads it). */
@@ -484,6 +490,8 @@ class AppStore {
   async updateSettings(patch: Partial<AppSettings>): Promise<boolean> {
     if (!this.settings) return false;
     Object.assign(this.settings, patch);
+    // With the Preview tabs switch off every tab is kept, the open Preview tab too.
+    if (!this.previewTabs) this.tabs.forEach((t) => this.keepTab(t.id));
     this.applyTheme();
     this.applyZoom();
     return this.saveSettings();
@@ -1038,9 +1046,11 @@ class AppStore {
    * Puts new tab `tab` in the tab bar. As the Preview tab, it takes the place of the one
    * there is, which goes without a question (its edits, made elsewhere, stay in the
    * document) and without joining the Reopen Closed Tab list. Otherwise, or with no
-   * Preview tab, it goes just after the active tab.
+   * Preview tab, it goes just after the active tab. While the Preview tabs switch is off,
+   * every tab is kept: `preview` is ignored.
    */
   private placeTab(tab: Tab, preview: boolean) {
+    preview &&= this.previewTabs;
     const old = preview ? this.tabs.find((t) => t.preview) : undefined;
     if (preview) tab.preview = true;
     if (old) {

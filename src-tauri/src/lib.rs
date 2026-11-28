@@ -76,6 +76,10 @@ struct AppSettings {
     check_updates: bool,
     /// Show param/header descriptions under each row.
     show_descriptions: bool,
+    /// The Preview tabs switch (Settings → General): while off, every navigation opens a
+    /// kept tab. On by default, also for settings saved before it existed.
+    #[serde(deserialize_with = "on_unless_false")]
+    preview_tabs: bool,
     /// Sidebar width in px. A float, so no value the frontend writes fails to load.
     sidebar_width: f64,
     /// The sidebar is collapsed to its rail (View → Show Sidebar). Its width is kept meanwhile.
@@ -218,6 +222,12 @@ fn or_default<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned +
     Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).unwrap_or_default())
 }
 
+/// Reads a switch that is on unless saved as `false`, as the frontend reads it: anything
+/// else in a hand-edited settings file leaves it on.
+fn on_unless_false<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(d)? != serde_json::Value::Bool(false))
+}
+
 /// The zoom range, the lowest and highest of the frontend's levels (`ZOOM_LEVELS`
 /// in src/lib/zoom.ts; src/lib/zoom.test.ts checks they agree).
 const MIN_ZOOM: f64 = 0.5;
@@ -265,6 +275,7 @@ impl Default for AppSettings {
             layout: "horizontal".into(),
             check_updates: true,
             show_descriptions: true,
+            preview_tabs: true,
             sidebar_width: 280.0,
             sidebar_hidden: false,
             zoom: 1.0,

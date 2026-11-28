@@ -670,6 +670,26 @@ fn settings_without_pane_sizes_load_with_defaults() {
     assert_eq!(json["splitRatio"], json!({ "horizontal": 0.5, "vertical": 0.3 }));
 }
 
+/// #250: the Preview tabs switch is on by default, in settings saved before it existed too,
+/// and only a saved `false` turns it off; turned off, it stays off after a save and reload.
+#[test]
+fn the_preview_tabs_switch_is_on_unless_saved_off() {
+    let read = |json: &str| {
+        serde_json::to_value(serde_json::from_str::<super::AppSettings>(json).unwrap()).unwrap()["previewTabs"].clone()
+    };
+    assert_eq!(serde_json::to_value(super::AppSettings::default()).unwrap()["previewTabs"], true);
+    assert_eq!(read(r#"{"theme":"light"}"#), true);
+    assert_eq!(read(r#"{"previewTabs":"no"}"#), true);
+    assert_eq!(read(r#"{"previewTabs":false}"#), false);
+
+    let h = Harness::new();
+    let mut settings = h.ok("get_settings", json!({}));
+    assert_eq!(settings["previewTabs"], true);
+    settings["previewTabs"] = json!(false);
+    h.ok("save_settings", json!({ "settings": settings }));
+    assert_eq!(h.ok("get_settings", json!({}))["previewTabs"], false);
+}
+
 /// A theme chosen by an older version loads unchanged; a settings file without one follows the OS.
 #[test]
 fn saved_themes_load_unchanged_and_a_missing_theme_follows_the_system() {
