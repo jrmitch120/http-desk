@@ -58,11 +58,21 @@
     }
   }
 
-  /** Opens the request, which becomes the explorer's selection; while its file's file view is active, shows it there instead. */
-  function openRequest(key: string) {
+  /**
+   * Opens the request, which becomes the explorer's selection: in the Preview tab (a
+   * click, Enter), or kept (a double-click). While its file's file view is active, shows
+   * it there instead.
+   */
+  function openRequest(key: string, preview = true) {
     app.selectRequest(node.path, key, "only");
     if (app.activeTab?.kind === "file" && app.activeTab.path === node.path) app.openFileView(node.path, { key });
-    else app.openRequest(node.path, { key });
+    else app.openRequest(node.path, { key }, { preview });
+  }
+
+  /** A double-click opens a kept tab: the Preview tab its first click opened, kept. */
+  function doubleClickRequest(e: MouseEvent, key: string) {
+    if (e.shiftKey || (currentOS() === "mac" ? e.metaKey : e.ctrlKey)) return;
+    openRequest(key, false);
   }
 
   /** ⌘-click (Ctrl-click off macOS) toggles the request in the selection and Shift-click
@@ -79,7 +89,7 @@
       ? [{ label: "Run selection", icon: "send", disabled: app.running, action: () => app.runSelection() }]
       : [];
     menu.show(e, [
-      { label: "Open", icon: "send", action: () => app.openRequest(node.path, { key }) },
+      { label: "Open", icon: "send", action: () => app.openRequest(node.path, { key }, { preview: true }) },
       ...runSelection,
       { label: "Rename…", icon: "edit", action: () => app.renameRequest(node.path, key) },
       { label: "Duplicate", icon: "copy", action: () => app.duplicateRequest(node.path, key) },
@@ -167,6 +177,7 @@
         aria-level={depth + 2}
         tabindex="-1"
         onclick={(e) => clickRequest(e, req._key!)}
+        ondblclick={(e) => doubleClickRequest(e, req._key!)}
         onkeydown={(e) => plainEnter(e) && openRequest(req._key!)}
         oncontextmenu={(e) => requestMenu(e, req._key!)}
       >

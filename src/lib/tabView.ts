@@ -23,6 +23,11 @@ interface TabBase {
    * URL; a file view's file name), shown until it re-attaches (or is dropped).
    */
   restoring?: { method: string; name: string };
+  /**
+   * The workspace's Preview tab (at most one): the next navigation replaces it in place.
+   * Absent on a kept tab, which only the user closes.
+   */
+  preview?: true;
 }
 
 /** A tab on a request of a document (by file and the document's key for it), and how it shows it. */

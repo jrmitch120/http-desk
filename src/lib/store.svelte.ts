@@ -758,7 +758,7 @@ class AppStore {
       // Same order and count as what we sent: carry keys over by index.
       fresh.requests.forEach((r, i) => (r._key = keys[i] ?? uid()));
       const orphans = doc.orphans.filter((r) => !back.includes(r));
-      this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved);
+      this.fromElsewhere(() => (this.docs[path] = this.makeDoc(path, fresh, orphans, doc.saved)));
       return true;
     } catch (e) {
       this.toast("error", `Save failed: ${errorMessage(e)}`);
@@ -849,7 +849,7 @@ class AppStore {
       const held = new Set(this.tabs.flatMap((t) => (t.kind === "request" && t.path === path ? [t.key] : [])));
       orphans = [...old.file.requests, ...old.orphans].filter((r) => unused.has(r._key!) && held.has(r._key!));
     }
-    this.docs[path] = this.makeDoc(path, file, orphans, old?.saved);
+    this.fromElsewhere(() => (this.docs[path] = this.makeDoc(path, file, orphans, old?.saved)));
   }
 
   private reloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1013,19 +1013,96 @@ class AppStore {
 
   // ---------------------------------------------------------------- tabs
 
-  async openRequest(path: string, which: { key?: string; index?: number }) {
+  /**
+   * Opens request `which` of the file at `path` in a tab, made active: the tab already
+   * on it if there is one (kept, unless `preview`), else a new one. With `preview` (a
+   * navigation: the sidebar's click, Enter or Open), the new tab is the workspace's
+   * Preview tab, which replaces the one there is in place. Kept otherwise.
+   */
+  async openRequest(path: string, which: { key?: string; index?: number }, how: { preview?: boolean } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     const req = which.key ? doc.file.requests.find((r) => r._key === which.key) : doc.file.requests[which.index ?? 0];
     if (!req) return;
     const key = req._key!;
     let tab = this.tabs.find((t) => t.kind === "request" && t.path === path && t.key === key);
+    if (tab && !how.preview) this.keepTab(tab.id);
     if (!tab) {
       tab = newTab(path, key);
+      this.placeTab(tab, !!how.preview);
+    }
+    this.activeTabId = tab.id;
+  }
+
+  /**
+   * Puts new tab `tab` in the tab bar. As the Preview tab, it takes the place of the one
+   * there is, which goes without a question (its edits, made elsewhere, stay in the
+   * document) and without joining the Reopen Closed Tab list. Otherwise, or with no
+   * Preview tab, it goes just after the active tab.
+   */
+  private placeTab(tab: Tab, preview: boolean) {
+    const old = preview ? this.tabs.find((t) => t.preview) : undefined;
+    if (preview) tab.preview = true;
+    if (old) {
+      const at = this.tabs.indexOf(old);
+      this.removeTab(old.id);
+      this.tabs.splice(at, 0, tab);
+    } else {
       const at = this.tabs.findIndex((t) => t.id === this.activeTabId);
       this.tabs.splice(at < 0 ? this.tabs.length : at + 1, 0, tab);
     }
-    this.activeTabId = tab.id;
+    if (preview) this.notePreviewShown();
+  }
+
+  /** Makes tab `id` a kept tab, if it's the Preview tab: no navigation replaces it, and only the user closes it. */
+  keepTab(id: string) {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (tab?.preview) delete tab.preview;
+  }
+
+  /**
+   * The Preview tab's request as it opened, or as last changed from outside the tab
+   * (`docSnapshot`). Every change made elsewhere goes through `fromElsewhere`, which
+   * moves this along, so any other change since was made in the tab's own editor (the
+   * URL bar, a section, a rename there): it keeps the tab (`noteTabEdits`).
+   */
+  private previewShot: string | null = null;
+
+  private previewRequest(): { tab: Tab; req: Request } | null {
+    const tab = this.tabs.find((t) => t.preview);
+    const req = tab && this.requestFor(tab);
+    return tab && req ? { tab, req } : null;
+  }
+
+  /**
+   * Tab `tabId`'s editor shows its request as it is now (it calls this whenever the
+   * request changes). If that's the Preview tab, and its request changed since it opened
+   * other than from elsewhere, the change was made in it: it becomes a kept tab.
+   */
+  noteTabEdits(tabId: string) {
+    const shown = this.previewRequest();
+    if (shown?.tab.id === tabId && docSnapshot(shown.req) !== this.previewShot) this.keepTab(tabId);
+  }
+
+  /**
+   * Makes `change`, which changes requests from outside their tabs (the file view, Rename
+   * variable, a rename in the explorer, a reload or save), leave the Preview tab a
+   * Preview tab. A change made in the tab before it, not noted yet, still keeps it.
+   */
+  private fromElsewhere<T>(change: () => T): T {
+    const shown = this.previewRequest();
+    if (shown) this.noteTabEdits(shown.tab.id);
+    try {
+      return change();
+    } finally {
+      this.notePreviewShown();
+    }
+  }
+
+  /** The Preview tab's request is as the tab found it: what changes it from here on was done in the tab. */
+  private notePreviewShown() {
+    const shown = this.previewRequest();
+    this.previewShot = shown ? docSnapshot(shown.req) : null;
   }
 
   /** Shows one of a tab's request sections (Params, Headers, …). */
@@ -1380,14 +1457,16 @@ class AppStore {
     if (wasClean) await this.save(path);
   }
 
-  async renameRequest(path: string, key: string) {
+  /** Renames a request, asking for the name. From tab `fromTab` (its Rename command), that tab is kept, as any change made in it. */
+  async renameRequest(path: string, key: string, fromTab?: string) {
     const doc = await this.loadDoc(path);
     const req = doc?.file.requests.find((r) => r._key === key);
     if (!req || this.refused(path, [key])) return;
     const r = await this.prompt("Rename request", displayName(req));
     if (r === null || !r.trim()) return;
     const wasClean = !this.isDocDirty(path);
-    req.name = r.trim();
+    if (fromTab) this.keepTab(fromTab);
+    this.fromElsewhere(() => (req.name = r.trim()));
     if (wasClean) await this.save(path);
   }
 
@@ -1573,6 +1652,7 @@ class AppStore {
   async send(tabId: string) {
     const typing = this.tabs.find((t) => t.id === tabId);
     if (typing?.kind === "file") return this.sendUnderCursor(typing);
+    this.keepTab(tabId);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
     if (typing && this.texts.waiting(typing.path, sourceView(typing.key))) await this.texts.readNow(typing.path, sourceView(typing.key));
     const tab = this.tabs.find((t): t is RequestTab => t.id === tabId && t.kind === "request");
@@ -1849,6 +1929,11 @@ class AppStore {
         }
       },
       toast: (kind, message) => store.toast(kind, message),
+      typed: (path, view) => {
+        const tab = store.tabs.find((t) => t.path === path && (view.kind === "file" ? t.kind === "file" : t.kind === "request" && t.key === view.key));
+        if (tab) store.keepTab(tab.id);
+      },
+      fromFileView: (change) => store.fromElsewhere(change),
     };
   }
 
@@ -2288,7 +2373,7 @@ class AppStore {
       const doc = await this.loadDoc(path);
       if (!doc || doc.missing) continue;
       const wasClean = !this.isDocDirty(path);
-      renameInFile(doc.file, list, name, next);
+      this.fromElsewhere(() => renameInFile(doc.file, list, name, next));
       edited++;
       if (!wasClean) unsaved.push(basename(path));
       else await this.save(path); // a failure is reported; the rename stays on screen, unsaved

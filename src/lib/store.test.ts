@@ -4189,3 +4189,220 @@ describe("the request under a file view's cursor (#167)", () => {
     expect(app.fileRequestWanted).toEqual({ tabId: fileTab().id, key: keyOf("Create") });
   });
 });
+
+describe("Preview tabs (#245)", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed, so the reopen list holds only this test's.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const books = () => fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"], ["GET", "Get", "https://x/books/1"]);
+  const shown = () => app.tabs.map((t) => [app.requestFor(t)?.name, !!t.preview]);
+  /** Navigates to request `index` of PATH as the sidebar's single click does. */
+  const browse = async (index: number) => app.openRequest(PATH, { key: (await app.loadDoc(PATH))!.file.requests[index]._key }, { preview: true });
+  /** What the active tab's editor does whenever its request changes, whatever changed it. */
+  const editorSees = () => app.activeTabId && app.noteTabEdits(app.activeTabId);
+
+  it("a navigation opens a Preview tab just after the active tab, and the next one replaces it in place", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openRequest(PATH, { index: 2 });
+    app.activeTabId = app.tabs[0].id;
+
+    await browse(1);
+    expect(shown()).toEqual([["List", false], ["Create", true], ["Get", false]]);
+    expect(app.requestFor(app.activeTab)?.name).toBe("Create");
+
+    app.activeTabId = app.tabs[0].id;
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Authors", "https://x/authors"]));
+    await app.openRequest("/ws/api/authors.http", { index: 0 }, { preview: true });
+    expect(shown()).toEqual([["List", false], ["Authors", true], ["Get", false]]);
+    expect(app.requestFor(app.activeTab)?.name).toBe("Authors");
+  });
+
+  it("opening a request is kept unless asked for a Preview tab, so other ways of opening are as before", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openRequest(PATH, { index: 1 });
+    expect(shown()).toEqual([["List", false], ["Create", false]]);
+  });
+
+  it("navigating to a request already open in any tab focuses that tab and leaves the Preview tab alone", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await browse(1);
+    const tabs = [...app.tabs];
+
+    await browse(0);
+    expect(app.tabs).toEqual(tabs);
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+    expect(app.activeTabId).toBe(tabs[0].id);
+
+    await browse(1);
+    expect(app.tabs).toEqual(tabs);
+    expect(app.activeTabId).toBe(tabs[1].id);
+  });
+
+  it("a replaced Preview tab doesn't go on the Reopen Closed Tab list; one the user closes does", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    await browse(1);
+    expect(canRun("reopen-tab")).toBe(false);
+
+    await app.closeTab(app.tabs[0].id);
+    runCommand("reopen-tab");
+    expect(shown()).toEqual([["Create", false]]);
+    expect(canRun("reopen-tab")).toBe(false);
+  });
+
+  it("the first change made in the Preview tab's editor keeps it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    const [tab] = app.tabs;
+    // As the URL bar, a section or a rename in the tab does: straight into the request.
+    app.requestFor(tab)!.headers.items.push({ enabled: true, name: "X-Trace", value: "on" });
+    editorSees();
+    expect(shown()).toEqual([["List", false]]);
+
+    await browse(1);
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+  });
+
+  it("text typed in the Preview tab's Source view keeps it at once", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    const [tab] = app.tabs as RequestTab[];
+    void app.texts.edit(PATH, sourceView(tab.key), "### List\nGET https://x/books?page=2\n");
+    expect(shown()).toEqual([["List", false]]);
+  });
+
+  it("Rename from the Preview tab keeps it; Rename from the explorer doesn't", async () => {
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    const renaming = app.renameRequest(PATH, (app.tabs[0] as RequestTab).key);
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("ok", "Listing");
+    await renaming;
+    editorSees();
+    expect(shown()).toEqual([["Listing", true]]);
+
+    runCommand("rename-request");
+    await vi.waitFor(() => expect(app.dialog).not.toBeNull());
+    app.closeDialog("ok", "All books");
+    await vi.waitFor(() => expect(shown()).toEqual([["All books", false]]));
+  });
+
+  it("a replaced Preview tab lets go of its response", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    const [tab] = app.tabs;
+    app.runs[tab.id] = { runId: "r", loading: false, startedAt: 0, response: { id: "r1", status: 200 } as HttpResponse };
+    await browse(1);
+    expect(app.runs[tab.id]).toBeUndefined();
+    expect(api.releaseResponse.mock.calls.map(([id]) => id)).toEqual(["r1"]);
+  });
+
+  it("a Send from the Preview tab keeps it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    api.sendRequest.mockResolvedValueOnce({ id: "r1", status: 200 } as HttpResponse);
+    await app.send(app.tabs[0].id);
+    expect(shown()).toEqual([["List", false]]);
+  });
+
+  it("looking around the Preview tab (its section, its response view) leaves it a Preview tab", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+    const [tab] = app.tabs as RequestTab[];
+    app.showSection(tab.id, "headers");
+    tab.responseView.tab = "headers";
+    tab.responseView.wrap = true;
+    editorSees();
+    expect(shown()).toEqual([["List", true]]);
+  });
+
+  it("a Run that includes the Preview tab's request leaves it a Preview tab", async () => {
+    app.root = "/ws";
+    app.settings = null;
+    app.envName = null;
+    app.envSet = null;
+    app.envFolders = [];
+    api.runRequests.mockResolvedValue({ cancelled: false });
+    readHttpFile.mockResolvedValueOnce(books());
+    await browse(0);
+
+    await app.runFile(PATH);
+    editorSees();
+
+    expect(api.runRequests).toHaveBeenCalled();
+    expect(shown()).toEqual([["List", true]]);
+  });
+
+  it("Rename variable rewriting the Preview tab's request leaves it a Preview tab", async () => {
+    app.root = "/ws";
+    app.envFolders = [];
+    app.envSet = { shared: [], environments: [{ name: "dev", variables: [{ name: "token", value: "t", secret: true }] }], privateFileIgnored: true };
+    saveEnvironments.mockResolvedValue({ gitignoreUpdated: false });
+    loadEnvironments.mockImplementation(async () => structuredClone(saveEnvironments.mock.lastCall?.[0] ?? app.envSet));
+    saveHttpFile.mockImplementation(async (_path: string, f: HttpFile) => structuredClone(f));
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "List", "{{token}}/books"], ["GET", "Get", "https://x/1"]));
+    await browse(0);
+
+    const done = app.renameVariable("token");
+    app.closeRenaming({
+      name: "apiToken",
+      usages: [{ kind: "request", path: PATH, index: 0, name: "List", method: "GET", url: "{{token}}/books", field: { kind: "url" }, disabled: false, start: 0, end: 9 }],
+    });
+    expect(await done).toBe(true);
+    editorSees();
+
+    expect(app.requestFor(app.tabs[0])?.url).toBe("{{apiToken}}/books");
+    expect(shown()).toEqual([["List", true]]);
+  });
+
+  describe("with edits made elsewhere", () => {
+    // The real core (WASM) reads and writes the file view's text, as the shell does.
+    const TEXT = "@host = https://example.com\n\n### List\nGET {{host}}/books\n\n### Create\nPOST {{host}}/books\n";
+    beforeEach(() => {
+      api.parseFileText.mockImplementation(async (text: string) => invokeCore("parse_file_text", { text }));
+      api.fileText.mockImplementation(async (f: HttpFile) => invokeCore("file_text", { file: f }));
+      api.parseRequest.mockImplementation(async (text: string) => invokeCore("parse_request", { text }));
+      api.requestSource.mockImplementation(async (request: unknown) => invokeCore("request_source", { request }));
+      readHttpFile.mockResolvedValueOnce(invokeCore<HttpFile>("parse_file", { text: TEXT }));
+    });
+
+    it("replaces a Preview tab with unsaved edits without asking, and the edits stay in the document", async () => {
+      await app.openFileView(PATH);
+      await browse(0);
+      await app.texts.edit(PATH, fileView, TEXT.replace("### List", "### Listing"));
+      const list = app.docs[PATH].file.requests[0];
+      expect(app.isRequestDirty(PATH, list._key!)).toBe(true);
+      editorSees();
+      // Changed from the file view, not from the tab: still a Preview tab.
+      expect(shown()).toEqual([[undefined, false], ["Listing", true]]);
+
+      await browse(1);
+
+      expect(app.dialog).toBeNull();
+      expect(shown()).toEqual([[undefined, false], ["Create", true]]);
+      expect(app.docs[PATH].file.requests[0].name).toBe("Listing");
+      expect(app.isRequestDirty(PATH, list._key!)).toBe(true);
+    });
+  });
+
+  it("a kept open (the sidebar's double-click) of the request in the Preview tab keeps that tab: one tab, kept", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    // The double-click's first click opened the Preview tab.
+    await browse(0);
+    await app.openRequest(PATH, { key: app.docs[PATH].file.requests[0]._key });
+    expect(shown()).toEqual([["List", false]]);
+
+    await browse(1);
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+    await app.openRequest(PATH, { key: app.docs[PATH].file.requests[0]._key });
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+  });
+});

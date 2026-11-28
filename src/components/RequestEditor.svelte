@@ -88,6 +88,10 @@
   /** The request as JSON, made once per change: what its readings are asked with and compared by. */
   const reqJson = $derived(req ? JSON.stringify(req) : null);
 
+  // The first change to the request made here keeps the Preview tab. The store tells it
+  // from a change made elsewhere (the file view, Rename variable, a reload), which doesn't.
+  $effect(() => app.noteTabEdits(tab.id));
+
   // What the core found reading the request's source: asked when it's opened (at once)
   // and after each edit (debounced like the source), for the strip and the underlines.
   $effect(() => {

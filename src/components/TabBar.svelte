@@ -67,6 +67,7 @@
         class="tab"
         class:active
         class:orphaned
+        class:preview={tab.preview && !orphaned}
         data-tab={tab.id}
         role="tab"
         aria-selected={active}
@@ -177,6 +178,10 @@
   .tab.orphaned .name {
     font-style: italic;
     text-decoration: line-through;
+  }
+  /* The Preview tab: the next navigation replaces it. */
+  .tab.preview .name {
+    font-style: italic;
   }
   .orphan-icon {
     display: flex;

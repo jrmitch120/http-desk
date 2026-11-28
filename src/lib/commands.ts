@@ -254,7 +254,7 @@ const COMMANDS: Command[] = [
     id: "rename-request",
     label: "Rename…",
     enabled: withRequest,
-    run: () => isRequestTab(app.activeTab) && void app.renameRequest(app.activeTab.path, app.activeTab.key),
+    run: () => isRequestTab(app.activeTab) && void app.renameRequest(app.activeTab.path, app.activeTab.key, app.activeTab.id),
   },
   {
     id: "show-source",

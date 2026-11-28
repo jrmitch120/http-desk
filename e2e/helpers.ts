@@ -33,7 +33,8 @@ export function treeItem(page: Page, label: string): Locator {
 
 /**
  * Expands each folder/file in `path` (relative to the workspace root), then
- * opens the request named `request` in a tab.
+ * opens the request named `request` in a kept tab (a double-click: a single click
+ * opens the Preview tab, which the next one replaces).
  * Example: `openRequest(page, ["api", "pets.http"], "List pets")`.
  */
 export async function openRequest(page: Page, path: string[], request: string): Promise<void> {
@@ -41,7 +42,7 @@ export async function openRequest(page: Page, path: string[], request: string): 
     const row = treeItem(page, segment);
     if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
   }
-  await treeItem(page, request).click();
+  await treeItem(page, request).dblclick();
   await expect(urlBar(page)).toBeVisible();
 }
 

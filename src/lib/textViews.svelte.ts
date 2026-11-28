@@ -143,6 +143,10 @@ export interface TextViewsHost {
   /** Requests `keys` of `path`, gone that way, are in its file again (an Undo, or a block cut and pasted elsewhere): their tabs come back. */
   requestsBack(path: string, keys: Set<string>): void;
   toast(kind: "error", message: string): void;
+  /** The user typed in `view` of `path`: a change made in the tab that shows it. */
+  typed(path: string, view: TextView): void;
+  /** `change` puts a file view's text in its document: a change to its requests made from outside their tabs. */
+  fromFileView(change: () => void): void;
 }
 
 /** Typed text waiting to be read: after a pause, or at once on Save or Send. */
@@ -239,6 +243,7 @@ export class TextViews {
   edit(path: string, view: TextView, text: string): Promise<void> {
     const doc = this.host.docs[path];
     if (!doc) return Promise.resolve();
+    this.host.typed(path, view);
     if (view.kind === "request") {
       const req = this.host.findRequest(path, view.key);
       if (!req) return Promise.resolve();
@@ -657,6 +662,10 @@ export class TextViews {
    * values with the reader's (`FileReader.parse`): what goes in is a copy.
    */
   private replaceFile(doc: Doc, fresh: HttpFile) {
+    this.host.fromFileView(() => this.putFile(doc, fresh));
+  }
+
+  private putFile(doc: Doc, fresh: HttpFile) {
     const old = doc.file.requests;
     const oldShots = fileShot(doc.file).requests;
     const oldShot = new Map(old.map((r, i) => [r, oldShots[i]]));
