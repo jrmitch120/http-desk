@@ -2,8 +2,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { menuClick, menuItem, openApp, tab, treeItem } from "./helpers";
 
 // Keeping the Preview tab (GLOSSARY) without changing it or sending from it: a
-// double-click on the tab, Keep open in its context menu, or File → Keep Open. These single-click
-// in the tree on purpose: the shared `openRequest` helper double-clicks.
+// double-click on the tab, Keep open in its context menu, or File → Keep Open. These
+// single-click in the tree on purpose: the shared `openRequest` helper double-clicks.
 
 const tabs = (page: Page) => page.getByRole("tablist", { name: "Open requests" }).getByRole("tab");
 const italic = (t: Locator) => t.locator(".name").evaluate((el) => getComputedStyle(el).fontStyle === "italic");
