@@ -1967,6 +1967,10 @@ class AppStore {
         store.unshown = new Set(ready.keys());
         store.reattaching = ready;
       },
+      // A restored Preview tab's request is as the tab finds it: only changes from here on keep it.
+      restored: (id) => {
+        if (store.tabs.find((t) => t.id === id)?.preview) store.notePreviewShown();
+      },
       toast: (kind, message) => store.toast(kind, message),
     };
   }

@@ -496,6 +496,112 @@ describe("restoring a workspace's Layout", () => {
   });
 });
 
+describe("Preview tabs (#249)", () => {
+  // The Layout keeps which tab is the Preview tab, alongside "restoring a workspace's Layout".
+  const WS = "/ws";
+  const placed = (path: string, name: string, position: number, more: object = {}) => ({ path, name, method: "GET", url: `https://x/${name}`, position, section: "params", responseView: { tab: "body", mode: "pretty", wrap: false }, ...more });
+  const books = () => fileOf(["GET", "List", "https://x/List"], ["GET", "Create", "https://x/Create"], ["GET", "Get", "https://x/Get"]);
+  const shown = () => app.tabs.map((t) => [t.kind === "file" ? `file ${basename(t.path)}` : app.requestFor(t)?.name, !!t.preview]);
+  const ready = () => vi.waitFor(() => expect(app.tabs.some((t) => t.restoring)).toBe(false));
+
+  beforeEach(() => {
+    openWorkspace.mockResolvedValue({ root: WS, tree: { name: "ws", path: WS, kind: "dir", children: [] }, gitignoreUpdated: false });
+    getSettings.mockResolvedValue({ environments: {} });
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+    api.saveLayout.mockResolvedValue(undefined);
+    readHttpFile.mockImplementation(async () => books());
+  });
+
+  it("reopening the workspace brings back its Preview tab as the Preview tab, and every other tab kept", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("a.http", "Create", 1, { preview: true }), placed("a.http", "Get", 2)], active: 0, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+
+    expect(shown()).toEqual([["List", false], ["Create", true], ["Get", false]]);
+  });
+
+  it("the restored Preview tab stays one when its editor first shows its request, and the next navigation replaces it", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("a.http", "Create", 1, { preview: true })], active: 1, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+    // What the restored tab's editor does when it first shows.
+    app.noteTabEdits(app.tabs[1].id);
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+
+    await app.openRequest(`${WS}/a.http`, { index: 2 }, { preview: true });
+    expect(shown()).toEqual([["List", false], ["Get", true]]);
+  });
+
+  /** The Layout the app saves once its changes settle (what its effect does on each change). */
+  async function savedLayout() {
+    api.saveLayout.mockClear();
+    await vi.waitFor(async () => {
+      app.layout.track();
+      await app.layout.flush();
+      expect(api.saveLayout).toHaveBeenCalled();
+    });
+    return api.saveLayout.mock.lastCall![1];
+  }
+
+  it("the saved Layout marks the Preview tab, and no longer once it's kept", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0)], active: 0, expanded: [] });
+    await app.openWorkspace(WS);
+    await ready();
+    await savedLayout();
+
+    await app.openRequest(`${WS}/a.http`, { index: 1 }, { preview: true });
+    let saved = await savedLayout();
+    expect(saved.tabs.map((t: { name: string; preview?: boolean }) => [t.name, t.preview])).toEqual([["List", undefined], ["Create", true]]);
+
+    app.keepTab(app.tabs[1].id);
+    saved = await savedLayout();
+    expect(saved.tabs.map((t: { name: string; preview?: boolean }) => [t.name, t.preview])).toEqual([["List", undefined], ["Create", undefined]]);
+  });
+
+  it("a file view that's the Preview tab comes back as it, and is saved as it", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), { kind: "file", path: "a.http", preview: true }], active: 0, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+
+    expect(shown()).toEqual([["List", false], ["file a.http", true]]);
+    expect((await savedLayout()).tabs).toEqual([expect.not.objectContaining({ preview: true }), { kind: "file", path: "a.http", preview: true }]);
+  });
+
+  it("of several tabs a damaged Layout marks as the Preview tab, only the first comes back as it", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("a.http", "Create", 1, { preview: true }), { kind: "file", path: "a.http", preview: true }, placed("a.http", "Get", 2, { preview: true })], active: 0, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+
+    expect(shown()).toEqual([["List", false], ["Create", true], ["file a.http", false], ["Get", false]]);
+  });
+
+  it("a Layout saved before Preview tabs brings every tab back kept", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), { kind: "file", path: "a.http" }, placed("a.http", "Get", 2, { preview: "yes" })], active: 2, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+
+    expect(shown()).toEqual([["List", false], ["file a.http", false], ["Get", false]]);
+  });
+
+  it("a restored Preview tab whose request is gone is dropped like any other such tab", async () => {
+    api.loadLayout.mockResolvedValue({ tabs: [placed("a.http", "List", 0), placed("a.http", "Gone", 3, { preview: true })], active: 1, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await ready();
+
+    expect(shown()).toEqual([["List", false]]);
+    await vi.waitFor(() => expect(app.toasts.map((t) => t.message)).toEqual(["1 tab wasn't restored: its request no longer exists."]));
+    // With no Preview tab left, the next navigation opens one beside the active tab.
+    await app.openRequest(`${WS}/a.http`, { index: 1 }, { preview: true });
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+  });
+});
+
 describe("a tab's request section and response view", () => {
   it("start on Params, and on the Body tab in Pretty without wrap", async () => {
     const [tab] = await openAll(fileOf(["GET", "List", "https://x/books"]));
