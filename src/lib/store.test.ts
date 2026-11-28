@@ -4583,3 +4583,41 @@ describe("Preview tabs (#245)", () => {
     expect(shown()).toEqual([["List", false], ["Create", true]]);
   });
 });
+
+describe("Preview tabs (#246)", () => {
+  beforeEach(() => {
+    // Forget the tabs earlier tests closed, so the reopen list holds only this test's.
+    while (canRun("reopen-tab")) runCommand("reopen-tab");
+    app.tabs = [];
+    app.activeTabId = null;
+  });
+
+  const books = () => fileOf(["GET", "List", "https://x/books"], ["POST", "Create", "https://x/books"]);
+  const shown = () => app.tabs.map((t) => [app.requestFor(t)?.name, !!t.preview]);
+  /** Navigates to request `index` of PATH as the sidebar's single click does. */
+  const browse = async (index: number) => app.openRequest(PATH, { key: (await app.loadDoc(PATH))!.file.requests[index]._key }, { preview: true });
+
+  it("Keep open is enabled only on the Preview tab and keeps it: the next navigation opens a new Preview tab beside it", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    expect(canRun("keep-tab")).toBe(false);
+
+    await browse(1);
+    expect(canRun("keep-tab")).toBe(true);
+    expect(runCommand("keep-tab")).toBe(true);
+    expect(shown()).toEqual([["List", false], ["Create", false]]);
+    expect(canRun("keep-tab")).toBe(false);
+
+    readHttpFile.mockResolvedValueOnce(fileOf(["GET", "Authors", "https://x/authors"]));
+    await app.openRequest("/ws/api/authors.http", { index: 0 }, { preview: true });
+    expect(shown()).toEqual([["List", false], ["Create", false], ["Authors", true]]);
+  });
+
+  it("keeping a kept tab (a double-click on it) changes nothing", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await browse(1);
+    app.keepTab(app.tabs[0].id);
+    expect(shown()).toEqual([["List", false], ["Create", true]]);
+  });
+});
