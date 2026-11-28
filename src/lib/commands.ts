@@ -26,6 +26,7 @@ export type CommandId =
   | "save-all"
   | "close-tab"
   | "reopen-tab"
+  | "keep-tab"
   | "close-window"
   | "quit"
   | "settings"
@@ -193,6 +194,13 @@ const COMMANDS: Command[] = [
     shortcut: { mod: true, shift: true, key: "t" },
     enabled: () => app.canReopenTab,
     run: () => app.reopenClosedTab(),
+  },
+  {
+    // The keyboard's way to keep the Preview tab, as a double-click on it does (GLOSSARY "Preview tab").
+    id: "keep-tab",
+    label: "Keep Open",
+    enabled: () => !!app.activeTab?.preview,
+    run: () => app.activeTabId && app.keepTab(app.activeTabId),
   },
   {
     id: "close-window",

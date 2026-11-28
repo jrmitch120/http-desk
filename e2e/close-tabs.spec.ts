@@ -116,6 +116,6 @@ test("every item in a tab's menu has an icon", async ({ page }) => {
   await openRequest(page, ["api", "pets.http"], "List pets");
   await tab(page, "List pets").click({ button: "right" });
   const items = page.getByRole("menu").getByRole("menuitem");
-  await expect(items).toHaveText(["Close", "Close others", "Close all", "Duplicate request", "View file as text"]);
-  await expect(items.filter({ has: page.locator(".ico svg path:not([d=''])") })).toHaveCount(5);
+  await expect(items).toHaveText(["Close", "Close others", "Close all", "Keep open", "Duplicate request", "View file as text"]);
+  await expect(items.filter({ has: page.locator(".ico svg path:not([d=''])") })).toHaveCount(6);
 });
