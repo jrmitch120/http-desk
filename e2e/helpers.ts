@@ -242,6 +242,13 @@ export function setClipboard(page: Page, text: string): Promise<void> {
   }, text);
 }
 
+/** The file the next open-file dialog picks; null cancels it (the default). */
+export function setFilePick(page: Page, path: string | null): Promise<void> {
+  return page.evaluate((p) => {
+    (window as unknown as { __mock: { filePick: string | null } }).__mock.filePick = p;
+  }, path);
+}
+
 /** Makes the clipboard plugin's writes fail (or succeed again), as when the OS clipboard is unavailable. */
 export function setClipboardFails(page: Page, fails: boolean): Promise<void> {
   return page.evaluate((f) => {

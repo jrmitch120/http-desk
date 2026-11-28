@@ -32,6 +32,20 @@ the app's [edit menu](#the-edit-menu); anything else shows the app's own
 field and checks the event's default was prevented and the app's menu opened; add
 a line there for a new kind of field.
 
+## Text fields don't autocorrect
+
+Every `<input>` and `<textarea>` spreads `textFieldAttrs` (`src/lib/textField.ts`):
+autocomplete, autocorrect and autocapitalize off, and no spell-check. The app's fields
+hold paths, names, URLs, numbers and code, and on macOS WebKit otherwise offers
+text-replacement bubbles in them. `src/guardrail/text-fields.test.ts` fails on a field
+without the spread; `e2e/text-fields.spec.ts` checks the rendered fields, CodeMirror's
+editors included (CodeMirror turns these off itself).
+
+A value that must name an existing file is chosen with a file picker, not typed: show
+it in a read-only `.input` (still selectable and copyable) beside **Browse…** and a
+**Clear** button, as Settings' TLS certificate paths do. The OS picker still takes a
+typed or pasted path.
+
 ## Stable layout
 
 Nothing that appears or goes while someone works may move what's around it: an error,

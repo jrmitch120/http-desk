@@ -73,6 +73,7 @@
   import type { MenuItem } from "../lib/menu.svelte";
   import ActionsButton from "./ActionsButton.svelte";
   import { addMenuItems } from "../lib/editMenu";
+  import { textFieldAttrs } from "../lib/textField";
 
   interface Props {
     items: R[];
@@ -367,7 +368,7 @@
   </div>
 
   {#if bulk}
-    <textarea class="bulk-text mono" bind:value={bulkText} oninput={applyBulk} spellcheck="false" rows={Math.max(6, bulkText.split("\n").length + 1)}></textarea>
+    <textarea {...textFieldAttrs} class="bulk-text mono" bind:value={bulkText} oninput={applyBulk} rows={Math.max(6, bulkText.split("\n").length + 1)}></textarea>
   {:else}
     {#each rows as { row, i } (row)}
       {@const isGhost = row === ghost}
@@ -387,10 +388,10 @@
           {:else if t.id === "name"}
             {#snippet nameInput(cls: string, actions: MenuItem[])}
               <input
+                {...textFieldAttrs}
                 class="cell c-name {cls}"
                 value={row.name}
                 placeholder={isGhost ? `Add ${namePlaceholder.toLowerCase()}` : namePlaceholder}
-                spellcheck="false"
                 aria-invalid={error ? "true" : undefined}
                 oninput={(e) => set(row, { name: e.currentTarget.value } as Partial<R>)}
                 oncontextmenu={actions.length ? (e) => addMenuItems(e, actions) : undefined}
@@ -412,7 +413,7 @@
             {#if variables}
               <VarField class="cell c-value{divider(c) ? ' divider' : ''}" value={row.value} placeholder={valuePlaceholder} label={valuePlaceholder} {variables} onchange={(value) => set(row, { value } as Partial<R>)} />
             {:else}
-              <input class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} spellcheck="false" oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
+              <input {...textFieldAttrs} class="cell c-value" class:divider={divider(c)} value={row.value} placeholder={valuePlaceholder} oninput={(e) => set(row, { value: e.currentTarget.value } as Partial<R>)} />
             {/if}
           {:else if t.id === "delete"}
             <span class="c-del">
@@ -425,6 +426,7 @@
         {#if descriptionColumnShown && !isGhost}
           {#if editing === row}
             <textarea
+              {...textFieldAttrs}
               class="desc desc-edit"
               style:grid-column="{subStart} / -1"
               rows="1"

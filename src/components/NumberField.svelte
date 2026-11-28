@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { textFieldAttrs } from "../lib/textField";
   // A number typed into a text field (ADR 0002): a unit suffix inside the box and no
   // spinners. It takes only what a number of its kind can hold (digits, one decimal
   // point unless `integer`, a leading minus only when `min` allows one); anything else
@@ -72,12 +73,11 @@
 
 <div class="number-field">
   <input
+    {...textFieldAttrs}
     id="{id}-input"
     class="input"
     type="text"
     inputmode={integer ? "numeric" : "decimal"}
-    autocomplete="off"
-    spellcheck="false"
     aria-label={label}
     {disabled}
     style:padding-right={unit ? `${unitWidth + 13}px` : undefined}

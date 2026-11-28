@@ -633,6 +633,8 @@ const openedUrls: string[] = [];
 const openedPaths: string[] = [];
 /** The OS clipboard, as the clipboard plugin reads and writes it. */
 let clipboardText = "";
+// What `plugin:dialog|open` picks: null is a cancelled dialog (`__mock.filePick`).
+let filePick: string | null = null;
 /** The texts the clipboard plugin wrote, in order. */
 const clipboardWrites: string[] = [];
 /** Whether the clipboard plugin's writes fail (a test sets it). */
@@ -712,6 +714,13 @@ window.addEventListener(
   /** The script files opened in the default editor, in order. */
   get openedPaths() {
     return [...openedPaths];
+  },
+  /** The file the next open-file dialog picks (null cancels it); a test may set it. */
+  get filePick() {
+    return filePick;
+  },
+  set filePick(path: string | null) {
+    filePick = path;
   },
   /** The OS clipboard the clipboard plugin reads and writes; a test may set it. */
   get clipboard() {
@@ -2038,6 +2047,8 @@ mockIPC(
         if (body === undefined) throw RESPONSE_GONE;
         return mockShape(JSON.parse(body));
       }
+      case "plugin:dialog|open":
+        return filePick;
       case "plugin:dialog|save":
         return `${ROOT}/${args.options?.defaultPath ?? "response"}`;
       case "save_response_body": {

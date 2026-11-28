@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, menuClick, mockState, openApp, setClipboard, showSettingsPage } from "./helpers";
+import { dialog, menuClick, mockState, openApp, setClipboard, setFilePick, showSettingsPage } from "./helpers";
 
 /** Opens Settings on `category`. */
 async function openSettings(page: Page, category = "General") {
@@ -99,19 +99,35 @@ test("a maximum body size takes only digits, and below 1 MB puts back the last v
   await expect.poll(async () => (await savedSettings(page)).exec.maxBodyBytes).toBe(8 * 1024 * 1024);
 });
 
-test("a certificate path applies on Enter and on Clear, not per keystroke", async ({ page }) => {
+test("a certificate path is set only with Browse…, shown read-only, and removed with Clear", async ({ page }) => {
   await openApp(page);
   const settings = await openSettings(page, "TLS");
-  const ca = settings.locator(".setting", { hasText: "CA certificate" });
+  const ca = settings.getByRole("textbox", { name: "CA certificate" });
+  await expect(ca).toHaveValue("");
+  await expect(ca).toHaveAttribute("readonly", "");
 
-  await ca.getByRole("textbox").fill("/certs/ca.pem");
+  // Typing does nothing: the path can't be mistyped.
+  await ca.click();
+  await page.keyboard.type("asdasd");
+  await expect(ca).toHaveValue("");
+
+  // Cancelling the picker changes nothing.
+  await settings.getByRole("button", { name: "Browse for CA certificate" }).click();
   expect((await savedSettings(page)).exec.caCertPath).toBeNull();
-  await ca.getByRole("textbox").press("Enter");
-  await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
 
-  await ca.getByRole("button", { name: "Clear" }).click();
+  // Setting a path shows Clear in a slot kept for it: the field and Browse… don't move.
+  const browse = settings.getByRole("button", { name: "Browse for CA certificate" });
+  const before = [await ca.boundingBox(), await browse.boundingBox()];
+  await setFilePick(page, "/certs/ca.pem");
+  await browse.click();
+  await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
+  await expect(ca).toHaveValue("/certs/ca.pem");
+  await expect(settings.getByRole("button", { name: "Clear CA certificate" })).toBeVisible();
+  expect([await ca.boundingBox(), await browse.boundingBox()]).toEqual(before);
+
+  await settings.getByRole("button", { name: "Clear CA certificate" }).click();
   await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBeNull();
-  await expect(ca.getByRole("textbox")).toHaveValue("");
+  await expect(ca).toHaveValue("");
 });
 
 /**
@@ -164,15 +180,6 @@ test.describe("without a blur on removal (as in WebKit)", () => {
       await close(page);
       await expect(settings).toHaveCount(0);
       await expect.poll(async () => (await savedSettings(page)).exec.timeoutMs).toBe(45000);
-    });
-
-    test(`closing Settings with ${how} applies the certificate path being typed`, async ({ page }) => {
-      await openApp(page);
-      const settings = await openSettings(page, "TLS");
-      await settings.locator(".setting", { hasText: "CA certificate" }).getByRole("textbox").fill("/certs/ca.pem");
-      await close(page);
-      await expect(settings).toHaveCount(0);
-      await expect.poll(async () => (await savedSettings(page)).exec.caCertPath).toBe("/certs/ca.pem");
     });
   }
 });

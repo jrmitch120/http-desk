@@ -27,7 +27,7 @@
 
   /**
    * Blurs a focused field inside the modal before closing, so a field that
-   * applies on blur (NumberField, Settings paths) keeps what was typed. WebKit
+   * applies on blur (NumberField) keeps what was typed. WebKit
    * fires no blur when the focused element is removed with the modal.
    */
   function close() {

@@ -21,6 +21,7 @@
   import SegmentedControl, { type SegmentedOption } from "./SegmentedControl.svelte";
   import WorkspaceHistory from "./WorkspaceHistory.svelte";
   import type { SidebarView } from "../lib/store.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   // Each hints the command that shows it and focuses its list.
   const VIEWS: SegmentedOption<SidebarView>[] = [
@@ -227,11 +228,11 @@
   <div class="search">
     <Icon name="search" size={13} />
     <input
+      {...textFieldAttrs}
       bind:this={searchInput}
       bind:value={query}
       placeholder="Search requests"
       onkeydown={onSearchKey}
-      spellcheck="false"
       role="combobox"
       aria-expanded={!!query.trim() && hits.length > 0}
       aria-controls="search-results"

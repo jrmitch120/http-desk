@@ -8,6 +8,7 @@
   import Modal from "./Modal.svelte";
   import { arrangeDialogButtons } from "../lib/platform";
   import type { DialogButton } from "../lib/store.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   let value = $state(app.dialog?.input?.value ?? "");
   let input: HTMLInputElement | undefined = $state();
@@ -61,7 +62,7 @@
   <div class="body">
     {#if d.message}<p>{d.message}</p>{/if}
     {#if d.input}
-      <input class="input" bind:this={input} bind:value placeholder={d.input.placeholder} onkeydown={enterAnswers} />
+      <input {...textFieldAttrs} class="input" bind:this={input} bind:value placeholder={d.input.placeholder} onkeydown={enterAnswers} />
     {/if}
     {#each d.fields ?? [] as field, i}
       <div class="field">
@@ -69,14 +70,13 @@
         {#if field.help}<span class="help" id="dialog-help-{i}">{field.help}</span>{/if}
         <span class="with-btn">
           <input
+            {...textFieldAttrs}
             id="dialog-field-{i}"
             aria-describedby={field.help ? `dialog-help-${i}` : undefined}
             class="input mono"
             type={shown[i] ? "text" : "password"}
             bind:this={fieldInputs[i]}
             bind:value={values[i]}
-            spellcheck="false"
-            autocomplete="off"
             onkeydown={enterAnswers}
           />
           <button type="button" class="icon-btn" aria-label={shown[i] ? `Hide ${field.label}` : `Show ${field.label}`} use:tooltip onclick={() => (shown[i] = !shown[i])}>

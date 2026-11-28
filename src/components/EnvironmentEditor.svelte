@@ -24,6 +24,7 @@
   import { lastNamed } from "../lib/http";
   import type { MenuItem } from "../lib/menu.svelte";
   import { environmentsFor, folderLabel, workspaceFolders } from "../lib/envFolders";
+  import { textFieldAttrs } from "../lib/textField";
 
   /** List (one environment at a time) unless the user picked the matrix; remembered in the app settings. */
   const view = $derived(app.settings?.envView === "matrix" ? "matrix" : "list");
@@ -447,7 +448,7 @@
         </button>
         <div class="filter">
           <Icon name="search" size={13} />
-          <input class="input" placeholder="Filter variables" bind:value={filter} />
+          <input {...textFieldAttrs} class="input" placeholder="Filter variables" bind:value={filter} />
         </div>
       {/if}
     </div>
@@ -515,7 +516,7 @@
             {/if}
             <div class="filter">
               <Icon name="search" size={13} />
-              <input class="input" placeholder="Filter variables" bind:value={filter} />
+              <input {...textFieldAttrs} class="input" placeholder="Filter variables" bind:value={filter} />
             </div>
           </div>
 

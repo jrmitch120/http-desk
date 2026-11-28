@@ -21,6 +21,7 @@
   import { RESPONSE_POSITIONS } from "../lib/responsePositions";
   import { EDITOR_NAMES, EDITORS, type EditorName } from "../lib/checks";
   import Toggle from "./Toggle.svelte";
+  import { textFieldAttrs } from "../lib/textField";
 
   /** The rail's categories, in order. */
   const CATEGORIES: { id: SettingsCategory; name: string; icon: string }[] = [
@@ -63,13 +64,8 @@
     if (Object.entries(patch).some(([k, v]) => app.settings!.exec[k as keyof ExecSettings] !== v)) set({ exec });
   }
 
-  function setPath(key: PathKey, value: string) {
-    setExec({ [key]: value.trim() === "" ? null : value });
-  }
-
-  /** Path fields apply on blur and Enter, not per keystroke. */
-  function onPathKeydown(e: KeyboardEvent, key: PathKey) {
-    if (e.key === "Enter") setPath(key, (e.currentTarget as HTMLInputElement).value);
+  function setPath(key: PathKey, value: string | null) {
+    setExec({ [key]: value });
   }
 
   async function browse(key: PathKey) {
@@ -96,10 +92,15 @@
       <small class="muted">{f.hint}</small>
     </div>
     <div class="row">
-      <input class="input mono grow" value={exec[f.key] ?? ""} placeholder="None" onblur={(e) => setPath(f.key, e.currentTarget.value)} onkeydown={(e) => onPathKeydown(e, f.key)} />
-      <button class="btn small" onclick={() => browse(f.key)}>Browse…</button>
+      <!-- Read-only: a path is chosen with Browse… (where the OS picker also takes a typed
+           or pasted path), so it can't be mistyped; it can still be selected and copied. -->
+      <input {...textFieldAttrs} class="input mono grow" readonly aria-label={f.label} value={exec[f.key] ?? ""} placeholder="None" />
+      <button class="btn small" aria-label="Browse for {f.label}" onclick={() => browse(f.key)}>Browse…</button>
+      <!-- Clear's slot is kept while there's nothing to clear, so the field and Browse… never move. -->
       {#if exec[f.key]}
-        <button class="icon-btn" aria-label="Clear" use:tooltip onclick={() => setPath(f.key, "")}><Icon name="x" size={14} /></button>
+        <button class="icon-btn" aria-label="Clear {f.label}" use:tooltip onclick={() => setPath(f.key, null)}><Icon name="x" size={14} /></button>
+      {:else}
+        <span class="icon-btn clear-slot" aria-hidden="true"></span>
       {/if}
     </div>
   </div>
@@ -324,5 +325,8 @@
   }
   .page :global(.tls-off) {
     margin: 2px 0 6px;
+  }
+  .clear-slot {
+    visibility: hidden;
   }
 </style>
