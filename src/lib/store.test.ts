@@ -1045,6 +1045,24 @@ describe("Preview tabs (#250)", () => {
     await browse(2);
     expect(shown()).toEqual([["List", false], ["Get", true]]);
   });
+
+  it("while it's off, a workspace whose Layout was saved with a Preview tab reopens with every tab kept", async () => {
+    const WS = "/ws";
+    const placed = (name: string, position: number, more: object = {}) => ({ path: "a.http", name, method: "GET", url: `https://x/${name}`, position, section: "params", responseView: { tab: "body", mode: "pretty", wrap: false }, ...more });
+    openWorkspace.mockResolvedValue({ root: WS, tree: { name: "ws", path: WS, kind: "dir", children: [] }, gitignoreUpdated: false });
+    // Turned off earlier, in another workspace.
+    app.settings = settings({ previewTabs: false });
+    getSettings.mockResolvedValue(settings({ previewTabs: false }));
+    loadEnvironments.mockResolvedValue({ shared: [], environments: [], privateFileIgnored: true });
+    api.saveLayout.mockResolvedValue(undefined);
+    readHttpFile.mockImplementation(async () => books());
+    api.loadLayout.mockResolvedValue({ tabs: [placed("List", 0), placed("Create", 1, { preview: true })], active: 1, expanded: [] });
+
+    await app.openWorkspace(WS);
+    await vi.waitFor(() => expect(app.tabs.some((t) => t.restoring)).toBe(false));
+
+    expect(shown()).toEqual([["List", false], ["Create", false]]);
+  });
 });
 
 describe("the sidebar", () => {

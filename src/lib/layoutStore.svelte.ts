@@ -25,6 +25,8 @@ export interface LayoutHost {
   activeTabId: string | null;
   expanded: Record<string, boolean>;
   readonly docs: Record<string, Doc>;
+  /** The Preview tabs switch: while off, a restored Layout's Preview tab comes back kept. */
+  readonly previewTabs: boolean;
   /**
    * Reads the file at `path` afresh into its document, `prepare` seeing its requests
    * before they get keys (to re-attach them); whoever loads it meanwhile shares the
@@ -153,7 +155,7 @@ export class LayoutStore {
     const layout = readLayout(saved);
     const tabs = layout.tabs.map((t): Tab => {
       const path = fromWorkspace(root, t.path);
-      const preview = t.preview ? { preview: true as const } : {};
+      const preview = t.preview && this.host.previewTabs ? { preview: true as const } : {};
       if (t.kind === "file") return { ...newFileTab(path), restoring: { method: "", name: basename(path) }, ...preview };
       return { ...newTab(path, uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) }, ...preview };
     });

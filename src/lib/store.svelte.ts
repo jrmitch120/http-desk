@@ -1987,6 +1987,9 @@ class AppStore {
       set expanded(expanded) {
         store.expanded = expanded;
       },
+      get previewTabs() {
+        return store.previewTabs;
+      },
       get docs() {
         return store.docs;
       },
