@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { dialog, mockState, openApp, showSettingsPage } from "./helpers";
+import { dialog, menuClick, mockState, openApp, setClipboard, showSettingsPage } from "./helpers";
 
 /** Opens Settings on `category`. */
 async function openSettings(page: Page, category = "General") {
@@ -29,21 +29,36 @@ test("toggling Follow redirects applies at once and is still applied after reope
   await expect(follow()).toHaveAttribute("aria-checked", "false");
 });
 
-test("clearing the idle timeout shows an error and saves nothing; leaving the field restores it", async ({ page }) => {
+test("the idle timeout takes only digits and one decimal point; anything else typed or pasted is dropped", async ({ page }) => {
+  // Linux, where the Edit menu's Paste is the app's own command (as a paste lands in a field).
+  await openApp(page, "?platform=linux");
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  const settings = await showSettingsPage(page, "Requests");
+  const idle = settings.getByRole("textbox", { name: "Idle timeout" });
+
+  await idle.selectText();
+  await idle.pressSequentially("1a.5s.2");
+  await expect(idle).toHaveValue("1.52");
+  // A paste is cleaned the same way, and the caret stays after what was inserted.
+  await idle.fill("");
+  await setClipboard(page, "4x5");
+  await menuClick(page, "paste");
+  await expect(idle).toHaveValue("45");
+  await idle.pressSequentially("0");
+  await expect(idle).toHaveValue("450");
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+});
+
+test("leaving the idle timeout empty puts back the last value and saves nothing, on blur or Enter", async ({ page }) => {
   await openApp(page);
   const settings = await openSettings(page, "Requests");
   const idle = settings.getByRole("textbox", { name: "Idle timeout" });
   await expect(idle).toHaveValue("30");
 
   await idle.fill("");
-  await expect(idle).toHaveAttribute("aria-invalid", "true");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
   await idle.press("Enter");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
-
-  await idle.fill("soon");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a number");
-
+  await expect(idle).toHaveValue("30");
+  await idle.fill("");
   await idle.blur();
   await expect(idle).toHaveValue("30");
   await expect(idle).not.toHaveAttribute("aria-invalid", "true");
@@ -65,18 +80,21 @@ test("typing a new idle timeout saves it on Enter, not per keystroke", async ({ 
   await expect(settings).toBeVisible();
 });
 
-test("a maximum body size has to be a whole number of at least 1 MB", async ({ page }) => {
+test("a maximum body size takes only digits, and below 1 MB puts back the last value", async ({ page }) => {
   await openApp(page);
   const settings = await openSettings(page, "Requests");
   const size = settings.getByRole("textbox", { name: "Maximum body size" });
   await expect(size).toHaveValue("100");
 
+  // A whole-number field drops the decimal point too.
+  await size.selectText();
+  await size.pressSequentially("2.5");
+  await expect(size).toHaveValue("25");
   await size.fill("0");
-  await expect(settings.getByRole("alert")).toHaveText("Must be at least 1");
-  await size.fill("2.5");
-  await expect(settings.getByRole("alert")).toHaveText("Enter a whole number");
-  await size.fill("8");
+  await size.blur();
+  await expect(size).toHaveValue("100");
   await expect(settings.getByRole("alert")).toHaveCount(0);
+  await size.fill("8");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect.poll(async () => (await savedSettings(page)).exec.maxBodyBytes).toBe(8 * 1024 * 1024);
 });

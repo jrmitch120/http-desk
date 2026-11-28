@@ -36,11 +36,12 @@ a line there for a new kind of field.
 
 Nothing that appears or goes while someone works may move what's around it: an error,
 a hint, a count, a badge, a spinner or a hover affordance. A layout shift moves the
-thing the user is looking at or about to click. Either reserve the space up front
-(a fixed width, a slot that is always there) or float the transient thing over the
-layout (absolutely positioned, like NumberField's error). A control that gains such a
-state gets an e2e test that measures the boxes around it before and after and expects
-them unchanged (`e2e/settings-rail.spec.ts` has one for NumberField's error).
+thing the user is looking at or about to click. Prefer a design where the transient
+thing isn't needed (NumberField refuses what it can't hold rather than explaining it).
+Otherwise reserve the space up front (a fixed width, a slot that is always there) or
+float it over the layout (absolutely positioned). A control that gains such a state
+gets an e2e test that measures the boxes around it before and after and expects them
+unchanged.
 
 ## Picking a control
 
@@ -235,11 +236,12 @@ spinners.
 - One width (96px) whatever its unit. The unit is drawn inside the box, after the number,
   so number fields down a page end on the same edge as its switches and buttons. Pressing
   on the unit focuses the field.
-- Applies on blur or Enter, never per keystroke. An invalid value shows an error
-  (`role="alert"`, linked by `aria-describedby`) and isn't applied; leaving the field
-  puts back the last valid value. The error floats under the field, right-aligned with
-  it, over whatever is below: it takes no space, so nothing moves when it appears or
-  goes ([stable layout](#stable-layout)).
+- Takes only what its number can hold: digits, one decimal point (none when
+  `integer`), and a leading minus only when `min` allows a negative. Anything else,
+  typed or pasted, is dropped as it arrives, and the caret stays where the user put it.
+- Applies on blur or Enter, never per keystroke. A value it still can't apply (empty,
+  or below `min`) puts back the last value. There is no error message: the field never
+  holds a value worth explaining.
 - Use for numeric settings. A value with its own syntax, such as a per-request `@timeout`
   (`500 ms`, `2m`), is a plain `.input`.
 

@@ -1,9 +1,10 @@
 <script lang="ts">
-  // A number typed into a text field (ADR 0002): a unit suffix inside the box, no
-  // spinners, and validation in a message that floats under the field, so it never
-  // moves the layout. It applies on blur or Enter, never per keystroke. A value
-  // that isn't valid shows an error and is never applied; leaving the field puts
-  // back the last valid value.
+  // A number typed into a text field (ADR 0002): a unit suffix inside the box and no
+  // spinners. It takes only what a number of its kind can hold (digits, one decimal
+  // point unless `integer`, a leading minus only when `min` allows one); anything else
+  // typed or pasted is dropped as it arrives. It applies on blur or Enter, never per
+  // keystroke. A value it still can't apply (empty, or below `min`) puts back the last
+  // value, with no error message: there is nothing to show and nothing to move.
   interface Props {
     value: number;
     onchange: (value: number) => void;
@@ -12,7 +13,7 @@
     /** Shown inside the field, after the number, e.g. "s" or "MB". */
     unit?: string;
     min?: number;
-    /** Only whole numbers are valid. */
+    /** Only whole numbers: the field takes no decimal point. */
     integer?: boolean;
     disabled?: boolean;
   }
@@ -25,70 +26,80 @@
   // The unit is drawn over the input's right padding; the number stops short of it.
   let unitWidth = $state(0);
 
-  function check(text: string): { n: number; error: "" } | { n: null; error: string } {
-    const t = text.trim();
-    const n = Number(t);
-    if (t === "" || !Number.isFinite(n)) return { n: null, error: "Enter a number" };
-    if (integer && !Number.isInteger(n)) return { n: null, error: "Enter a whole number" };
-    if (min !== undefined && n < min) return { n: null, error: `Must be at least ${min}` };
-    return { n, error: "" };
+  /** `text` with everything this field can't hold removed, and where `caret` ends up. */
+  function clean(text: string, caret: number): { text: string; caret: number } {
+    const negative = min === undefined || min < 0;
+    let out = "";
+    let at = caret;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      const keep =
+        (c >= "0" && c <= "9") ||
+        (c === "." && !integer && !out.includes(".")) ||
+        (c === "-" && negative && out === "");
+      if (keep) out += c;
+      else if (i < caret) at--;
+    }
+    return { text: out, caret: at };
   }
 
-  const error = $derived(draft === null ? "" : check(draft).error);
+  /** The number `text` holds, or null when it can't be applied (empty, or below `min`). */
+  function parse(text: string): number | null {
+    const n = Number(text);
+    if (text === "" || text === "-" || text === "." || !Number.isFinite(n)) return null;
+    if (min !== undefined && n < min) return null;
+    return n;
+  }
 
-  /** Applies a valid draft. An invalid one stays put (Enter) or is dropped (blur). */
-  function commit(onInvalid: "keep" | "revert") {
+  /** Applies the draft, or puts back the last value when it can't be applied. */
+  function commit() {
     if (draft === null) return;
-    const { n } = check(draft);
-    if (n === null) {
-      if (onInvalid === "revert") draft = null;
-      return;
-    }
+    const n = parse(draft);
     draft = null;
-    if (n !== value) onchange(n);
+    if (n !== null && n !== value) onchange(n);
+  }
+
+  function oninput(e: Event & { currentTarget: HTMLInputElement }) {
+    const el = e.currentTarget;
+    const { text, caret } = clean(el.value, el.selectionStart ?? el.value.length);
+    if (text !== el.value) {
+      el.value = text;
+      el.setSelectionRange(caret, caret);
+    }
+    draft = text;
   }
 </script>
 
 <div class="number-field">
-  <div class="box">
-    <input
-      id="{id}-input"
-      class="input"
-      type="text"
-      inputmode={integer ? "numeric" : "decimal"}
-      autocomplete="off"
-      spellcheck="false"
-      aria-label={label}
-      aria-invalid={error ? "true" : undefined}
-      aria-describedby={error ? `${id}-error` : undefined}
-      {disabled}
-      style:padding-right={unit ? `${unitWidth + 13}px` : undefined}
-      value={draft ?? String(value)}
-      oninput={(e) => (draft = e.currentTarget.value)}
-      onblur={() => commit("revert")}
-      onkeydown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commit("keep");
-        }
-      }}
-    />
-    {#if unit}
-      <!-- A label, so pressing on the unit focuses the field; the field's name stays `label`. -->
-      <label class="unit" class:disabled for="{id}-input" bind:offsetWidth={unitWidth}>{unit}</label>
-    {/if}
-  </div>
-  {#if error}<div class="error" id="{id}-error" role="alert">{error}</div>{/if}
+  <input
+    id="{id}-input"
+    class="input"
+    type="text"
+    inputmode={integer ? "numeric" : "decimal"}
+    autocomplete="off"
+    spellcheck="false"
+    aria-label={label}
+    {disabled}
+    style:padding-right={unit ? `${unitWidth + 13}px` : undefined}
+    value={draft ?? String(value)}
+    {oninput}
+    onblur={commit}
+    onkeydown={(e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+      }
+    }}
+  />
+  {#if unit}
+    <!-- A label, so pressing on the unit focuses the field; the field's name stays `label`. -->
+    <label class="unit" class:disabled for="{id}-input" bind:offsetWidth={unitWidth}>{unit}</label>
+  {/if}
 </div>
 
 <style>
-  /* The error floats below the field rather than taking space in the layout: showing
-     or clearing it must never move the field, its row, or anything after it. */
-  .number-field {
-    position: relative;
-  }
   /* One width for every NumberField, whatever its unit, so fields line up down a page. */
-  .box {
+  .number-field {
     position: relative;
     width: 96px;
   }
@@ -96,9 +107,6 @@
     width: 100%;
     text-align: right;
     font-variant-numeric: tabular-nums;
-  }
-  .input[aria-invalid="true"] {
-    border-color: var(--danger);
   }
   .unit {
     position: absolute;
@@ -111,19 +119,5 @@
   }
   .unit.disabled {
     opacity: 0.5;
-  }
-  .error {
-    position: absolute;
-    top: calc(100% + var(--space-1));
-    right: 0;
-    z-index: 10;
-    padding: 3px 8px;
-    background: var(--popup-bg);
-    border: 1px solid var(--danger);
-    border-radius: var(--radius-sm);
-    box-shadow: var(--popup-shadow);
-    color: var(--danger);
-    font-size: 11.5px;
-    white-space: nowrap;
   }
 </style>

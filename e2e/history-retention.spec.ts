@@ -205,7 +205,8 @@ test("retention limits are edited in Settings, and kept after a reload", async (
   await expect(size).toHaveValue("200");
 
   await perRequest.fill("0");
-  await expect(settings.getByRole("alert")).toHaveText("Must be at least 1");
+  await perRequest.press("Enter");
+  await expect(perRequest).toHaveValue("50");
   await perRequest.fill("10");
   await perRequest.press("Enter");
   await days.fill("7");
