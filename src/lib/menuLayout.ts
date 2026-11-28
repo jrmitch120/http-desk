@@ -68,6 +68,7 @@ export function menuLayout(os: OS): TopMenu[] {
     // Windows and Linux keep Settings and quitting in File; macOS in the app menu.
     ...(mac ? [] : [SEP, cmd("settings")]),
     SEP,
+    cmd("keep-tab"),
     cmd("close-tab"),
     cmd("reopen-tab"),
     cmd("close-window"),

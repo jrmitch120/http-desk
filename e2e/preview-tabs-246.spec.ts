@@ -1,8 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { openApp, tab, treeItem } from "./helpers";
+import { menuClick, menuItem, openApp, tab, treeItem } from "./helpers";
 
 // Keeping the Preview tab (GLOSSARY) without changing it or sending from it: a
-// double-click on the tab, or Keep open in its context menu. These single-click
+// double-click on the tab, Keep open in its context menu, or File → Keep Open. These single-click
 // in the tree on purpose: the shared `openRequest` helper double-clicks.
 
 const tabs = (page: Page) => page.getByRole("tablist", { name: "Open requests" }).getByRole("tab");
@@ -55,4 +55,18 @@ test("Keep open in the tab's context menu is enabled only for the Preview tab, a
   await treeItem(page, "Get pet image").click();
   await expect(tabs(page)).toHaveCount(3);
   expect(await italic(tab(page, "Get pet image"))).toBe(true);
+});
+
+test("File → Keep Open keeps the active Preview tab, and is greyed out on a kept tab", async ({ page }) => {
+  await openApp(page);
+  await expandPets(page);
+  await treeItem(page, "List pets").click();
+  await expect.poll(() => menuItem(page, "keep-tab")).toMatchObject({ label: "Keep Open", enabled: true });
+
+  await menuClick(page, "keep-tab");
+
+  await expect.poll(() => italic(tab(page, "List pets"))).toBe(false);
+  await expect.poll(() => menuItem(page, "keep-tab")).toMatchObject({ enabled: false });
+  await treeItem(page, "Create pet").click();
+  await expect(tabs(page)).toHaveCount(2);
 });

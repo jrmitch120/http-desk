@@ -196,7 +196,7 @@ const COMMANDS: Command[] = [
     run: () => app.reopenClosedTab(),
   },
   {
-    // The keyboard's way to keep the Preview tab, as a double-click on it does (GLOSSARY "Preview tab").
+    // File → Keep Open: keeps the Preview tab, as a double-click on it does (GLOSSARY "Preview tab").
     id: "keep-tab",
     label: "Keep Open",
     enabled: () => !!app.activeTab?.preview,

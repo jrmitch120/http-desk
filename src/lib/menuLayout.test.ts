@@ -31,7 +31,7 @@ describe("the menu layout", () => {
   it("on macOS is the app menu, File, Edit, View, Request, Window and Help", () => {
     expect(outline(menuLayout("mac"))).toEqual([
       "HttpDesk: about, -, settings, check-updates, -, (services), -, (hide), (hideOthers), (showAll), -, (quit)",
-      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, close-tab, reopen-tab, close-window",
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, keep-tab, close-tab, reopen-tab, close-window",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
@@ -42,7 +42,7 @@ describe("the menu layout", () => {
 
   it("on Windows puts Settings, Close Window and Exit under File, and Check for Updates and About under Help", () => {
     expect(outline(menuLayout("windows"))).toEqual([
-      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, keep-tab, close-tab, reopen-tab, close-window, -, quit",
       "Edit: (undo), (redo), -, (cut), (copy), (paste), (selectAll)",
       "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
@@ -52,7 +52,7 @@ describe("the menu layout", () => {
 
   it("on Linux is Windows' layout with the app's own Edit items, not the OS's (ADR-0005)", () => {
     expect(outline(menuLayout("linux"))).toEqual([
-      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, close-tab, reopen-tab, close-window, -, quit",
+      "File: open-folder, Open Recent ▸ [[recent]], -, new-request, new-file, new-folder, -, import-openapi, -, save, save-all, -, settings, -, keep-tab, close-tab, reopen-tab, close-window, -, quit",
       "Edit: undo, redo, -, cut, copy, paste, select-all",
       "View: toggle-sidebar, focus-explorer, focus-history, -, toggle-session, toggle-runner, toggle-problems, -, zoom-in, zoom-out, zoom-reset, -, toggle-response-position, Response Position ▸ [response-right, response-below], Theme ▸ [theme-system, theme-light, theme-dark]",
       "Request: send, cancel, -, run-file, stop-run, -, save, duplicate-request, rename-request, -, show-source, view-file-as-text, -, clear-session",
