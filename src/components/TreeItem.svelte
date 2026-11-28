@@ -69,16 +69,19 @@
     else app.openRequest(node.path, { key }, { preview });
   }
 
+  /** ⌘ held (Ctrl off macOS): the click toggles the request in the selection. */
+  const toggling = (e: MouseEvent) => (currentOS() === "mac" ? e.metaKey : e.ctrlKey);
+
   /** A double-click opens a kept tab: the Preview tab its first click opened, kept. */
   function doubleClickRequest(e: MouseEvent, key: string) {
-    if (e.shiftKey || (currentOS() === "mac" ? e.metaKey : e.ctrlKey)) return;
+    if (e.shiftKey || toggling(e)) return;
     openRequest(key, false);
   }
 
   /** ⌘-click (Ctrl-click off macOS) toggles the request in the selection and Shift-click
    *  selects a range, neither opening it; a plain click opens it. */
   function clickRequest(e: MouseEvent, key: string) {
-    if (currentOS() === "mac" ? e.metaKey : e.ctrlKey) app.selectRequest(node.path, key, "toggle");
+    if (toggling(e)) app.selectRequest(node.path, key, "toggle");
     else if (e.shiftKey) app.selectRequest(node.path, key, "range");
     else openRequest(key);
   }

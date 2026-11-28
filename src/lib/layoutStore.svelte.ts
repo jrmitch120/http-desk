@@ -14,7 +14,7 @@ import { api, errorMessage } from "./api";
 import { findNode } from "./tree";
 import { reattach, type KnownRequest } from "./reattach";
 import { fromWorkspace, inWorkspace, LAYOUT_SETTLE_MS, readLayout, type Layout, type LayoutTab } from "./layout";
-import { newFileTab, newTab, type Tab } from "./tabView";
+import { newFileTab, newTab, previewFlag, type Tab } from "./tabView";
 import type { Doc } from "./store.svelte";
 import type { Request, TreeNode } from "./types";
 import { basename, displayName, uid } from "./http";
@@ -81,7 +81,7 @@ export class LayoutStore {
       const doc = docs[t.path];
       const path = inWorkspace(root, t.path);
       // Kept tabs are saved as before Preview tabs: without the flag.
-      const preview = t.preview ? { preview: true as const } : {};
+      const preview = previewFlag(!!t.preview);
       if (t.kind === "file") {
         if (!doc || path === null) continue;
         if (t.id === activeTabId) active = tabs.length;
@@ -155,7 +155,7 @@ export class LayoutStore {
     const layout = readLayout(saved);
     const tabs = layout.tabs.map((t): Tab => {
       const path = fromWorkspace(root, t.path);
-      const preview = t.preview && this.host.previewTabs ? { preview: true as const } : {};
+      const preview = previewFlag(!!t.preview && this.host.previewTabs);
       if (t.kind === "file") return { ...newFileTab(path), restoring: { method: "", name: basename(path) }, ...preview };
       return { ...newTab(path, uid(), t), restoring: { method: t.method, name: t.title ?? displayName(t) }, ...preview };
     });

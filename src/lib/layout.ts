@@ -3,7 +3,7 @@
 // are relative to the workspace root and `/`-separated, so the document doesn't
 // care how the root is spelled. Unsaved edits, the sidebar search, response
 // filters and pane sizes are never part of it.
-import { newResponseView, type RequestSection, type ResponseView } from "./tabView";
+import { newResponseView, previewFlag, type RequestSection, type ResponseView } from "./tabView";
 import type { BodyMode } from "./bodyView.svelte";
 import type { PlacedRequest } from "./reattach";
 
@@ -67,7 +67,7 @@ const str = (v: unknown) => (typeof v === "string" ? v : null);
 
 function readTab(v: unknown): LayoutTab | null {
   if (!isObject(v)) return null;
-  const preview = v.preview === true ? { preview: true as const } : {};
+  const preview = previewFlag(v.preview === true);
   if (v.kind === "file") return typeof v.path === "string" ? { kind: "file", path: v.path, ...preview } : null;
   const [path, name, method, url, title] = [str(v.path), str(v.name), str(v.method), str(v.url), str(v.title)];
   if (path === null || name === null || method === null || url === null) return null;

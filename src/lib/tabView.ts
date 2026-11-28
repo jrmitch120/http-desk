@@ -48,6 +48,9 @@ export interface FileTab extends TabBase {
 /** An editor tab: a request of a document, or a file view of the document. */
 export type Tab = RequestTab | FileTab;
 
+/** The `preview` flag to spread into a tab (or a Layout's tab): present only on the Preview tab. */
+export const previewFlag = (preview: boolean): { preview?: true } => (preview ? { preview: true } : {});
+
 /** Whether `tab` is on a request (not a file view). */
 export const isRequestTab = (tab: Tab | null | undefined): tab is RequestTab => tab?.kind === "request";
 
