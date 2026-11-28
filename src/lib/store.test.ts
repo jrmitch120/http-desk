@@ -492,6 +492,25 @@ describe("Preview tabs (#248)", () => {
     expect(app.isOrphaned(remove)).toBe(true);
     expect(app.tabs[0].preview).toBe(true);
   });
+
+  // A revert only ever comes from closing the reverted request's own tab ("Don't save"),
+  // so it never changes the request another tab, the Preview tab, shows.
+  it("Don't save on closing another tab of the file leaves the Preview tab a Preview tab", async () => {
+    readHttpFile.mockResolvedValueOnce(books());
+    await app.openRequest(PATH, { index: 0 });
+    await app.openRequest(PATH, { index: 1 }, { preview: true });
+    const [list, remove] = app.tabs;
+    app.requestFor(list)!.url += "?edited";
+
+    const closing = app.closeTab(list.id);
+    await answer("discard");
+    await closing;
+    app.noteTabEdits(remove.id);
+
+    expect(app.tabs).toEqual([remove]);
+    expect(remove.preview).toBe(true);
+    expect(app.dirtyDocs()).toEqual([]);
+  });
 });
 
 describe("restoring a workspace's Layout", () => {

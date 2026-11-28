@@ -1291,7 +1291,12 @@ class AppStore {
     this.runs[tabId] = { runId: uid(), ...last };
   }
 
-  revertRequest(path: string, key: string) {
+  /**
+   * Puts request `key` of `path` back as last saved (drops it, if it never was). Only
+   * "Don't save" on closing its own tab calls it, so it changes no request another tab
+   * shows: no `fromElsewhere` needed to leave the Preview tab a Preview tab.
+   */
+  private revertRequest(path: string, key: string) {
     const doc = this.docs[path];
     if (!doc || this.refused(path)) return;
     this.texts.drop(path, sourceView(key));
