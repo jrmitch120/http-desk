@@ -369,3 +369,42 @@ for (const theme of ["dark", "light"] as const) {
     }
   });
 }
+
+// A NumberField's unit sits inside its box, so every number field on a page is the same
+// width and ends on the same right edge as the page's switches and buttons.
+for (const name of ["Requests", "History"]) {
+  test(`${name}: number fields are one width and line up with the page's other controls`, async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+    await categoryTab(page, name).click();
+    const p = panel(page, name);
+    const boxes = await p.locator(".number-field .box").evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) };
+      }),
+    );
+    expect(boxes.length).toBeGreaterThan(1);
+    const rights = new Set(boxes.map((b) => b.right));
+    expect([...new Set(boxes.map((b) => b.width))]).toHaveLength(1);
+    expect([...rights]).toHaveLength(1);
+    // Each unit is drawn inside its field's box.
+    for (const unit of await p.locator(".number-field .unit").all()) {
+      const u = (await unit.boundingBox())!;
+      const box = (await unit.locator("xpath=..").boundingBox())!;
+      expect(u.x).toBeGreaterThanOrEqual(box.x);
+      expect(u.x + u.width).toBeLessThanOrEqual(box.x + box.width);
+    }
+    // The switch on the page ends on the same edge.
+    const sw = (await p.getByRole("switch").first().boundingBox())!;
+    expect(Math.round(sw.x + sw.width)).toBe([...rights][0]);
+  });
+}
+
+test("clicking a number field's unit focuses the field", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("banner").getByRole("button", { name: "Settings" }).click();
+  await categoryTab(page, "Requests").click();
+  await panel(page, "Requests").locator(".number-field .unit", { hasText: "MB" }).click();
+  await expect(panel(page, "Requests").getByRole("textbox", { name: "Maximum body size" })).toBeFocused();
+});

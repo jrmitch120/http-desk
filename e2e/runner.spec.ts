@@ -324,8 +324,10 @@ test("the options' labels sit clear of their controls", async ({ page }) => {
   const unit = await options.getByText("ms", { exact: true }).boundingBox();
   const toggle = await options.getByText("Stop on first failure").boundingBox();
   expect(label!.x + label!.width).toBeLessThanOrEqual(field!.x);
-  expect(field!.x + field!.width).toBeLessThanOrEqual(unit!.x);
-  expect(unit!.x + unit!.width).toBeLessThanOrEqual(toggle!.x);
+  // The unit sits inside the field's box, which ends before the toggle.
+  expect(unit!.x).toBeGreaterThanOrEqual(field!.x);
+  expect(unit!.x + unit!.width).toBeLessThanOrEqual(field!.x + field!.width);
+  expect(field!.x + field!.width).toBeLessThanOrEqual(toggle!.x);
 });
 
 test("each result's status and time line up with the other rows', whatever the time", async ({ page }) => {

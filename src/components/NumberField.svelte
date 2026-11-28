@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A number typed into a text field (ADR 0002): a unit suffix, inline validation
+  // A number typed into a text field (ADR 0002): a unit suffix inside the box, inline validation
   // and no spinners. It applies on blur or Enter, never per keystroke. A value
   // that isn't valid shows an error and is never applied; leaving the field puts
   // back the last valid value.
@@ -8,7 +8,7 @@
     onchange: (value: number) => void;
     /** Accessible name of the field. */
     label: string;
-    /** Shown after the field, e.g. "s" or "MB". */
+    /** Shown inside the field, after the number, e.g. "s" or "MB". */
     unit?: string;
     min?: number;
     /** Only whole numbers are valid. */
@@ -21,6 +21,8 @@
   const id = $props.id();
   // What the user has typed since the field last applied; null shows `value`.
   let draft = $state<string | null>(null);
+  // The unit is drawn over the input's right padding; the number stops short of it.
+  let unitWidth = $state(0);
 
   function check(text: string): { n: number; error: "" } | { n: null; error: string } {
     const t = text.trim();
@@ -47,8 +49,9 @@
 </script>
 
 <div class="number-field">
-  <div class="row">
+  <div class="box">
     <input
+      id="{id}-input"
       class="input"
       type="text"
       inputmode={integer ? "numeric" : "decimal"}
@@ -58,6 +61,7 @@
       aria-invalid={error ? "true" : undefined}
       aria-describedby={error ? `${id}-error` : undefined}
       {disabled}
+      style:padding-right={unit ? `${unitWidth + 13}px` : undefined}
       value={draft ?? String(value)}
       oninput={(e) => (draft = e.currentTarget.value)}
       onblur={() => commit("revert")}
@@ -68,7 +72,10 @@
         }
       }}
     />
-    {#if unit}<span class="unit" class:disabled>{unit}</span>{/if}
+    {#if unit}
+      <!-- A label, so pressing on the unit focuses the field; the field's name stays `label`. -->
+      <label class="unit" class:disabled for="{id}-input" bind:offsetWidth={unitWidth}>{unit}</label>
+    {/if}
   </div>
   {#if error}<div class="error" id="{id}-error" role="alert">{error}</div>{/if}
 </div>
@@ -80,13 +87,13 @@
     align-items: flex-end;
     gap: var(--space-1);
   }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
+  /* One width for every NumberField, whatever its unit, so fields line up down a page. */
+  .box {
+    position: relative;
+    width: 96px;
   }
   .input {
-    width: 84px;
+    width: 100%;
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -94,8 +101,13 @@
     border-color: var(--danger);
   }
   .unit {
-    min-width: 2ch;
+    position: absolute;
+    top: 50%;
+    right: 9px;
+    transform: translateY(-50%);
     color: var(--muted);
+    cursor: text;
+    user-select: none;
   }
   .unit.disabled {
     opacity: 0.5;

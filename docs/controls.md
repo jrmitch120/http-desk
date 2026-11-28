@@ -222,6 +222,9 @@ spinners.
 
 - Props: `value`, `onchange(n)`, `label` (accessible name), `unit?` (suffix such as `s` or
   `MB`), `min?`, `integer?`, `disabled?`.
+- One width (96px) whatever its unit. The unit is drawn inside the box, after the number,
+  so number fields down a page end on the same edge as its switches and buttons. Pressing
+  on the unit focuses the field.
 - Applies on blur or Enter, never per keystroke. An invalid value shows an inline error
   (`role="alert"`, linked by `aria-describedby`) and isn't applied; leaving the field
   puts back the last valid value.
