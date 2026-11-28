@@ -320,7 +320,8 @@ test("the options' labels sit clear of their controls", async ({ page }) => {
 
   const options = runner(page).getByRole("group", { name: "Runner options" });
   const label = await options.getByText("Delay", { exact: true }).boundingBox();
-  const field = await options.getByRole("textbox", { name: "Delay between requests" }).boundingBox();
+  // The field's bordered box, which holds the input and its unit.
+  const field = await options.getByRole("textbox", { name: "Delay between requests" }).locator("xpath=..").boundingBox();
   const unit = await options.getByText("ms", { exact: true }).boundingBox();
   const toggle = await options.getByText("Stop on first failure").boundingBox();
   expect(label!.x + label!.width).toBeLessThanOrEqual(field!.x);
