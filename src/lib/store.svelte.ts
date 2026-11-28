@@ -1491,6 +1491,8 @@ class AppStore {
     }
     const under = (p: string) => p === path || p.startsWith(path + "/") || p.startsWith(path + "\\");
     for (const t of this.tabs.filter((t) => under(t.path))) this.removeTab(t.id);
+    // Before the docs go: an expanded file node still in the tree would read its file again.
+    for (const p of Object.keys(this.expanded).filter(under)) delete this.expanded[p];
     for (const p of Object.keys(this.docs).filter(under)) delete this.docs[p];
     this.problems.removed(path);
     await this.refreshTree();

@@ -1771,6 +1771,8 @@ mockIPC(
       }
       case "read_http_file":
         await readsReleased;
+        // Like the shell, a file that isn't there fails to read.
+        if (fileAt(args.path) === undefined) throw `Could not read ${args.path}: No such file or directory (os error 2)`;
         return clone(fileAt(args.path));
       case "save_http_file": {
         // Like the shell: the file is written as text, then read back.

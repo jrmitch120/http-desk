@@ -27,3 +27,18 @@ test("when the trash is unavailable, Cancel keeps the file and only an explicit 
   await dialog(page, "Couldn't Move to the Trash").getByRole("button", { name: "Delete permanently" }).click();
   await expect(treeItem(page, "pets.http")).toHaveCount(0);
 });
+
+test("trashing an expanded file reports no error: its node doesn't read the gone file again", async ({ page }) => {
+  await openApp(page);
+  await treeItem(page, "api").click();
+  await treeItem(page, "pets.http").click();
+  await expect(treeItem(page, "List pets")).toBeVisible();
+
+  await treeMenu(page, "pets.http", "Move to Trash");
+  await dialog(page, "Move to Trash").getByRole("button", { name: "Move to Trash" }).click();
+
+  await expect(treeItem(page, "pets.http")).toHaveCount(0);
+  // Give a late read of the gone file time to land its toast.
+  await page.waitForTimeout(300);
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
