@@ -258,7 +258,7 @@
         {#snippet actions()}
           {#if lock.heldBy.kind === "request"}
             {@const key = lock.heldBy.key}
-            <button class="btn small" onclick={() => app.openRequest(tab.path, { key })}>Show request</button>
+            <button class="btn small" onclick={() => app.openRequest(tab.path, { key }, { preview: true })}>Show request</button>
           {/if}
         {/snippet}
       </Banner>
@@ -278,7 +278,7 @@
           // The one under the cursor now, though the outline hasn't caught up.
           const index = requestNow();
           const key = !invalid && index !== null ? doc?.file.requests[index]?._key : underCursor;
-          if (key) void app.openRequest(tab.path, { key });
+          if (key) void app.openRequest(tab.path, { key }, { preview: true });
         }}
         use:tooltip={noRequest || "Open the request under the cursor in its own tab"}
       >

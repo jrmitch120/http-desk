@@ -949,7 +949,8 @@ class AppStore {
 
   /** Opens the request a search result points at. It is found by name + method
    *  + URL, since unsaved edits may have moved it since the search; `index`
-   *  only breaks ties and is the fallback when nothing matches. */
+   *  only breaks ties and is the fallback when nothing matches. A navigation: it
+   *  opens the Preview tab. */
   async openSearchHit(hit: SearchHit) {
     const doc = await this.loadDoc(hit.path);
     if (!doc) return;
@@ -957,7 +958,7 @@ class AppStore {
     const reqs = doc.file.requests;
     const same = (r: Request | undefined) => !!r && signature({ name: displayName(r), method: r.method, url: r.url }) === want;
     const req = same(reqs[hit.index]) ? reqs[hit.index] : (reqs.find(same) ?? reqs[hit.index]);
-    if (req) await this.openRequest(hit.path, { key: req._key });
+    if (req) await this.openRequest(hit.path, { key: req._key }, { preview: true });
   }
 
   /** Find usages of `{{name}}` across the workspace, shown in the sidebar (shown
@@ -993,7 +994,7 @@ class AppStore {
   /** Shows where a Find usages result is: the request on the field holding it
    *  (found as `openSearchHit` finds it), a File variable's row in its file's
    *  request Settings, or an environment value's row in the Environments modal (on
-   *  the folder of the env file holding it). */
+   *  the folder of the env file holding it). A request opens in the Preview tab. */
   async openUsage(usage: Usage) {
     if (usage.kind === "environment") {
       this.definitionWanted = { kind: "env", env: usage.env, name: usage.name, dir: this.folderOf(usage.path) };
@@ -1003,7 +1004,7 @@ class AppStore {
     if (usage.kind === "fileVariable") {
       const open = this.tabs.find((t) => t.path === usage.path && t.id === this.activeTabId) ?? this.tabs.find((t) => t.path === usage.path);
       if (open) this.activeTabId = open.id;
-      else await this.openRequest(usage.path, { index: 0 });
+      else await this.openRequest(usage.path, { index: 0 }, { preview: true });
       if (this.activeTab?.path === usage.path) this.editDefinition(this.activeTab.id, { kind: "file", name: usage.name });
       return;
     }
@@ -1323,16 +1324,17 @@ class AppStore {
    * Opens the file at `path` as one text (its file view, a tab of its own; the one
    * already open, if there is one), made active. With `line` (1-based), the view
    * scrolls that line into view with the caret on it (at character `column`, or its
-   * start); with `key`, it shows that request.
+   * start); with `key`, it shows that request. As `openRequest`: kept, unless
+   * `preview` (a navigation) asks for the Preview tab.
    */
-  async openFileView(path: string, at: { line?: number; column?: number; key?: string } = {}) {
+  async openFileView(path: string, at: { line?: number; column?: number; key?: string } = {}, how: { preview?: boolean } = {}) {
     const doc = await this.loadDoc(path);
     if (!doc) return;
     let tab = this.tabs.find((t) => t.kind === "file" && t.path === path);
+    if (tab && !how.preview) this.keepTab(tab.id);
     if (!tab) {
       tab = newFileTab(path);
-      const i = this.tabs.findIndex((t) => t.id === this.activeTabId);
-      this.tabs.splice(i < 0 ? this.tabs.length : i + 1, 0, tab);
+      this.placeTab(tab, !!how.preview);
     }
     this.activeTabId = tab.id;
     if (at.line) this.fileLineWanted = { tabId: tab.id, line: at.line, column: at.column };
@@ -1651,8 +1653,8 @@ class AppStore {
 
   async send(tabId: string) {
     const typing = this.tabs.find((t) => t.id === tabId);
-    if (typing?.kind === "file") return this.sendUnderCursor(typing);
     this.keepTab(tabId);
+    if (typing?.kind === "file") return this.sendUnderCursor(typing);
     // Text typed in the Source view a moment ago is sent too (and only then awaited).
     if (typing && this.texts.waiting(typing.path, sourceView(typing.key))) await this.texts.readNow(typing.path, sourceView(typing.key));
     const tab = this.tabs.find((t): t is RequestTab => t.id === tabId && t.kind === "request");
